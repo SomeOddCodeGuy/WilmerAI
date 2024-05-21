@@ -1,0 +1,6 @@
+{
+  "type": "koboldCpp",
+  "modelName": "Unused",
+  "promptTemplate": "llama3",
+  "truncation_length": 8192
+}

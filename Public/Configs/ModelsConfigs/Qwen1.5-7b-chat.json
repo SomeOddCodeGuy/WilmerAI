@@ -1,0 +1,6 @@
+{
+  "type": "koboldCpp",
+  "modelName": "Unused",
+  "promptTemplate": "_chatonly",
+  "truncation_length": 16384
+}

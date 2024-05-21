@@ -1,0 +1,5 @@
+{
+  "modelNameForDisplayOnly": "This machine port 5003",
+  "endpoint": "http://127.0.0.1:5003",
+  "modelName": "MagicCoder-6.7b"
+}

@@ -1,0 +1,6 @@
+{
+  "type": "koboldCpp",
+  "modelName": "Unused",
+  "promptTemplate": "command-r",
+  "truncation_length": 32768
+}

@@ -1,0 +1,14 @@
+{
+  "CODING": {
+    "description": "Any request which requires a code snippet as a response",
+    "workflow": "Small-TechnicalWorkflow"
+  },
+  "CONVERSATIONAL": {
+    "description": "Casual conversation or non-specific inquiries",
+    "workflow": "Small-ConversationalWorkflow"
+  },
+  "REASONING": {
+    "description": "Requests that require complex reasoning or logic skills, or riddles and brain teasers",
+    "workflow": "Small-ReasoningWorkflow"
+  }
+}

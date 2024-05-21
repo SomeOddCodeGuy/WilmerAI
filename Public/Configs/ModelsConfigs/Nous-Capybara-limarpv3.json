@@ -1,0 +1,6 @@
+{
+  "type": "koboldCpp",
+  "modelName": "Unused",
+  "promptTemplate": "limarp-alpaca",
+  "truncation_length": 16384
+}

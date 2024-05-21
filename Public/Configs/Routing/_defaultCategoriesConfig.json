@@ -1,0 +1,14 @@
+{
+  "CODING": {
+    "description": "Any request which requires a code snippet as a response",
+    "workflow": "CodingWorkflow"
+  },
+  "FACTUAL": {
+    "description": "Requests that require factual information or data",
+    "workflow": "ConversationalWorkflow"
+  },
+  "CONVERSATIONAL": {
+    "description": "Casual conversation or non-specific inquiries",
+    "workflow": "FactualWorkflow"
+  }
+}

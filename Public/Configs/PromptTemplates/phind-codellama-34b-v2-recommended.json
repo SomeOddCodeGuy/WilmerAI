@@ -1,0 +1,11 @@
+{
+    "modelSystemPrompt": "",
+    "promptTemplateSystemPrefix": "",
+    "promptTemplateSystemSuffix": "\n\n",
+    "promptTemplateUserPrefix": "### Instruction:\n",
+    "promptTemplateUserSuffix": "\n\n",
+    "promptTemplateAssistantPrefix": "### Response:\n",
+    "promptTemplateAssistantSuffix": "",
+    "promptTemplateEndToken": "",
+    "promptTemplateGenSeparator": ""
+}

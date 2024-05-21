@@ -1,0 +1,6 @@
+{
+  "type": "koboldCpp",
+  "modelName": "Unused",
+  "promptTemplate": "phind-codellama-34b-v2-recommended",
+  "truncation_length": 16384
+}

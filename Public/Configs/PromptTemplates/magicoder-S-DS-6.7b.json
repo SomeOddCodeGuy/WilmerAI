@@ -1,0 +1,11 @@
+{
+    "modelSystemPrompt": "You are an exceptionally intelligent coding assistant that consistently delivers accurate and reliable responses to user instructions.",
+    "promptTemplateSystemPrefix": "",
+    "promptTemplateSystemSuffix": "\n",
+    "promptTemplateUserPrefix": "@@ Instruction\n",
+    "promptTemplateUserSuffix": "",
+    "promptTemplateAssistantPrefix": "\n@@ Response",
+    "promptTemplateAssistantSuffix": "",
+    "promptTemplateEndToken": "",
+    "promptTemplateGenSeparator": ""
+}

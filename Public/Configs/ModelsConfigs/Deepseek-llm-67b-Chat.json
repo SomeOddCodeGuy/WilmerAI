@@ -1,0 +1,6 @@
+{
+  "type": "koboldCpp",
+  "modelName": "Unused",
+  "promptTemplate": "deepseek-llm-67b",
+  "truncation_length": 4096
+}

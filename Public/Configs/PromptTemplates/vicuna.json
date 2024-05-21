@@ -1,0 +1,11 @@
+{
+    "modelSystemPrompt": "A chat between a human and an assistant.",
+    "promptTemplateSystemPrefix": "",
+    "promptTemplateSystemSuffix": "",
+    "promptTemplateUserPrefix": "### Human:",
+    "promptTemplateUserSuffix": "",
+    "promptTemplateAssistantPrefix": "### Assistant:",
+    "promptTemplateAssistantSuffix": "",
+    "promptTemplateEndToken": "",
+    "promptTemplateGenSeparator": ""
+}

@@ -1,0 +1,11 @@
+{
+    "modelSystemPrompt": "",
+    "promptTemplateSystemPrefix": "<s>",
+    "promptTemplateSystemSuffix": "\n",
+    "promptTemplateUserPrefix": "User: ",
+    "promptTemplateUserSuffix": "\n",
+    "promptTemplateAssistantPrefix": "AI: ",
+    "promptTemplateAssistantSuffix": "\n",
+    "promptTemplateEndToken": "",
+    "promptTemplateGenSeparator": ""
+}

@@ -1,0 +1,5 @@
+{
+  "modelNameForDisplayOnly": "This machine port 5002",
+  "endpoint": "http://127.0.0.1:5002",
+  "modelName": "Llama-3-8b-Instruct-Coder"
+}

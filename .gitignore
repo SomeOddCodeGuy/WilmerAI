@@ -1,0 +1,4 @@
+.idea
+.venv
+logs/*.wilmerai.log
+logs/wilmerai.log

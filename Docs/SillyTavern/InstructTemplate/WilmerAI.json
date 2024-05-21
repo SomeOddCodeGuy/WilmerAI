@@ -1,0 +1,17 @@
+{
+    "system_prompt": "Please reply for the AI controlled {{char}} in this conversation with the human controlled {{user}}",
+    "input_sequence": "[Beg_User]",
+    "output_sequence": "[Beg_Assistant]",
+    "first_output_sequence": "[Beg_Assistant]",
+    "last_output_sequence": "",
+    "system_sequence_prefix": "[Beg_Sys]",
+    "system_sequence_suffix": "",
+    "stop_sequence": "",
+    "separator_sequence": "",
+    "wrap": false,
+    "macro": true,
+    "names": true,
+    "names_force_groups": true,
+    "activation_regex": "",
+    "name": "WilmerAI"
+}

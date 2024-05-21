@@ -1,0 +1,6 @@
+{
+  "type": "koboldCpp",
+  "modelName": "Unused",
+  "promptTemplate": "codefuse-deepseek-33b",
+  "truncation_length": 16384
+}

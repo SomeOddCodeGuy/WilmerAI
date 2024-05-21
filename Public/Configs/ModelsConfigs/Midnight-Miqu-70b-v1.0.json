@@ -1,0 +1,6 @@
+{
+  "type": "koboldCpp",
+  "modelName": "Unused",
+  "promptTemplate": "midnight-miqu-user-assistant",
+  "truncation_length": 16384
+}

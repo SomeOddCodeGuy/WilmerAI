@@ -1,0 +1,6 @@
+{
+  "type": "koboldCpp",
+  "modelName": "Unused",
+  "promptTemplate": "magicoder-S-DS-6.7b",
+  "truncation_length": 16384
+}
