@@ -1,0 +1,7 @@
+{
+  "Display_Only_Description": "This workflow relies on the defaultParallelProcessWorkflow and only gets the system prompt and prompt from here",
+  "systemPrompt": "You are an expert summarizer. Please follow the instructions carefully.",
+  "prompt": "Below, within brackets, is an excerpt from a roleplay. Please summarize, in vivid and complete detail, the events within the excerpt. This summary will be added to a running collection of summaries, so please don't write anything else except the summary. Please use the character/user names explicitly, as some may write in first person but you need to write your descriptions in third person.\n[\n[TextChunk]\n]\n",
+  "chunkEstimatedTokenSize": 1500,
+  "chunksUntilNewMemory": 5
+}

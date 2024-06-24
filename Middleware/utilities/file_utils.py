@@ -33,8 +33,7 @@ def read_chunks_with_hashes(filepath):
     """Read chunks with hashes from a JSON file.
 
     Args:
-        filepath (str): The path to the JSON file containing chunks with hashes that represent
-                        the latest user/assistant pair within the chunk
+        filepath (str): The path to the JSON file containing chunks with hashes.
 
     Returns:
         list: A list of tuples, where each tuple contains a text block and its corresponding hash.
@@ -47,8 +46,7 @@ def write_chunks_with_hashes(chunks_with_hashes, filepath, overwrite=False):
     """Write chunks with hashes to a JSON file, optionally overwriting existing content.
 
     Args:
-        chunks_with_hashes (list): A list of tuples, where each tuple contains a text block and a hash that
-                                    represents the latest user/assistant pair of the chunk
+        chunks_with_hashes (list): A list of tuples, where each tuple contains a text block and a hash.
         filepath (str): The path to the JSON file where chunks with hashes will be written.
         overwrite (bool): If True, overwrite the existing file content; otherwise, append to it.
     """
@@ -68,8 +66,7 @@ def update_chunks_with_hashes(chunks_with_hashes, filepath, mode='append'):
     """Update chunks with hashes in a JSON file, appending or overwriting based on mode.
 
     Args:
-        chunks_with_hashes (list): A list of tuples, where each tuple contains a text block and a hash that
-                                    represents the latest user/assistant pair of the chunk
+        chunks_with_hashes (list): A list of tuples, where each tuple contains a text block and a hash.
         filepath (str): The path to the JSON file where chunks with hashes will be updated.
         mode (str): The mode of operation. Use 'append' to add new chunks to the existing data, or
                     'overwrite' to replace the existing data.
@@ -81,9 +78,10 @@ def update_chunks_with_hashes(chunks_with_hashes, filepath, mode='append'):
 
 
 def get_logger_filename():
-    """
+    """Get the path to the logging file for Wilmer.
+
     Returns:
-        str: The path to the logging file for Wilmer
+        str: The path to the logging file for Wilmer.
     """
     util_dir = os.path.dirname(os.path.abspath(__file__))
     middleware_dir = os.path.dirname(util_dir)

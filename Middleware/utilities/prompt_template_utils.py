@@ -1,62 +1,81 @@
-from typing import List, Tuple
+from copy import deepcopy
+from typing import List, Dict
 
 from Middleware.utilities.config_utils import load_template_from_json
-from Middleware.utilities.prompt_extraction_utils import extract_pairs_and_system_prompt_from_wilmer_templated_string
+from Middleware.utilities.prompt_extraction_utils import separate_messages
 from Middleware.utilities.prompt_utils import strip_tags
-from Middleware.utilities.text_utils import reduce_pairs_to_fit_token_limit
+from Middleware.utilities.text_utils import rough_estimate_token_length
 
 
-def format_system_prompts(system_prompt: str, pairs: List[Tuple[str, str]], llm_handler,
-                          chat_prompt_template_name: str) -> dict:
+def format_system_prompts(messages: List[Dict[str, str]], llm_handler, chat_prompt_template_name: str) -> dict:
     """
     Formats system prompts and user prompts using the provided LLM handler and chat prompt template.
 
     Parameters:
-    - system_prompt (str): The system prompt extracted from the incoming user's message.
-    - pairs (List[Tuple[str, str]]): A list of user-assistant message pairs.
+    - messages (List[Dict[str, str]]): A list of messages with roles and content.
     - llm_handler: An object containing information and methods for interacting with an LLM.
     - chat_prompt_template_name (str): The name of the chat prompt template file.
 
     Returns:
     - dict: A dictionary containing formatted system and user prompts.
     """
+    system_prompt, other_messages = separate_messages(messages, True)
+    chat_user_prompt = format_messages_with_template(other_messages, chat_prompt_template_name)
+    templates_user_prompt = format_messages_with_template(other_messages, llm_handler.prompt_template_file_name)
+
+    chat_user_prompt_content = [message["content"] for message in chat_user_prompt if message["role"] != "system"]
+    template_user_prompt_content = [message["content"] for message in templates_user_prompt if
+                                    message["role"] != "system"]
+
     return {
-        "chat_system_prompt": system_prompt,
-        "templated_system_prompt": format_templated_prompt(system_prompt,
-                                                           llm_handler,
-                                                           llm_handler.prompt_template_file_name),
-        "templated_user_prompt_without_system": format_pairs_with_template('', pairs,
-                                                                           llm_handler.prompt_template_file_name),
-        "chat_user_prompt_without_system": format_pairs_with_template('', pairs, chat_prompt_template_name)
+        "chat_system_prompt": format_templated_system_prompt(system_prompt, llm_handler, chat_prompt_template_name),
+        "templated_system_prompt": format_templated_system_prompt(system_prompt, llm_handler,
+                                                                  llm_handler.prompt_template_file_name),
+        "templated_user_prompt_without_system": ''.join(template_user_prompt_content),
+        "chat_user_prompt_without_system": ''.join(chat_user_prompt_content)
     }
 
 
-def format_pairs_with_template(system_prompt: str, pairs: List[Tuple[str, str]], template_file_name: str) -> str:
+def format_messages_with_template_as_string(messages: List[Dict[str, str]], template_file_name: str) -> str:
     """
-    Applies a template to a list of message pairs and a system prompt.
+    Formats messages using the specified template and returns them as a single concatenated string.
 
     Parameters:
-    - system_prompt (str): The system prompt to be formatted.
-    - pairs (List[Tuple[str, str]]): A list of user-assistant message pairs.
+    - messages (List[Dict[str, str]]): A list of messages with roles and content.
     - template_file_name (str): The name of the template file to use for formatting.
 
     Returns:
-    - str: A formatted string containing the system prompt and message pairs.
+    - str: A single string with all formatted messages concatenated.
+    """
+    formatted_messages = format_messages_with_template(messages, template_file_name)
+    formatted_strings = [message["content"] for message in formatted_messages]
+    return ''.join(formatted_strings)
+
+
+def format_messages_with_template(messages: List[Dict[str, str]], template_file_name: str) -> List[Dict[str, str]]:
+    """
+    Formats messages using the specified template.
+
+    Parameters:
+    - messages (List[Dict[str, str]]): A list of messages with roles and content.
+    - template_file_name (str): The name of the template file to use for formatting.
+
+    Returns:
+    - List[Dict[str, str]]: A list of formatted messages.
     """
     prompt_template = load_template_from_json(template_file_name)
-    formatted_system_prompt = f"{prompt_template['promptTemplateSystemPrefix']}{system_prompt}{prompt_template['promptTemplateSystemSuffix']}"
+    message_copy = deepcopy(messages)
+    formatted_messages = []
 
-    formatted_pairs = []
-    for user, assistant in pairs:
-        user_formatted = f"{prompt_template['promptTemplateUserPrefix']}{user}{prompt_template['promptTemplateUserSuffix']}" if user else ''
-        assistant_formatted = f"{prompt_template['promptTemplateAssistantPrefix']}{assistant}"
-        if pairs.index((user, assistant)) < len(pairs) - 1:
-            assistant_formatted += prompt_template['promptTemplateAssistantSuffix']
-        formatted_pairs.append(user_formatted + assistant_formatted)
+    for i, message in enumerate(message_copy):
+        prefix = prompt_template.get(f"promptTemplate{message['role'].capitalize()}Prefix", '')
+        suffix = '' if i == len(message_copy) - 1 and message['role'] == 'assistant' else prompt_template.get(
+            f"promptTemplate{message['role'].capitalize()}Suffix", '')
+        formatted_message = f"{prefix}{message['content']}{suffix}"
+        message['content'] = strip_tags(formatted_message)
+        formatted_messages.append(message)
 
-    formatted_chat = formatted_system_prompt + ''.join(formatted_pairs)
-    formatted_chat = strip_tags(formatted_chat)
-    return formatted_chat
+    return formatted_messages
 
 
 def format_user_turn_with_template(user_turn: str, template_file_name: str) -> str:
@@ -72,8 +91,23 @@ def format_user_turn_with_template(user_turn: str, template_file_name: str) -> s
     """
     prompt_template = load_template_from_json(template_file_name)
     formatted_turn = f"{prompt_template['promptTemplateUserPrefix']}{user_turn}{prompt_template['promptTemplateUserSuffix']}"
-    formatted_turn = strip_tags(formatted_turn)
-    return formatted_turn
+    return strip_tags(formatted_turn)
+
+
+def format_system_prompt_with_template(system_prompt: str, template_file_name: str) -> str:
+    """
+    Formats a system prompt using the specified template.
+
+    Parameters:
+    - system_prompt (str): The system message to be formatted.
+    - template_file_name (str): The name of the template file to use for formatting.
+
+    Returns:
+    - str: The formatted system prompt.
+    """
+    prompt_template = load_template_from_json(template_file_name)
+    formatted_turn = f"{prompt_template['promptTemplateSystemPrefix']}{system_prompt}{prompt_template['promptTemplateSystemSuffix']}"
+    return strip_tags(formatted_turn)
 
 
 def add_assistant_end_token_to_user_turn(user_turn: str, template_file_name: str) -> str:
@@ -89,45 +123,84 @@ def add_assistant_end_token_to_user_turn(user_turn: str, template_file_name: str
     """
     prompt_template = load_template_from_json(template_file_name)
     formatted_turn = f"{user_turn}{prompt_template['promptTemplateAssistantPrefix']}{prompt_template['promptTemplateEndToken']}"
-    formatted_turn = strip_tags(formatted_turn)
-    return formatted_turn
+    return strip_tags(formatted_turn)
 
 
-def generate_templated_string(prompt, template_file_name, truncation_length=0, max_new_tokens=0):
-    """
-    Generates a templated string from the given prompt, applying truncation if necessary.
-
-    Parameters:
-    - prompt (str): The original prompt message.
-    - template_file_name (str): The name of the template file to use for formatting.
-    - truncation_length (int, optional): The maximum length of the prompt after truncation. Defaults to 0 (no truncation).
-    - max_new_tokens (int, optional): The maximum number of new tokens to be generated. Defaults to 0 (no limit).
-
-    Returns:
-    - str: The generated templated string.
-    """
-    system_prompt, prompt_pairs = extract_pairs_and_system_prompt_from_wilmer_templated_string(prompt)
-
-    if truncation_length > 0 and 0 < max_new_tokens < truncation_length:
-        true_truncate_length = (truncation_length - max_new_tokens) * 0.8
-        prompt_pairs = reduce_pairs_to_fit_token_limit(system_prompt, prompt_pairs, true_truncate_length)
-
-    return format_pairs_with_template(system_prompt=system_prompt, pairs=prompt_pairs,
-                                      template_file_name=template_file_name)
-
-
-def format_templated_prompt(text: str, llm_handler, prompt_template_file_name) -> str:
+def format_templated_prompt(prompt: str, llm_handler, prompt_template_file_name) -> str:
     """
     Formats a given text using the specified LLM handler and prompt template.
 
     Parameters:
-    - text (str): The text to be formatted.
+    - prompt (str): The text to be formatted.
     - llm_handler: An object containing information and methods for interacting with an LLM.
     - prompt_template_file_name (str): The name of the template file to use for formatting.
 
     Returns:
     - str: The formatted prompt.
     """
-    return generate_templated_string(prompt=text, template_file_name=prompt_template_file_name,
-                                     truncation_length=llm_handler.truncate_length,
-                                     max_new_tokens=llm_handler.max_new_tokens)
+    return format_user_turn_with_template(user_turn=prompt, template_file_name=prompt_template_file_name)
+
+
+def format_templated_system_prompt(prompt: str, llm_handler, prompt_template_file_name) -> str:
+    """
+    Formats a system prompt using the specified LLM handler and prompt template.
+
+    Parameters:
+    - prompt (str): The system message to be formatted.
+    - llm_handler: An object containing information and methods for interacting with an LLM.
+    - prompt_template_file_name (str): The name of the template file to use for formatting.
+
+    Returns:
+    - str: The formatted system prompt.
+    """
+    return format_system_prompt_with_template(system_prompt=prompt, template_file_name=prompt_template_file_name)
+
+
+def reduce_messages_to_fit_token_limit(system_prompt: str, messages: List[Dict[str, str]], max_tokens: int) -> List[
+    Dict[str, str]]:
+    """
+    Reduces messages to fit within a maximum token limit.
+
+    This function processes messages in reverse order, accumulating token
+    estimates until the specified maximum token limit is reached. It ensures
+    that full messages are included without exceeding the token limit.
+
+    Parameters:
+    - system_prompt (str): The system prompt to be prepended to the messages.
+    - messages (List[Dict[str, str]]): The list of messages.
+    - max_tokens (int): The maximum number of tokens allowed.
+
+    Returns:
+    - List[Dict[str, str]]: The list of messages that fit within the token limit.
+    """
+    current_token_count = rough_estimate_token_length(system_prompt)
+    fitting_messages = []
+
+    for message in reversed(messages):
+        message_token_count = rough_estimate_token_length(message['content'])
+
+        if current_token_count + message_token_count <= max_tokens:
+            fitting_messages.append(message)
+            current_token_count += message_token_count
+        else:
+            break
+
+    return list(reversed(fitting_messages))
+
+
+def get_formatted_last_n_turns_as_string(messages: List[Dict[str, str]], n: int, template_file_name: str) -> str:
+    """
+    Retrieves and formats the last n user turns as a single concatenated string.
+
+    Parameters:
+    - messages (List[Dict[str, str]]): A list of messages with roles and content.
+    - n (int): The number of turns to retrieve and format.
+    - template_file_name (str): The name of the template file to use for formatting.
+
+    Returns:
+    - str: A single string with the last n user turns concatenated and formatted.
+    """
+    filtered_messages = [message for message in messages if message["role"] != "system"]
+    trimmed_messages = deepcopy(filtered_messages[-n:])
+    return_message = format_messages_with_template(trimmed_messages, template_file_name)
+    return ''.join([message["content"] for message in return_message])

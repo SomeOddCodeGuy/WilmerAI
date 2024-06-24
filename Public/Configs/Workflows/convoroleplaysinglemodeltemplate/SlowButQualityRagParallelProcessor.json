@@ -1,0 +1,16 @@
+{
+  "title": "Performing Slow but Quality RAG on Search Results",
+  "agentName": "Slow but Quality RAG Agent",
+  "systemPrompt": "",
+  "prompt": "",
+  "multiModelList": [
+    {
+      "endpointName": "ConvoRoleplaySingleModelEndpoint"
+    }
+  ],
+  "preset": "Default_8k_400",
+  "type": "SlowButQualityRAG",
+  "ragTarget": "",
+  "ragType": "RecentMemory",
+  "addUserTurnTemplate": true
+}

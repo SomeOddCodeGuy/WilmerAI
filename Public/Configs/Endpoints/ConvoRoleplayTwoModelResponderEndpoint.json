@@ -1,0 +1,5 @@
+{
+  "modelNameForDisplayOnly": "Big model for responding and summarizing",
+  "endpoint": "http://127.0.0.1:5003",
+  "modelName": "Llama-3-70b-Instruct"
+}

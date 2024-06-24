@@ -1,6 +1,7 @@
 {
-  "type": "koboldCpp",
+  "truncation_length_display_only": 16384,
+  "type": "openAIV1Completion",
   "modelName": "Unused",
   "promptTemplate": "alpaca",
-  "truncation_length": 16384
+  "addGenerationPrompt": true
 }

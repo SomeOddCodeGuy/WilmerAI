@@ -5,10 +5,10 @@
   },
   "FACTUAL": {
     "description": "Requests that require factual information or data",
-    "workflow": "ConversationalWorkflow"
+    "workflow": "FactualWorkflow"
   },
   "CONVERSATIONAL": {
     "description": "Casual conversation or non-specific inquiries",
-    "workflow": "FactualWorkflow"
+    "workflow": "ConversationalWorkflow"
   }
 }

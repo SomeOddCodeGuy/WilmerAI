@@ -1,11 +1,9 @@
 {
-    "modelSystemPrompt": "",
-    "promptTemplateSystemPrefix": "<s>system\n ",
-    "promptTemplateSystemSuffix": "\n",
-    "promptTemplateUserPrefix": "<s>human\n ",
-    "promptTemplateUserSuffix": "\n",
-    "promptTemplateAssistantPrefix": "<s>bot\n",
-    "promptTemplateAssistantSuffix": "<｜end_of_sentence｜>",
-    "promptTemplateEndToken": "",
-    "promptTemplateGenSeparator": ""
+  "promptTemplateSystemPrefix": "<s>system\n ",
+  "promptTemplateSystemSuffix": "\n",
+  "promptTemplateUserPrefix": "<s>human\n ",
+  "promptTemplateUserSuffix": "\n",
+  "promptTemplateAssistantPrefix": "<s>bot\n",
+  "promptTemplateAssistantSuffix": "<|end_of_sentence|>",
+  "promptTemplateEndToken": ""
 }

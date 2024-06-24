@@ -1,11 +1,9 @@
 {
-    "modelSystemPrompt": "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.",
-    "promptTemplateAssistantPrefix": "ASSISTANT: ",
-    "promptTemplateAssistantSuffix": "</s>\n",
-    "promptTemplateEndToken": "",
-    "promptTemplateGenSeparator": "",
-    "promptTemplateSystemPrefix": "",
-    "promptTemplateSystemSuffix": "\n\n",
-    "promptTemplateUserPrefix": "USER: ",
-    "promptTemplateUserSuffix": "\n"
+  "promptTemplateAssistantPrefix": "ASSISTANT: ",
+  "promptTemplateAssistantSuffix": "</s>\n",
+  "promptTemplateEndToken": "",
+  "promptTemplateSystemPrefix": "",
+  "promptTemplateSystemSuffix": "\n\n",
+  "promptTemplateUserPrefix": "USER: ",
+  "promptTemplateUserSuffix": "\n"
 }

@@ -1,11 +1,9 @@
 {
-    "modelSystemPrompt": "",
-    "promptTemplateAssistantPrefix": "<|start_header_id|>assistant<|end_header_id|>\n\n",
-    "promptTemplateAssistantSuffix": "<|eot_id|>",
-    "promptTemplateEndToken": "",
-    "promptTemplateGenSeparator": "",
-    "promptTemplateSystemPrefix": "<|start_header_id|>system<|end_header_id|>\n\n",
-    "promptTemplateSystemSuffix": "<|eot_id|>",
-    "promptTemplateUserPrefix": "<|start_header_id|>user<|end_header_id|>\n\n",
-    "promptTemplateUserSuffix": "<|eot_id|>"
+  "promptTemplateAssistantPrefix": "<|start_header_id|>assistant<|end_header_id|>\n\n",
+  "promptTemplateAssistantSuffix": "<|eot_id|>",
+  "promptTemplateEndToken": "",
+  "promptTemplateSystemPrefix": "<|start_header_id|>system<|end_header_id|>\n\n",
+  "promptTemplateSystemSuffix": "<|eot_id|>",
+  "promptTemplateUserPrefix": "<|start_header_id|>user<|end_header_id|>\n\n",
+  "promptTemplateUserSuffix": "<|eot_id|>"
 }

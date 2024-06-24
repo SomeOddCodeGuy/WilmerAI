@@ -1,0 +1,9 @@
+{
+  "promptTemplateSystemPrefix": "<s> [INST] <<SYS>>\n",
+  "promptTemplateSystemSuffix": "\n<</SYS>> [/INST]\n\n",
+  "promptTemplateUserPrefix": " [INST] ",
+  "promptTemplateUserSuffix": " [/INST] ",
+  "promptTemplateAssistantPrefix": "",
+  "promptTemplateAssistantSuffix": " </s>",
+  "promptTemplateEndToken": ""
+}

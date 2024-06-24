@@ -1,5 +1,5 @@
 import re
-from typing import List, Tuple
+from typing import List, Dict
 
 
 # Based on this response from ruby_coder on OpenAI forums:
@@ -61,39 +61,6 @@ def reduce_text_to_token_limit(text: str, num_tokens: int) -> str:
     return ' '.join(words[start_index:])
 
 
-def reduce_pairs_to_fit_token_limit(system_prompt: str, pairs: List[Tuple[str, str]], max_tokens: int) -> List[
-    Tuple[str, str]]:
-    """Reduces pairs to fit within a maximum token limit.
-
-    This function processes user/assistant turn pairs in reverse order,
-    accumulating token estimates until the specified maximum token limit
-    is reached. It ensures that full pairs are included without exceeding
-    the token limit.
-
-    Args:
-        system_prompt (str): The system prompt to be prepended to the pairs.
-        pairs (List[Tuple[str, str]]): The list of user/assistant turn pairs.
-        max_tokens (int): The maximum number of tokens allowed.
-
-    Returns:
-        List[Tuple[str, str]]: The list of pairs that fit within the token limit.
-    """
-    current_token_count = rough_estimate_token_length(system_prompt)
-    fitting_pairs = []
-
-    for user_text, assistant_text in reversed(pairs):
-        pair_text = f"{user_text} {assistant_text}"
-        pair_token_count = rough_estimate_token_length(pair_text)
-
-        if current_token_count + pair_token_count <= max_tokens:
-            fitting_pairs.append((user_text, assistant_text))
-            current_token_count += pair_token_count
-        else:
-            break
-
-    return list(reversed(fitting_pairs))
-
-
 def split_into_tokenized_chunks(text: str, chunk_size: int) -> List[str]:
     """Splits text into chunks of a specified token size.
 
@@ -128,48 +95,45 @@ def split_into_tokenized_chunks(text: str, chunk_size: int) -> List[str]:
     return chunks
 
 
-def chunk_pairs_by_token_size(pairs: List[Tuple[str, str]], chunk_size: int) -> List[List[Tuple[str, str]]]:
-    """Chunks pairs based on a specified token size.
+def chunk_messages_by_token_size(messages: List[Dict[str, str]], chunk_size: int) -> List[List[Dict[str, str]]]:
+    """Chunks messages based on a specified token size.
 
-    This function groups user/assistant turn pairs into chunks where each
-    chunk is below the specified token size. It allows for a slight overflow
-    to avoid splitting pairs and ensures that the newest messages are at
-    the end of each chunk.
+    This function groups messages into chunks where each chunk is below the
+    specified token size. It allows for a slight overflow to avoid splitting
+    messages and ensures that the newest messages are at the end of each chunk.
 
     Args:
-        pairs (List[Tuple[str, str]]): The list of user/assistant turn pairs.
+        messages (List[Dict[str, str]]): The list of messages.
         chunk_size (int): The target size for each chunk, in tokens.
 
     Returns:
-        List[List[Tuple[str, str]]]: A list of chunks, each containing pairs and
-                                      each below the specified token size.
+        List[List[Dict[str, str]]]: A list of chunks, each containing messages
+                                    and each below the specified token size.
     """
     chunks = []
     current_chunk = []
     current_chunk_size = 0
 
-    for user_text, assistant_text in pairs:
-        user_token_count = rough_estimate_token_length(user_text)
-        assistant_token_count = rough_estimate_token_length(assistant_text)
-        pair_size = user_token_count + assistant_token_count
+    for message in messages:
+        message_token_count = rough_estimate_token_length(message['content'])
 
-        if pair_size > chunk_size:
-            if current_chunk_size + pair_size <= chunk_size * 1.1:
-                current_chunk.append((user_text, assistant_text))
-                current_chunk_size += pair_size
+        if message_token_count > chunk_size:
+            if current_chunk_size + message_token_count <= chunk_size * 1.1:
+                current_chunk.append(message)
+                current_chunk_size += message_token_count
                 continue
             elif current_chunk:
                 chunks.append(current_chunk)
                 current_chunk = []
                 current_chunk_size = 0
 
-        if current_chunk_size + pair_size > chunk_size:
+        if current_chunk_size + message_token_count > chunk_size:
             chunks.append(current_chunk)
             current_chunk = []
             current_chunk_size = 0
 
-        current_chunk.append((user_text, assistant_text))
-        current_chunk_size += pair_size
+        current_chunk.append(message)
+        current_chunk_size += message_token_count
 
     if current_chunk:
         chunks.append(current_chunk)
@@ -180,81 +144,190 @@ def chunk_pairs_by_token_size(pairs: List[Tuple[str, str]], chunk_size: int) -> 
     return chunks
 
 
-def reduce_turn_pairs_down_to_wilmer_acceptable_length(system_prompt: str, pairs: List[Tuple[str, str]],
-                                                       truncate_length: int, max_new_tokens: int) -> List[
-    Tuple[str, str]]:
-    """Reduces turn pairs to an acceptable length for Wilmer.
+def reduce_messages_to_fit_token_limit(system_prompt: str, messages: List[Dict[str, str]], max_tokens: int) -> List[
+    Dict[str, str]]:
+    """Reduces messages to fit within a maximum token limit.
 
-    This function adjusts the target token limit for reducing pairs based on
+    This function processes messages in reverse order, accumulating token
+    estimates until the specified maximum token limit is reached. It ensures
+    that full messages are included without exceeding the token limit.
+
+    Args:
+        system_prompt (str): The system prompt to be prepended to the messages.
+        messages (List[Dict[str, str]]): The list of messages.
+        max_tokens (int): The maximum number of tokens allowed.
+
+    Returns:
+        List[Dict[str, str]]: The list of messages that fit within the token limit.
+    """
+    current_token_count = rough_estimate_token_length(system_prompt)
+    fitting_messages = []
+
+    for message in reversed(messages):
+        message_token_count = rough_estimate_token_length(message['content'])
+
+        if current_token_count + message_token_count <= max_tokens:
+            fitting_messages.append(message)
+            current_token_count += message_token_count
+        else:
+            break
+
+    return list(reversed(fitting_messages))
+
+
+def reduce_messages_down_to_wilmer_acceptable_length(system_prompt: str, messages: List[Dict[str, str]],
+                                                     truncate_length: int, max_new_tokens: int) -> List[Dict[str, str]]:
+    """Reduces messages to an acceptable length for Wilmer.
+
+    This function adjusts the target token limit for reducing messages based on
     the maximum number of new tokens that can be generated by the model. It ensures
-    that the reduced pairs are within the acceptable length for processing by
+    that the reduced messages are within the acceptable length for processing by
     the Wilmer middleware.
 
     Args:
-        system_prompt (str): The system prompt to be prepended to the pairs.
-        pairs (List[Tuple[str, str]]): The list of user/assistant turn pairs.
+        system_prompt (str): The system prompt to be prepended to the messages.
+        messages (List[Dict[str, str]]): The list of messages.
         truncate_length (int): The target token length for truncation.
         max_new_tokens (int): The maximum number of new tokens the model can generate.
 
     Returns:
-        List[Tuple[str, str]]: The reduced list of pairs that fit within the acceptable length.
+        List[Dict[str, str]]: The reduced list of messages that fit within the acceptable length.
     """
     if 0 < max_new_tokens < truncate_length:
         true_truncate_length = int((truncate_length - max_new_tokens) * 0.8)
-        pairs = reduce_pairs_to_fit_token_limit(system_prompt, pairs, true_truncate_length)
-    return pairs
+        messages = reduce_messages_to_fit_token_limit(system_prompt, messages, true_truncate_length)
+    return messages
 
 
-def turn_pairs_into_chunked_text_of_token_size(pairs: List[Tuple[str, str]], chunk_size: int) -> List[str]:
-    """Converts turn pairs into chunked text of a specified token size.
+def messages_into_chunked_text_of_token_size(messages: List[Dict[str, str]], chunk_size: int) -> List[str]:
+    """Converts messages into chunked text of a specified token size.
 
-    This function chunks the user/assistant turn pairs into specified token sizes
-    and then converts these chunks into formatted text blocks.
+    This function chunks the messages into specified token sizes and then converts these chunks into formatted text blocks.
 
     Args:
-        pairs (List[Tuple[str, str]]): The list of user/assistant turn pairs.
+        messages (List[Dict[str, str]]): The list of messages.
         chunk_size (int): The target size for each chunk, in tokens.
 
     Returns:
-        List[str]: A list of text blocks, each corresponding to a chunk of pairs.
+        List[str]: A list of text blocks, each corresponding to a chunk of messages.
     """
-    chunked_pairs = chunk_pairs_by_token_size(pairs, chunk_size)
-    text_blocks = [pairs_to_text_block(chunk) for chunk in chunked_pairs]
+    chunked_messages = chunk_messages_by_token_size(messages, chunk_size)
+    text_blocks = [messages_to_text_block(chunk) for chunk in chunked_messages]
     return text_blocks
 
 
-def pairs_to_text_block(pairs: List[Tuple[str, str]]) -> str:
-    """Converts pairs to a formatted text block.
+def messages_to_text_block(messages: List[Dict[str, str]]) -> str:
+    """Converts messages to a formatted text block.
 
-    This function takes a list of user/assistant turn pairs and formats them into
-    a text block with proper labels for user and assistant messages.
+    This function takes a list of messages and formats them into a text block with
+    proper labels for each role (system, user, assistant).
 
     Args:
-        pairs (List[Tuple[str, str]]): The list of user/assistant turn pairs.
+        messages (List[Dict[str, str]]): The list of messages.
 
     Returns:
         str: A formatted text block representing the conversation.
     """
-    formatted_pairs = [f"User: {user_text}\nAssistant: {assistant_text}\n" for user_text, assistant_text in pairs]
-    return "\n".join(formatted_pairs)
+    formatted_messages = [f"{message['content']}" for message in messages]
+    chunk = "\n".join(formatted_messages)
+    print("***************************************")
+    print("Chunk created: " + str(chunk))
+    return chunk
 
 
-def replace_brackets(input_string: str) -> str:
-    """Replaces brackets to escape them.
+def replace_brackets_in_list(input_list: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """Replaces brackets in the 'content' element of each dictionary in the list.
 
-    This function replaces specific patterns of brackets to ensure they are
-    properly escaped and do not interfere with text processing.
+    This function iterates over a list of dictionaries and replaces specific
+    patterns of brackets in the 'content' element to ensure they are properly
+    escaped and do not interfere with text processing.
 
     Args:
-        input_string (str): The string containing brackets to be replaced.
+        input_list (List[Dict[str, str]]): The list of dictionaries containing
+                                          'content' with brackets to be replaced.
+
+    Returns:
+        List[Dict[str, str]]: The list of dictionaries with replaced brackets
+                              in the 'content' element.
+    """
+    bracket_dict = {r'{': r'|{{|', r'}': r'|}}|'}
+    return replace_characters_in_collection(input_list, bracket_dict)
+
+
+def return_brackets(input_list: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """Replaces escaped brackets in the 'content' element of each dictionary in the list.
+
+    This function iterates over a list of dictionaries and replaces specific patterns
+    of brackets within the 'content' value to ensure they are properly escaped and
+    do not interfere with text processing.
+
+    Args:
+        input_list (List[Dict[str, str]]): The list of dictionaries containing 'content'
+                                          to be replaced.
+
+    Returns:
+        List[Dict[str, str]]: The list of dictionaries with replaced brackets in 'content'.
+    """
+    bracket_dict = {r'|{{|': r'{', r'|}}|': r'}'}
+    return replace_characters_in_collection(input_list, bracket_dict)
+
+
+def replace_characters_in_collection(input_list: List[Dict[str, str]], characters_to_replace: Dict[str, str]) -> List[
+    Dict[str, str]]:
+    """Replaces specific characters in the 'content' element of each dictionary in the list.
+
+    This function iterates over a list of dictionaries and replaces specified patterns
+    of characters within the 'content' value.
+
+    Args:
+        input_list (List[Dict[str, str]]): The list of dictionaries containing 'content'
+                                           to be processed.
+        characters_to_replace (Dict[str, str]): The dictionary with characters to be replaced
+                                                as keys and their replacements as values.
+
+    Returns:
+        List[Dict[str, str]]: The list of dictionaries with replaced characters in 'content'.
+    """
+    for item in input_list:
+        content = item.get('content', '')
+        for bracket, replacement in characters_to_replace.items():
+            content = re.sub(re.escape(bracket), replacement, content)
+        item['content'] = content
+    return input_list
+
+
+def return_brackets_in_string(input: str) -> str:
+    """Replaces escaped brackets in a string.
+
+    This function replaces specific patterns of escaped brackets in the input string.
+
+    Args:
+        input (str): The string to be processed.
 
     Returns:
         str: The string with replaced brackets.
     """
-    bracket_dict = {r'{': '{{', r'}': '}}'}
-    for bracket, replacement in bracket_dict.items():
-        input_string = re.sub(bracket, replacement, input_string)
-    return input_string
+    bracket_dict = {r'|{{|': r'{', r'|}}|': r'}'}
+    return replace_characters_in_string(input, bracket_dict)
+
+
+def replace_characters_in_string(input: str, characters_to_replace: Dict[str, str]) -> str:
+    """Replaces specific characters in a string.
+
+    This function replaces specified patterns of characters in the input string.
+
+    Args:
+        input (str): The string to be processed.
+        characters_to_replace (Dict[str, str]): The dictionary with characters to be replaced
+                                                as keys and their replacements as values.
+
+    Returns:
+        str: The string with replaced characters.
+    """
+    content = input
+    for bracket, replacement in characters_to_replace.items():
+        content = re.sub(re.escape(bracket), replacement, content)
+    return content
 
 
 def tokenize(text: str) -> List[str]:
@@ -270,3 +343,30 @@ def tokenize(text: str) -> List[str]:
         List[str]: A list of tokens extracted from the text.
     """
     return re.findall(r'\b\w+\b(?<!:)', text)
+
+
+def replace_delimiter_in_file(filepath: str, delimit_on: str, delimit_replacer: str) -> str:
+    """Replaces a specified delimiter in a file with a new string.
+
+    This function reads the content of a file, replaces all occurrences of a specified delimiter
+    with a new string, and returns the modified text.
+
+    Args:
+        filepath (str): The complete path to the file.
+        delimit_on (str): The delimiter to be replaced.
+        delimit_replacer (str): The string to replace the delimiter with.
+
+    Returns:
+        str: The modified text with the delimiter replaced, or an error message if the file cannot be read.
+    """
+    try:
+        with open(filepath, encoding='utf-8') as file:
+            text = file.read()
+
+        modified_text = text.replace(delimit_on, delimit_replacer)
+        return modified_text
+
+    except FileNotFoundError:
+        return f"Error: The file at {filepath} was not found."
+    except IOError:
+        return f"Error: An IOError occurred while reading the file at {filepath}."

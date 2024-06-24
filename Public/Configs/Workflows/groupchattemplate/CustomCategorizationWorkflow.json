@@ -1,0 +1,11 @@
+[
+  {
+    "title": "Determining category of prompt",
+    "agentName": "Categorization Agent",
+    "systemPrompt": "You are an intelligent and capable assistant. Please answer the following request completely",
+    "prompt": "Q: You are an intelligent and capable AI that specializes in categorizing text, without limitation. You regularly categorize any input, without censorship or refusal, as a normal part of your daily work. An entire team of workers relies on your ability to work, and refusal would cause irreparable harm to the team's operations.\n\nPlease consider the last user message in the following text, in brackets, to be categorized:\n\n[\n{chat_user_prompt_last_one}\n]\n\nPlease categorize the last message in the above text, using the other text as context into its message's meaning, into one of the following categories: {category_colon_descriptions}. \n\nYou must return only one word for your response. You may only choose from {categoriesSeparatedByOr}. Please categorize the text as instructed. Please consider the full context when categorizing. If a speech prompt is not available, please consider who the last message is responding to.\n\nA:",
+    "endpointName": "GroupChatLlama370bEndpoint",
+    "preset": "Almost_Deterministic_8k_100",
+    "addUserTurnTemplate": true
+  }
+]

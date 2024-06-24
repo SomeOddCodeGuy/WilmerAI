@@ -1,6 +1,7 @@
 {
-  "type": "koboldCpp",
+  "truncation_length_display_only": 32768,
+  "type": "openAIV1Completion",
   "modelName": "Unused",
   "promptTemplate": "command-r",
-  "truncation_length": 32768
+  "addGenerationPrompt": true
 }

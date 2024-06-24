@@ -1,11 +1,9 @@
 {
-    "modelSystemPrompt": "Below is an instruction that describes a task, paired with an input that provides further context. Write a response that appropriately completes the request.",
-    "promptTemplateSystemPrefix": "",
-    "promptTemplateSystemSuffix": "\n",
-    "promptTemplateUserPrefix": "USER: ",
-    "promptTemplateUserSuffix": " ",
-    "promptTemplateAssistantPrefix": "ASSISTANT:",
-    "promptTemplateAssistantSuffix": "\n",
-    "promptTemplateEndToken": "",
-    "promptTemplateGenSeparator": ""
+  "promptTemplateSystemPrefix": "",
+  "promptTemplateSystemSuffix": "\n",
+  "promptTemplateUserPrefix": "USER: ",
+  "promptTemplateUserSuffix": " ",
+  "promptTemplateAssistantPrefix": "ASSISTANT:",
+  "promptTemplateAssistantSuffix": "\n",
+  "promptTemplateEndToken": ""
 }

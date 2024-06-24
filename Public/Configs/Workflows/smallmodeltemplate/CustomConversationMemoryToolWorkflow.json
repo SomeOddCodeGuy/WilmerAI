@@ -1,0 +1,44 @@
+[
+  {
+    "title": "Search Keyword Generation",
+    "agentName": "Keyword Generator Agent",
+    "systemPrompt": "You are an intelligent and capable assistant. Please answer the following request completely",
+    "prompt": "Q: You are engaged in an ongoing conversation with a user. For each message, identify and extract key terms and phrases related to the topics discussed to help you recall relevant prior discussions from a text database. Your response should not only select keywords for key topics that are most important from the sentences but also format them to enable complex searches using logical and proximity operators.\n\nConversation messages:\n[\nGerald: I really enjoy flying. It makes me happy I've always wanted to get a pilot's license. I think we talked about that before. I'd love to fly around in my own personal plane. Having it would be really helpful. Wonder if there's an app for getting more information about it? You wrote one didn't you?\nGerald: Or should I get a boat? Ugh I have no idea.\nRalf:\n]\n\nInstructions:\nAnalyze the message to pinpoint the main subjects. Select keywords and format them in a structured way that represents the specific topics discussed, focusing on proper nouns, technical terms, and specific products or tools mentioned. Format the keywords to potentially include logical connectors like AND, OR, and NOT, or grouping parentheses for complex queries. This will aid in both proximity and logical searches. For example, if the user discusses multiple topics, consider formatting like \"(Flying OR Pilot License) AND (Plane OR Aircraft) AND (App OR Application OR Software)\".\n\nResponse:\nProvide keywords based on the core topics or subjects discussed in the user's message, ensuring relevance to the actual entities or concepts mentioned, formatted to aid in complex search queries. Please do not include the names of any speakers.\n\nA: (Flying OR Pilot License) AND (Plane OR Aircraft) AND (App OR Application OR Software) AND (Boat OR Ship OR Seacraft)\n\nQ: As an AI interacting with a user in an ongoing dialogue, your task is to extract and structure keywords from each message that can be used to recall related prior discussions effectively. Your responses should organize keywords in a way that supports advanced searches involving logical operators and proximity searches.\n\nConversation messages:\n[\nGerald: Last weekend, I went hiking in the Rockies. It was incredible! The views from the top were breathtaking. I’m thinking of going back next month but maybe camping instead. I read a great guidebook on outdoor survival that really helped. Also, have we talked about my plans to visit Yellowstone next year?\nRalf: What do you think about outdoor photography? I recently bought a new camera to capture nature scenes.\nGerald:\n]\n\nInstructions:\nPinpoint the main subjects and keywords from each message and format them to support complex search operations. Focus on nouns and specific terms that clearly represent topics, avoiding overly broad terms. Format these terms using logical connectors (AND, OR, NOT) and parentheses for clarity. Consider how terms can be related or contrasted in the context of the conversation for better search optimization. For example, if the user mentions related activities, format the response as \"(Hiking OR Camping) AND Rockies AND (Guidebook OR Book) AND (Outdoor Survival OR Survival Techniques)\".\n\nResponse:\nConstruct a response with keywords organized in a logical format that enhances searchability for recalling specific or related discussions. Please do not include the names of any speakers.\n\nA: (Hiking OR Camping) AND Rockies AND (Guidebook OR Book) AND (Outdoor Survival OR Survival Techniques) AND (Yellowstone OR National Park) AND (Photography OR Outdoor Photography) AND Camera\n\n\nQ: As an AI interacting with a user in an ongoing dialogue, your task is to extract and structure keywords from each message that can be used to recall related prior discussions effectively. Your responses should organize keywords in a way that supports advanced searches involving logical operators and proximity searches.\n\nConversation messages:\n[\n{chat_user_prompt_last_two}\n]\n\nInstructions:\nPinpoint the main subjects and keywords from each message and format them to support complex search operations. Focus on nouns and specific terms that clearly represent topics, avoiding overly broad terms. Format these terms using logical connectors (AND, OR, NOT) and parentheses for clarity. Consider how terms can be related or contrasted in the context of the conversation for better search optimization. For example, if the user mentions related activities, format the response as \"(Hiking OR Camping) AND Rockies AND (Guidebook OR Book) AND (Outdoor Survival OR Survival Techniques)\".\n\nResponse:\nConstruct a response with keywords organized in a logical format that enhances searchability for recalling specific or related discussions. Please do not include the names of any speakers.\n\nA: ",
+    "endpointName": "SmallModelEndpoint",
+    "preset": "Almost_Deterministic_8k_100",
+    "addUserTurnTemplate": true
+  },
+  {
+    "title": "Performing keyword search",
+    "agentName": "Keyword Search Agent",
+    "type": "KeywordSearchPerformerTool",
+    "searchTarget": "CurrentConversation",
+    "keywords": "{agent1Output}",
+    "lookbackStartTurn": 31
+  },
+  {
+    "title": "Performing Slow but Quality RAG on Search Results",
+    "agentName": "Slow but Quality RAG Agent",
+    "systemPrompt": "You are an extremely capable summarizer, who is able to summarize any text into a human readable paragraph. You never allow things like misplaced prompt template tags, odd parentheses or brackets, or other things like this to throw you off. Your summaries are always clear and concise.",
+    "prompt": "You are currently in a roleplay with a user who just sent you a message. In order to respond to that message, you've decided to look through your memories to find anything that might be relevant.\n\nYou have just run across an old chat log, which can be found within brackets below:\n\n[\n[TextChunk]\n]\n\nPlease summarize the important details of this old chat log, being sure to capture to import key points of what you see here. What was said, who said it, how they seemed to feel. If there are very important key details, like the definition of a word or specifying the meaning of something, please include that as well. You will be using this note later when you craft a response to the user.",
+    "multiModelList": [
+      {
+        "endpointName": "SmallModelEndpoint"
+      }
+    ],
+    "preset": "Default_8k_400",
+    "type": "SlowButQualityRAG",
+    "ragTarget": "{agent2Output}",
+    "ragType": "CurrentConversation",
+    "addUserTurnTemplate": true
+  },
+  {
+    "title": "Search Result Summarizer",
+    "agentName": "Search Result Summarizer Agent",
+    "systemPrompt": "You are an extremely capable summarizer, who is able to summarize any text into a human readable text. You never allow things like misplaced prompt template tags, odd parentheses or brackets, or other things like this to throw you off. Your summaries are always clear and detailed.",
+    "prompt": "You are engaged in a conversation with a user. The user sent you a message, and you have taken some time to look through your long term memories for anything related to that message. The memories that you came up with, which are from long ago in the conversation, can be found here: \n[\n{agent3Output}\n]\n\nThe latest messages in the conversation can be found in brackets below: \n[\n{chat_user_prompt_last_three}\n]\n\nPlease look through the distant memories and the recent conversation, and then answer the following questions with complete sentences:\n\nA) What context do these long term memories from earlier in the conversation give towards the current conversation?\nB) Based on these long term memories from earlier in the conversation, what sort of response should be given?\nC) Based on these long term memories from earlier in the conversation, what sort of relationship do the speakers seem to have with one another?\n\nNOTE: If there are no memories, please specify that.",
+    "endpointName": "SmallModelEndpoint",
+    "preset": "Default_8k_2000",
+    "addUserTurnTemplate": true
+  }
+]

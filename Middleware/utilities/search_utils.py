@@ -49,7 +49,7 @@ def calculate_line_scores(lines: List[str], index: Dict[str, List[int]], query_t
 
 
 def apply_proximity_filter(lines: List[str], line_scores: Dict[int, int], tokens: List[str], proximity_limit: int) -> \
-        Dict[int, int]:
+Dict[int, int]:
     """
     Apply a proximity filter to the line scores, considering the distance between tokens.
 
@@ -128,27 +128,37 @@ def advanced_search_in_chunks(chunks: List[str], query: str, max_excerpts: int =
     return relevant_chunks
 
 
-def filter_keywords_by_speakers(text: str, keywords: str) -> str:
+def filter_keywords_by_speakers(messages: List[Dict[str, str]], keywords: str) -> str:
     """
-    Filter out keywords that match any speaker names found in the text.
+    Filter out keywords that match any speaker names found in the messages.
 
     Parameters:
-    text (str): The text containing the conversation with speaker names.
+    messages (List[Dict[str, str]]): The list of messages containing the conversation with speaker names.
     keywords (str): The keywords to filter, potentially containing speaker names.
 
     Returns:
     str: The filtered keywords with speaker names removed.
     """
-    speakers = set(re.findall(r'\b(\w+):', text))
+    # Extract speakers from the messages
+    speakers = set()
+    for message in messages:
+        content = message['content']
+        found_speakers = re.findall(r'\b(\w+):', content)
+        speakers.update(found_speakers)
+
+    # Tokenize the keywords
     tokens = re.findall(r'(\b\w+\b:|\bAND\b|\bOR\b|\(|\)|\b\w+\b)', keywords)
+
+    # Filter tokens
     filtered_tokens = [token for token in tokens if token not in speakers and not token.endswith(':')]
+
+    # Join filtered tokens back into a string
     result = ' '.join(filtered_tokens)
     result = re.sub(r'\(\s+', '(', result)
     result = re.sub(r'\s+\)', ')', result)
+
     return result
 
-
-# The following functions are helper methods for the advanced search methods.
 
 def calculate_tfidf_scores(chunks: List[str], query: str) -> List[float]:
     """

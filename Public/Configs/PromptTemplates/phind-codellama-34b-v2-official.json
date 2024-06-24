@@ -1,11 +1,10 @@
 {
-    "modelSystemPrompt": "You are an exceptionally intelligent coding assistant that consistently delivers accurate and reliable responses to user instructions.",
-    "promptTemplateSystemPrefix": "### System Prompt\n",
-    "promptTemplateSystemSuffix": "\n",
-    "promptTemplateUserPrefix": "### User Message\n",
-    "promptTemplateUserSuffix": "\n",
-    "promptTemplateAssistantPrefix": "### Assistant\n",
-    "promptTemplateAssistantSuffix": "",
-    "promptTemplateEndToken": "</s>",
-    "promptTemplateGenSeparator": "</s>"
+  "promptTemplateSystemPrefix": "### System Prompt\n",
+  "promptTemplateSystemSuffix": "\n",
+  "promptTemplateUserPrefix": "### User Message\n",
+  "promptTemplateUserSuffix": "\n",
+  "promptTemplateAssistantPrefix": "### Assistant\n",
+  "promptTemplateAssistantSuffix": "",
+  "promptTemplateEndToken": "</s>",
+  "promptTemplateGenSeparator": "</s>"
 }

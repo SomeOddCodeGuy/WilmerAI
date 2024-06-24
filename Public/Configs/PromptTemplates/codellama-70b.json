@@ -1,11 +1,9 @@
 {
-    "modelSystemPrompt": "",
-    "promptTemplateSystemPrefix": "Source: system\n\n ",
-    "promptTemplateSystemSuffix": " <step> ",
-    "promptTemplateUserPrefix": "Source: user\n\n ",
-    "promptTemplateUserSuffix": " <step> ",
-    "promptTemplateAssistantPrefix": "Source: assistant\n",
-    "promptTemplateAssistantSuffix": " <step> ",
-    "promptTemplateEndToken": "Destination: user\n ",
-    "promptTemplateGenSeparator": ""
+  "promptTemplateSystemPrefix": "Source: system\n\n ",
+  "promptTemplateSystemSuffix": " <step> ",
+  "promptTemplateUserPrefix": "Source: user\n\n ",
+  "promptTemplateUserSuffix": " <step> ",
+  "promptTemplateAssistantPrefix": "Source: assistant\n",
+  "promptTemplateAssistantSuffix": " <step> ",
+  "promptTemplateEndToken": "Destination: user\n "
 }

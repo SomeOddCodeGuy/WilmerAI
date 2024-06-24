@@ -1,11 +1,9 @@
 {
-    "modelSystemPrompt": "",
-    "promptTemplateAssistantPrefix": "### Response:\n",
-    "promptTemplateAssistantSuffix": "\n",
-    "promptTemplateEndToken": "",
-    "promptTemplateGenSeparator": "",
-    "promptTemplateSystemPrefix": " ",
-    "promptTemplateSystemSuffix": " ",
-    "promptTemplateUserPrefix": "### Instruction:\n",
-    "promptTemplateUserSuffix": "\n"
+  "promptTemplateAssistantPrefix": "### Response:\n",
+  "promptTemplateAssistantSuffix": "\n",
+  "promptTemplateEndToken": "",
+  "promptTemplateSystemPrefix": " ",
+  "promptTemplateSystemSuffix": " ",
+  "promptTemplateUserPrefix": "### Instruction:\n",
+  "promptTemplateUserSuffix": "\n"
 }

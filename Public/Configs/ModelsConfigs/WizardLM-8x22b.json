@@ -1,6 +1,7 @@
 {
-  "type": "koboldCpp",
+  "truncation_length_display_only": 16384,
+  "type": "openAIV1Completion",
   "modelName": "Unused",
-  "promptTemplate": "userassistant",
-  "truncation_length": 16384
+  "promptTemplate": "userassistantwizard",
+  "addGenerationPrompt": true
 }

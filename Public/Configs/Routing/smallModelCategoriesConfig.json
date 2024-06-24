@@ -1,0 +1,14 @@
+{
+  "TECHNICAL": {
+    "description": "Any conversation which is specifically technical in nature, including IT related questions, software related questions, requests that require the writing of new code or the modification of existing code.",
+    "workflow": "CodingWorkflow"
+  },
+  "FACTUAL": {
+    "description": "Questions or conversation where the response would be a textbook or encyclopedic statement of fact",
+    "workflow": "FactualWorkflow"
+  },
+  "CONVERSATIONAL": {
+    "description": "Small talk, casual conversation, or any non-factual or non-technical query",
+    "workflow": "ConversationalWorkflow"
+  }
+}

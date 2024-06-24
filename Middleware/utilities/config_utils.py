@@ -26,6 +26,19 @@ def load_config(config_file):
     return config_data
 
 
+def get_current_username():
+    """
+    Retrieves the current username from the configuration.
+
+    :return: The current username.
+    """
+    project_dir = get_project_root_directory_path()
+    config_file = os.path.join(project_dir, 'Public', 'Configs', 'Users', '_current-user.json')
+    with open(config_file) as file:
+        data = json.load(file)
+    return data['currentUser']
+
+
 def get_user_config():
     """
     Retrieves the configuration for the current user.
@@ -33,10 +46,7 @@ def get_user_config():
     :return: The current user's configuration data.
     """
     project_dir = get_project_root_directory_path()
-    config_file = os.path.join(project_dir, 'Public', 'Configs', 'Users', '_current-user.json')
-    with open(config_file) as file:
-        data = json.load(file)
-    current_user_name = data['currentUser']
+    current_user_name = get_current_username()
     config_path = os.path.join(project_dir, 'Public', 'Configs', 'Users', f'{current_user_name.lower()}.json')
     with open(config_path) as file:
         config_data = json.load(file)
@@ -45,7 +55,7 @@ def get_user_config():
 
 def get_config_value(key):
     """
-    Retrieves a specific configuration value from the WilmerAI configuration.
+    Retrieves a specific configuration value from the user configuration.
 
     :param key: The key of the configuration value to retrieve.
     :return: The value associated with the specified key.
@@ -92,7 +102,14 @@ def get_discussion_file_path(discussion_id, file_name):
     return os.path.join(directory, f'{discussion_id}_{file_name}.json')
 
 
-# The following functions are now simplified using the above helper functions.
+def get_application_port():
+    """
+    Retrieves the expected port for the application from the user configuration.
+
+    :return: The port on which the API should run.
+    """
+    return get_config_value('port')
+
 
 def get_custom_workflow_is_active():
     """
@@ -112,20 +129,20 @@ def get_default_parallel_processor_name():
     return get_config_value('defaultParallelProcessWorkflow')
 
 
-def get_oversized_prompt_workflow_name():
+def get_discussion_id_workflow_name():
     """
-    Retrieves the name of the workflow for oversized prompts.
+    Retrieves the name of the discussion ID workflow.
 
-    :return: The name of the oversized prompt workflow.
+    :return: The name of the discussion ID workflow.
     """
-    return get_config_value('oversizedPromptWorkflow')
+    return get_config_value('discussionIdMemoryFileWorkflowSettings')
 
 
 def get_chat_template_name():
     """
-    Retrieves the name of the active chat prompt template_name.
+    Retrieves the name of the active chat prompt template.
 
-    :return: The name of the active chat prompt template_name.
+    :return: The name of the active chat prompt template.
     """
     return get_config_value('chatPromptTemplateName')
 
@@ -215,7 +232,6 @@ def get_openai_preset_path(config_name):
     :param config_name: The name of the preset configuration.
     :return: The full path to the preset configuration file.
     """
-
     return get_preset_config_path("OpenAiCompatibleApis", config_name)
 
 
@@ -232,22 +248,20 @@ def get_endpoint_config(endpoint):
 
 def get_template_config_path(template_file_name):
     """
-    Constructs the file path for a prompt template_name configuration file.
+    Constructs the file path for a prompt template configuration file.
 
-    :param template_file_name: The base name of the prompt template_name configuration file.
-    :return: The full path to the prompt template_name configuration file.
+    :param template_file_name: The base name of the prompt template configuration file.
+    :return: The full path to the prompt template configuration file.
     """
-    project_root = get_project_root_directory_path()
-    config_file = get_config_path('PromptTemplates', template_file_name)
-    return config_file
+    return get_config_path('PromptTemplates', template_file_name)
 
 
 def load_template_from_json(template_file_name):
     """
-    Loads a prompt template_name from a JSON configuration file.
+    Loads a prompt template from a JSON configuration file.
 
-    :param template_file_name: The base name of the prompt template_name configuration file.
-    :return: The loaded prompt template_name data.
+    :param template_file_name: The base name of the prompt template configuration file.
+    :return: The loaded prompt template data.
     """
     config_path = get_template_config_path(template_file_name)
     return load_config(config_path)
@@ -260,25 +274,20 @@ def get_workflow_path(workflow_name):
     :param workflow_name: The name of the workflow configuration.
     :return: The full path to the workflow configuration file.
     """
-    return get_config_path('Workflows', workflow_name)
+    user_name = get_current_username()
+    project_dir = get_project_root_directory_path()
+    config_file = os.path.join(project_dir, 'Public', 'Configs', 'Workflows', user_name, f'{workflow_name}.json')
+    return config_file
 
 
-def get_autoremove_strings():
+def get_discussion_id_workflow_path():
     """
-    Retrieves the list of strings to be automatically removed from prompts.
+    Retrieves the file path to the discussion ID workflow.
 
-    :return: A list of autoremove strings.
+    :return: The full path to the discussion ID workflow.
     """
-    return get_config_value('autoremove_strings')
-
-
-def get_stop_strings():
-    """
-    Retrieves the list of stop strings for LLM processing.
-
-    :return: A list of stop strings.
-    """
-    return get_config_value('stop_strings')
+    workflow_name = get_discussion_id_workflow_name()
+    return get_workflow_path(workflow_name)
 
 
 def get_discussion_memory_file_path(discussion_id):
@@ -288,7 +297,9 @@ def get_discussion_memory_file_path(discussion_id):
     :param discussion_id: The ID of the discussion.
     :return: The full path to the discussion's memory file.
     """
-    return get_discussion_file_path(discussion_id, 'memories')
+    result = get_discussion_file_path(discussion_id, 'memories')
+    print("Getting discussion id path: " + result)
+    return result
 
 
 def get_discussion_chat_summary_file_path(discussion_id):
@@ -301,5 +312,31 @@ def get_discussion_chat_summary_file_path(discussion_id):
     return get_discussion_file_path(discussion_id, 'chat_summary')
 
 
-def get_routing_config():
-    routing_config = get_categories_config()
+def get_is_streaming() -> bool:
+    """
+    Retrieves the stream configuration setting.
+
+    :return: The stream setting from the user configuration.
+    """
+    data = get_user_config()
+    return data['stream']
+
+
+def get_is_chat_complete_add_user_assistant() -> bool:
+    """
+    Retrieves the chat completion configuration setting.
+
+    :return: The chat completion add user assistant setting from the user configuration.
+    """
+    data = get_user_config()
+    return data['chatCompleteAddUserAssistant']
+
+
+def get_is_chat_complete_add_missing_assistant() -> bool:
+    """
+    Retrieves the chat completion configuration setting.
+
+    :return: The chat completion add missing assistant setting from the user configuration.
+    """
+    data = get_user_config()
+    return data['chatCompletionAddMissingAssistantGenerator']

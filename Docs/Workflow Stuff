@@ -1,0 +1,3 @@
+* MultiModelList in workflow nodes:
+    You can list multiple LLMs, and it will spin up threads == the number of models available
+    If you put just 1 model, it will do only 1 thread
