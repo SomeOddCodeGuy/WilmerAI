@@ -682,6 +682,12 @@ with endpoints that aren't set up. Wilmer just kind of stalls out if you try
 to hit a link that doesn't exist, since the timeout is set for a really long
 period of time due to some LLMs taking forever to respond.
 
+### My LLM is responding to things I said but deleted and/or the worker LLMs seem to be getting confused a lot.
+
+If you're using KoboldCpp with ContextShift, or something that has a feature like it,
+you may want to turn that off. I always run KoboldCpp with --noshift when using
+Wilmer.
+
 ---
 
 ## Contact
