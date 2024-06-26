@@ -1,5 +1,5 @@
 {
   "modelNameForDisplayOnly": "Small model for doing work",
   "endpoint": "http://127.0.0.1:5002",
-  "modelName": "Llama-3-8b-Instruct"
+  "modelConfigFileName": "Llama-3-8b-Instruct"
 }

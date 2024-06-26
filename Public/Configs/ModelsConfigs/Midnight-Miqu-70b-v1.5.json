@@ -1,7 +1,7 @@
 {
   "truncation_length_display_only": 16384,
   "type": "openAIV1Completion",
-  "modelName": "Unused",
+  "modelNameToSendToAPI": "Unused",
   "promptTemplate": "midnight-miqu-user-assistant",
   "addGenerationPrompt": true
 }

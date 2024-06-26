@@ -13,7 +13,7 @@ class LlmHandlerService:
     def initialize_llm_handler(self, config_data, preset, endpoint, stream=False):
         llm_type = config_data["type"]
         add_generation_prompt = config_data["addGenerationPrompt"]
-        model_name = config_data["modelName"]
+        model_name = config_data["modelNameToSendToAPI"]
         if llm_type == "openAIV1Completion":
             print('Loading v1 Completions endpoint: ' + endpoint)
             llm = OpenAiLlmCompletionsApiService(endpoint=endpoint, model_name=model_name, presetname=preset,
@@ -36,6 +36,9 @@ class LlmHandlerService:
         return self.llm_handler
 
     def load_model_from_config(self, config_name, preset, stream=False):
-        config_file = get_model_config_path(config_name)
-        config_data = load_config(config_file)
-        return self.initialize_llm_handler(config_data, preset, config_name, stream)
+        try:
+            config_file = get_model_config_path(config_name)
+            config_data = load_config(config_file)
+            return self.initialize_llm_handler(config_data, preset, config_name, stream)
+        except Exception as e:
+            print(f"Error loading model from config: ", e)

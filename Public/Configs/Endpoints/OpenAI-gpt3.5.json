@@ -1,6 +1,0 @@
-{
-  "modelNameForDisplayOnly": "OpenAI API GPT3.5",
-  "endpoint": "https://api.openai.com",
-  "modelName": "gpt-3.5-turbo-0125",
-  "apiKey": ""
-}

@@ -1,5 +1,5 @@
 {
   "modelNameForDisplayOnly": "Llama 3 70b",
   "endpoint": "http://127.0.0.1:5003",
-  "modelName": "Llama-3-70b-Instruct"
+  "modelConfigFileName": "Llama-3-70b-Instruct"
 }

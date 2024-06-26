@@ -90,7 +90,7 @@ While I have primarily used this with SillyTavern, it might also work with Open-
 
 #### Text Completion
 
-To connect as a Text Completion in SillyTavern, follow these steps:
+To connect as a Text Completion in SillyTavern, follow these steps (the below screenshot is from SillyTavern):
 
 ![Text Completion Settings](Docs/Examples/Images/ST_text_completion_settings.png)
 
@@ -119,7 +119,7 @@ There are no expected newlines or characters between tags.
 
 #### Chat Completions
 
-To connect as Chat Completions in SillyTavern, follow these steps:
+To connect as Chat Completions in SillyTavern, follow these steps (the below screenshot is from SillyTavern):
 
 ![Chat Completion Settings](Docs/Examples/Images/ST_chat_completion_settings.png)
 
@@ -145,6 +145,25 @@ simply copy your "Public" folder to the new installation to retain your settings
 
 This section will walk you through setting up Wilmer. I have broken the sections into steps; I might recommend copying
 each step, 1 by 1, into an LLM and asking it to help you set the section up. That may make this go much easier.
+
+**IMPORTANT NOTES**
+> It is important to note two things about Wilmer setup.
+> * A) Preset files are 100% customizable. What is in that file goes to the llm API. This is because cloud
+    APIs do not handle some of the various presets that local LLM APIs handle. As such, if you use OpenAI API
+    or other cloud services, the calls will probably fail if you use one of the regular local AI presets. Please
+    see the preset "OpenAI-API" for an example of what openAI accepts.
+>
+>
+> * B) In a lot of the prompts you'll see "You are in a roleplay conversation". This is because LLMs have no
+    identity of their own; they are just files without a persona. The moment you give them a persona, even if
+    that persona is "helpful AI", you are roleplaying with them. (Think of JARVIS from Ironman. The AI calling itself
+    JARVIS and being sassy is a form of roleplay). I use this prompting style to enforce personas for my Assistant
+    and "development team"
+>
+>
+> * C) By default, all the user files are set to turn on streaming responses. You either need to enable
+    this in your front end that is calling Wilmer so that both match, or you need to go into Users/username.json
+    and set Stream to "false"
 
 ### Step 1: Installing the Program
 
@@ -182,9 +201,69 @@ Alternatively, you can manually install the dependencies and run Wilmer with the
 The provided scripts are designed to streamline the process by setting up a virtual environment. However, you can safely
 ignore them if you prefer manual installation.
 
-### Step 2: Endpoints and Models
+### Step 2 Fast Route: Use Pre-made Users
 
-First, we'll set up the endpoints and models. Within the Public folder you should see the following sub-folders. Let's
+Within the Public/Configs you will find a series of folders containing json files. The two that you are
+most interested in are the `Endpoints` folder and the `Users` folder.
+
+First, choose which template user you'd like to use:
+
+* **openaicloudapiservicetemplate**: This user is straight forward, has routing for "Factual/Technical/Conversation" and
+  uses a single endpoint, the `OpenAIEndpoint1` endpoint for everything. It also uses a single preset for all
+  nodes: `OpenAI-API`. If you want to use a single conversation workflow without routing, within the
+  Users/openaicloudapiservicetemplate.json file you can find a boolean to enable custom workflows, which is currently
+  set to a good conversation workflow.
+
+
+* **smallmodeltemplate**: This template is for a single small model being used on all nodes. The endpoint used here is
+  `SmallModelEndpoint`. This also has routes for "Factual/Technical/Conversation", and uses appropriate presets for each
+  node
+
+
+* **multimodeltemplate**: This template is for using three models in tandem: A coding model for the Technical workflow,
+  a factual model for the Factual workflow, and a generalist model for conversation and all worker tasks in the
+  workflows.
+  The endpoints used are `SmallMultiModelCodingEndpoint`, `SmallMultiModelFactualEndpoint`, and
+  `SmallMultiModelGeneralistEndpoint`. It uses appropriate presets for each node in the workflows.
+
+
+* **convoroleplaysinglemodeltemplate**: This user uses a single model with a custom workflow that is good for
+  conversations,
+  and should be good for roleplay (awaiting feedback to tweak if needed). This bypasses all routing. The model used is
+  `ConvoRoleplaySingleModelEndpoint`.
+
+
+* **convoroleplaytwomodeltemplate**: This user uses two models with a custom workflow that is good for conversations,
+  and should be good for roleplay (awaiting feedback to tweak if needed). This bypasses all routing. The models used are
+  `ConvoRoleplayTwoModelWorkerEndpoint`, which is meant for a small model that handles the worker and processing nodes,
+  and `ConvoRoleplayTwoModelResponderEndpoint` which is used by response nodes and summarizing nodes.
+
+
+* **groupchattemplate**: This user exists because I promised to show an example of how my "Development Team" in
+  SillyTavern works. It's fully functional, though a little stripped down. The endpoints it uses
+  are `GroupChatCodestralEndpoint`, `GroupChatLlama370bEndpoint`, `GroupChatWizardEndpoint`
+  and `GroupChatSmalWorkerModelEndpoint`
+
+Once you have selected the user that you want to use, there are a couple of steps to perform:
+
+1) Update the endpoints for your user under Public/Configs/Endpoints. If using a cloud API with
+   openaicloudapiservicetemplate, then you need to update `OpenAIEndpoint1` with the appropriate URL
+   (can leave it alone if using openAI) and your API Key. If you using one of the local AI options,
+   then you will need to update the respective endpoints listed in the user description above
+   with the urls/ports of your API endpoints, and a model config name that matches the model
+   you are using. (If you don't see your model, you'll need to scroll down a bit to see how to
+   set one up!)
+
+2) You will need to set it as your current user. You can do this in Public/Configs/Users/_current-user.json.
+   Simply put the name of the user as the current user and save. You can also specify in here what port you
+   want Wilmer to run on, and whether you want your responses streamed or not.
+
+That's it! Run Wilmer, connect to it, and you should be good to go.
+
+### Step 2 Slow Route: Endpoints and Models (Learn How to Actually Use the Thing)
+
+First, we'll set up the endpoints and models. Within the Public/Configs folder you should see the following sub-folders.
+Let's
 walk
 through what you need.
 
@@ -197,12 +276,13 @@ file, `SocgMacbookPort5001.json`, defines an endpoint:
 {
   "modelNameForDisplayOnly": "Socg Macbook Pro 5001",
   "endpoint": "http://192.168.1.392:5001",
-  "modelName": "Llama-3-8b-Instruct"
+  "modelConfigFileName": "Llama-3-8b-Instruct"
 }
 ```
 
 - **endpoint**: The address of the LLM you are connecting to.
-- **modelName**: The exact name of a model JSON file from the "ModelConfigs" folder, without the ".json" extension.
+- **modelConfigFileName**: The exact name of a model JSON file from the "ModelConfigs" folder, without the ".json"
+  extension.
 
 #### ModelConfigs
 
@@ -213,7 +293,7 @@ configuration, `Llama-3-8b-Instruct.json`, is shown below:
 {
   "truncation_length_display_only": 8192,
   "type": "openAIV1Completion",
-  "modelName": "Unused",
+  "modelNameToSendToAPI": "Unused",
   "promptTemplate": "llama3",
   "addGenerationPrompt": true
 }
@@ -681,12 +761,6 @@ the wrong user set as your current, in which case you're hitting a workflow
 with endpoints that aren't set up. Wilmer just kind of stalls out if you try
 to hit a link that doesn't exist, since the timeout is set for a really long
 period of time due to some LLMs taking forever to respond.
-
-### My LLM is responding to things I said but deleted and/or the worker LLMs seem to be getting confused a lot.
-
-If you're using KoboldCpp with ContextShift, or something that has a feature like it,
-you may want to turn that off. I always run KoboldCpp with --noshift when using
-Wilmer.
 
 ---
 

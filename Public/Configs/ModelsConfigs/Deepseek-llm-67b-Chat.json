@@ -1,7 +1,7 @@
 {
   "truncation_length_display_only": 4096,
   "type": "openAIV1Completion",
-  "modelName": "Unused",
+  "modelNameToSendToAPI": "Unused",
   "promptTemplate": "deepseek-llm-67b",
   "addGenerationPrompt": true
 }

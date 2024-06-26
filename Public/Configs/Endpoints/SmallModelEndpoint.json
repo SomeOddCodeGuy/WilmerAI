@@ -1,5 +1,5 @@
 {
-  "modelNameForDisplayOnly": "For users with just enough VRAM to run a single small model",
+  "modelNameForDisplayOnly": "Small coding model for coding tasks",
   "endpoint": "http://127.0.0.1:5002",
-  "modelName": "Llama-3-8b-Instruct"
+  "modelConfigFileName": "Llama-3-8b-Instruct"
 }

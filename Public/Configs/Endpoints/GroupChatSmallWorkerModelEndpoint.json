@@ -1,5 +1,5 @@
 {
   "modelNameForDisplayOnly": "Small worker model for utilities that aren't actually used in this workflow",
   "endpoint": "http://127.0.0.1:5002",
-  "modelName": "Hermes-2-Theta-Llama-3-8b"
+  "modelConfigFileName": "Hermes-2-Theta-Llama-3-8b"
 }

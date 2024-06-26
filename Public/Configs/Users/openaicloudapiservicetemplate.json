@@ -1,0 +1,19 @@
+{
+  "port": 5005,
+  "stream": true,
+  "customWorkflowOverride": false,
+  "customWorkflow": "FullCustomWorkflow-WithRecent-ChatSummary",
+  "routingConfig": "openAICloudApiServiceCategoriesConfig",
+  "categorizationWorkflow": "CustomCategorizationWorkflow",
+  "defaultParallelProcessWorkflow": "SlowButQualityRagParallelProcessor",
+  "fileMemoryToolWorkflow": "MemoryFileToolWorkflow",
+  "chatSummaryToolWorkflow": "GetChatSummaryToolWorkflow",
+  "conversationMemoryToolWorkflow": "CustomConversationMemoryToolWorkflow",
+  "recentMemoryToolWorkflow": "RecentMemoryToolWorkflow",
+  "discussionIdMemoryFileWorkflowSettings": "_DiscussionId-MemoryFile-Workflow-Settings",
+  "discussionDirectory": "C:\\Temp",
+  "chatPromptTemplateName": "_chatonly",
+  "verboseLogging": false,
+  "chatCompleteAddUserAssistant": false,
+  "chatCompletionAddMissingAssistantGenerator": false
+}

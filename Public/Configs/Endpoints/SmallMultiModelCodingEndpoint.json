@@ -1,5 +1,5 @@
 {
   "modelNameForDisplayOnly": "Small coding model for coding tasks",
   "endpoint": "http://127.0.0.1:5001",
-  "modelName": "MagicCoder-6.7b"
+  "modelConfigFileName": "MagicCoder-6.7b"
 }

@@ -141,6 +141,7 @@ class OpenAiChatCompletionsApi:
 
             try:
                 with requests.post(url, headers=self.headers, json=data, stream=True) as r:
+                    print(data)
                     print(f"Response status code: {r.status_code}")
                     buffer = ""
                     first_chunk_buffer = ""  # Buffer for the first few chunks
@@ -223,6 +224,7 @@ class OpenAiChatCompletionsApi:
         for attempt in range(retries):
             try:
                 print(f"Non-Streaming flow! Attempt: {attempt + 1}")
+                print(data)
                 response = self.session.post(url, headers=self.headers, json=data, timeout=14400)
                 response.raise_for_status()  # Raises HTTPError for bad responses
                 payload = response.json()

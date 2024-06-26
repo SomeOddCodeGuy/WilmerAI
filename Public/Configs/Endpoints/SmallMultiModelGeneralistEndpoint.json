@@ -1,5 +1,5 @@
 {
   "modelNameForDisplayOnly": "Small generalist model for conversation and all else",
   "endpoint": "http://127.0.0.1:5003",
-  "modelName": "OpenHermes-2.5-Mistral-7b"
+  "modelConfigFileName": "OpenHermes-2.5-Mistral-7b"
 }

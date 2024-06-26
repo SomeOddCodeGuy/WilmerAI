@@ -1,0 +1,6 @@
+{
+  "modelNameForDisplayOnly": "OpenAI API 2. Requires OpenAI-API preset on any node that uses it!",
+  "endpoint": "https://api.openai.com",
+  "modelConfigFileName": "OpenAI-gpt-4-turbo",
+  "apiKey": ""
+}

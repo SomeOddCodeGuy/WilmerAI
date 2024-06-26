@@ -221,7 +221,7 @@ def get_model_config_path(config_name):
     """
     endpoint_config = get_config_path('Endpoints', config_name)
     endpoint_data = load_config(endpoint_config)
-    model_config_path = get_config_path('ModelsConfigs', endpoint_data['modelName'])
+    model_config_path = get_config_path('ModelsConfigs', endpoint_data['modelConfigFileName'])
     return model_config_path
 
 
