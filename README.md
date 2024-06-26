@@ -147,7 +147,7 @@ This section will walk you through setting up Wilmer. I have broken the sections
 each step, 1 by 1, into an LLM and asking it to help you set the section up. That may make this go much easier.
 
 **IMPORTANT NOTES**
-> It is important to note two things about Wilmer setup.
+> It is important to note three things about Wilmer setup.
 > * A) Preset files are 100% customizable. What is in that file goes to the llm API. This is because cloud
     APIs do not handle some of the various presets that local LLM APIs handle. As such, if you use OpenAI API
     or other cloud services, the calls will probably fail if you use one of the regular local AI presets. Please
