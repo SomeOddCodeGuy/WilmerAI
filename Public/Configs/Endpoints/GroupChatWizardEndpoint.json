@@ -1,5 +1,9 @@
 {
   "modelNameForDisplayOnly": "WizardLM2-8x22b",
   "endpoint": "http://127.0.0.1:5004",
-  "modelConfigFileName": "WizardLM-8x22b"
+  "apiTypeConfigFileName": "KoboldCpp",
+  "maxContextTokenSize": 16384,
+  "modelNameToSendToAPI": "",
+  "promptTemplate": "alpaca",
+  "addGenerationPrompt": true
 }

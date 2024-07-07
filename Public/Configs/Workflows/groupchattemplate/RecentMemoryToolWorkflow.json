@@ -7,16 +7,18 @@
     "maxSummaryChunksFromFile": 3
   },
   {
+    "title": "Grab the memory chunks from file",
+    "agentName": "Recent Memory File Puller Agent",
+    "type": "GetCurrentMemoryFromFile"
+  },
+  {
     "title": "Performing Slow but Quality RAG on Search Results",
     "agentName": "Slow but Quality RAG Agent",
     "systemPrompt": "You are an extremely capable summarizer, who is able to summarize any text into a human readable paragraph. You never allow things like misplaced prompt template tags, odd parentheses or brackets, or other things like this to throw you off. Your summaries are always clear and concise.",
-    "prompt": "You are currently in a roleplay with a user who just sent you a message. In order to respond to that message, you've decided to go through the most recent messages in your conversation.\n\nYou have broken the recent messages into chunks, and can find one of those chunks here:\n\n[\n[TextChunk]\n]\n\nPlease summarize the important details of these messages, being sure to capture to import key points of what you see here. What was said, who said it, how they seemed to feel. If there are very important key details, like the definition of a word or specifying the meaning of something, please include that as well. You will be using this note later when you craft a response to the user. Please use the character/user names explicitly, as some may write in first person but you need to write your descriptions in third person.",
-    "multiModelList": [
-      {
-        "endpointName": "GroupChatSmallWorkerModelEndpoint"
-      }
-    ],
-    "preset": "Default_8k_400",
+    "prompt": "You are an intelligent and capable content summarizer that is assisting someone who is currently in an online roleplay with a user via a chat program. The instructions for the conversation can be found here: [\n[\nchat_system_prompt\n]\nYou've been summarizing the conversation into 'memory' chunks as the conversation has progressed. You can find the current collection of those memories here: \n[\n{agent2Output}\n]\n\nA new series of messages have occurred since the last time you wrote those memories. You can find the newest messages here:\n\n[\n[TextChunk]\n]\n\nPlease summarize the important details of these new messages, being sure to capture key points of context: what was said, who said it, and how they seemed to feel. Capture as much detail as possible from the new messages into your memory, as you will be using this memory later when you craft a response to the user.\nPlease use the character/user names explicitly, as some may write in first person but you need to write your descriptions in third person.",
+    "endpointName": "GroupChatSmallWorkerModelEndpoint",
+    "preset": "Default",
+    "maxResponseSizeInTokens": 400,
     "type": "SlowButQualityRAG",
     "ragTarget": "{agent1Output}",
     "ragType": "CurrentConversation",
@@ -26,9 +28,10 @@
     "title": "Result Summarizer",
     "agentName": "Memory Summarizer agent",
     "systemPrompt": "You are an extremely capable summarizer, who is able to summarize any text into a human readable text. You never allow things like misplaced prompt template tags, odd parentheses or brackets, or other things like this to throw you off. Your summaries are always clear and detailed.",
-    "prompt": "You are engaged in a conversation with a user. You have been re-reading the most recent messages, broken them into chunks, and written a small summary about each chunk. You can find those summaries of the most recent messages below: \n[\n{agent2Output}\n]\n\nBased on the summaries of all the most recent messages, please write a vivid and detailed summary of the current situation, as well as all of the events and information leading up to it. Try to write it in such a way that someone who doesn't have access to the chat logs can full understand what is happening.\nNote: If the brackets are empty, then there was nothing to summarize.",
+    "prompt": "You are engaged in a conversation with a user. You have been re-reading the most recent messages, broken them into chunks, and written a small summary about each chunk. You can find those summaries of the most recent messages below: \n[\n{agent3Output}\n]\n\nBased on the summaries of all the most recent messages, please write a vivid and detailed summary of the current situation, as well as all of the events and information leading up to it. Try to write it in such a way that someone who doesn't have access to the chat logs can full understand what is happening.\nNote: If the brackets are empty, then there was nothing to summarize.",
     "endpointName": "GroupChatSmallWorkerModelEndpoint",
-    "preset": "Default_8k_1000",
+    "preset": "Default",
+    "maxResponseSizeInTokens": 1000,
     "addUserTurnTemplate": true
   }
 ]

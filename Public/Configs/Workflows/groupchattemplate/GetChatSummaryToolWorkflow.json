@@ -16,10 +16,11 @@
         "endpointName": "GroupChatSmallWorkerModelEndpoint"
       }
     ],
-    "preset": "Default_8k_400",
+    "preset": "Default",
     "type": "SlowButQualityRAG",
     "ragTarget": "{agent1Output}",
     "ragType": "CurrentConversation",
+    "maxResponseSizeInTokens": 400,
     "addUserTurnTemplate": true
   },
   {
@@ -33,7 +34,8 @@
     "systemPrompt": "You are an extremely capable summarizer, who is able to summarize any text into a human readable text. You never allow things like misplaced prompt template tags, odd parentheses or brackets, or other things like this to throw you off. Your summaries are always clear and detailed.",
     "prompt": "You are engaged in a roleplay with a user, who has sent you a new message. In order to respond to them appropriately, you have decided that it is important to first document the story so far.\n\nHere you can find the instructions for the roleplay, as well as the initial starting scenario from the beginning:\n[\n{chat_system_prompt}\n]\n\nBelow you can find the complete summarized story of the roleplay up to this point, if one exists:\n[\n{agent3Output}\n]\n\nNext, you will find below a collection of memories for the new roleplay that has occurred since the summary above was written:\n[\n{agent2Output}\n]\n\nPlease consider the instructions, the entire roleplay story summary, and the new memories that you have developed since the summary was written. Please update the roleplay story summary, adding your new memories to it in order to create a more complete story summary.\n\nPlease respond with the complete story summary, as the old summary will be thrown away and anything you leave out will be lost forever.",
     "endpointName": "GroupChatSmallWorkerModelEndpoint",
-    "preset": "Default_8k_2000",
+    "preset": "Default",
+    "maxResponseSizeInTokens": 2000,
     "addUserTurnTemplate": true
   },
   {

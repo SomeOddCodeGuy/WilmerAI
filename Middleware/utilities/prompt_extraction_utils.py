@@ -59,7 +59,7 @@ def extract_discussion_id(messages: List[Dict[str, str]]) -> Optional[str]:
     Returns:
     Optional[str]: The extracted numeric discussion ID, or None if not found.
     """
-    pattern = f'{re.escape(discussion_identifiers["discussion_id_start"])}(\\d+){re.escape(discussion_identifiers["discussion_id_end"])}'
+    pattern = f'{re.escape(discussion_identifiers["discussion_id_start"])}(.*?){re.escape(discussion_identifiers["discussion_id_end"])}'
     for message in messages:
         match = re.search(pattern, message['content'])
         if match:

@@ -1,5 +1,9 @@
 {
   "modelNameForDisplayOnly": "OpenHermes-2.5-Mistral-7b",
   "endpoint": "http://127.0.0.1:5000",
-  "modelConfigFileName": ""
+  "apiTypeConfigFileName": "KoboldCpp",
+  "maxContextTokenSize": 16384,
+  "modelNameToSendToAPI": "",
+  "promptTemplate": "alpaca",
+  "addGenerationPrompt": true
 }

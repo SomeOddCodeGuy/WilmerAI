@@ -1,5 +1,9 @@
 {
   "modelNameForDisplayOnly": "Small coding model for coding tasks",
   "endpoint": "http://127.0.0.1:5001",
-  "modelConfigFileName": "MagicCoder-6.7b"
+  "apiTypeConfigFileName": "KoboldCpp",
+  "maxContextTokenSize": 16384,
+  "modelNameToSendToAPI": "",
+  "promptTemplate": "alpaca",
+  "addGenerationPrompt": true
 }

@@ -6,7 +6,8 @@
     "prompt": "",
     "lastMessagesToSendInsteadOfPrompt": 5,
     "endpointName": "ConvoRoleplayTwoModelResponderEndpoint",
-    "preset": "Low_temp_8k_2000",
+    "preset": "Low_temp",
+    "maxResponseSizeInTokens": 2000,
     "addUserTurnTemplate": false
   }
 ]

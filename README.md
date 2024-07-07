@@ -270,46 +270,62 @@ through what you need.
 #### Endpoints
 
 These configuration files represent the LLM API endpoints you are connected to. For example, the following JSON
-file, `SocgMacbookPort5001.json`, defines an endpoint:
+file, `SmallModelEndpoint.json`, defines an endpoint:
 
 ```json
 {
-  "modelNameForDisplayOnly": "Socg Macbook Pro 5001",
-  "endpoint": "http://192.168.1.392:5001",
-  "modelConfigFileName": "Llama-3-8b-Instruct"
-}
-```
-
-- **endpoint**: The address of the LLM you are connecting to.
-- **modelConfigFileName**: The exact name of a model JSON file from the "ModelConfigs" folder, without the ".json"
-  extension.
-
-#### ModelConfigs
-
-These configuration files represent LLM models and instruct Wilmer on how to use them. An example
-configuration, `Llama-3-8b-Instruct.json`, is shown below:
-
-```json
-{
-  "truncation_length_display_only": 8192,
-  "type": "openAIV1Completion",
-  "modelNameToSendToAPI": "Unused",
-  "promptTemplate": "llama3",
+  "modelNameForDisplayOnly": "Small model for all tasks",
+  "endpoint": "http://127.0.0.1:5000",
+  "apiTypeConfigFileName": "KoboldCpp",
+  "maxContextTokenSize": 8192,
+  "modelNameToSendToAPI": "",
+  "promptTemplate": "chatml",
   "addGenerationPrompt": true
 }
 ```
 
-- **truncation_length_display_only**: This is for display purposes only; the actual truncation length is specified in a
-  preset file.
+- **endpoint**: The address of the LLM API that you are connecting to. Must be an openAI compatible API of either
+  text Completions or Chat Completions type (if you're unsure- that's the vast majority of APIs, so this will
+  probably work with whatever you're trying)
+- **apiTypeConfigFileName**: The exact name of the json file from the ApiTypes folder that specifies what type
+  of API this is, minus the ".json" extension. "Open-AI-API" will probably work for most cloud services.
+- **maxContextTokenSize**: Specifies the max token size that your endpoint can accept
+- **modelNameToSendToAPI**: Specifies what model name to send to the API. For cloud services, this can be important.
+  For example, OpenAI may expected "gpt-3.5-turbo" here, or something like that. For local AI running in Kobold,
+  text-generation-webui, etc, this is mostly unused. (Ollama may use it, though)
+- **promptTemplate**: The exact json file name of the prompt template to use, minus the ".json" extension. These
+  can be found in the PromptTemplates folder.
+- **addGenerationPrompt**: This boolean is for Text Completion endpoints to specify whether the model expects a
+  final "assistant" tag at the very end. Not all models do. If you're unsure about this, just set it to
+  "false"
+
+#### ApiTypes
+
+These configuration files represent the different API types that you might be hitting when using Wilmer.
+
+```json
+{
+  "nameForDisplayOnly": "KoboldCpp",
+  "type": "openAIV1Completion",
+  "truncateLengthPropertyName": "truncation_length",
+  "maxNewTokensPropertyName": "max_tokens",
+  "streamPropertyName": "stream"
+}
+```
+
 - **type**: Can be either "openAIV1Completion" or "openAIChatCompletion". Use "openAIV1Completion" for KoboldCpp and "
   openAIChatCompletion" for OpenAI's API.
-- **modelName**: Sent to the API when applicable. Important for proprietary APIs like OpenAI; unused by many local
-  programs like KoboldCpp.
-- **promptTemplate**: Specifies a JSON config name from the "PromptTemplates" folder, without the ".json" extension.
-  Used only with v1Completion, not chat/Completion.
-- **addGenerationPrompt**: Specifies whether an additional assistant prompt template tag should be added to
-  v1Completion. For example, if the assistant tag is `[Begin_Assistant]`, it might look like
-  this: `[Begin_Assistant]RolandAI: [Begin_Assistant]` if true, and `[Begin_Assistant]RolandAI:` if false.
+- **truncateLengthPropertyName**: This specifies what the API expects the max context size field to be called
+  when sending a request. Compare the Open-AI-API file to the KoboldCpp file; Open-AI-API doesn't support this
+  field at all, so we left it blank. Whereas KoboldCpp does support it, and it expects us to send the value
+  with the property name "truncation_length". If you are unsure what to do, for locally running APIs I recommend
+  trying KoboldCpp's settings, and for cloud I recommend trying Open-AI-API's settings. The actual value we send
+  here is in the Endpoints config.
+- **maxNewTokensPropertyName**: Similar to the truncate length, this is the API's expected property name
+  for the number of tokens you want the LLM to respond with. The actual value we send here is on each individual
+  node within workflows
+- **streamPropertyName**: Same as max tokens and truncate length. This specifies the field name for whether to
+  stream the response to the front end or send the whole response as a text block once it is done.
 
 #### PromptTemplates
 
@@ -471,7 +487,8 @@ Here is an example of what a workflow JSON might look like:
     "prompt": "",
     "lastMessagesToSendInsteadOfPrompt": 6,
     "endpointName": "SocgMacStudioPort5002",
-    "preset": "Coding_8k_3000",
+    "preset": "Coding",
+    "maxResponseSizeInTokens": 500,
     "addUserTurnTemplate": false
   },
   {
@@ -480,7 +497,8 @@ Here is an example of what a workflow JSON might look like:
     "systemPrompt": "You are an exceptionally powerful and intelligent technical AI that is currently in a role play with a user in an online chat.",
     "prompt": "You are in an online conversation with a user. The last five messages can be found here:\n[\n{chat_user_prompt_last_five}\n]\nYou have already considered this request quietly to yourself within your own inner thoughts, and come up with a possible answer. The answer can be found here:\n[\n{agent1Output}\n]\nPlease critically review the response, reconsidering your initial choices, and ensure that it is accurate, complete, and fulfills all requirements of the user's request.\n\nOnce you have finished reconsidering your answer, please respond to the user with the correct and complete answer.\n\nIMPORTANT: Do not mention your inner thoughts or make any mention of reviewing a solution. The user cannot see the answer above, and any mention of it would confuse the user. Respond to the user with a complete answer as if it were the first time you were answering it.",
     "endpointName": "SocgMacStudioPort5002",
-    "preset": "Coding_8k_3000",
+    "preset": "Coding",
+    "maxResponseSizeInTokens": 1000,
     "addUserTurnTemplate": true
   }
 ]
@@ -505,6 +523,9 @@ at the endpoint.
   folder, without the `.json` extension.
 - **preset**: The preset to send to the API. Truncate length and max tokens to send come from this. This should match a
   JSON file name from the `Presets` folder, without the `.json` extension.
+- **maxResponseSizeInTokens**: Specifies the maximum number of tokens you want the LLM to send back to you as a
+  response.
+  This can be set per node, in case you want some nodes to respond with only 100 tokens and others to respond with 3000.
 - **addUserTurnTemplate**: Whether to wrap the prompt being sent to the LLM within a user turn template. If you send the
   last few messages, set this as `false` (see first example node above). If you send a prompt, set this as `true` (see
   second example node above).
@@ -601,10 +622,11 @@ multiple LLMs to iterate through them. Every endpoint specified here will be uti
       "endpointName": "SocgMacbookPort5004"
     }
   ],
-  "preset": "Default_8k_400",
+  "preset": "Default",
   "type": "SlowButQualityRAG",
   "ragTarget": "",
   "ragType": "RecentMemory",
+  "maxResponseSizeInTokens": 400,
   "addUserTurnTemplate": true
 }
 ```

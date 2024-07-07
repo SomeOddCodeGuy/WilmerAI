@@ -17,7 +17,8 @@
     "prompt": "",
     "lastMessagesToSendInsteadOfPrompt": 5,
     "endpointName": "SmallMultiModelGeneralistEndpoint",
-    "preset": "Default_8k_1000",
+    "preset": "Default",
+    "maxResponseSizeInTokens": 1000,
     "addUserTurnTemplate": false
   }
 ]

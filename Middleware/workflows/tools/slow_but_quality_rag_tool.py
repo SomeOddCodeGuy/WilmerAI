@@ -1,16 +1,20 @@
 from copy import deepcopy
 from typing import List, Dict
 
+from Middleware.services.llm_service import LlmHandlerService
 from Middleware.utilities.config_utils import get_discussion_memory_file_path, load_config, \
-    get_discussion_chat_summary_file_path, get_default_parallel_processor_name, get_workflow_path, \
-    get_discussion_id_workflow_path
+    get_discussion_chat_summary_file_path, get_discussion_id_workflow_path, get_endpoint_config
 from Middleware.utilities.file_utils import read_chunks_with_hashes, \
     update_chunks_with_hashes
-from Middleware.utilities.prompt_extraction_utils import extract_discussion_id, extract_last_n_turns
+from Middleware.utilities.prompt_extraction_utils import extract_discussion_id, extract_last_n_turns, \
+    remove_discussion_id_tag_from_string
+from Middleware.utilities.prompt_template_utils import format_user_turn_with_template, \
+    format_system_prompt_with_template
 from Middleware.utilities.prompt_utils import find_last_matching_memory_hash, chunk_messages_with_hashes, \
     extract_text_blocks_from_hashed_chunks, find_last_matching_hash_message, get_messages_within_index
 from Middleware.utilities.search_utils import filter_keywords_by_speakers, advanced_search_in_chunks, search_in_chunks
 from Middleware.utilities.text_utils import messages_into_chunked_text_of_token_size
+from Middleware.workflows.managers.workflow_variable_manager import WorkflowVariableManager
 from Middleware.workflows.tools.parallel_llm_processing_tool import ParallelLlmProcessingTool
 
 
@@ -149,8 +153,8 @@ class SlowButQualityRAGTool:
 
         return '\n\n'.join(filtered_chunks)
 
-    def process_new_memory_chunks(self, chunks, hash_chunks, rag_system_prompt, rag_prompt, parallel_workflow,
-                                  discussionId):
+    def process_new_memory_chunks(self, chunks, hash_chunks, rag_system_prompt, rag_prompt, workflow,
+                                  discussionId, messages):
         """
         Processes new memory chunks by performing RAG (Retrieval-Augmented Generation) on them and updating the memory file.
 
@@ -159,22 +163,20 @@ class SlowButQualityRAGTool:
             hash_chunks (list of tuple): A list of tuples containing hashes and their associated chunks.
             rag_system_prompt (str): The system prompt for the RAG tool.
             rag_prompt (str): The user prompt for the RAG tool.
-            parallel_workflow (str): The workflow to use for processing chunks.
+            workflow (dict): The workflow to use for processing chunks.
             discussionId (str): The ID of the discussion for which memory is being processed.
 
         Returns:
             None
         """
         rag_tool = SlowButQualityRAGTool()
-        workflow = get_workflow_path(parallel_workflow)
-        workflow_config = load_config(workflow)
-        print("Workflow Name: " + workflow)
 
         all_chunks = "--ChunkBreak--".join(chunks)
         print("Processing chunks: ", all_chunks)
 
-        result = rag_tool.perform_rag_on_conversation_chunk(rag_system_prompt, rag_prompt, all_chunks, workflow_config,
-                                                            "--rag_break--")
+        result = rag_tool.perform_rag_on_memory_chunk(rag_system_prompt, rag_prompt, all_chunks, workflow,
+                                                      messages,
+                                                      "--rag_break--")
         results = result.split("--rag_break--")
         print("Total results: " + str(len(results)))
         print("Total chunks: " + str(len(hash_chunks)))
@@ -246,13 +248,13 @@ class SlowButQualityRAGTool:
         if discussion_id is None:
             final_pairs = self.get_recent_chat_messages_up_to_max(max_turns_to_search, messages)
             print("Chat Summary memory gathering complete. Total number of pair chunks: {}".format(len(final_pairs)))
-            return '--ChunkBreak--'.join(final_pairs)
+            return '\n------------\n'.join(final_pairs)
         else:
             filepath = get_discussion_memory_file_path(discussion_id)
             hashed_memory_chunks = read_chunks_with_hashes(filepath)
             if len(hashed_memory_chunks) == 0:
                 final_pairs = self.get_recent_chat_messages_up_to_max(max_turns_to_search, messages)
-                return '--ChunkBreak--'.join(final_pairs)
+                return '\n------------\n'.join(final_pairs)
             else:
                 filepath = get_discussion_chat_summary_file_path(discussion_id)
                 hashed_summary_chunk = read_chunks_with_hashes(filepath)
@@ -266,12 +268,12 @@ class SlowButQualityRAGTool:
                 if max_summary_chunks_from_file == 0:
                     max_summary_chunks_from_file = 3
                 elif max_summary_chunks_from_file == -1:
-                    return '--ChunkBreak--'.join(memory_chunks)
+                    return '\n------------\n'.join(memory_chunks)
                 elif len(memory_chunks) <= max_summary_chunks_from_file:
-                    return '--ChunkBreak--'.join(memory_chunks)
+                    return '\n------------\n'.join(memory_chunks)
 
                 latest_summaries = memory_chunks[-max_summary_chunks_from_file:]
-                return '--ChunkBreak--'.join(latest_summaries)
+                return '\n------------\n'.join(latest_summaries)
 
     def get_recent_chat_messages_up_to_max(self, max_turns_to_search: int, messages: List[Dict[str, str]]) -> List[str]:
         """
@@ -329,13 +331,13 @@ class SlowButQualityRAGTool:
         chunk_size = discussion_id_workflow_config.get('chunkEstimatedTokenSize', 1500)
         chunks_til_new_memory = discussion_id_workflow_config.get('chunksUntilNewMemory', 5)
 
-        parallel_workflow = get_default_parallel_processor_name()
         discussion_chunks = read_chunks_with_hashes(filepath)
         discussion_chunks.reverse()
 
         if len(discussion_chunks) == 0:
             print("No discussion chunks")
-            self.process_full_discussion_flow(messages, rag_system_prompt, rag_prompt, parallel_workflow, discussionId)
+            self.process_full_discussion_flow(messages, rag_system_prompt, rag_prompt, discussion_id_workflow_config,
+                                              discussionId)
         else:
             index = find_last_matching_hash_message(messages, discussion_chunks)
             print("Number of messages since last memory chunk update: ", index)
@@ -351,14 +353,15 @@ class SlowButQualityRAGTool:
                     pass_chunks = extract_text_blocks_from_hashed_chunks(chunks)
 
                     self.process_new_memory_chunks(pass_chunks, trimmed_discussion_chunks, rag_system_prompt,
-                                                   rag_prompt, parallel_workflow, discussionId)
+                                                   rag_prompt, discussion_id_workflow_config, discussionId, messages)
             elif index == -1:
                 print("-1 flow hit. Processing discussions")
-                self.process_full_discussion_flow(messages, rag_system_prompt, rag_prompt, parallel_workflow,
+                self.process_full_discussion_flow(messages, rag_system_prompt, rag_prompt,
+                                                  discussion_id_workflow_config,
                                                   discussionId)
 
     def process_full_discussion_flow(self, messages: List[Dict[str, str]], rag_system_prompt: str, rag_prompt: str,
-                                     parallel_workflow: str, discussionId: str) -> None:
+                                     workflow_config: dict, discussionId: str) -> None:
         """
         Process the entire discussion flow if no previous chunks are available or if the
         last chunk is outdated.
@@ -367,7 +370,7 @@ class SlowButQualityRAGTool:
             messages (List[Dict[str, str]]): The list of message dictionaries for the discussion.
             rag_system_prompt (str): The system prompt for the RAG process.
             rag_prompt (str): The prompt used for RAG processing.
-            parallel_workflow (str): The name of the parallel processing workflow.
+            workflow_config (dict): The name of the parallel processing workflow.
             discussionId (str): The unique identifier for the discussion.
         """
         print("Beginning full discussion flow")
@@ -380,7 +383,7 @@ class SlowButQualityRAGTool:
         pass_chunks = extract_text_blocks_from_hashed_chunks(chunk_hashes)
         pass_chunks.reverse()
         chunk_hashes.reverse()
-        BATCH_SIZE = 20
+        BATCH_SIZE = 10
 
         for i in range(0, len(chunk_hashes), BATCH_SIZE):
             batch_chunk_hashes = chunk_hashes[i:i + BATCH_SIZE]
@@ -389,7 +392,7 @@ class SlowButQualityRAGTool:
             print("Length of batch_chunk_hashes: ", len(batch_chunk_hashes))
 
             self.process_new_memory_chunks(batch_pass_chunks, batch_chunk_hashes, rag_system_prompt, rag_prompt,
-                                           parallel_workflow, discussionId)
+                                           workflow_config, discussionId, messages)
 
     def get_message_chunks(self, messages: List[Dict[str, str]], lookbackStartTurn: int, chunk_size: int) -> List[str]:
         """
@@ -433,3 +436,108 @@ class SlowButQualityRAGTool:
         parallel_llm_processing_service = ParallelLlmProcessingTool(config)
         return parallel_llm_processing_service.process_prompt_chunks(chunks, rag_prompt, rag_system_prompt,
                                                                      custom_delimiter)
+
+    @staticmethod
+    def perform_rag_on_memory_chunk(rag_system_prompt: str, rag_prompt: str, text_chunk: str, config: dict,
+                                    messages,
+                                    custom_delimiter: str = "") -> str:
+        """
+        Perform Retrieval-Augmented Generation (RAG) on a given chunk of conversation.
+
+        Args:
+            rag_system_prompt (str): The system prompt for the RAG process.
+            rag_prompt (str): The prompt used for RAG processing.
+            text_chunk (str): The chunk of text to process.
+            config (dict): Configuration parameters for the RAG process.
+            custom_delimiter (str, optional): Custom delimiter to separate chunks. Defaults to "".
+
+        Returns:
+            List[str]: The processed chunks of text.
+        """
+        chunks = text_chunk.split('--ChunkBreak--')
+
+        discussionId = extract_discussion_id(messages)
+        filepath = get_discussion_memory_file_path(discussionId)
+        discussion_chunks = read_chunks_with_hashes(filepath)
+
+        endpoint_data = get_endpoint_config(config['endpointName'])
+        llm_handler_service = LlmHandlerService()
+        llm_handler = llm_handler_service.initialize_llm_handler(endpoint_data,
+                                                                 config['preset'],
+                                                                 config['endpointName'],
+                                                                 False,
+                                                                 endpoint_data.get("maxContextTokenSize", 4096),
+                                                                 config.get("maxResponseSizeInTokens", 400))
+
+        result_chunks = []
+        memory_chunks = extract_text_blocks_from_hashed_chunks(discussion_chunks)
+        print("Chunks:", chunks)
+
+        for chunk in chunks:
+            if (len(memory_chunks) > 0):
+                if (len(memory_chunks) < 4):
+                    print("Memory chunks:", memory_chunks)
+                    current_memories = '\n--------------\n'.join(
+                        memory_chunks)
+                else:
+                    last_three_chunks = memory_chunks[-3:]
+                    current_memories = '\n--------------\n'.join(
+                        last_three_chunks)
+            else:
+                current_memories = ""
+
+            print("Processing memory chunk. Current memories is: [[" + current_memories.strip() + "]]")
+            system_prompt = rag_system_prompt.replace('[Memory_file]', current_memories.strip())
+            prompt = rag_prompt.replace('[Memory_file]', current_memories.strip())
+
+            result_chunk = SlowButQualityRAGTool.process_single_chunk(chunk, llm_handler, prompt, system_prompt,
+                                                                      messages)
+            memory_chunks.append(result_chunk)
+            result_chunks.append(result_chunk)
+
+        return custom_delimiter.join(result_chunks)
+
+    @staticmethod
+    def process_single_chunk(chunk, llm_handler, workflow_prompt, workflow_system_prompt,
+                             messages):
+        """
+        Processes a single chunk using the specified LLM handler.
+
+        Parameters:
+        chunk (str): The text chunk to be processed.
+        index (int): The index of the chunk in the original text.
+        llm_handler (LlmHandlerService): The handler for processing the chunk.
+        workflow_prompt (str): The prompt used in processing.
+        workflow_system_prompt (str): The system prompt used in processing.
+        results_queue (Queue): Queue where the result is placed after processing.
+        """
+
+        workflow_variable_service = WorkflowVariableManager()
+        formatted_prompt = workflow_variable_service.apply_variables(workflow_prompt, llm_handler, messages)
+        formatted_system_prompt = workflow_variable_service.apply_variables(workflow_system_prompt, llm_handler,
+                                                                            messages)
+
+        formatted_prompt = formatted_prompt.replace('[TextChunk]', chunk)
+        formatted_system_prompt = formatted_system_prompt.replace('[TextChunk]', chunk)
+
+        formatted_prompt = format_user_turn_with_template(formatted_prompt, llm_handler.prompt_template_file_name)
+        formatted_system_prompt = format_system_prompt_with_template(formatted_system_prompt,
+                                                                     llm_handler.prompt_template_file_name)
+
+        formatted_system_prompt = remove_discussion_id_tag_from_string(formatted_system_prompt)
+        formatted_prompt = remove_discussion_id_tag_from_string(formatted_prompt)
+
+        if not llm_handler.takes_message_collection:
+            result = llm_handler.llm.get_response_from_llm(system_prompt=formatted_system_prompt,
+                                                           prompt=formatted_prompt)
+        else:
+            collection = []
+            if formatted_system_prompt:
+                collection.append({"role": "system", "content": formatted_system_prompt})
+            if formatted_prompt:
+                collection.append({"role": "user", "content": formatted_prompt})
+
+            result = llm_handler.llm.get_response_from_llm(collection)
+
+        if result:
+            return result

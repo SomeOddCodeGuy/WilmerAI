@@ -8,7 +8,7 @@ from urllib3 import Retry
 
 from Middleware.models.open_ai_api_presets import OpenAiApiPresets
 from Middleware.utilities.config_utils import get_openai_preset_path, get_endpoint_config, \
-    get_is_chat_complete_add_user_assistant, get_is_chat_complete_add_missing_assistant
+    get_is_chat_complete_add_user_assistant, get_is_chat_complete_add_missing_assistant, get_config_property_if_exists
 from Middleware.utilities.text_utils import return_brackets_in_string
 
 
@@ -17,22 +17,28 @@ class OpenAiLlmCompletionsApiService:
     A service class that provides compatibility with OpenAI's API for interacting with LLMs.
     """
 
-    def __init__(self, endpoint: str, model_name: str, presetname: str, stream: bool = False):
+    def __init__(self, endpoint: str, presetname: str, api_type_config, truncate_length, max_tokens,
+                 stream: bool = False):
         """
         Initializes the OpenAiLlmCompletionsApiService with the given configuration.
 
         :param endpoint: The API endpoint URL for the LLM service.
-        :param model_name: The name of the model to use.
         :param presetname: The name of the preset file containing API parameters.
         :param stream: A boolean indicating whether to use streaming or not.
+        :param api_type_config: The config file for the specified apiType in the Endpoint
+        :param truncate_length: The max context length of the model, if it applies
+        :param max_tokens: The max number of tokens to generate from the response
         """
         preset_file = get_openai_preset_path(presetname)
         endpoint_file = get_endpoint_config(endpoint)
-        self.model_name = model_name
         self.api_key = endpoint_file.get("apiKey", "")
-        print("API key found: " + self.api_key)
+        print("Api key found: " + self.api_key)
         self.endpoint_url = endpoint_file["endpoint"]
+        self.model_name = endpoint_file["modelNameToSendToAPI"]
         self.is_busy: bool = False
+        self.truncate_property_name = get_config_property_if_exists("truncateLengthPropertyName", api_type_config)
+        self.stream_property_name = get_config_property_if_exists("streamPropertyName", api_type_config)
+        self.max_token_property_name = get_config_property_if_exists("maxNewTokensPropertyName", api_type_config)
 
         if not os.path.exists(preset_file):
             raise FileNotFoundError(f'The preset file {preset_file} does not exist.')
@@ -40,7 +46,15 @@ class OpenAiLlmCompletionsApiService:
         with open(preset_file) as file:
             preset = json.load(file)
 
-        self._gen_input = OpenAiApiPresets(**preset)
+        self._gen_input_raw = OpenAiApiPresets(**preset)
+        self._gen_input = self._gen_input_raw.to_json()
+        # Add optional fields if they are not None
+        if self.truncate_property_name:
+            self._gen_input[self.truncate_property_name] = truncate_length
+        if self.stream_property_name:
+            self._gen_input[self.stream_property_name] = stream
+        if self.max_token_property_name:
+            self._gen_input[self.max_token_property_name] = max_tokens
 
         self.endpoint: str = endpoint_file["endpoint"]
         self.stream: bool = stream
@@ -66,11 +80,11 @@ class OpenAiLlmCompletionsApiService:
             if self.stream:
                 return self._api.invoke_streaming(prompt=full_prompt, endpoint=self.endpoint,
                                                   model_name=self.model_name,
-                                                  params=self._gen_input.to_json())
+                                                  params=self._gen_input)
             else:
                 result = self._api.invoke_non_streaming(prompt=full_prompt, endpoint=self.endpoint,
                                                         model_name=self.model_name,
-                                                        params=self._gen_input.to_json())
+                                                        params=self._gen_input)
                 print("######################################")
                 print("Non-streaming output: ", result)
                 print("######################################")
@@ -231,6 +245,10 @@ class OpenAiCompletionsApi:
         for attempt in range(retries):
             try:
                 print(f"Non-Streaming flow! Attempt: {attempt + 1}")
+                print("Headers: ")
+                print(json.dumps(self.headers))
+                print("Data: ")
+                print(json.dumps(data))
                 response = self.session.post(url, headers=self.headers, json=data, timeout=14400)
                 response.raise_for_status()  # Raises HTTPError for bad responses
 

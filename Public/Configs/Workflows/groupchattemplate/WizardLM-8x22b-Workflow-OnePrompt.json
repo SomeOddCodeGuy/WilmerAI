@@ -6,7 +6,8 @@
     "prompt": "",
     "lastMessagesToSendInsteadOfPrompt": 5,
     "endpointName": "GroupChatWizardEndpoint",
-    "preset": "Coding_16k_3000",
+    "preset": "Coding",
+    "maxResponseSizeInTokens": 3000,
     "addUserTurnTemplate": false
   }
 ]

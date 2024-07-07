@@ -12,5 +12,6 @@
   "type": "SlowButQualityRAG",
   "ragTarget": "",
   "ragType": "RecentMemory",
+  "maxResponseSizeInTokens": 1000,
   "addUserTurnTemplate": true
 }

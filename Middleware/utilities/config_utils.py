@@ -26,6 +26,13 @@ def load_config(config_file):
     return config_data
 
 
+def get_config_property_if_exists(config_property, config_data):
+    if config_data.get(config_property) and config_data.get(config_property) != "":
+        return config_data.get(config_property)
+    else:
+        return None
+
+
 def get_current_username():
     """
     Retrieves the current username from the configuration.
@@ -212,19 +219,6 @@ def get_categories_config():
     return load_config(config_path)
 
 
-def get_model_config_path(config_name):
-    """
-    Retrieves the file path to a model configuration file based on the endpoint name.
-
-    :param config_name: The name of the endpoint configuration.
-    :return: The full path to the model configuration file.
-    """
-    endpoint_config = get_config_path('Endpoints', config_name)
-    endpoint_data = load_config(endpoint_config)
-    model_config_path = get_config_path('ModelsConfigs', endpoint_data['modelConfigFileName'])
-    return model_config_path
-
-
 def get_openai_preset_path(config_name):
     """
     Retrieves the file path to a preset configuration file.
@@ -244,6 +238,17 @@ def get_endpoint_config(endpoint):
     """
     endpoint_file = get_config_path('Endpoints', endpoint)
     return load_config(endpoint_file)
+
+
+def get_api_type_config(api_type):
+    """
+    Retrieves the endpoint configuration based on the endpoint name.
+
+    :param endpoint: The name of the endpoint configuration.
+    :return: The full path to the endpoint configuration file.
+    """
+    api_type_file = get_config_path('ApiTypes', api_type)
+    return load_config(api_type_file)
 
 
 def get_template_config_path(template_file_name):

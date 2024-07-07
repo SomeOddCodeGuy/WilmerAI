@@ -1,5 +1,9 @@
 {
   "modelNameForDisplayOnly": "Codestral",
   "endpoint": "http://127.0.0.1:5001",
-  "modelConfigFileName": "Codestral"
+  "apiTypeConfigFileName": "KoboldCpp",
+  "maxContextTokenSize": 16384,
+  "modelNameToSendToAPI": "",
+  "promptTemplate": "alpaca",
+  "addGenerationPrompt": true
 }

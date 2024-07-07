@@ -2,10 +2,11 @@ from queue import Queue, Empty
 from threading import Thread
 
 from Middleware.services.llm_service import LlmHandlerService
-from Middleware.utilities.config_utils import load_config, get_model_config_path
+from Middleware.utilities.config_utils import get_endpoint_config
 from Middleware.utilities.prompt_extraction_utils import remove_discussion_id_tag_from_string
 from Middleware.utilities.prompt_template_utils import format_user_turn_with_template, \
     format_system_prompt_with_template
+from Middleware.workflows.managers.workflow_variable_manager import WorkflowVariableManager
 
 
 class ParallelLlmProcessingTool:
@@ -38,15 +39,16 @@ class ParallelLlmProcessingTool:
 
         self.llm_handlers = []
         for endpoint in config['multiModelList']:
-            config_file = get_model_config_path(endpoint['endpointName'])
-            config_data = load_config(config_file)
-            handler = llm_handler_service.initialize_llm_handler(config_data,
+            endpoint_data = get_endpoint_config(endpoint["endpointName"])
+            handler = llm_handler_service.initialize_llm_handler(endpoint_data,
                                                                  config['preset'],
                                                                  endpoint['endpointName'],
-                                                                 False)
+                                                                 False,
+                                                                 endpoint.get("maxContextTokenSize", 4096),
+                                                                 config.get("maxResponseSizeInTokens", 400))
             self.llm_handlers.append(handler)
 
-    def process_prompt_chunks(self, chunks, workflow_prompt, workflow_system_prompt, custom_delimiter=""):
+    def process_prompt_chunks(self, chunks, workflow_prompt, workflow_system_prompt, messages, custom_delimiter=""):
         """
         Processes each prompt chunk in parallel using threads.
 
@@ -67,7 +69,7 @@ class ParallelLlmProcessingTool:
 
         threads = [
             Thread(target=self.chunk_processing_worker,
-                   args=(handler, chunks_queue, workflow_prompt, workflow_system_prompt, results_queue))
+                   args=(handler, chunks_queue, workflow_prompt, workflow_system_prompt, results_queue, messages))
             for handler in self.llm_handlers]
 
         for thread in threads:
@@ -77,7 +79,8 @@ class ParallelLlmProcessingTool:
 
         return self.assemble_results(chunks, results_queue, custom_delimiter)
 
-    def chunk_processing_worker(self, handler, chunks_queue, workflow_prompt, workflow_system_prompt, results_queue):
+    def chunk_processing_worker(self, handler, chunks_queue, workflow_prompt, workflow_system_prompt, results_queue,
+                                messages):
         """
         Worker method for processing chunks; intended to run in a thread.
 
@@ -100,7 +103,8 @@ class ParallelLlmProcessingTool:
                                           llm_handler=handler,
                                           workflow_prompt=workflow_prompt,
                                           workflow_system_prompt=workflow_system_prompt,
-                                          results_queue=results_queue)
+                                          results_queue=results_queue,
+                                          messages=messages)
                 chunks_queue.task_done()
             except Empty:
                 print(f"No more chunks to process by handler for model {handler.prompt_template_file_name}.")
@@ -110,7 +114,8 @@ class ParallelLlmProcessingTool:
                       f"{handler.prompt_template_file_name}: {str(e)}")
 
     @staticmethod
-    def process_single_chunk(chunk, index, llm_handler, workflow_prompt, workflow_system_prompt, results_queue):
+    def process_single_chunk(chunk, index, llm_handler, workflow_prompt, workflow_system_prompt, results_queue,
+                             messages):
         """
         Processes a single chunk using the specified LLM handler.
 
@@ -122,8 +127,13 @@ class ParallelLlmProcessingTool:
         workflow_system_prompt (str): The system prompt used in processing.
         results_queue (Queue): Queue where the result is placed after processing.
         """
-        formatted_prompt = workflow_prompt.replace('[TextChunk]', chunk)
-        formatted_system_prompt = workflow_system_prompt.replace('[TextChunk]', chunk)
+        workflow_variable_service = WorkflowVariableManager()
+        formatted_prompt = workflow_variable_service.apply_variables(workflow_prompt, llm_handler, messages)
+        formatted_system_prompt = workflow_variable_service.apply_variables(workflow_system_prompt, llm_handler,
+                                                                            messages)
+
+        formatted_prompt = formatted_prompt.replace('[TextChunk]', chunk)
+        formatted_system_prompt = formatted_system_prompt.replace('[TextChunk]', chunk)
 
         formatted_prompt = format_user_turn_with_template(formatted_prompt, llm_handler.prompt_template_file_name)
         formatted_system_prompt = format_system_prompt_with_template(formatted_system_prompt,

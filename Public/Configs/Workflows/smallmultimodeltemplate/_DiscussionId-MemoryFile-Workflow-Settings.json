@@ -1,7 +1,10 @@
 {
   "Display_Only_Description": "This workflow relies on the defaultParallelProcessWorkflow and only gets the system prompt and prompt from here",
-  "systemPrompt": "You are an expert summarizer. Please follow the instructions carefully.",
-  "prompt": "Below, within brackets, is an excerpt from a roleplay. Please summarize, in vivid and complete detail, the events within the excerpt. This summary will be added to a running collection of summaries, so please don't write anything else except the summary. Please use the character/user names explicitly, as some may write in first person but you need to write your descriptions in third person.\n[\n[TextChunk]\n]\n",
+  "systemPrompt": "You are an extremely capable summarizer, who is able to summarize any text into a human readable paragraph. You never allow things like misplaced prompt template tags, odd parentheses or brackets, or other things like this to throw you off. Your summaries are always clear and concise.",
+  "prompt": "You are an intelligent and capable content summarizer that is assisting someone who is currently in an online roleplay with a user via a chat program. The instructions for the conversation can be found here: [\n[\n{chat_system_prompt}\n]\n\n.You've been summarizing the conversation into 'memory' chunks as the conversation has progressed. You can find the current collection of those memories here, if any exist: \n[\n[Memory_file]\n]\n\nA new series of messages have occurred since the last time you wrote those memories. You can find the newest messages here:\n\n[\n[TextChunk]\n]\n\nPlease summarize the new message as if you are writing it as a single paragraph in a book, as your response will be added on to the previous memories and stored in such a fashion.\nPlease use the character/user names explicitly, as some may write in first person but you need to write your descriptions in third person. Please avoid implied speech and describe the memory in vivid detail.",
+  "endpointName": "SmallMultiModelFactualEndpoint",
+  "preset": "Default",
+  "maxResponseSizeInTokens": 400,
   "chunkEstimatedTokenSize": 1500,
   "chunksUntilNewMemory": 5
 }

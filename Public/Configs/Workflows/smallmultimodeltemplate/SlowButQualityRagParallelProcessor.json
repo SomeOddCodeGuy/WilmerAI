@@ -11,9 +11,10 @@
       "endpointName": "SmallMultiModelFactualEndpoint"
     }
   ],
-  "preset": "Default_8k_400",
+  "preset": "Default",
   "type": "SlowButQualityRAG",
   "ragTarget": "",
   "ragType": "RecentMemory",
+  "maxResponseSizeInTokens": 400,
   "addUserTurnTemplate": true
 }

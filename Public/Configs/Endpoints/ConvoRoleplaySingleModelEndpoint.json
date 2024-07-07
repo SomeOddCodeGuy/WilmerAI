@@ -1,5 +1,9 @@
 {
   "modelNameForDisplayOnly": "Single model for all tasks",
   "endpoint": "http://127.0.0.1:5002",
-  "modelConfigFileName": "Llama-3-8b-Instruct"
+  "apiTypeConfigFileName": "KoboldCpp",
+  "maxContextTokenSize": 16384,
+  "modelNameToSendToAPI": "",
+  "promptTemplate": "alpaca",
+  "addGenerationPrompt": true
 }

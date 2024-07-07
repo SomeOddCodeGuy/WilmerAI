@@ -65,8 +65,8 @@ class PromptCategorizer:
         Get the category of the prompt and run the appropriate workflow.
 
         Args:
-            prompt (str): The input prompt to categorize.
-            stream (bool): Whether to stream the output. Default is False.
+            prompt: The input prompt to categorize.
+            stream: Whether to stream the output. Default is False.
 
         Returns:
             str: The result of the workflow execution.

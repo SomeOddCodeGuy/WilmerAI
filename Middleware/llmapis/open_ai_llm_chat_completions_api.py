@@ -8,7 +8,7 @@ from urllib3 import Retry
 
 from Middleware.models.open_ai_api_presets import OpenAiApiPresets
 from Middleware.utilities.config_utils import get_openai_preset_path, get_endpoint_config, \
-    get_is_chat_complete_add_user_assistant, get_is_chat_complete_add_missing_assistant
+    get_is_chat_complete_add_user_assistant, get_is_chat_complete_add_missing_assistant, get_config_property_if_exists
 
 
 class OpenAiLlmChatCompletionsApiService:
@@ -16,22 +16,28 @@ class OpenAiLlmChatCompletionsApiService:
     A service class that provides compatibility with OpenAI's API for interacting with LLMs.
     """
 
-    def __init__(self, endpoint: str, model_name: str, presetname: str, stream: bool = False):
+    def __init__(self, endpoint: str, presetname: str, api_type_config, truncate_length, max_tokens,
+                 stream: bool = False):
         """
         Initializes the OpenAiLlmChatCompletionsApiService with the given configuration.
 
         :param endpoint: The API endpoint URL for the LLM service.
-        :param model_name: The model name to be used with the LLM service.
         :param presetname: The name of the preset file containing API parameters.
         :param stream: A boolean indicating whether to use streaming or not.
+        :param api_type_config: The config file for the specified apiType in the Endpoint
+        :param truncate_length: The max context length of the model, if it applies
+        :param max_tokens: The max number of tokens to generate from the response
         """
         preset_file = get_openai_preset_path(presetname)
         endpoint_file = get_endpoint_config(endpoint)
         self.api_key = endpoint_file.get("apiKey", "")
         print("Api key found: " + self.api_key)
         self.endpoint_url = endpoint_file["endpoint"]
-        self.model_name = model_name
+        self.model_name = endpoint_file["modelNameToSendToAPI"]
         self.is_busy: bool = False
+        self.truncate_property_name = get_config_property_if_exists("truncateLengthPropertyName", api_type_config)
+        self.stream_property_name = get_config_property_if_exists("streamPropertyName", api_type_config)
+        self.max_token_property_name = get_config_property_if_exists("maxNewTokensPropertyName", api_type_config)
 
         if not os.path.exists(preset_file):
             raise FileNotFoundError(f'The preset file {preset_file} does not exist.')
@@ -39,11 +45,19 @@ class OpenAiLlmChatCompletionsApiService:
         with open(preset_file) as file:
             preset = json.load(file)
 
-        self._gen_input = OpenAiApiPresets(**preset)
+        self._gen_input_raw = OpenAiApiPresets(**preset)
+        self._gen_input = self._gen_input_raw.to_json()
+        # Add optional fields if they are not None
+        if self.truncate_property_name:
+            self._gen_input[self.truncate_property_name] = truncate_length
+        if self.stream_property_name:
+            self._gen_input[self.stream_property_name] = stream
+        if self.max_token_property_name:
+            self._gen_input[self.max_token_property_name] = max_tokens
 
         self.endpoint: str = endpoint_file["endpoint"]
         self.stream: bool = stream
-        self._api = OpenAiChatCompletionsApi(self.api_key, self.endpoint_url)
+        self._api = OpenAiChatCompletionsApi(self.api_key, self.endpoint_url, api_type_config)
 
     def get_response_from_llm(self, conversation: List[Dict[str, str]]) -> Union[
         Generator[str, None, None], Dict[str, Any], None]:
@@ -66,14 +80,13 @@ class OpenAiLlmChatCompletionsApiService:
         try:
             self.is_busy = True
 
-            if self.stream:
-                self._gen_input.stream = True
+            if self.stream and self.stream_property_name:
                 return self._api.invoke_streaming(messages=corrected_conversation, endpoint=self.endpoint,
-                                                  model=self.model_name, params=self._gen_input.to_json())
+                                                  model=self.model_name, params=self._gen_input)
             else:
                 result = self._api.invoke_non_streaming(messages=corrected_conversation, endpoint=self.endpoint,
                                                         model_name=self.model_name,
-                                                        params=self._gen_input.to_json())
+                                                        params=self._gen_input)
                 print("######################################")
                 print("Non-streaming output: ", result)
                 print("######################################")
@@ -98,7 +111,7 @@ class OpenAiChatCompletionsApi:
     A class that encapsulates the functionality to interact with the OpenAI API.
     """
 
-    def __init__(self, api_key: str, endpoint: str):
+    def __init__(self, api_key: str, endpoint: str, api_type_config):
         """
         Initializes the OpenAiChatCompletionsApi with the base URL and default headers.
 
@@ -129,7 +142,8 @@ class OpenAiChatCompletionsApi:
         :return: A generator yielding chunks of the response in SSE format.
         """
         url: str = f"{endpoint}/v1/chat/completions"
-        data: Dict[str, Any] = {"model": model, "stream": True, "messages": messages, **(params or {})}
+        data: Dict[str, Any] = {"model": model, "messages": messages, **(params or {})}
+
         add_user_assistant = get_is_chat_complete_add_user_assistant()
         add_missing_assistant = get_is_chat_complete_add_missing_assistant()
         print(f"Streaming flow!")
@@ -148,7 +162,6 @@ class OpenAiChatCompletionsApi:
                     first_chunk_processed = False
                     max_buffer_length = 100
                     for chunk in r.iter_content(chunk_size=1024, decode_unicode=True):
-                        print("Chunk received: {}".format(chunk))
                         buffer += chunk
                         while "data:" in buffer:
                             data_pos = buffer.find("data:")

@@ -7,22 +7,6 @@
     "maxSummaryChunksFromFile": 5
   },
   {
-    "title": "Performing Slow but Quality RAG on Search Results",
-    "agentName": "Slow but Quality RAG Agent",
-    "systemPrompt": "You are an extremely capable summarizer, who is able to summarize any text into a human readable paragraph. You never allow things like misplaced prompt template tags, odd parentheses or brackets, or other things like this to throw you off. Your summaries are always clear and concise.",
-    "prompt": "You are currently in a roleplay with a user, and they have sent a new message. Because you take this roleplay very seriously, you've decided to plan your response out carefully. To do this, you have decided to summarize the events that have occurred so far, to better document the flow of the story and best determine how to respond\n\nTo make this task easier, you've broken the story up into chunks, which you can handle one at a time. Below is one of the chunks, whichis an excerpt of the story that has occurred so far: \n\n[\n[TextChunk]\n]\n\nPlease summarize a high level story of what is occurring in this excerpt. Try to keep important details, while making the summary more concise. Ideally, someone looking at your summary will be able to understand the major events that have occurred, and could then look at the conversation itself to see the specifics.",
-    "multiModelList": [
-      {
-        "endpointName": "ConvoRoleplayTwoModelWorkerEndpoint"
-      }
-    ],
-    "preset": "Default_8k_400",
-    "type": "SlowButQualityRAG",
-    "ragTarget": "{agent1Output}",
-    "ragType": "CurrentConversation",
-    "addUserTurnTemplate": true
-  },
-  {
     "title": "Grab the current summary from file",
     "agentName": "Chat Summary File Puller Agent",
     "type": "GetCurrentSummaryFromFile"
@@ -31,15 +15,16 @@
     "title": "Result Summarizer",
     "agentName": "Memory Summarizer Agent",
     "systemPrompt": "You are an extremely capable summarizer, who is able to summarize any text into a human readable text. You never allow things like misplaced prompt template tags, odd parentheses or brackets, or other things like this to throw you off. Your summaries are always clear and detailed.",
-    "prompt": "You are engaged in a roleplay with a user, who has sent you a new message. In order to respond to them appropriately, you have decided that it is important to first document the story so far.\n\nHere you can find the instructions for the roleplay, as well as the initial starting scenario from the beginning:\n[\n{chat_system_prompt}\n]\n\nBelow you can find the complete summarized story of the roleplay up to this point, if one exists:\n[\n{agent3Output}\n]\n\nNext, you will find below a collection of memories for the new roleplay that has occurred since the summary above was written:\n[\n{agent2Output}\n]\n\nPlease consider the instructions, the entire roleplay story summary, and the new memories that you have developed since the summary was written. Please update the roleplay story summary, adding your new memories to it in order to create a more complete story summary.\n\nPlease respond with the complete story summary, as the old summary will be thrown away and anything you leave out will be lost forever.",
-    "endpointName": "ConvoRoleplayTwoModelResponderEndpoint",
-    "preset": "Default_8k_2000",
+    "prompt": "You are engaged in a roleplay with a user, who has sent you a new message. In order to respond to them appropriately, you have decided that it is important to first document the story so far.\n\nHere you can find the instructions for the roleplay, as well as the initial starting scenario from the beginning:\n[\n{chat_system_prompt}\n]\n\nBelow you can find the complete summarized story of the roleplay up to this point, if one exists:\n[\n{agent2Output}\n]\n\nNext, you will find below a collection of memories for the new roleplay that has occurred since the summary above was written:\n[\n{agent1Output}\n]\n\nPlease consider the instructions, the entire roleplay story summary, and the new memories that you have developed since the summary was written. Please update the roleplay story summary, adding your new memories to it in order to create a more complete story summary.\n\nPlease respond with the complete story summary, as the old summary will be thrown away and anything you leave out will be lost forever.",
+    "endpointName": "ConvoRoleplayTwoModelWorkerEndpoint",
+    "preset": "Default",
+    "maxResponseSizeInTokens": 2000,
     "addUserTurnTemplate": true
   },
   {
     "title": "Save the chat summary if applicable, and return it",
     "agentName": "Chat Summary Saver and Returner",
     "type": "WriteCurrentSummaryToFileAndReturnIt",
-    "input": "{agent4Output}"
+    "input": "{agent3Output}"
   }
 ]

@@ -2,7 +2,7 @@
   "port": 5005,
   "stream": true,
   "customWorkflowOverride": false,
-  "customWorkflow": "FullCustomWorkflow-WithRecent-ChatSummary",
+  "customWorkflow": "FullCustomWorkflow-ChatSummary",
   "routingConfig": "openAICloudApiServiceCategoriesConfig",
   "categorizationWorkflow": "CustomCategorizationWorkflow",
   "defaultParallelProcessWorkflow": "SlowButQualityRagParallelProcessor",

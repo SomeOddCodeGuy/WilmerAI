@@ -1,5 +1,9 @@
 {
   "modelNameForDisplayOnly": "Small worker model for utilities that aren't actually used in this workflow",
   "endpoint": "http://127.0.0.1:5002",
-  "modelConfigFileName": "Hermes-2-Theta-Llama-3-8b"
+  "apiTypeConfigFileName": "KoboldCpp",
+  "maxContextTokenSize": 16384,
+  "modelNameToSendToAPI": "",
+  "promptTemplate": "alpaca",
+  "addGenerationPrompt": true
 }

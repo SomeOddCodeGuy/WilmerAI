@@ -1,5 +1,9 @@
 {
-  "modelNameForDisplayOnly": "Small coding model for coding tasks",
-  "endpoint": "http://127.0.0.1:5002",
-  "modelConfigFileName": "Llama-3-8b-Instruct"
+  "modelNameForDisplayOnly": "Small model for all tasks",
+  "endpoint": "http://127.0.0.1:5000",
+  "apiTypeConfigFileName": "KoboldCpp",
+  "maxContextTokenSize": 8192,
+  "modelNameToSendToAPI": "",
+  "promptTemplate": "chatml",
+  "addGenerationPrompt": true
 }

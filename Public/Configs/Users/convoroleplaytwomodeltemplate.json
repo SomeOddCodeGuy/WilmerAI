@@ -2,7 +2,7 @@
   "port": 5005,
   "stream": true,
   "customWorkflowOverride": true,
-  "customWorkflow": "FullCustomWorkflow-WithRecent-ChatSummary",
+  "customWorkflow": "FullCustomWorkflow-ChatSummary",
   "routingConfig": "ConvoRoleplayTwoModelCategoriesConfig",
   "categorizationWorkflow": "CustomCategorizationWorkflow",
   "defaultParallelProcessWorkflow": "SlowButQualityRagParallelProcessor",

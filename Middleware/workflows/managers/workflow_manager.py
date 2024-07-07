@@ -133,7 +133,11 @@ class WorkflowManager:
             else:
                 self.llm_handler = self.llm_handler_service.load_model_from_config(config["endpointName"],
                                                                                    preset,
-                                                                                   stream)
+                                                                                   stream,
+                                                                                   config.get("maxContextTokenSize",
+                                                                                              4096),
+                                                                                   config.get("maxResponseSizeInTokens",
+                                                                                              400))
         if "endpointName" not in config:
             self.llm_handler = LlmHandler(None, get_chat_template_name(), 0, 0, True)
 
@@ -181,6 +185,9 @@ class WorkflowManager:
                                                                          config["maxSummaryChunksFromFile"])
         if config["type"] == "GetCurrentSummaryFromFile":
             print("Getting current summary from File")
+            return self.handle_get_current_summary_from_file(messages)
+        if config["type"] == "GetCurrentMemoryFromFile":
+            print("Getting current memories from File")
             return self.handle_get_current_summary_from_file(messages)
         if config["type"] == "WriteCurrentSummaryToFileAndReturnIt":
             print("Writing current summary to file")
@@ -297,3 +304,20 @@ class WorkflowManager:
             return "There is not yet a summary file"
 
         return extract_text_blocks_from_hashed_chunks(current_summary)
+
+    def handle_get_current_memories_from_file(self, messages):
+        """
+        Retrieves the current summary from a file based on the user's prompt.
+
+        :param messages: List of message dictionaries.
+        :return: The current summary extracted from the file or a message indicating the absence of a summary file.
+        """
+        discussion_id = extract_discussion_id(messages)
+        filepath = get_discussion_memory_file_path(discussion_id)
+
+        current_memories = read_chunks_with_hashes(filepath)
+
+        if current_memories is None or len(current_memories) == 0:
+            return "There are not yet any memories"
+
+        return extract_text_blocks_from_hashed_chunks(current_memories)

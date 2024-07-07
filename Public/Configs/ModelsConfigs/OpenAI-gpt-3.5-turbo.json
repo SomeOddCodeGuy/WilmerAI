@@ -1,7 +1,0 @@
-{
-  "truncation_length_display_only": 8192,
-  "type": "openAIChatCompletion",
-  "modelNameToSendToAPI": "gpt-3.5-turbo",
-  "promptTemplate": "_chatonly",
-  "addGenerationPrompt": false
-}

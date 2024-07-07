@@ -1,0 +1,7 @@
+{
+  "nameForDisplayOnly": "KoboldCpp",
+  "type": "openAIChatCompletion",
+  "truncateLengthPropertyName": "truncation_length",
+  "maxNewTokensPropertyName": "max_tokens",
+  "streamPropertyName": "stream"
+}

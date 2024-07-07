@@ -2,7 +2,7 @@
   "port": 5005,
   "stream": true,
   "customWorkflowOverride": false,
-  "customWorkflow": "",
+  "customWorkflow": "FullCustomWorkflow-ChatSummary",
   "routingConfig": "smallMultiModelCategoriesConfig",
   "categorizationWorkflow": "CustomCategorizationWorkflow",
   "defaultParallelProcessWorkflow": "SlowButQualityRagParallelProcessor",

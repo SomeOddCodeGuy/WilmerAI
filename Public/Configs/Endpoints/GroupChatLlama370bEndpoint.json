@@ -1,5 +1,9 @@
 {
   "modelNameForDisplayOnly": "Llama 3 70b",
   "endpoint": "http://127.0.0.1:5003",
-  "modelConfigFileName": "Llama-3-70b-Instruct"
+  "apiTypeConfigFileName": "KoboldCpp",
+  "maxContextTokenSize": 16384,
+  "modelNameToSendToAPI": "",
+  "promptTemplate": "alpaca",
+  "addGenerationPrompt": true
 }

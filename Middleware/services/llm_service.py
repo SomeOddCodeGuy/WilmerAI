@@ -2,7 +2,7 @@ from Middleware.llmapis.open_ai_llm_chat_completions_api import OpenAiLlmChatCom
 from Middleware.llmapis.open_ai_llm_completions_api import OpenAiLlmCompletionsApiService
 from Middleware.models.llm_handler import LlmHandler
 from Middleware.utilities.config_utils import get_chat_template_name, \
-    load_config, get_model_config_path
+    get_endpoint_config, get_api_type_config
 
 
 class LlmHandlerService:
@@ -10,18 +10,21 @@ class LlmHandlerService:
     def __init__(self):
         self.llm_handler = None
 
-    def initialize_llm_handler(self, config_data, preset, endpoint, stream=False):
-        llm_type = config_data["type"]
-        add_generation_prompt = config_data["addGenerationPrompt"]
-        model_name = config_data["modelNameToSendToAPI"]
+    def initialize_llm_handler(self, config_data, preset, endpoint, stream, truncate_length, max_tokens):
+        print("Initialize llm hander config_data: {}".format(config_data))
+        add_generation_prompt = config_data.get("addGenerationPrompt", False)
+        api_type_config = get_api_type_config(config_data["apiTypeConfigFileName"])
+        llm_type = api_type_config["type"]
         if llm_type == "openAIV1Completion":
             print('Loading v1 Completions endpoint: ' + endpoint)
-            llm = OpenAiLlmCompletionsApiService(endpoint=endpoint, model_name=model_name, presetname=preset,
-                                                 stream=stream)
+            llm = OpenAiLlmCompletionsApiService(endpoint=endpoint, presetname=preset,
+                                                 stream=stream, api_type_config=api_type_config,
+                                                 truncate_length=truncate_length, max_tokens=max_tokens)
         elif llm_type == "openAIChatCompletion":
             print('Loading chat Completions endpoint: ' + endpoint)
-            llm = OpenAiLlmChatCompletionsApiService(endpoint=endpoint, model_name=model_name, presetname=preset,
-                                                     stream=stream)
+            llm = OpenAiLlmChatCompletionsApiService(endpoint=endpoint, presetname=preset,
+                                                     stream=stream, api_type_config=api_type_config,
+                                                     truncate_length=truncate_length, max_tokens=max_tokens)
         else:
             raise ValueError(f"Unsupported LLM type: {llm_type}")
 
@@ -35,10 +38,10 @@ class LlmHandlerService:
 
         return self.llm_handler
 
-    def load_model_from_config(self, config_name, preset, stream=False):
+    def load_model_from_config(self, config_name, preset, stream=False, truncate_length=4096, max_tokens=400):
         try:
-            config_file = get_model_config_path(config_name)
-            config_data = load_config(config_file)
-            return self.initialize_llm_handler(config_data, preset, config_name, stream)
+            print("Loading model from: " + config_name)
+            config_file = get_endpoint_config(config_name)
+            return self.initialize_llm_handler(config_file, preset, config_name, stream, truncate_length, max_tokens)
         except Exception as e:
             print(f"Error loading model from config: ", e)
