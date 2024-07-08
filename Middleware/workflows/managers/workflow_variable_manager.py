@@ -125,31 +125,31 @@ class WorkflowVariableManager:
         messages = deepcopy(originalMessages)
         return {
             "templated_user_prompt_last_twenty": get_formatted_last_n_turns_as_string(
-                messages, 20, template_file_name=llm_handler.prompt_template_file_name
-            ),
+                messages, 20, template_file_name=llm_handler.prompt_template_file_name,
+                isChatCompletion=llm_handler.takes_message_collection),
             "chat_user_prompt_last_twenty": extract_last_n_turns_as_string(messages, 20),
             "templated_user_prompt_last_ten": get_formatted_last_n_turns_as_string(
-                messages, 10, template_file_name=llm_handler.prompt_template_file_name
-            ),
+                messages, 10, template_file_name=llm_handler.prompt_template_file_name,
+                isChatCompletion=llm_handler.takes_message_collection),
             "chat_user_prompt_last_ten": extract_last_n_turns_as_string(messages, 10),
             "templated_user_prompt_last_five": get_formatted_last_n_turns_as_string(
-                messages, 5, template_file_name=llm_handler.prompt_template_file_name
-            ),
+                messages, 5, template_file_name=llm_handler.prompt_template_file_name,
+                isChatCompletion=llm_handler.takes_message_collection),
             "chat_user_prompt_last_five": extract_last_n_turns_as_string(messages, 5),
             "templated_user_prompt_last_four": get_formatted_last_n_turns_as_string(
-                messages, 4, template_file_name=llm_handler.prompt_template_file_name
-            ),
+                messages, 4, template_file_name=llm_handler.prompt_template_file_name,
+                isChatCompletion=llm_handler.takes_message_collection),
             "chat_user_prompt_last_four": extract_last_n_turns_as_string(messages, 4),
             "templated_user_prompt_last_three": get_formatted_last_n_turns_as_string(
-                messages, 3, template_file_name=llm_handler.prompt_template_file_name
-            ),
+                messages, 3, template_file_name=llm_handler.prompt_template_file_name,
+                isChatCompletion=llm_handler.takes_message_collection),
             "chat_user_prompt_last_three": extract_last_n_turns_as_string(messages, 3),
             "templated_user_prompt_last_two": get_formatted_last_n_turns_as_string(
-                messages, 2, template_file_name=llm_handler.prompt_template_file_name
-            ),
+                messages, 2, template_file_name=llm_handler.prompt_template_file_name,
+                isChatCompletion=llm_handler.takes_message_collection),
             "chat_user_prompt_last_two": extract_last_n_turns_as_string(messages, 2),
             "templated_user_prompt_last_one": get_formatted_last_n_turns_as_string(
-                messages, 1, template_file_name=llm_handler.prompt_template_file_name
-            ),
+                messages, 1, template_file_name=llm_handler.prompt_template_file_name,
+                isChatCompletion=llm_handler.takes_message_collection),
             "chat_user_prompt_last_one": extract_last_n_turns_as_string(messages, 1)
         }

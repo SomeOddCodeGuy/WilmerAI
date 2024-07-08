@@ -474,7 +474,7 @@ class SlowButQualityRAGTool:
         print("Chunks:", chunks)
 
         for chunk in chunks:
-            if (len(memory_chunks) > 0):
+            if memory_chunks is not None and len(memory_chunks) > 0:
                 if (len(memory_chunks) < 4):
                     print("Memory chunks:", memory_chunks)
                     current_memories = '\n--------------\n'.join(
@@ -520,9 +520,11 @@ class SlowButQualityRAGTool:
         formatted_prompt = formatted_prompt.replace('[TextChunk]', chunk)
         formatted_system_prompt = formatted_system_prompt.replace('[TextChunk]', chunk)
 
-        formatted_prompt = format_user_turn_with_template(formatted_prompt, llm_handler.prompt_template_file_name)
+        formatted_prompt = format_user_turn_with_template(formatted_prompt, llm_handler.prompt_template_file_name,
+                                                          llm_handler.takes_message_collection)
         formatted_system_prompt = format_system_prompt_with_template(formatted_system_prompt,
-                                                                     llm_handler.prompt_template_file_name)
+                                                                     llm_handler.prompt_template_file_name,
+                                                                     llm_handler.takes_message_collection)
 
         formatted_system_prompt = remove_discussion_id_tag_from_string(formatted_system_prompt)
         formatted_prompt = remove_discussion_id_tag_from_string(formatted_prompt)

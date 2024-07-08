@@ -19,12 +19,12 @@ class LlmHandlerService:
             print('Loading v1 Completions endpoint: ' + endpoint)
             llm = OpenAiLlmCompletionsApiService(endpoint=endpoint, presetname=preset,
                                                  stream=stream, api_type_config=api_type_config,
-                                                 truncate_length=truncate_length, max_tokens=max_tokens)
+                                                 max_tokens=max_tokens)
         elif llm_type == "openAIChatCompletion":
             print('Loading chat Completions endpoint: ' + endpoint)
             llm = OpenAiLlmChatCompletionsApiService(endpoint=endpoint, presetname=preset,
                                                      stream=stream, api_type_config=api_type_config,
-                                                     truncate_length=truncate_length, max_tokens=max_tokens)
+                                                     max_tokens=max_tokens)
         else:
             raise ValueError(f"Unsupported LLM type: {llm_type}")
 

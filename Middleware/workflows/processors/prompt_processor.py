@@ -217,20 +217,26 @@ class PromptProcessor:
                     add_user_turn_template = True
                 if add_user_turn_template:
                     print("Adding user turn")
-                    prompt = format_user_turn_with_template(prompt, self.llm_handler.prompt_template_file_name)
+                    prompt = format_user_turn_with_template(prompt, self.llm_handler.prompt_template_file_name
+                                                            ,
+                                                            isChatCompletion=self.llm_handler.takes_message_collection)
             else:
                 # Extracting with template because this is v1/completions
                 last_messages_to_send = config.get("lastMessagesToSendInsteadOfPrompt", 5)
                 prompt = get_formatted_last_n_turns_as_string(
                     message_copy, last_messages_to_send + 1,
-                    template_file_name=self.llm_handler.prompt_template_file_name
+                    template_file_name=self.llm_handler.prompt_template_file_name,
+                    isChatCompletion=self.llm_handler.takes_message_collection
                 )
 
             if self.llm_handler.add_generation_prompt:
-                prompt = add_assistant_end_token_to_user_turn(prompt, self.llm_handler.prompt_template_file_name)
+                prompt = add_assistant_end_token_to_user_turn(prompt, self.llm_handler.prompt_template_file_name,
+                                                              isChatCompletion=self.llm_handler.takes_message_collection)
 
             system_prompt = format_system_prompt_with_template(system_prompt,
-                                                               self.llm_handler.prompt_template_file_name)
+                                                               self.llm_handler.prompt_template_file_name
+                                                               ,
+                                                               isChatCompletion=self.llm_handler.takes_message_collection)
 
             return self.llm_handler.llm.get_response_from_llm(system_prompt=system_prompt, prompt=prompt)
         else:

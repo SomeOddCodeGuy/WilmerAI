@@ -16,7 +16,7 @@ class OpenAiLlmChatCompletionsApiService:
     A service class that provides compatibility with OpenAI's API for interacting with LLMs.
     """
 
-    def __init__(self, endpoint: str, presetname: str, api_type_config, truncate_length, max_tokens,
+    def __init__(self, endpoint: str, presetname: str, api_type_config, max_tokens,
                  stream: bool = False):
         """
         Initializes the OpenAiLlmChatCompletionsApiService with the given configuration.
@@ -49,7 +49,7 @@ class OpenAiLlmChatCompletionsApiService:
         self._gen_input = self._gen_input_raw.to_json()
         # Add optional fields if they are not None
         if self.truncate_property_name:
-            self._gen_input[self.truncate_property_name] = truncate_length
+            self._gen_input[self.truncate_property_name] = endpoint_file["maxContextTokenSize"]
         if self.stream_property_name:
             self._gen_input[self.stream_property_name] = stream
         if self.max_token_property_name:
@@ -178,6 +178,7 @@ class OpenAiChatCompletionsApi:
                                 for choice in chunk_data.get("choices", []):
                                     if "delta" in choice:
                                         content = choice["delta"].get("content", "")
+                                        print("Content received: " + content)
                                         # Check if both booleans are true and process the first chunks
                                         if add_user_assistant and add_missing_assistant and not first_chunk_processed:
                                             first_chunk_buffer += content

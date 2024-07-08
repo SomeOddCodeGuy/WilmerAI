@@ -17,7 +17,7 @@ class OpenAiLlmCompletionsApiService:
     A service class that provides compatibility with OpenAI's API for interacting with LLMs.
     """
 
-    def __init__(self, endpoint: str, presetname: str, api_type_config, truncate_length, max_tokens,
+    def __init__(self, endpoint: str, presetname: str, api_type_config, max_tokens,
                  stream: bool = False):
         """
         Initializes the OpenAiLlmCompletionsApiService with the given configuration.
@@ -50,7 +50,7 @@ class OpenAiLlmCompletionsApiService:
         self._gen_input = self._gen_input_raw.to_json()
         # Add optional fields if they are not None
         if self.truncate_property_name:
-            self._gen_input[self.truncate_property_name] = truncate_length
+            self._gen_input[self.truncate_property_name] = endpoint_file["maxContextTokenSize"]
         if self.stream_property_name:
             self._gen_input[self.stream_property_name] = stream
         if self.max_token_property_name:

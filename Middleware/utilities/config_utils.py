@@ -244,7 +244,7 @@ def get_api_type_config(api_type):
     """
     Retrieves the endpoint configuration based on the endpoint name.
 
-    :param endpoint: The name of the endpoint configuration.
+    :param api_type: The name of the api_type configuration.
     :return: The full path to the endpoint configuration file.
     """
     api_type_file = get_config_path('ApiTypes', api_type)
