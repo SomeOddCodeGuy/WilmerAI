@@ -1,6 +1,5 @@
 import re
-from copy import deepcopy
-from typing import Dict, Tuple, List, Optional
+from typing import Dict, Tuple, List, Optional, Any
 
 template = {
     "Begin_Sys": "[Beg_Sys]",
@@ -15,35 +14,60 @@ discussion_identifiers = {
 }
 
 
-def extract_last_n_turns(messages: List[Dict[str, str]], n: int) -> List[Dict[str, str]]:
+def extract_last_n_turns(messages: List[Dict[str, str]], n: int, include_sysmes: bool = True
+                         , remove_all_systems_override=False) -> List[Dict[str, str]]:
     """
-    Extract the last n user and assistant messages, excluding system messages.
-
+    Extract the last n messages, including system messages if include_sysmes is True.
+    When include_sysmes is True, only system messages at the very beginning of the list are excluded.
     Parameters:
     messages (List[Dict[str, str]]): The list of messages.
     n (int): The number of messages to extract.
-
+    include_sysmes (bool, optional): Whether to include system messages that are not at the start of the list. Defaults to True.
     Returns:
-    List[Dict[str, str]]: The last n user and assistant messages.
+    List[Dict[str, str]]: The last n messages, with system messages included as specified.
     """
-    filtered_messages = [message for message in messages if message["role"] != "system"]
+    if not messages:
+        return []
+    if remove_all_systems_override:
+        filtered_messages = [message for message in messages if message["role"] != "system"]
+        return filtered_messages
+
+    first_non_system_index = next((i for i, message in enumerate(messages) if message["role"] != "system"), None)
+
+    if not include_sysmes:
+        filtered_messages = [message for message in messages if message["role"] != "system"]
+    else:
+        filtered_messages = messages[first_non_system_index:] if first_non_system_index is not None else messages
+
     return filtered_messages[-n:]
 
 
-def extract_last_n_turns_as_string(messages: List[Dict[str, str]], n: int) -> str:
+def extract_last_n_turns_as_string(messages: List[Dict[str, Any]], n: int, include_sysmes: bool = True,
+                                   remove_all_systems_override=False) -> str:
     """
-    Extract the last n user and assistant messages as a single string, excluding system messages.
-
+    Extract the last n messages as a single string, including system messages if include_sysmes is True.
+    If include_sysmes is False, all system messages are excluded.
     Parameters:
-    messages (List[Dict[str, str]]): The list of messages.
+    messages (List[Dict[str, Any]]): The list of messages.
     n (int): The number of messages to extract.
-
+    include_sysmes (bool, optional): Whether to include system messages in the output. Defaults to True.
     Returns:
-    str: The last n user and assistant messages as a single string.
+    str: The last n messages as a single string.
     """
-    filtered_messages = [message for message in messages if message["role"] != "system"]
-    return_messages = deepcopy(filtered_messages[-n:])
-    return '\n'.join(message["content"] for message in return_messages)
+    if remove_all_systems_override:
+        filtered_messages = [message for message in messages if message["role"] != "system"]
+        return '\n'.join(message["content"] for message in filtered_messages)
+
+    index_of_first_non_system_message = next((i for i, message in enumerate(messages) if message["role"] != "system"),
+                                             None)
+
+    if include_sysmes and index_of_first_non_system_message is not None:
+        messages = messages[index_of_first_non_system_message:]
+
+    if not include_sysmes:
+        messages = [message for message in messages if message["role"] != "system"]
+
+    return '\n'.join(message["content"] for message in messages[-n:])
 
 
 def extract_discussion_id(messages: List[Dict[str, str]]) -> Optional[str]:
@@ -102,26 +126,29 @@ def remove_discussion_id_tag_from_string(message: str) -> str:
     return re.sub(pattern, '', message)
 
 
-def separate_messages(messages: List[Dict[str, str]], isVariable=False) -> Tuple[str, List[Dict[str, str]]]:
+def separate_messages(messages: List[Dict[str, str]], separate_sysmes: bool = False) -> Tuple[
+    str, List[Dict[str, str]]]:
     """
-    Extracts the system prompt and remaining messages from the messages list.
+    Processes a list of messages to extract system prompts and organize the conversation.
 
     Parameters:
-    messages (List[Dict[str, str]]): A list of messages with roles and content.
-    isVariable (bool): A flag indicating if the system prompt is variable. Default is False.
+    - messages (List[Dict[str, str]]): A list of messages with roles ('system', 'user', 'assistant') and content.
+    - separate_sysmes (bool, optional): If True, only the system messages at the start of the messages list are extracted into the system prompt. Subsequent system messages are included in the conversation. If False, all system messages are extracted into the system prompt, and other roles are included in the conversation. Defaults to False.
 
     Returns:
-    Tuple[str, List[Dict[str, str]]]: The system prompt and the remaining messages.
+    - Tuple[str, List[Dict[str, str]]]: A tuple containing the system prompt and the remaining conversation messages.
     """
     system_prompt_list = []
     conversation = []
     for message in messages:
-        role = message.get('role', '').lower()
-        if role == 'system':
+        if 'role' not in message or 'content' not in message:
+            raise ValueError("Message is missing the 'role' or 'content' key.")
+
+        role = message['role'].lower()
+        if role == 'system' and (not separate_sysmes or not conversation):
             system_prompt_list.append(message['content'])
         else:
             conversation.append(message)
-
     system_prompt = ' '.join(system_prompt_list)
     return system_prompt, conversation
 

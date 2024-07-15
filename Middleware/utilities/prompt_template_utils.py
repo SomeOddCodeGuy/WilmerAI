@@ -19,7 +19,7 @@ def format_system_prompts(messages: List[Dict[str, str]], llm_handler, chat_prom
     Returns:
     - dict: A dictionary containing formatted system and user prompts.
     """
-    system_prompt, other_messages = separate_messages(messages, True)
+    system_prompt, other_messages = separate_messages(messages, llm_handler.takes_message_collection)
     chat_user_prompt = format_messages_with_template(other_messages, chat_prompt_template_name,
                                                      llm_handler.takes_message_collection)
     templates_user_prompt = format_messages_with_template(other_messages, llm_handler.prompt_template_file_name

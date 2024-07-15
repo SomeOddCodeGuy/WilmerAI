@@ -11,7 +11,7 @@ from Middleware.utilities.prompt_extraction_utils import extract_discussion_id, 
 from Middleware.utilities.prompt_template_utils import format_user_turn_with_template, \
     format_system_prompt_with_template
 from Middleware.utilities.prompt_utils import find_last_matching_memory_hash, chunk_messages_with_hashes, \
-    extract_text_blocks_from_hashed_chunks, find_last_matching_hash_message, get_messages_within_index
+    extract_text_blocks_from_hashed_chunks, find_last_matching_hash_message
 from Middleware.utilities.search_utils import filter_keywords_by_speakers, advanced_search_in_chunks, search_in_chunks
 from Middleware.utilities.text_utils import messages_into_chunked_text_of_token_size
 from Middleware.workflows.managers.workflow_variable_manager import WorkflowVariableManager
@@ -27,7 +27,7 @@ class SlowButQualityRAGTool:
     def __init__(self):
         pass
 
-    def perform_keyword_search(self, keywords: str, target, **kwargs):
+    def perform_keyword_search(self, keywords: str, target, llm_handler, **kwargs):
         """
         :param keywords: A string representing the keywords to search for.
         :param target: The target object to perform the keyword search on.
@@ -42,7 +42,7 @@ class SlowButQualityRAGTool:
                 lookbackStartTurn = 0
             if 'messages' in kwargs:
                 messages = kwargs['messages']
-                result = self.perform_conversation_search(keywords, messages, lookbackStartTurn)
+                result = self.perform_conversation_search(keywords, messages, llm_handler, lookbackStartTurn)
                 return result
             else:
                 print("Fatal Workflow Error: cannot perform keyword search; no user prompt")
@@ -51,7 +51,7 @@ class SlowButQualityRAGTool:
                 messages = kwargs['messages']
                 print("In recent memories")
                 print(messages)
-                result = self.perform_memory_file_keyword_search(keywords, messages)
+                result = self.perform_memory_file_keyword_search(keywords, messages, llm_handler)
                 return result
 
     @staticmethod
@@ -80,7 +80,7 @@ class SlowButQualityRAGTool:
                 new_chunks.append(chunk)
         return new_chunks
 
-    def perform_conversation_search(self, keywords: str, messages, lookbackStartTurn=0):
+    def perform_conversation_search(self, keywords: str, messages, llm_handler, lookbackStartTurn=0):
         """
         Perform a conversation search based on given keywords and user prompt.
 
@@ -102,7 +102,7 @@ class SlowButQualityRAGTool:
 
         # In case the LLM designated the speakers as keywords, we want to remove them
         # The speakers would trigger tons of erroneous hits
-        last_n_turns = extract_last_n_turns(messages, 10)
+        last_n_turns = extract_last_n_turns(messages, 10, llm_handler.takes_message_collection)
         keywords = filter_keywords_by_speakers(last_n_turns, keywords)
         print("Keywords: " + str(keywords))
 
@@ -116,7 +116,7 @@ class SlowButQualityRAGTool:
 
         return '--ChunkBreak--'.join(filtered_chunks)
 
-    def perform_memory_file_keyword_search(self, keywords: str, messages):
+    def perform_memory_file_keyword_search(self, keywords: str, messages, llm_handler):
         """
         Perform a memory file keyword search based on given keywords and user prompt.
 
@@ -139,7 +139,7 @@ class SlowButQualityRAGTool:
 
         # In case the LLM designated the speakers as keywords, we want to remove them
         # The speakers would trigger tons of erroneous hits
-        last_n_turns = extract_last_n_turns(messages, 10)
+        last_n_turns = extract_last_n_turns(messages, 10, llm_handler.takes_message_collection)
         keywords = filter_keywords_by_speakers(last_n_turns, keywords)
         print("Keywords: " + str(keywords))
 
@@ -342,7 +342,7 @@ class SlowButQualityRAGTool:
             index = find_last_matching_hash_message(messages, discussion_chunks)
             print("Number of messages since last memory chunk update: ", index)
             if index > chunks_til_new_memory:
-                trimmed_discussion_pairs = get_messages_within_index(messages, index)
+                trimmed_discussion_pairs = extract_last_n_turns(messages, index, remove_all_systems_override=True)
                 trimmed_discussion_pairs.reverse()
                 print("Trimmed discussion message length: ", len(trimmed_discussion_pairs))
                 print(trimmed_discussion_pairs)
@@ -379,7 +379,9 @@ class SlowButQualityRAGTool:
             new_messages = new_messages[:-1]
 
         new_messages.reverse()
-        chunk_hashes = chunk_messages_with_hashes(new_messages, 1500)
+        filtered_messaged_to_chunk = [message for message in new_messages if message["role"] != "system"]
+
+        chunk_hashes = chunk_messages_with_hashes(filtered_messaged_to_chunk, 1500)
         pass_chunks = extract_text_blocks_from_hashed_chunks(chunk_hashes)
         pass_chunks.reverse()
         chunk_hashes.reverse()
@@ -513,9 +515,10 @@ class SlowButQualityRAGTool:
         """
 
         workflow_variable_service = WorkflowVariableManager()
-        formatted_prompt = workflow_variable_service.apply_variables(workflow_prompt, llm_handler, messages)
+        formatted_prompt = workflow_variable_service.apply_variables(workflow_prompt, llm_handler, messages,
+                                                                     remove_all_system_override=True)
         formatted_system_prompt = workflow_variable_service.apply_variables(workflow_system_prompt, llm_handler,
-                                                                            messages)
+                                                                            messages, remove_all_system_override=True)
 
         formatted_prompt = formatted_prompt.replace('[TextChunk]', chunk)
         formatted_system_prompt = formatted_system_prompt.replace('[TextChunk]', chunk)

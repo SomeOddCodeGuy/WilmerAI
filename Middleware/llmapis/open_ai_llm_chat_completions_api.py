@@ -73,7 +73,7 @@ class OpenAiLlmChatCompletionsApiService:
             for msg in conversation
         ]
         # Construct the full prompt from the conversation
-        full_prompt = "".join(msg["content"] for msg in corrected_conversation)
+        full_prompt = "\n".join(msg["content"] for msg in corrected_conversation)
         print("\n************************************************")
         print("Formatted_Prompt:", full_prompt)
         print("************************************************")
@@ -178,7 +178,6 @@ class OpenAiChatCompletionsApi:
                                 for choice in chunk_data.get("choices", []):
                                     if "delta" in choice:
                                         content = choice["delta"].get("content", "")
-                                        print("Content received: " + content)
                                         # Check if both booleans are true and process the first chunks
                                         if add_user_assistant and add_missing_assistant and not first_chunk_processed:
                                             first_chunk_buffer += content

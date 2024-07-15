@@ -87,13 +87,15 @@ class PromptProcessor:
         if "searchTarget" not in config or config["searchTarget"] == "CurrentConversation":
             print("Performing search on Current Conversation")
             return self.slow_but_quality_rag_service.perform_keyword_search(
-                keywords, "CurrentConversation", messages=messages, lookbackStartTurn=lookbackStartTurn
+                keywords, "CurrentConversation", messages=messages, lookbackStartTurn=lookbackStartTurn,
+                llm_handler=self.llm_handler
             )
 
         if config["searchTarget"] == "RecentMemories":
             print("Performing search on Recent Memories")
             return self.slow_but_quality_rag_service.perform_keyword_search(
-                keywords, "RecentMemories", messages=messages, lookbackStartTurn=lookbackStartTurn
+                keywords, "RecentMemories", messages=messages, lookbackStartTurn=lookbackStartTurn,
+                llm_handler=self.llm_handler
             )
 
     def save_summary_to_file(self, config: Dict, messages: List[Dict[str, str]],
@@ -264,7 +266,8 @@ class PromptProcessor:
             else:
                 # Extracting without template because this is for chat/completions
                 last_messages_to_send = config.get("lastMessagesToSendInsteadOfPrompt", 5)
-                last_n_turns = extract_last_n_turns(message_copy, last_messages_to_send)
+                last_n_turns = extract_last_n_turns(message_copy, last_messages_to_send,
+                                                    self.llm_handler.takes_message_collection)
                 collection.extend(last_n_turns)
 
             return self.llm_handler.llm.get_response_from_llm(collection)

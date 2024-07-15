@@ -42,7 +42,7 @@ class WorkflowVariableManager:
         self.set_categories_from_kwargs(**kwargs)
 
     def apply_variables(self, prompt: str, llm_handler: Any, messages: List[Dict[str, str]],
-                        agent_outputs: Optional[Dict[str, Any]] = None) -> str:
+                        agent_outputs: Optional[Dict[str, Any]] = None, remove_all_system_override=None) -> str:
         """
         Applies the generated variables to the prompt and formats it using the specified template.
 
@@ -52,12 +52,13 @@ class WorkflowVariableManager:
         :param agent_outputs: A dictionary of outputs from agent processing.
         :return: The formatted prompt string.
         """
-        variables = self.generate_variables(llm_handler, messages, agent_outputs)
+        variables = self.generate_variables(llm_handler, messages, agent_outputs, remove_all_system_override)
         formatted_prompt = prompt.format(**variables)
         return formatted_prompt
 
     def generate_variables(self, llm_handler: Any, messages: List[Dict[str, str]],
-                           agent_outputs: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                           agent_outputs: Optional[Dict[str, Any]] = None, remove_all_system_override=None) -> Dict[
+        str, Any]:
         """
         Generates all the variables utilized by the workflow prompts.
 
@@ -70,7 +71,8 @@ class WorkflowVariableManager:
 
         if messages:
             print("Inside generate variables")
-            prompt_configurations = self.generate_conversation_turn_variables(messages, llm_handler)
+            prompt_configurations = self.generate_conversation_turn_variables(messages, llm_handler,
+                                                                              remove_all_system_override)
             variables.update(prompt_configurations)
             variables.update(format_system_prompts(messages, llm_handler, get_chat_template_name()))
 
@@ -113,7 +115,8 @@ class WorkflowVariableManager:
             self.category_list = kwargs['category_list']
 
     @staticmethod
-    def generate_conversation_turn_variables(originalMessages: List[Dict[str, str]], llm_handler: Any) -> Dict[
+    def generate_conversation_turn_variables(originalMessages: List[Dict[str, str]], llm_handler: Any,
+                                             remove_all_system_override) -> Dict[
         str, str]:
         """
         Generates a dictionary of variables based on the conversation turns in the unaltered prompt.
@@ -122,34 +125,43 @@ class WorkflowVariableManager:
         :param llm_handler: The LLM handler.
         :return: A dictionary of variables for user prompts at different turn lengths.
         """
+        include_sysmes = llm_handler.takes_message_collection
+
         messages = deepcopy(originalMessages)
         return {
             "templated_user_prompt_last_twenty": get_formatted_last_n_turns_as_string(
                 messages, 20, template_file_name=llm_handler.prompt_template_file_name,
                 isChatCompletion=llm_handler.takes_message_collection),
-            "chat_user_prompt_last_twenty": extract_last_n_turns_as_string(messages, 20),
+            "chat_user_prompt_last_twenty": extract_last_n_turns_as_string(messages, 20,
+                                                                           include_sysmes, remove_all_system_override),
             "templated_user_prompt_last_ten": get_formatted_last_n_turns_as_string(
                 messages, 10, template_file_name=llm_handler.prompt_template_file_name,
                 isChatCompletion=llm_handler.takes_message_collection),
-            "chat_user_prompt_last_ten": extract_last_n_turns_as_string(messages, 10),
+            "chat_user_prompt_last_ten": extract_last_n_turns_as_string(messages, 10,
+                                                                        include_sysmes, remove_all_system_override),
             "templated_user_prompt_last_five": get_formatted_last_n_turns_as_string(
                 messages, 5, template_file_name=llm_handler.prompt_template_file_name,
                 isChatCompletion=llm_handler.takes_message_collection),
-            "chat_user_prompt_last_five": extract_last_n_turns_as_string(messages, 5),
+            "chat_user_prompt_last_five": extract_last_n_turns_as_string(messages, 5,
+                                                                         include_sysmes, remove_all_system_override),
             "templated_user_prompt_last_four": get_formatted_last_n_turns_as_string(
                 messages, 4, template_file_name=llm_handler.prompt_template_file_name,
                 isChatCompletion=llm_handler.takes_message_collection),
-            "chat_user_prompt_last_four": extract_last_n_turns_as_string(messages, 4),
+            "chat_user_prompt_last_four": extract_last_n_turns_as_string(messages, 4,
+                                                                         include_sysmes, remove_all_system_override),
             "templated_user_prompt_last_three": get_formatted_last_n_turns_as_string(
                 messages, 3, template_file_name=llm_handler.prompt_template_file_name,
                 isChatCompletion=llm_handler.takes_message_collection),
-            "chat_user_prompt_last_three": extract_last_n_turns_as_string(messages, 3),
+            "chat_user_prompt_last_three": extract_last_n_turns_as_string(messages, 3,
+                                                                          include_sysmes, remove_all_system_override),
             "templated_user_prompt_last_two": get_formatted_last_n_turns_as_string(
                 messages, 2, template_file_name=llm_handler.prompt_template_file_name,
                 isChatCompletion=llm_handler.takes_message_collection),
-            "chat_user_prompt_last_two": extract_last_n_turns_as_string(messages, 2),
+            "chat_user_prompt_last_two": extract_last_n_turns_as_string(messages, 2,
+                                                                        include_sysmes, remove_all_system_override),
             "templated_user_prompt_last_one": get_formatted_last_n_turns_as_string(
                 messages, 1, template_file_name=llm_handler.prompt_template_file_name,
                 isChatCompletion=llm_handler.takes_message_collection),
-            "chat_user_prompt_last_one": extract_last_n_turns_as_string(messages, 1)
+            "chat_user_prompt_last_one": extract_last_n_turns_as_string(messages, 1,
+                                                                        include_sysmes, remove_all_system_override)
         }
