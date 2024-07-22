@@ -40,6 +40,5 @@
   "min_keep": 0,
   "image_data": [],
   "id_slot": -1,
-  "cache_prompt": false,
-  "system_prompt": ""
+  "cache_prompt": false
 }
