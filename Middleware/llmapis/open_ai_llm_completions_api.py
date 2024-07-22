@@ -184,37 +184,100 @@ class OpenAiCompletionsApi:
 
                             try:
                                 chunk_data = json.loads(data_str)
+                                if 'choices' in chunk_data:
+                                    for choice in chunk_data.get("choices", []):
+                                        if "text" in choice:
+                                            content = choice["text"]
 
-                                for choice in chunk_data.get("choices", []):
-                                    if "text" in choice:
-                                        content = choice["text"]
+                                            if add_user_assistant and add_missing_assistant and not first_chunk_processed:
+                                                first_chunk_buffer += content
+                                                if "Assistant:" in first_chunk_buffer:
+                                                    if first_chunk_buffer.startswith("Assistant:"):
+                                                        first_chunk_buffer = first_chunk_buffer[
+                                                                             len("Assistant:"):].lstrip()
+                                                    first_chunk_processed = True
+                                                    content = first_chunk_buffer
+                                                elif len(first_chunk_buffer) > max_buffer_length:
+                                                    first_chunk_processed = True
+                                                    content = first_chunk_buffer
+                                                else:
+                                                    continue
 
-                                        if add_user_assistant and add_missing_assistant and not first_chunk_processed:
-                                            first_chunk_buffer += content
-                                            if "Assistant:" in first_chunk_buffer:
-                                                if first_chunk_buffer.startswith("Assistant:"):
-                                                    first_chunk_buffer = first_chunk_buffer[len("Assistant:"):].lstrip()
-                                                first_chunk_processed = True
-                                                content = first_chunk_buffer
-                                            elif len(first_chunk_buffer) > max_buffer_length:
-                                                first_chunk_processed = True
-                                                content = first_chunk_buffer
-                                            else:
-                                                continue
+                                            completion_data = {
+                                                "choices": [{
+                                                    "finish_reason": choice.get("finish_reason"),
+                                                    "index": choice.get("index"),
+                                                    "delta": {"content": content},
+                                                    "text": content
+                                                }],
+                                                "created": chunk_data.get("created"),
+                                                "id": chunk_data.get("id"),
+                                                "model": "Wilmer-AI",
+                                                "object": "chat.completion.chunk"
+                                            }
+                                            yield sse_format(json.dumps(completion_data))
+                                elif 'choices' in chunk_data.get("response", {}):
+                                    for choice in chunk_data["response"].get("choices", []):
+                                        if "text" in choice:
+                                            content = choice["text"]
 
-                                        completion_data = {
-                                            "choices": [{
-                                                "finish_reason": choice.get("finish_reason"),
-                                                "index": choice.get("index"),
-                                                "delta": {"content": content},
-                                                "text": content
-                                            }],
-                                            "created": chunk_data.get("created"),
-                                            "id": chunk_data.get("id"),
-                                            "model": "Wilmer-AI",
-                                            "object": "chat.completion.chunk"
-                                        }
-                                        yield sse_format(json.dumps(completion_data))
+                                            if add_user_assistant and add_missing_assistant and not first_chunk_processed:
+                                                first_chunk_buffer += content
+                                                if "Assistant:" in first_chunk_buffer:
+                                                    if first_chunk_buffer.startswith("Assistant:"):
+                                                        first_chunk_buffer = first_chunk_buffer[
+                                                                             len("Assistant:"):].lstrip()
+                                                    first_chunk_processed = True
+                                                    content = first_chunk_buffer
+                                                elif len(first_chunk_buffer) > max_buffer_length:
+                                                    first_chunk_processed = True
+                                                    content = first_chunk_buffer
+                                                else:
+                                                    continue
+
+                                            completion_data = {
+                                                "choices": [{
+                                                    "finish_reason": choice.get("finish_reason"),
+                                                    "index": choice.get("index"),
+                                                    "delta": {"content": content},
+                                                    "text": content
+                                                }],
+                                                "created": chunk_data.get("created"),
+                                                "id": chunk_data.get("id"),
+                                                "model": "Wilmer-AI",
+                                                "object": "chat.completion.chunk"
+                                            }
+                                            yield sse_format(json.dumps(completion_data))
+                                elif 'content' in chunk_data:
+                                    content = chunk_data["content"]
+
+                                    if add_user_assistant and add_missing_assistant and not first_chunk_processed:
+                                        first_chunk_buffer += content
+                                        if "Assistant:" in first_chunk_buffer:
+                                            if first_chunk_buffer.startswith("Assistant:"):
+                                                first_chunk_buffer = first_chunk_buffer[
+                                                                     len("Assistant:"):].lstrip()
+                                            first_chunk_processed = True
+                                            content = first_chunk_buffer
+                                        elif len(first_chunk_buffer) > max_buffer_length:
+                                            first_chunk_processed = True
+                                            content = first_chunk_buffer
+                                        else:
+                                            continue
+
+                                    completion_data = {
+                                        "choices": [{
+                                            "finish_reason": None,
+                                            "index": 0,
+                                            "delta": {"content": content},
+                                            "text": content
+                                        }],
+                                        "created": None,
+                                        "id": None,
+                                        "model": "Wilmer-AI",
+                                        "object": "chat.completion.chunk"
+                                    }
+                                    yield sse_format(json.dumps(completion_data))
                             except json.JSONDecodeError as e:
                                 print(f"Failed to parse JSON: {e}")
                                 continue
@@ -246,18 +309,26 @@ class OpenAiCompletionsApi:
             try:
                 print(f"Non-Streaming flow! Attempt: {attempt + 1}")
                 print("Headers: ")
-                print(json.dumps(self.headers))
+                print(json.dumps(self.headers, indent=2))
                 print("Data: ")
-                print(json.dumps(data))
+                print(json.dumps(data, indent=2))
                 response = self.session.post(url, headers=self.headers, json=data, timeout=14400)
                 response.raise_for_status()  # Raises HTTPError for bad responses
 
                 payload = response.json()
                 print("Response: ", response)
-                print("Payload: ", payload)
+                print("Payload: ", json.dumps(payload, indent=2))
 
+                # Check for your original format first
                 if 'choices' in payload and payload['choices'][0] and 'text' in payload['choices'][0]:
                     result_text = payload['choices'][0]['text']
+                    return result_text
+                # Check for specified format in the API specification
+                elif 'choices' in payload and payload['choices'][0]:
+                    result_text = payload['choices'][0]['text']
+                    return result_text
+                elif 'content' in payload:
+                    result_text = payload['content']  # llama.cpp server
                     return result_text
                 else:
                     return ''

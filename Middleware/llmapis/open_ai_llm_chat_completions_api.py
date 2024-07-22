@@ -246,6 +246,8 @@ class OpenAiChatCompletionsApi:
                 if 'choices' in payload and payload['choices'][0] and 'message' in payload['choices'][
                     0] and 'content' in payload['choices'][0]['message']:
                     result_text = payload['choices'][0]['message']['content']
+                    if result_text is None or result_text == '':
+                        result_text = payload['content']  # llama.cpp server
                     return result_text
                 else:
                     return ''

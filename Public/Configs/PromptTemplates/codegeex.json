@@ -1,0 +1,9 @@
+{
+  "promptTemplateSystemPrefix": "[gMASK] <sop> <|system|>\n",
+  "promptTemplateSystemSuffix": " ",
+  "promptTemplateUserPrefix": "<|user|>\n",
+  "promptTemplateUserSuffix": " ",
+  "promptTemplateAssistantPrefix": "<|assistant|>\n",
+  "promptTemplateAssistantSuffix": " ",
+  "promptTemplateEndToken": ""
+}

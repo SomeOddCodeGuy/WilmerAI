@@ -9,7 +9,7 @@ from Middleware.utilities.file_utils import read_chunks_with_hashes, \
 from Middleware.utilities.prompt_extraction_utils import extract_discussion_id, extract_last_n_turns, \
     remove_discussion_id_tag_from_string
 from Middleware.utilities.prompt_template_utils import format_user_turn_with_template, \
-    format_system_prompt_with_template
+    format_system_prompt_with_template, add_assistant_end_token_to_user_turn
 from Middleware.utilities.prompt_utils import find_last_matching_memory_hash, chunk_messages_with_hashes, \
     extract_text_blocks_from_hashed_chunks, find_last_matching_hash_message
 from Middleware.utilities.search_utils import filter_keywords_by_speakers, advanced_search_in_chunks, search_in_chunks
@@ -531,6 +531,11 @@ class SlowButQualityRAGTool:
 
         formatted_system_prompt = remove_discussion_id_tag_from_string(formatted_system_prompt)
         formatted_prompt = remove_discussion_id_tag_from_string(formatted_prompt)
+
+        if llm_handler.add_generation_prompt:
+            formatted_prompt = add_assistant_end_token_to_user_turn(formatted_prompt,
+                                                                    llm_handler.prompt_template_file_name,
+                                                                    isChatCompletion=llm_handler.takes_message_collection)
 
         if not llm_handler.takes_message_collection:
             result = llm_handler.llm.get_response_from_llm(system_prompt=formatted_system_prompt,
