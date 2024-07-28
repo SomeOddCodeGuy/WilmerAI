@@ -375,7 +375,9 @@ class SlowButQualityRAGTool:
         """
         print("Beginning full discussion flow")
         new_messages = deepcopy(messages)
-        if len(new_messages) > 1 and new_messages[-1]['role'] == 'assistant':
+        if (len(new_messages) > 1
+            and new_messages[-1]['role'] == 'assistant'
+            and len(new_messages[-1].get('content', '')) < 30):
             new_messages = new_messages[:-1]
 
         new_messages.reverse()
