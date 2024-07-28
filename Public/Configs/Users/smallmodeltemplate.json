@@ -2,7 +2,7 @@
   "port": 5005,
   "stream": true,
   "customWorkflowOverride": false,
-  "customWorkflow": "FullCustomWorkflow-ChatSummary",
+  "customWorkflow": "FactualWorkflow",
   "routingConfig": "smallModelCategoriesConfig",
   "categorizationWorkflow": "CustomCategorizationWorkflow",
   "defaultParallelProcessWorkflow": "SlowButQualityRagParallelProcessor",
@@ -15,5 +15,8 @@
   "chatPromptTemplateName": "_chatonly",
   "verboseLogging": false,
   "chatCompleteAddUserAssistant": false,
-  "chatCompletionAddMissingAssistantGenerator": false
+  "chatCompletionAddMissingAssistantGenerator": false,
+  "useOfflineWikiApi": false,
+  "offlineWikiApiHost": "127.0.0.1",
+  "offlineWikiApiPort": 5728
 }

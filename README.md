@@ -206,6 +206,12 @@ ignore them if you prefer manual installation.
 Within the Public/Configs you will find a series of folders containing json files. The two that you are
 most interested in are the `Endpoints` folder and the `Users` folder.
 
+**NOTE:** The Factual workflow nodes of the `smallmodeltemplate`, `smallmultimodeltemplate`
+and `openaicloudapiservicetemplate` users will attempt to utilize the
+[OfflineWikipediaTextApi](https://github.com/SomeOddCodeGuy/OfflineWikipediaTextApi)
+project to pull full wikipedia articles to RAG against. If you don't have this API, the workflow
+should not have any issues, but I personally use this API to help improve the factual responses I get.
+
 First, choose which template user you'd like to use:
 
 * **openaicloudapiservicetemplate**: This user is straight forward, has routing for "Factual/Technical/Conversation" and
@@ -220,7 +226,8 @@ First, choose which template user you'd like to use:
   node
 
 
-* **multimodeltemplate**: This template is for using three models in tandem: A coding model for the Technical workflow,
+* **smallmultimodeltemplate**: This template is for using three models in tandem: A coding model for the Technical
+  workflow,
   a factual model for the Factual workflow, and a generalist model for conversation and all worker tasks in the
   workflows.
   The endpoints used are `SmallMultiModelCodingEndpoint`, `SmallMultiModelFactualEndpoint`, and
@@ -652,6 +659,50 @@ string). What you do within Invoke is entirely up to you. This can be used to in
   ],
   "kwargs": {},
   "type": "PythonModule"
+}
+```
+
+### Full Text Wikipedia Offline API Caller Node
+
+This node will make a call to
+the [OfflineWikipediaTextApi](https://github.com/SomeOddCodeGuy/OfflineWikipediaTextApi)
+and will pull back a response based on the promptToSearch that you pass in. You can use this text to pass
+into other nodes for factual responses (see factual workflows in the sample users).
+
+```json
+  {
+  "title": "Querying the offline wikipedia api",
+  "agentName": "Wikipedia Search Api Agent Three",
+  "promptToSearch": "{agent1Output}",
+  "type": "OfflineWikiApiFullArticle"
+}
+```
+
+The configuration for these nodes can be found in the user json.
+
+```json
+{
+  "useOfflineWikiApi": false,
+  "offlineWikiApiHost": "127.0.0.1",
+  "offlineWikiApiPort": 5728
+}
+```
+
+When set to false, the node is hardcoded to respond that no additional information was found.
+
+### First Paragraph Text Wikipedia Offline API Caller Node
+
+This is an alternative setting to the full text. txtapi-wikipedia by default returns the first
+paragraph of the wiki article. If that is all you need, then this endpoint will return that.
+
+The only difference from the previous node is the type.
+
+```json
+  {
+  "title": "Querying the offline wikipedia api",
+  "agentName": "Wikipedia Search Api Agent Three",
+  "promptToSearch": "{agent1Output}",
+  "type": "OfflineWikiApiPartialArticle"
 }
 ```
 

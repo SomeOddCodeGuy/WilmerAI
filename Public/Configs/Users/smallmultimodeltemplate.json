@@ -15,5 +15,8 @@
   "chatPromptTemplateName": "_chatonly",
   "verboseLogging": true,
   "chatCompleteAddUserAssistant": false,
-  "chatCompletionAddMissingAssistantGenerator": false
+  "chatCompletionAddMissingAssistantGenerator": false,
+  "useOfflineWikiApi": false,
+  "offlineWikiApiHost": "127.0.0.1",
+  "offlineWikiApiPort": 5728
 }

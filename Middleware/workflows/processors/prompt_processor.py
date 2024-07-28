@@ -8,6 +8,7 @@ from Middleware.utilities.prompt_extraction_utils import extract_discussion_id, 
     remove_discussion_id_tag
 from Middleware.utilities.prompt_template_utils import format_user_turn_with_template, \
     add_assistant_end_token_to_user_turn, format_system_prompt_with_template, get_formatted_last_n_turns_as_string
+from Middleware.workflows.tools.offline_wikipedia_api_tool import OfflineWikiApiClient
 from Middleware.workflows.tools.slow_but_quality_rag_tool import SlowButQualityRAGTool
 
 
@@ -312,3 +313,29 @@ class PromptProcessor:
             kwargs[key] = value
         # Call the function and return the result
         return run_dynamic_module(module_path, *new_args, **kwargs)
+
+    def handle_offline_wiki_node(self, messages: List[Dict[str, str]], prompt,
+                                 agent_outputs: [Dict], get_full_article: bool = True) -> Any:
+
+        message_copy = deepcopy(messages)
+        remove_discussion_id_tag(message_copy)
+
+        variabled_prompt = self.workflow_variable_service.apply_variables(
+            prompt=str(prompt),
+            llm_handler=self.llm_handler,
+            messages=message_copy,
+            agent_outputs=agent_outputs
+        )
+
+        offline_wiki_api_client = OfflineWikiApiClient()
+        if get_full_article:
+            results = offline_wiki_api_client.get_full_wiki_article_by_prompt(variabled_prompt)
+        else:
+            results = offline_wiki_api_client.get_wiki_summary_by_prompt(variabled_prompt)
+
+        result = "No additional information provided"
+        if results is not None:
+            if len(results) > 0:
+                result = results[0]
+
+        return result

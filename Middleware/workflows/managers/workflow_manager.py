@@ -203,6 +203,13 @@ class WorkflowManager:
         if config["type"] == "PythonModule":
             print("Python Module")
             return self.handle_python_module(config, prompt_processor_service, messages, agent_outputs)
+        if config["type"] == "OfflineWikiApiFullArticle":
+            print("Offline Wikipedia Api Full Article")
+            return prompt_processor_service.handle_offline_wiki_node(messages, config["promptToSearch"], agent_outputs)
+        if config["type"] == "OfflineWikiApiPartialArticle":
+            print("Offline Wikipedia Api Summary Only")
+            return prompt_processor_service.handle_offline_wiki_node(messages, config["promptToSearch"], agent_outputs,
+                                                                     False)
 
     def handle_python_module(self, config, prompt_processor_service, messages, agent_outputs):
         """
