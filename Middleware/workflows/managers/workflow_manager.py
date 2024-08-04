@@ -108,8 +108,6 @@ class WorkflowManager:
                         text_chunks = []
                         for chunk in result:
                             if chunk.strip() != '[DONE]' and chunk.strip() != 'data: [DONE]':
-                                print("Chunk yield is: ", chunk)
-                                print("Yielding chunk from node:", idx, chunk)
                                 text_chunks.append(json.loads(chunk.removeprefix('data:'))['choices'][0]['text'])
                                 yield chunk
                             else:
