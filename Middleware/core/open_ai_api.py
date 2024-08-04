@@ -159,4 +159,4 @@ class WilmerApi:
         else:
             print("handle_user_prompt workflow exists")
             workflow_manager: WorkflowManager = WorkflowManager(get_active_custom_workflow_name())
-            return workflow_manager.run_workflow(prompt_collection, stream)
+            return workflow_manager.run_workflow(prompt_collection, stream, allow_generator=True)

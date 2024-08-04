@@ -81,7 +81,7 @@ class WorkflowManager:
         if 'lookbackStartTurn' in kwargs:
             self.lookbackStartTurn = kwargs['lookbackStartTurn']
 
-    def run_workflow(self, user_prompt, stream: bool = False):
+    def run_workflow(self, user_prompt, stream: bool = False, allow_generator = False):
         """
         Executes the workflow based on the configuration file.
 
@@ -94,21 +94,42 @@ class WorkflowManager:
 
         with open(config_file) as f:
             configs = json.load(f)
-        agent_outputs = {}
-        for idx, config in enumerate(configs):
-            if idx == len(configs) - 1 and stream:
-                end_time = time.perf_counter()
-                execution_time = end_time - start_time
-                print(f"Execution time: {execution_time} seconds")
-                return self._process_section(config, user_prompt, agent_outputs, stream=stream)
-            else:
-                agent_outputs[f'agent{idx + 1}Output'] = self._process_section(config, user_prompt, agent_outputs)
+        def gen():
+            returned_to_user = False
+            agent_outputs = {}
+            for idx, config in enumerate(configs):
+                print(f'------Workflow {self.workflowConfigName}; ' +
+                      f'step {idx}; node type: {config.get("type", "Standard")}')
+                if not returned_to_user and (config.get('returnToUser', False) or idx == len(configs) - 1):
+                    returned_to_user = True
+                    result = self._process_section(config, user_prompt, agent_outputs, stream=stream)
+                    if stream:
+                        text_chunks = []
+                        for chunk in result:
+                            chunk_data = json.loads(chunk.removeprefix('data:'))
+                            text_chunks.append(chunk_data['choices'][0]['text'])
+                            yield chunk
+                        result = ''.join(text_chunks)
+                    else:
+                        yield result
+                    if user_prompt[-1]['role'] == 'assistant':
+                        user_prompt[-1]['content'] += result
+                    else:
+                        user_prompt.append({'role': 'assistant', 'content': result})
+                    agent_outputs[f'agent{idx + 1}Output'] = result
+                else:
+                    agent_outputs[f'agent{idx + 1}Output'] = self._process_section(config, user_prompt, agent_outputs)
 
-        end_time = time.perf_counter()
-        execution_time = end_time - start_time
-        print(f"Execution time: {execution_time} seconds")
+            end_time = time.perf_counter()
+            execution_time = end_time - start_time
+            print(f"Execution time: {execution_time} seconds")
 
-        return agent_outputs[list(agent_outputs.keys())[-1]]
+        if allow_generator and stream:
+            return gen()
+        else:
+            exhaust_generator = [x for x in gen()]
+            assert len(exhaust_generator) == 1
+            return exhaust_generator[0]
 
     def _process_section(self, config: Dict, messages: List[Dict[str, str]] = None, agent_outputs: Dict = None,
                          stream: bool = False):
