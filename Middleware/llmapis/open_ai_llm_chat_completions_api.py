@@ -170,8 +170,9 @@ class OpenAiChatCompletionsApi:
                                 break
                             data_str = buffer[data_pos + 5:end_pos].strip()
                             buffer = buffer[end_pos + 1:]
-                            if data_str == "[DONE]":
+                            if data_str == "[DONE]" or data_str == "data: [DONE]":
                                 print("Stream done signal received.")
+                                yield sse_format("[DONE]")
                                 return
                             try:
                                 chunk_data = json.loads(data_str)
@@ -214,6 +215,35 @@ class OpenAiChatCompletionsApi:
                             except json.JSONDecodeError as e:
                                 print(f"Failed to parse JSON: {e}")
                                 continue
+
+                    # Flush remaining buffer
+                    if buffer.strip():
+                        data_str = buffer.strip()
+                        if data_str == "data: [DONE]" or data_str == "[DONE]":
+                            print("Stream done signal received in buffer flush.")
+                            yield sse_format("[DONE]")
+                        else:
+                            try:
+                                chunk_data = json.loads(data_str)
+                                for choice in chunk_data.get("choices", []):
+                                    if "delta" in choice:
+                                        content = choice["delta"].get("content", "")
+                                        completion_data = {
+                                            "choices": [{
+                                                "finish_reason": choice.get("finish_reason"),
+                                                "index": choice.get("index"),
+                                                "delta": {"content": content},
+                                                "text": content
+                                            }],
+                                            "created": chunk_data.get("created"),
+                                            "id": chunk_data.get("id"),
+                                            "model": model,
+                                            "object": "chat.completion.chunk"
+                                        }
+                                        yield sse_format(json.dumps(completion_data))
+                            except json.JSONDecodeError as e:
+                                print(f"Failed to parse JSON: {e}")
+
             except requests.RequestException as e:
                 print(f"Request failed: {e}")
 
