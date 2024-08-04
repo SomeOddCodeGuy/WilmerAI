@@ -178,8 +178,9 @@ class OpenAiCompletionsApi:
                             data_str = buffer[data_pos + 5:end_pos].strip()
                             buffer = buffer[end_pos + 1:]
 
-                            if data_str == "[DONE]":
+                            if data_str == "[DONE]" or data_str == "data: [DONE]":
                                 print("Stream done signal received.")
+                                yield sse_format("[DONE]")
                                 return
 
                             try:
@@ -255,8 +256,7 @@ class OpenAiCompletionsApi:
                                         first_chunk_buffer += content
                                         if "Assistant:" in first_chunk_buffer:
                                             if first_chunk_buffer.startswith("Assistant:"):
-                                                first_chunk_buffer = first_chunk_buffer[
-                                                                     len("Assistant:"):].lstrip()
+                                                first_chunk_buffer = first_chunk_buffer[len("Assistant:"):].lstrip()
                                             first_chunk_processed = True
                                             content = first_chunk_buffer
                                         elif len(first_chunk_buffer) > max_buffer_length:
@@ -281,6 +281,36 @@ class OpenAiCompletionsApi:
                             except json.JSONDecodeError as e:
                                 print(f"Failed to parse JSON: {e}")
                                 continue
+
+                    # Flush remaining buffer
+                    if buffer.strip():
+                        data_str = buffer.strip()
+                        if data_str == "data: [DONE]" or data_str == "[DONE]":
+                            print("Stream done signal received in buffer flush.")
+                            yield sse_format("[DONE]")
+                        else:
+                            try:
+                                chunk_data = json.loads(data_str)
+                                if 'choices' in chunk_data:
+                                    for choice in chunk_data.get("choices", []):
+                                        if "text" in choice:
+                                            content = choice["text"]
+                                            completion_data = {
+                                                "choices": [{
+                                                    "finish_reason": choice.get("finish_reason"),
+                                                    "index": choice.get("index"),
+                                                    "delta": {"content": content},
+                                                    "text": content
+                                                }],
+                                                "created": chunk_data.get("created"),
+                                                "id": chunk_data.get("id"),
+                                                "model": "Wilmer-AI",
+                                                "object": "chat.completion.chunk"
+                                            }
+                                            yield sse_format(json.dumps(completion_data))
+                            except json.JSONDecodeError as e:
+                                print(f"Failed to parse JSON: {e}")
+
             except requests.RequestException as e:
                 print(f"Request failed: {e}")
 

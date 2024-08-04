@@ -81,7 +81,7 @@ class WorkflowManager:
         if 'lookbackStartTurn' in kwargs:
             self.lookbackStartTurn = kwargs['lookbackStartTurn']
 
-    def run_workflow(self, user_prompt, stream: bool = False, allow_generator = False):
+    def run_workflow(self, user_prompt, stream: bool = False):
         """
         Executes the workflow based on the configuration file.
 
@@ -94,6 +94,7 @@ class WorkflowManager:
 
         with open(config_file) as f:
             configs = json.load(f)
+
         def gen():
             returned_to_user = False
             agent_outputs = {}
@@ -106,16 +107,14 @@ class WorkflowManager:
                     if stream:
                         text_chunks = []
                         for chunk in result:
-                            chunk_data = json.loads(chunk.removeprefix('data:'))
-                            text_chunks.append(chunk_data['choices'][0]['text'])
-                            yield chunk
+                            if chunk.strip() != '[DONE]' and chunk.strip() != 'data: [DONE]':
+                                text_chunks.append(json.loads(chunk.removeprefix('data:'))['choices'][0]['text'])
+                                yield chunk
+                            else:
+                                yield chunk
                         result = ''.join(text_chunks)
                     else:
                         yield result
-                    if user_prompt[-1]['role'] == 'assistant':
-                        user_prompt[-1]['content'] += result
-                    else:
-                        user_prompt.append({'role': 'assistant', 'content': result})
                     agent_outputs[f'agent{idx + 1}Output'] = result
                 else:
                     agent_outputs[f'agent{idx + 1}Output'] = self._process_section(config, user_prompt, agent_outputs)
@@ -124,7 +123,7 @@ class WorkflowManager:
             execution_time = end_time - start_time
             print(f"Execution time: {execution_time} seconds")
 
-        if allow_generator and stream:
+        if stream:
             return gen()
         else:
             exhaust_generator = [x for x in gen()]
