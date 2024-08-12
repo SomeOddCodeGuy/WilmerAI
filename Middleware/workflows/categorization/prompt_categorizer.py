@@ -11,7 +11,7 @@ class PromptCategorizer:
     """
 
     @staticmethod
-    def conversational_method(prompt, stream=False):
+    def conversational_method(prompt, request_id, stream=False):
         """
         Run the default conversational workflow.
 
@@ -22,7 +22,7 @@ class PromptCategorizer:
         Returns:
             str: The result of the workflow execution.
         """
-        return WorkflowManager(workflow_config_name='_DefaultWorkflow').run_workflow(prompt, stream=stream)
+        return WorkflowManager(workflow_config_name='_DefaultWorkflow').run_workflow(prompt, request_id, stream=stream)
 
     @staticmethod
     def _configure_workflow_manager(category_data):
@@ -57,10 +57,12 @@ class PromptCategorizer:
                 self._add_category(category, workflow_name, description)
         except FileNotFoundError:
             print("Routing configuration file not found.")
+            raise
         except json.JSONDecodeError:
             print("Error decoding JSON from routing configuration file.")
+            raise
 
-    def get_prompt_category(self, prompt, stream):
+    def get_prompt_category(self, prompt, stream, request_id):
         """
         Get the category of the prompt and run the appropriate workflow.
 
@@ -78,10 +80,10 @@ class PromptCategorizer:
             print("Response initiated")
             workflow_name = self.categories[category]['workflow']
             workflow = WorkflowManager(workflow_config_name=workflow_name)
-            return workflow.run_workflow(prompt, stream=stream)
+            return workflow.run_workflow(prompt, request_id, stream=stream)
         else:
             print("Default response initiated")
-            return self.conversational_method(prompt, stream)
+            return self.conversational_method(prompt, request_id, stream)
 
     def _initialize_categories(self):
         """
@@ -117,7 +119,7 @@ class PromptCategorizer:
                     return key
         return None
 
-    def _categorize_request(self, user_request):
+    def _categorize_request(self, user_request, request_id):
         """
         Categorize the user's request by running the categorization workflow.
 
@@ -133,7 +135,7 @@ class PromptCategorizer:
         attempts = 0
 
         while attempts < 4:
-            category = workflow_manager.run_workflow(user_request).strip()
+            category = workflow_manager.run_workflow(user_request, request_id).strip()
             print("Output from the LLM: " + category)
             print(self.categories)
             category = category.translate(str.maketrans('', '', string.punctuation))

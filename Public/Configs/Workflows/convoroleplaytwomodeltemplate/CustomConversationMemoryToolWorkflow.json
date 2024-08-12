@@ -39,7 +39,7 @@
     "agentName": "Search Result Summarizer Agent",
     "systemPrompt": "You are an extremely capable summarizer, who is able to summarize any text into a human readable text. You never allow things like misplaced prompt template tags, odd parentheses or brackets, or other things like this to throw you off. Your summaries are always clear and detailed.",
     "prompt": "You are engaged in a conversation with a user. The user sent you a message, and you have taken some time to look through your long term memories for anything related to that message. The memories that you came up with, which are from long ago in the conversation, can be found here: \n[\n{agent3Output}\n]\n\nThe latest messages in the conversation can be found in brackets below: \n[\n{chat_user_prompt_last_three}\n]\n\nPlease look through the distant memories and the recent conversation, and then answer the following questions with complete sentences:\n\nA) What context do these long term memories from earlier in the conversation give towards the current conversation?\nB) Based on these long term memories from earlier in the conversation, what sort of response should be given?\nC) Based on these long term memories from earlier in the conversation, what sort of relationship do the speakers seem to have with one another?\n\nNOTE: If there are no memories, please specify that.",
-    "endpointName": "ConvoRoleplayTwoModelResponderEndpoint",
+    "endpointName": "ConvoRoleplayTwoModelWorkerEndpoint",
     "preset": "Default",
     "maxResponseSizeInTokens": 2000,
     "addUserTurnTemplate": true

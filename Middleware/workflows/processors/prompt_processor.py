@@ -1,3 +1,4 @@
+import traceback
 from copy import deepcopy
 from typing import Dict, Any, Optional, List
 
@@ -300,6 +301,8 @@ class PromptProcessor:
                 )
             except Exception as e:
                 print(f"Arg could not have variable applied. Exception: {e}")
+                traceback.print_exc()  # This prints the stack trace
+                raise
         new_args = tuple(modified_args)
 
         for key, value in kwargs.items():

@@ -1,3 +1,4 @@
+import traceback
 from queue import Queue, Empty
 from threading import Thread
 
@@ -112,6 +113,8 @@ class ParallelLlmProcessingTool:
             except Exception as e:
                 print(f"Error processing chunk at index {index} by handler for model "
                       f"{handler.prompt_template_file_name}: {str(e)}")
+                traceback.print_exc()  # This prints the stack trace
+                raise
 
     @staticmethod
     def process_single_chunk(chunk, index, llm_handler, workflow_prompt, workflow_system_prompt, results_queue,
