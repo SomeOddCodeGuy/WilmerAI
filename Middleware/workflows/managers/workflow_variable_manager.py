@@ -1,6 +1,8 @@
 from copy import deepcopy
 from typing import Dict, Any, Optional, List
 
+import jinja2
+
 from Middleware.utilities.config_utils import get_chat_template_name
 from Middleware.utilities.prompt_extraction_utils import extract_last_n_turns_as_string
 from Middleware.utilities.prompt_template_utils import (
@@ -42,7 +44,8 @@ class WorkflowVariableManager:
         self.set_categories_from_kwargs(**kwargs)
 
     def apply_variables(self, prompt: str, llm_handler: Any, messages: List[Dict[str, str]],
-                        agent_outputs: Optional[Dict[str, Any]] = None, remove_all_system_override=None) -> str:
+                        agent_outputs: Optional[Dict[str, Any]] = None, remove_all_system_override=None,
+                        config = None) -> str:
         """
         Applies the generated variables to the prompt and formats it using the specified template.
 
@@ -53,8 +56,13 @@ class WorkflowVariableManager:
         :return: The formatted prompt string.
         """
         variables = self.generate_variables(llm_handler, messages, agent_outputs, remove_all_system_override)
-        formatted_prompt = prompt.format(**variables)
-        return formatted_prompt
+        if config.get('jinja2', False):
+            environment = jinja2.Environment()
+            template = environment.from_string(prompt)
+            variables['messages'] = messages
+            return template.render(**variables)
+        else:
+            return prompt.format(**variables)
 
     def generate_variables(self, llm_handler: Any, messages: List[Dict[str, str]],
                            agent_outputs: Optional[Dict[str, Any]] = None, remove_all_system_override=None) -> Dict[

@@ -48,19 +48,22 @@ class PromptProcessor:
             prompt=config["prompt"],
             llm_handler=self.llm_handler,
             messages=messages,
-            agent_outputs=agent_outputs
+            agent_outputs=agent_outputs,
+            config=config
         )
         system_prompt = self.workflow_variable_service.apply_variables(
             prompt=config["systemPrompt"],
             llm_handler=self.llm_handler,
             messages=messages,
-            agent_outputs=agent_outputs
+            agent_outputs=agent_outputs,
+            config=config
         )
         rag_target = self.workflow_variable_service.apply_variables(
             rag_target,
             llm_handler=self.llm_handler,
             messages=messages,
-            agent_outputs=agent_outputs
+            agent_outputs=agent_outputs,
+            config=config
         )
 
         return self.slow_but_quality_rag_service.perform_rag_on_conversation_chunk(system_prompt, prompt, rag_target,
@@ -83,7 +86,13 @@ class PromptProcessor:
             return Exception("No keywords specified in Keyword Search node")
 
         # The keywords are coming from a previous agent, so we need those
-        keywords = self.workflow_variable_service.apply_variables(keywords, self.llm_handler, messages, agent_outputs)
+        keywords = self.workflow_variable_service.apply_variables(
+            keywords,
+            self.llm_handler,
+            messages,
+            agent_outputs,
+            config=config
+        )
 
         if "searchTarget" not in config or config["searchTarget"] == "CurrentConversation":
             print("Performing search on Current Conversation")
@@ -117,7 +126,13 @@ class PromptProcessor:
         discussion_id = extract_discussion_id(messages)
 
         # The summary is coming from a previous agent, so we need those
-        summary = self.workflow_variable_service.apply_variables(summary, self.llm_handler, messages, agent_outputs)
+        summary = self.workflow_variable_service.apply_variables(
+            summary,
+            self.llm_handler,
+            messages,
+            agent_outputs,
+            config=config
+        )
 
         if discussion_id is None:
             return summary
@@ -201,7 +216,8 @@ class PromptProcessor:
                 prompt=config.get("systemPrompt", ""),
                 llm_handler=self.llm_handler,
                 messages=message_copy,
-                agent_outputs=agent_outputs
+                agent_outputs=agent_outputs,
+                config=config
             )
 
             prompt = config.get("prompt", "")
@@ -210,7 +226,8 @@ class PromptProcessor:
                     prompt=config.get("prompt", ""),
                     llm_handler=self.llm_handler,
                     messages=message_copy,
-                    agent_outputs=agent_outputs
+                    agent_outputs=agent_outputs,
+                    config=config
                 )
 
                 if "addUserTurnTemplate" in config:
@@ -220,9 +237,11 @@ class PromptProcessor:
                     add_user_turn_template = True
                 if add_user_turn_template:
                     print("Adding user turn")
-                    prompt = format_user_turn_with_template(prompt, self.llm_handler.prompt_template_file_name
-                                                            ,
-                                                            isChatCompletion=self.llm_handler.takes_message_collection)
+                    prompt = format_user_turn_with_template(
+                        prompt,
+                        self.llm_handler.prompt_template_file_name,
+                        isChatCompletion=self.llm_handler.takes_message_collection
+                    )
             else:
                 # Extracting with template because this is v1/completions
                 last_messages_to_send = config.get("lastMessagesToSendInsteadOfPrompt", 5)
@@ -233,13 +252,17 @@ class PromptProcessor:
                 )
 
             if self.llm_handler.add_generation_prompt:
-                prompt = add_assistant_end_token_to_user_turn(prompt, self.llm_handler.prompt_template_file_name,
-                                                              isChatCompletion=self.llm_handler.takes_message_collection)
+                prompt = add_assistant_end_token_to_user_turn(
+                    prompt,
+                    self.llm_handler.prompt_template_file_name,
+                    isChatCompletion=self.llm_handler.takes_message_collection
+                )
 
-            system_prompt = format_system_prompt_with_template(system_prompt,
-                                                               self.llm_handler.prompt_template_file_name
-                                                               ,
-                                                               isChatCompletion=self.llm_handler.takes_message_collection)
+            system_prompt = format_system_prompt_with_template(
+                system_prompt,
+                self.llm_handler.prompt_template_file_name,
+                isChatCompletion=self.llm_handler.takes_message_collection
+            )
 
             return self.llm_handler.llm.get_response_from_llm(system_prompt=system_prompt, prompt=prompt)
         else:
@@ -250,7 +273,8 @@ class PromptProcessor:
                 prompt=config.get("systemPrompt", ""),
                 llm_handler=self.llm_handler,
                 messages=message_copy,
-                agent_outputs=agent_outputs
+                agent_outputs=agent_outputs,
+                config=config
             )
             if system_prompt:
                 collection.append({"role": "system", "content": system_prompt})
@@ -260,7 +284,8 @@ class PromptProcessor:
                 prompt=config.get("prompt", ""),
                 llm_handler=self.llm_handler,
                 messages=message_copy,
-                agent_outputs=agent_outputs
+                agent_outputs=agent_outputs,
+                config=config
             )
             if prompt:
                 collection.append({"role": "user", "content": prompt})
@@ -296,7 +321,8 @@ class PromptProcessor:
                     prompt=str(arg),
                     llm_handler=self.llm_handler,
                     messages=message_copy,
-                    agent_outputs=agent_outputs
+                    agent_outputs=agent_outputs,
+                    config=config
                 )
             except Exception as e:
                 print(f"Arg could not have variable applied. Exception: {e}")
@@ -308,7 +334,8 @@ class PromptProcessor:
                 prompt=str(value),
                 llm_handler=self.llm_handler,
                 messages=message_copy,
-                agent_outputs=agent_outputs
+                agent_outputs=agent_outputs,
+                config=config
             )
             kwargs[key] = value
         # Call the function and return the result
@@ -324,7 +351,8 @@ class PromptProcessor:
             prompt=str(prompt),
             llm_handler=self.llm_handler,
             messages=message_copy,
-            agent_outputs=agent_outputs
+            agent_outputs=agent_outputs,
+            config=config
         )
 
         offline_wiki_api_client = OfflineWikiApiClient()
