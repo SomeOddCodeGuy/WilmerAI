@@ -122,7 +122,7 @@ def remove_discussion_id_tag_from_string(message: str) -> str:
     Returns:
     str: The message string with the discussion ID tag removed.
     """
-    pattern = f'{re.escape(discussion_identifiers["discussion_id_start"])}\\d+{re.escape(discussion_identifiers["discussion_id_end"])}'
+    pattern = f'{re.escape(discussion_identifiers["discussion_id_start"])}.*?{re.escape(discussion_identifiers["discussion_id_end"])}'
     return re.sub(pattern, '', message)
 
 

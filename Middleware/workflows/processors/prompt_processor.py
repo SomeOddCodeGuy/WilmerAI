@@ -5,8 +5,7 @@ from typing import Dict, Any, Optional, List
 from Middleware.utilities.automation_utils import run_dynamic_module
 from Middleware.utilities.config_utils import get_discussion_memory_file_path, get_discussion_chat_summary_file_path
 from Middleware.utilities.file_utils import read_chunks_with_hashes, update_chunks_with_hashes
-from Middleware.utilities.prompt_extraction_utils import extract_discussion_id, extract_last_n_turns, \
-    remove_discussion_id_tag
+from Middleware.utilities.prompt_extraction_utils import extract_last_n_turns
 from Middleware.utilities.prompt_template_utils import format_user_turn_with_template, \
     add_assistant_end_token_to_user_turn, format_system_prompt_with_template, get_formatted_last_n_turns_as_string
 from Middleware.workflows.tools.offline_wikipedia_api_tool import OfflineWikiApiClient
@@ -67,7 +66,8 @@ class PromptProcessor:
         return self.slow_but_quality_rag_service.perform_rag_on_conversation_chunk(system_prompt, prompt, rag_target,
                                                                                    config)
 
-    def perform_keyword_search(self, config: Dict, messages: List[Dict[str, str]], agent_outputs: Optional[Dict] = None,
+    def perform_keyword_search(self, config: Dict, messages: List[Dict[str, str]], discussion_id: str,
+                               agent_outputs: Optional[Dict] = None,
                                lookbackStartTurn: int = 0) -> Any:
         """
         Performs a keyword search within the conversation or recent memories based on the provided configuration.
@@ -90,17 +90,17 @@ class PromptProcessor:
             print("Performing search on Current Conversation")
             return self.slow_but_quality_rag_service.perform_keyword_search(
                 keywords, "CurrentConversation", messages=messages, lookbackStartTurn=lookbackStartTurn,
-                llm_handler=self.llm_handler
+                llm_handler=self.llm_handler, discussion_id=discussion_id
             )
 
         if config["searchTarget"] == "RecentMemories":
             print("Performing search on Recent Memories")
             return self.slow_but_quality_rag_service.perform_keyword_search(
                 keywords, "RecentMemories", messages=messages, lookbackStartTurn=lookbackStartTurn,
-                llm_handler=self.llm_handler
+                llm_handler=self.llm_handler, discussion_id=discussion_id
             )
 
-    def save_summary_to_file(self, config: Dict, messages: List[Dict[str, str]],
+    def save_summary_to_file(self, config: Dict, messages: List[Dict[str, str]], discussion_id: str,
                              agent_outputs: Optional[Dict] = None) -> Exception | Any:
         """
         Saves a chat summary to a file after processing the user prompt and applying variables.
@@ -114,8 +114,6 @@ class PromptProcessor:
             summary = config["input"]
         else:
             return Exception("No summary found")
-
-        discussion_id = extract_discussion_id(messages)
 
         # The summary is coming from a previous agent, so we need those
         summary = self.workflow_variable_service.apply_variables(summary, self.llm_handler, messages, agent_outputs)
@@ -141,7 +139,7 @@ class PromptProcessor:
 
         return summary
 
-    def gather_recent_memories(self, messages: List[Dict[str, str]], max_turns_to_pull=0,
+    def gather_recent_memories(self, messages: List[Dict[str, str]], discussion_id: str, max_turns_to_pull=0,
                                max_summary_chunks_from_file=0) -> Any:
         """
         Gathers recent memories from the conversation based on the specified limits.
@@ -154,10 +152,12 @@ class PromptProcessor:
         return self.slow_but_quality_rag_service.get_recent_memories(
             messages=messages,
             max_turns_to_search=max_turns_to_pull,
-            max_summary_chunks_from_file=max_summary_chunks_from_file
+            max_summary_chunks_from_file=max_summary_chunks_from_file,
+            discussion_id=discussion_id
         )
 
-    def gather_chat_summary_memories(self, messages: List[Dict[str, str]], max_turns_to_pull: int = 0,
+    def gather_chat_summary_memories(self, messages: List[Dict[str, str]], discussion_id: str,
+                                     max_turns_to_pull: int = 0,
                                      max_summary_chunks_from_file: int = 0):
         """
         Gathers chat summary memories from the conversation based on the specified limits.
@@ -169,6 +169,7 @@ class PromptProcessor:
         """
         return self.slow_but_quality_rag_service.get_chat_summary_memories(
             messages=messages,
+            discussion_id=discussion_id,
             max_turns_to_search=max_turns_to_pull,
             max_summary_chunks_from_file=max_summary_chunks_from_file
         )
@@ -194,7 +195,6 @@ class PromptProcessor:
         :return: The response from the LLM.
         """
         message_copy = deepcopy(messages)
-        remove_discussion_id_tag(message_copy)
 
         if not self.llm_handler.takes_message_collection:
             # Current logic for building system_prompt and prompt
@@ -288,7 +288,6 @@ class PromptProcessor:
         :return: The result of the dynamic module execution.
         """
         message_copy = deepcopy(messages)
-        remove_discussion_id_tag(message_copy)
 
         modified_args = list(args)  # Convert tuple to list to allow modifications
         for i, arg in enumerate(modified_args):
@@ -321,7 +320,6 @@ class PromptProcessor:
                                  agent_outputs: [Dict], get_full_article: bool = True) -> Any:
 
         message_copy = deepcopy(messages)
-        remove_discussion_id_tag(message_copy)
 
         variabled_prompt = self.workflow_variable_service.apply_variables(
             prompt=str(prompt),
