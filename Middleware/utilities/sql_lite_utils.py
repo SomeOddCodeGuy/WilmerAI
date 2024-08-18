@@ -26,8 +26,9 @@ class SqlLiteUtils:
             print("No database found at " + db_name)
             return None
 
-        cursor = conn.cursor()
-        SqlLiteUtils.create_tables(cursor)
+        if conn is not None:
+            cursor = conn.cursor()
+            SqlLiteUtils.create_tables(cursor)
 
         return conn
 
