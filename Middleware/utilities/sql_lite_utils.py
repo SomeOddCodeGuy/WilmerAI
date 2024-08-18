@@ -3,16 +3,36 @@ import sqlite3
 import traceback
 from datetime import datetime, timedelta
 
+from Middleware.utilities import config_utils
+from Middleware.utilities.config_utils import get_custom_dblite_filepath
+
 
 class SqlLiteUtils:
-    DB_NAME = 'WilmerDb.sqlite'
     TABLE_NAME = 'WorkflowLocks'
 
     @staticmethod
-    def create_node_lock(wilmer_session_id, workflow_id, workflow_lock_id):
-        conn = sqlite3.connect(SqlLiteUtils.DB_NAME)
-        cursor = conn.cursor()
+    def get_wilmerdb_connection():
+        username = config_utils.get_current_username()
+        custom_path = get_custom_dblite_filepath()
 
+        if (custom_path):
+            db_name = os.path.join(custom_path, f'WilmerDb.{username}.sqlite')
+        else:
+            db_name = f'WilmerDb.{username}.sqlite'
+
+        conn = sqlite3.connect(db_name)
+
+        if not os.path.exists(db_name):
+            print("No database found at " + db_name)
+            return None
+
+        cursor = conn.cursor()
+        SqlLiteUtils.create_tables(cursor)
+
+        return conn
+
+    @staticmethod
+    def create_tables(cursor):
         cursor.execute(f'''
             CREATE TABLE IF NOT EXISTS {SqlLiteUtils.TABLE_NAME} (
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -22,6 +42,13 @@ class SqlLiteUtils:
                 ExpirationDate DATETIME
             )
         ''')
+
+    @staticmethod
+    def create_node_lock(wilmer_session_id, workflow_id, workflow_lock_id):
+        conn = SqlLiteUtils.get_wilmerdb_connection()
+        if conn is None:
+            return
+        cursor = conn.cursor()
 
         expiration_date = datetime.now() + timedelta(minutes=10)
 
@@ -36,10 +63,9 @@ class SqlLiteUtils:
 
     @staticmethod
     def delete_node_locks(wilmer_session_id=None, workflow_id=None, workflow_lock_id=None):
-        if not os.path.exists(SqlLiteUtils.DB_NAME):
-            return  # DB does not exist, nothing to do
-
-        conn = sqlite3.connect(SqlLiteUtils.DB_NAME)
+        conn = SqlLiteUtils.get_wilmerdb_connection()
+        if conn is None:
+            return
         cursor = conn.cursor()
 
         try:
@@ -69,10 +95,9 @@ class SqlLiteUtils:
 
     @staticmethod
     def get_lock(workflow_lock_id):
-        if not os.path.exists(SqlLiteUtils.DB_NAME):
-            return False
-
-        conn = sqlite3.connect(SqlLiteUtils.DB_NAME)
+        conn = SqlLiteUtils.get_wilmerdb_connection()
+        if conn is None:
+            return
         cursor = conn.cursor()
 
         try:
@@ -103,10 +128,9 @@ class SqlLiteUtils:
 
     @staticmethod
     def delete_old_locks(wilmer_session_id):
-        if not os.path.exists(SqlLiteUtils.DB_NAME):
-            return  # DB does not exist, nothing to do
-
-        conn = sqlite3.connect(SqlLiteUtils.DB_NAME)
+        conn = SqlLiteUtils.get_wilmerdb_connection()
+        if conn is None:
+            return
         cursor = conn.cursor()
 
         try:

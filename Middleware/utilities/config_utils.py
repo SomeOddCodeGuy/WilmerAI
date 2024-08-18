@@ -102,14 +102,9 @@ def get_config_path(sub_directory, file_name):
     :param file_name: The name of the configuration file.
     :return: The full path to the configuration file.
     """
-    if (instance_utils.CONFIG_DIRECTORY is None):
-        print("Config directory was None")
-        config_dir = str(get_root_config_directory())
-        config_file = os.path.join(config_dir, sub_directory, f'{file_name}.json')
-        return config_file
-    else:
-        config_file = os.path.join(instance_utils.CONFIG_DIRECTORY, sub_directory, f'{file_name}.json')
-        return config_file
+    config_dir = str(get_root_config_directory())
+    config_file = os.path.join(config_dir, sub_directory, f'{file_name}.json')
+    return config_file
 
 
 def get_preset_config_path(sub_directory, file_name):
@@ -135,6 +130,19 @@ def get_discussion_file_path(discussion_id, file_name):
     """
     directory = get_config_value('discussionDirectory')
     return os.path.join(directory, f'{discussion_id}_{file_name}.json')
+
+
+def get_custom_dblite_filepath():
+    """
+    Pulls the custom directory to put the dblite values, if specified.
+
+    :return: The full path to the discussion file.
+    """
+    directory = get_config_value('sqlLiteDirectory')
+    if (directory is None):
+        return get_project_root_directory_path()
+    else:
+        return str(os.path.join(directory))
 
 
 def get_application_port():

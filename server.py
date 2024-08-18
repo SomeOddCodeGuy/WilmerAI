@@ -1,38 +1,36 @@
-import sys
+import argparse
 
 from Middleware.core.open_ai_api import WilmerApi
 from Middleware.utilities import sql_lite_utils, instance_utils
 
 
 def parse_arguments():
-    args = sys.argv[1:]  # Skip the script name
-    for i in range(len(args)):
-        if args[i].startswith("--ConfigDirectory="):
-            value = args[i].split("=", 1)[1].strip()
-            if len(value) > 0:
-                instance_utils.CONFIG_DIRECTORY = value
-        elif args[i].startswith("--User="):
-            value = args[i].split("=", 1)[1].strip()
-            if len(value) > 0:
-                instance_utils.USER = value
-        elif i == 0 and not args[i].startswith("--"):
-            value = args[i].strip()
-            if len(value) > 0:
-                instance_utils.CONFIG_DIRECTORY = value
-        elif i == 1 and not args[i].startswith("--"):
-            value = args[i].strip()
-            if len(value) > 0:
-                instance_utils.USER = value
+    parser = argparse.ArgumentParser(description="Process configuration directory and user arguments.")
+    parser.add_argument("--ConfigDirectory", type=str, help="Custom path to the configuration directory")
+    parser.add_argument("--User", type=str, help="User to run Wilmer as")
+
+    parser.add_argument("positional", nargs="*", help="Positional arguments for ConfigDirectory and User")
+
+    args = parser.parse_args()
+
+    if len(args.positional) > 0 and args.positional[0].strip():
+        instance_utils.CONFIG_DIRECTORY = args.positional[0].strip()
+    if len(args.positional) > 1 and args.positional[1].strip():
+        instance_utils.USER = args.positional[1].strip()
+
+    if args.ConfigDirectory and args.ConfigDirectory.strip():
+        instance_utils.CONFIG_DIRECTORY = args.ConfigDirectory.strip()
+    if args.User and args.User.strip():
+        instance_utils.USER = args.User.strip()
 
 
 if __name__ == '__main__':
-    # Parse the command-line arguments
     parse_arguments()
 
     print(f"Config Directory: {instance_utils.CONFIG_DIRECTORY}")
     print(f"User: {instance_utils.USER}")
 
-    print(f"Deleting old locks for that do not belong to Wilmer Instance_Id: '{instance_utils.INSTANCE_ID}'")
+    print(f"Deleting old locks that do not belong to Wilmer Instance_Id: '{instance_utils.INSTANCE_ID}'")
     sql_lite_utils.SqlLiteUtils.delete_old_locks(instance_utils.INSTANCE_ID)
 
     print("Starting API")
