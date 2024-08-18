@@ -368,7 +368,7 @@ def replace_delimiter_in_file(filepath: str, delimit_on: str, delimit_replacer: 
 
     except FileNotFoundError:
         print(f"Error: The file at {filepath} was not found.")
-        return f"Error: The file at {filepath} was not found."
+        raise
     except IOError:
         print(f"Error: An IOError occurred while reading the file at {filepath}.")
-        return f"Error: An IOError occurred while reading the file at {filepath}."
+        raise

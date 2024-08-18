@@ -1,3 +1,5 @@
+import traceback
+
 from Middleware.llmapis.open_ai_llm_chat_completions_api import OpenAiLlmChatCompletionsApiService
 from Middleware.llmapis.open_ai_llm_completions_api import OpenAiLlmCompletionsApiService
 from Middleware.models.llm_handler import LlmHandler
@@ -45,3 +47,5 @@ class LlmHandlerService:
             return self.initialize_llm_handler(config_file, preset, config_name, stream, truncate_length, max_tokens)
         except Exception as e:
             print(f"Error loading model from config: ", e)
+            traceback.print_exc()  # This prints the stack trace
+            raise

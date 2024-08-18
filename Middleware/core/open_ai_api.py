@@ -1,5 +1,6 @@
 import json
 import time
+import uuid
 from typing import Any, Dict, Union, List
 
 from flask import Flask, jsonify, request, Response
@@ -152,11 +153,13 @@ class WilmerApi:
         :param stream: A boolean indicating whether the response should be streamed.
         :return: The processed prompt response.
         """
+        request_id = str(uuid.uuid4())
+
         if not get_custom_workflow_is_active():
             prompt = replace_brackets_in_list(prompt_collection)
             request_routing_service: PromptCategorizer = PromptCategorizer()
-            return request_routing_service.get_prompt_category(prompt, stream)
+            return request_routing_service.get_prompt_category(prompt, stream, request_id)
         else:
             print("handle_user_prompt workflow exists")
             workflow_manager: WorkflowManager = WorkflowManager(get_active_custom_workflow_name())
-            return workflow_manager.run_workflow(prompt_collection, stream)
+            return workflow_manager.run_workflow(prompt_collection, request_id, stream=stream)

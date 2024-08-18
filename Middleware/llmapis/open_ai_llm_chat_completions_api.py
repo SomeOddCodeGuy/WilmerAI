@@ -1,5 +1,6 @@
 import json
 import os
+import traceback
 from typing import Any, Dict, Generator, Optional, Union, List
 
 import requests
@@ -93,7 +94,8 @@ class OpenAiLlmChatCompletionsApiService:
                 return result
         except Exception as e:
             print("Exception in callApi:", e)
-            return None
+            traceback.print_exc()  # This prints the stack trace
+            raise
         finally:
             self.is_busy = False
 
@@ -246,6 +248,7 @@ class OpenAiChatCompletionsApi:
 
             except requests.RequestException as e:
                 print(f"Request failed: {e}")
+                raise
 
         return generate_sse_stream()
 
@@ -284,7 +287,8 @@ class OpenAiChatCompletionsApi:
             except requests.exceptions.RequestException as e:
                 print(f"Attempt {attempt + 1} failed with error: {e}")
                 if attempt == retries - 1:
-                    return None
+                    raise
             except Exception as e:
                 print("Unexpected error:", e)
-                return None
+                traceback.print_exc()  # This prints the stack trace
+                raise

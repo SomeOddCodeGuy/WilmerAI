@@ -21,7 +21,7 @@
     "agentName": "Search Result Summarizer Agent",
     "systemPrompt": "You are an extremely capable summarizer, who is able to summarize any text into a human readable text. You never allow things like misplaced prompt template tags, odd parentheses or brackets, or other things like this to throw you off. Your summaries are always clear and detailed.",
     "prompt": "You are currently in a roleplay conversation with another user. You have been looking through your long term memories for anything that might prove to be helpful context to continue the fun conversation. Below are several summarized memories that you came up with:\n[\n{agent2Output}\n]\n\nPlease write a concise and yet vivid summary based on the above memories, taking extra care to capture as much information as possible, with minimal embellishments to fill the gaps. If something is unclear, feel free to say so, as when you read this note later you will have more information available to you. If there are any names, definitions, code, or other explicitly defined things, please put them in your summary verbatim, so that the information is not lost. Your summary will be used to respond to the user later, and only you have access to these memories, so please do not leave out important information to the current conversation. Please use the character/user names explicitly, as some may write in first person but you need to describe in third person.",
-    "endpointName": "ConvoRoleplayTwoModelResponderEndpoint",
+    "endpointName": "ConvoRoleplayTwoModelWorkerEndpoint",
     "preset": "Default",
     "maxResponseSizeInTokens": 1000,
     "addUserTurnTemplate": true

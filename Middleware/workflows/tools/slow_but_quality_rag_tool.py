@@ -6,7 +6,7 @@ from Middleware.utilities.config_utils import get_discussion_memory_file_path, l
     get_discussion_chat_summary_file_path, get_discussion_id_workflow_path, get_endpoint_config
 from Middleware.utilities.file_utils import read_chunks_with_hashes, \
     update_chunks_with_hashes
-from Middleware.utilities.prompt_extraction_utils import extract_discussion_id, extract_last_n_turns, \
+from Middleware.utilities.prompt_extraction_utils import extract_last_n_turns, \
     remove_discussion_id_tag_from_string
 from Middleware.utilities.prompt_template_utils import format_user_turn_with_template, \
     format_system_prompt_with_template, add_assistant_end_token_to_user_turn
@@ -27,7 +27,7 @@ class SlowButQualityRAGTool:
     def __init__(self):
         pass
 
-    def perform_keyword_search(self, keywords: str, target, llm_handler, **kwargs):
+    def perform_keyword_search(self, keywords: str, target, llm_handler, discussion_id, **kwargs):
         """
         :param keywords: A string representing the keywords to search for.
         :param target: The target object to perform the keyword search on.
@@ -51,7 +51,7 @@ class SlowButQualityRAGTool:
                 messages = kwargs['messages']
                 print("In recent memories")
                 print(messages)
-                result = self.perform_memory_file_keyword_search(keywords, messages, llm_handler)
+                result = self.perform_memory_file_keyword_search(keywords, messages, llm_handler, discussion_id)
                 return result
 
     @staticmethod
@@ -80,13 +80,13 @@ class SlowButQualityRAGTool:
                 new_chunks.append(chunk)
         return new_chunks
 
-    def perform_conversation_search(self, keywords: str, messages, llm_handler, lookbackStartTurn=0):
+    def perform_conversation_search(self, keywords: str, messagesOriginal, llm_handler, lookbackStartTurn=0):
         """
         Perform a conversation search based on given keywords and user prompt.
 
         Args:
             keywords (str): A string containing keywords to search for.
-            messages (list): A collection representing the user's prompt for the conversation search.
+            messagesOriginal (list): A collection representing the user's prompt for the conversation search.
             lookbackStartTurn (int, optional): How many turns back from the most recent to begin our search. Defaults to 0.
 
         Returns:
@@ -95,14 +95,16 @@ class SlowButQualityRAGTool:
         print("Entering perform_conversation_search")
 
         # If we have fewer pairs than lookbackStartTurn, we can stop here
-        if len(messages) <= lookbackStartTurn:
+        if len(messagesOriginal) <= lookbackStartTurn:
             return 'There are no memories. This conversation has not gone long enough for there to be memories.'
 
-        pair_chunks = self.get_message_chunks(messages, lookbackStartTurn, 400)
+        message_copy = deepcopy(messagesOriginal)
+
+        pair_chunks = self.get_message_chunks(message_copy, lookbackStartTurn, 400)
 
         # In case the LLM designated the speakers as keywords, we want to remove them
         # The speakers would trigger tons of erroneous hits
-        last_n_turns = extract_last_n_turns(messages, 10, llm_handler.takes_message_collection)
+        last_n_turns = extract_last_n_turns(message_copy, 10, llm_handler.takes_message_collection)
         keywords = filter_keywords_by_speakers(last_n_turns, keywords)
         print("Keywords: " + str(keywords))
 
@@ -116,20 +118,21 @@ class SlowButQualityRAGTool:
 
         return '--ChunkBreak--'.join(filtered_chunks)
 
-    def perform_memory_file_keyword_search(self, keywords: str, messages, llm_handler):
+    def perform_memory_file_keyword_search(self, keywords: str, messagesOriginal, llm_handler, discussion_id):
         """
         Perform a memory file keyword search based on given keywords and user prompt.
 
         Args:
             keywords (str): A string containing keywords to search for.
-            messages (list): A collection representing the user's prompt for the conversation search.
+            messagesOriginal (list): A collection representing the user's prompt for the conversation search.
 
         Returns:
             str: A string representing the search result chunks joined by '--ChunkBreak--'.
         """
         print("Entering perform_memory_file_keyword_search")
-        discussion_id = extract_discussion_id(messages)
         filepath = get_discussion_memory_file_path(discussion_id)
+
+        message_copy = deepcopy(messagesOriginal)
 
         hash_chunks = read_chunks_with_hashes(filepath)
         pair_chunks = extract_text_blocks_from_hashed_chunks(hash_chunks)
@@ -139,7 +142,7 @@ class SlowButQualityRAGTool:
 
         # In case the LLM designated the speakers as keywords, we want to remove them
         # The speakers would trigger tons of erroneous hits
-        last_n_turns = extract_last_n_turns(messages, 10, llm_handler.takes_message_collection)
+        last_n_turns = extract_last_n_turns(message_copy, 10, llm_handler.takes_message_collection)
         keywords = filter_keywords_by_speakers(last_n_turns, keywords)
         print("Keywords: " + str(keywords))
 
@@ -175,7 +178,7 @@ class SlowButQualityRAGTool:
         print("Processing chunks: ", all_chunks)
 
         result = rag_tool.perform_rag_on_memory_chunk(rag_system_prompt, rag_prompt, all_chunks, workflow,
-                                                      messages,
+                                                      messages, discussionId,
                                                       "--rag_break--")
         results = result.split("--rag_break--")
         print("Total results: " + str(len(results)))
@@ -191,7 +194,7 @@ class SlowButQualityRAGTool:
         # Save to file
         update_chunks_with_hashes(replaced, filepath)
 
-    def get_recent_memories(self, messages: List[Dict[str, str]], max_turns_to_search=0,
+    def get_recent_memories(self, messages: List[Dict[str, str]], discussion_id: str, max_turns_to_search=0,
                             max_summary_chunks_from_file=0) -> str:
         """
         Retrieves recent memories from chat messages or memory files.
@@ -205,7 +208,6 @@ class SlowButQualityRAGTool:
             str: The recent memories concatenated as a single string with '--ChunkBreak--' delimiter.
         """
         print("Entered get_recent_memories")
-        discussion_id = extract_discussion_id(messages)
 
         if discussion_id is None:
             final_pairs = self.get_recent_chat_messages_up_to_max(max_turns_to_search, messages)
@@ -229,7 +231,7 @@ class SlowButQualityRAGTool:
                 latest_summaries = chunks[-max_summary_chunks_from_file:]
                 return '--ChunkBreak--'.join(latest_summaries)
 
-    def get_chat_summary_memories(self, messages: List[Dict[str, str]], max_turns_to_search=0,
+    def get_chat_summary_memories(self, messages: List[Dict[str, str]], discussion_id: str, max_turns_to_search=0,
                                   max_summary_chunks_from_file=0):
         """
         Retrieves chat summary memories from messages or memory files.
@@ -243,7 +245,6 @@ class SlowButQualityRAGTool:
             str: The chat summary memories concatenated as a single string with '--ChunkBreak--' delimiter.
         """
         print("Entered get_chat_summary_memories")
-        discussion_id = extract_discussion_id(messages)
 
         if discussion_id is None:
             final_pairs = self.get_recent_chat_messages_up_to_max(max_turns_to_search, messages)
@@ -307,7 +308,7 @@ class SlowButQualityRAGTool:
 
         return final_pairs
 
-    def handle_discussion_id_flow(self, discussionId: str, messages: List[Dict[str, str]]) -> None:
+    def handle_discussion_id_flow(self, discussionId: str, messagesOriginal: List[Dict[str, str]]) -> None:
         """
         Handle the discussion flow based on the discussion ID and messages provided.
 
@@ -317,9 +318,11 @@ class SlowButQualityRAGTool:
 
         Args:
             discussionId (str): The unique identifier for the discussion.
-            messages (List[Dict[str, str]]): The list of message dictionaries for the discussion.
+            messagesOriginal (List[Dict[str, str]]): The list of message dictionaries for the discussion.
         """
         filepath = get_discussion_memory_file_path(discussionId)
+
+        messages_copy = deepcopy(messagesOriginal)
 
         print("Entering discussionId Workflow")
         discussion_id_workflow_filepath = get_discussion_id_workflow_path()
@@ -336,13 +339,14 @@ class SlowButQualityRAGTool:
 
         if len(discussion_chunks) == 0:
             print("No discussion chunks")
-            self.process_full_discussion_flow(messages, rag_system_prompt, rag_prompt, discussion_id_workflow_config,
+            self.process_full_discussion_flow(messages_copy, rag_system_prompt, rag_prompt,
+                                              discussion_id_workflow_config,
                                               discussionId)
         else:
-            index = find_last_matching_hash_message(messages, discussion_chunks)
+            index = find_last_matching_hash_message(messages_copy, discussion_chunks)
             print("Number of messages since last memory chunk update: ", index)
             if index > chunks_til_new_memory:
-                trimmed_discussion_pairs = extract_last_n_turns(messages, index, remove_all_systems_override=True)
+                trimmed_discussion_pairs = extract_last_n_turns(messages_copy, index, remove_all_systems_override=True)
                 trimmed_discussion_pairs.reverse()
                 print("Trimmed discussion message length: ", len(trimmed_discussion_pairs))
                 print(trimmed_discussion_pairs)
@@ -353,10 +357,11 @@ class SlowButQualityRAGTool:
                     pass_chunks = extract_text_blocks_from_hashed_chunks(chunks)
 
                     self.process_new_memory_chunks(pass_chunks, trimmed_discussion_chunks, rag_system_prompt,
-                                                   rag_prompt, discussion_id_workflow_config, discussionId, messages)
+                                                   rag_prompt, discussion_id_workflow_config, discussionId,
+                                                   messages_copy)
             elif index == -1:
                 print("-1 flow hit. Processing discussions")
-                self.process_full_discussion_flow(messages, rag_system_prompt, rag_prompt,
+                self.process_full_discussion_flow(messages_copy, rag_system_prompt, rag_prompt,
                                                   discussion_id_workflow_config,
                                                   discussionId)
 
@@ -376,8 +381,8 @@ class SlowButQualityRAGTool:
         print("Beginning full discussion flow")
         new_messages = deepcopy(messages)
         if (len(new_messages) > 1
-            and new_messages[-1]['role'] == 'assistant'
-            and len(new_messages[-1].get('content', '')) < 30):
+                and new_messages[-1]['role'] == 'assistant'
+                and len(new_messages[-1].get('content', '')) < 30):
             new_messages = new_messages[:-1]
 
         new_messages.reverse()
@@ -443,7 +448,7 @@ class SlowButQualityRAGTool:
 
     @staticmethod
     def perform_rag_on_memory_chunk(rag_system_prompt: str, rag_prompt: str, text_chunk: str, config: dict,
-                                    messages,
+                                    messages, discussionId: str,
                                     custom_delimiter: str = "") -> str:
         """
         Perform Retrieval-Augmented Generation (RAG) on a given chunk of conversation.
@@ -460,7 +465,6 @@ class SlowButQualityRAGTool:
         """
         chunks = text_chunk.split('--ChunkBreak--')
 
-        discussionId = extract_discussion_id(messages)
         filepath = get_discussion_memory_file_path(discussionId)
         discussion_chunks = read_chunks_with_hashes(filepath)
 

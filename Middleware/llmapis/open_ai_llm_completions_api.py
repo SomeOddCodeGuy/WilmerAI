@@ -1,5 +1,6 @@
 import json
 import os
+import traceback
 from typing import Any, Dict, Generator, Optional, Union
 
 import requests
@@ -91,7 +92,8 @@ class OpenAiLlmCompletionsApiService:
                 return result
         except Exception as e:
             print("Exception in callApi:", e)
-            return None
+            traceback.print_exc()  # This prints the stack trace
+            raise
         finally:
             self.is_busy = False
 
@@ -280,6 +282,7 @@ class OpenAiCompletionsApi:
                                     yield sse_format(json.dumps(completion_data))
                             except json.JSONDecodeError as e:
                                 print(f"Failed to parse JSON: {e}")
+                                traceback.print_exc()  # This prints the stack trace
                                 continue
 
                     # Flush remaining buffer
@@ -310,9 +313,12 @@ class OpenAiCompletionsApi:
                                             yield sse_format(json.dumps(completion_data))
                             except json.JSONDecodeError as e:
                                 print(f"Failed to parse JSON: {e}")
+                                traceback.print_exc()  # This prints the stack trace
 
             except requests.RequestException as e:
                 print(f"Request failed: {e}")
+                traceback.print_exc()  # This prints the stack trace
+                raise
 
         return generate_sse_stream()
 
@@ -364,8 +370,10 @@ class OpenAiCompletionsApi:
                     return ''
             except requests.exceptions.RequestException as e:
                 print(f"Attempt {attempt + 1} failed with error: {e}")
+                traceback.print_exc()  # This prints the stack trace
                 if attempt == retries - 1:
-                    return None
+                    raise
             except Exception as e:
                 print("Unexpected error:", e)
-                return None
+                traceback.print_exc()  # This prints the stack trace
+                raise
