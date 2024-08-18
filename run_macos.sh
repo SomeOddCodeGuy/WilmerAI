@@ -27,9 +27,12 @@ if [ $? -ne 0 ]; then
 fi
 echo "Dependencies installed successfully."
 
-# Step 4: Run the application
-echo "Starting the application..."
-python server.py
+# Step 4: Run the application with optional parameters
+CONFIG_DIR=${1:-none}
+USER=${2:-none}
+
+echo "Starting the application with ConfigDirectory=$CONFIG_DIR and User=$USER..."
+python server.py "$CONFIG_DIR" "$USER"
 if [ $? -ne 0 ]; then
     echo "Failed to start the application."
     exit 1

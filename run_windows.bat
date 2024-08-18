@@ -26,9 +26,12 @@ if %ERRORLEVEL% NEQ 0 (
 )
 echo Dependencies installed successfully.
 
-:: Step 4: Run the application
-echo Starting the application...
-python server.py
+:: Step 4: Run the application with optional parameters
+set "CONFIG_DIR=%1"
+set "USER=%2"
+
+echo Starting the application with ConfigDirectory=%CONFIG_DIR% and User=%USER%...
+python server.py "%CONFIG_DIR%" "%USER%"
 if %ERRORLEVEL% NEQ 0 (
     echo Failed to start the application.
     exit /b %ERRORLEVEL%
