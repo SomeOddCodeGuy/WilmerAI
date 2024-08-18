@@ -1,16 +1,13 @@
 #!/bin/bash
 
-CONFIG_DIR=""
-USER=""
-
-while [[ "$#" -gt 0 ]]; do
-    case $1 in
-        --ConfigDirectory) CONFIG_DIR="$2"; shift ;;
-        --User) USER="$2"; shift ;;
-        *) echo "Unknown parameter passed: $1"; exit 1 ;;
-    esac
-    shift
-done
+# Ensure Unix line endings
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS
+    sed -i '' 's/\r$//' "$0"
+else
+    # Linux and others (not needed for macOS specific script)
+    sed -i 's/\r$//' "$0"
+fi
 
 echo "Creating virtual environment..."
 python3 -m venv venv
@@ -36,8 +33,8 @@ if [ $? -ne 0 ]; then
 fi
 echo "Dependencies installed successfully."
 
-echo "Starting the application with ConfigDirectory=$CONFIG_DIR and User=$USER..."
-python3 server.py "$CONFIG_DIR" "$USER"
+echo "Starting the application..."
+python3 server.py "$@"
 if [ $? -ne 0 ]; then
     echo "Failed to start the application."
     exit 1
