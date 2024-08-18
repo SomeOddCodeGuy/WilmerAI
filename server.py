@@ -5,14 +5,24 @@ from Middleware.utilities import sql_lite_utils, instance_utils
 
 
 def parse_arguments():
-    if len(sys.argv) > 1:
-        if (len(sys.argv[1]) > 0):
-            print("sys.argv 1 is " + str(sys.argv[1]))
-            instance_utils.CONFIG_DIRECTORY = sys.argv[1]
-    if len(sys.argv) > 2:
-        if (len(sys.argv[2]) > 0):
-            print("sys.argv 2 is " + str(sys.argv[2]))
-            instance_utils.USER = sys.argv[2]
+    args = sys.argv[1:]  # Skip the script name
+    for i in range(len(args)):
+        if args[i].startswith("--ConfigDirectory="):
+            value = args[i].split("=", 1)[1].strip()
+            if len(value) > 0:
+                instance_utils.CONFIG_DIRECTORY = value
+        elif args[i].startswith("--User="):
+            value = args[i].split("=", 1)[1].strip()
+            if len(value) > 0:
+                instance_utils.USER = value
+        elif i == 0 and not args[i].startswith("--"):
+            value = args[i].strip()
+            if len(value) > 0:
+                instance_utils.CONFIG_DIRECTORY = value
+        elif i == 1 and not args[i].startswith("--"):
+            value = args[i].strip()
+            if len(value) > 0:
+                instance_utils.USER = value
 
 
 if __name__ == '__main__':
