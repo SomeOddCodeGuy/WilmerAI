@@ -847,9 +847,8 @@ WilmerAI.Project@gmail.com
 
 ## Third Party Libraries
 
-WilmerAI imports four libraries within its requirements.txt, and imports the libraries via import statements; it does
-not
-extend or modify the source of those libraries.
+WilmerAI imports five libraries within its requirements.txt, and imports the libraries via import statements; it does
+not extend or modify the source of those libraries.
 
 The libraries are:
 
@@ -857,9 +856,10 @@ The libraries are:
 * requests: https://github.com/psf/requests/
 * scikit-learn: https://github.com/scikit-learn/scikit-learn/
 * urllib3: https://github.com/urllib3/urllib3/
+* jinja2: https://github.com/pallets/jinja
 
 Further information on their licensing can be found within the README of the ThirdParty-Licenses folder, as well as the
-full text of each license and their NOTICE files, if applicable, as of 2024-06-23.
+full text of each license and their NOTICE files, if applicable, with relevant last updated dates for each.
 
 ## Wilmer License and Copyright
 
