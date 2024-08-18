@@ -9,10 +9,7 @@ class SqlLiteUtils:
     TABLE_NAME = 'WorkflowLocks'
 
     @staticmethod
-    def create_node_lock(wilmer_session_id, workflow_id, workflow_lock_id):
-        conn = sqlite3.connect(SqlLiteUtils.DB_NAME)
-        cursor = conn.cursor()
-
+    def create_tables(cursor):
         cursor.execute(f'''
             CREATE TABLE IF NOT EXISTS {SqlLiteUtils.TABLE_NAME} (
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -22,6 +19,12 @@ class SqlLiteUtils:
                 ExpirationDate DATETIME
             )
         ''')
+
+    @staticmethod
+    def create_node_lock(wilmer_session_id, workflow_id, workflow_lock_id):
+        conn = sqlite3.connect(SqlLiteUtils.DB_NAME)
+        cursor = conn.cursor()
+        SqlLiteUtils.create_tables(cursor)
 
         expiration_date = datetime.now() + timedelta(minutes=10)
 
@@ -41,6 +44,7 @@ class SqlLiteUtils:
 
         conn = sqlite3.connect(SqlLiteUtils.DB_NAME)
         cursor = conn.cursor()
+        SqlLiteUtils.create_tables(cursor)
 
         try:
             # Start building the SQL query
@@ -74,6 +78,7 @@ class SqlLiteUtils:
 
         conn = sqlite3.connect(SqlLiteUtils.DB_NAME)
         cursor = conn.cursor()
+        SqlLiteUtils.create_tables(cursor)
 
         try:
             cursor.execute(f'''
@@ -108,6 +113,7 @@ class SqlLiteUtils:
 
         conn = sqlite3.connect(SqlLiteUtils.DB_NAME)
         cursor = conn.cursor()
+        SqlLiteUtils.create_tables(cursor)
 
         try:
             cursor.execute(f'''
