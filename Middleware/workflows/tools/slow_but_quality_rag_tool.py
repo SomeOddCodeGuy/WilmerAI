@@ -495,7 +495,7 @@ class SlowButQualityRAGTool:
             prompt = rag_prompt.replace('[Memory_file]', current_memories.strip())
 
             result_chunk = SlowButQualityRAGTool.process_single_chunk(chunk, llm_handler, prompt, system_prompt,
-                                                                      messages)
+                                                                      messages, config)
             memory_chunks.append(result_chunk)
             result_chunks.append(result_chunk)
 
@@ -503,7 +503,7 @@ class SlowButQualityRAGTool:
 
     @staticmethod
     def process_single_chunk(chunk, llm_handler, workflow_prompt, workflow_system_prompt,
-                             messages):
+                             messages, config):
         """
         Processes a single chunk using the specified LLM handler.
 
@@ -518,9 +518,11 @@ class SlowButQualityRAGTool:
 
         workflow_variable_service = WorkflowVariableManager()
         formatted_prompt = workflow_variable_service.apply_variables(workflow_prompt, llm_handler, messages,
-                                                                     remove_all_system_override=True)
+                                                                     remove_all_system_override=True,
+                                                                     config=config)
         formatted_system_prompt = workflow_variable_service.apply_variables(workflow_system_prompt, llm_handler,
-                                                                            messages, remove_all_system_override=True)
+                                                                            messages, remove_all_system_override=True,
+                                                                            config=config)
 
         formatted_prompt = formatted_prompt.replace('[TextChunk]', chunk)
         formatted_system_prompt = formatted_system_prompt.replace('[TextChunk]', chunk)
