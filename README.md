@@ -462,7 +462,7 @@ the endpoint you want. If you are using an example workflow added with Wilmer, t
 
 Within the "Public" folder you should have:
 
-* You should have created/editted an endpoint to point to your LLM and set up your model
+* You should have created/edited an endpoint to point to your LLM and set up your model
 * You should have made a json file with your username in Users folder
 * You should have updated _current-user with your new username, or an existing one if you are using a pre-included user
 * You should have made a routing json file with your categories in the Routing folder, or chosen the one you want to use
