@@ -42,14 +42,12 @@ def get_current_username():
     :return: The current username.
     """
     if (instance_utils.USER is None):
-        print("User came from json")
         config_dir = str(get_root_config_directory())
         config_file = os.path.join(config_dir, 'Users', '_current-user.json')
         with open(config_file) as file:
             data = json.load(file)
         return data['currentUser']
     else:
-        print("User fetched from global")
         return instance_utils.USER
 
 
@@ -84,12 +82,10 @@ def get_root_config_directory():
     :return: os path of the config directory.
     """
     if (instance_utils.CONFIG_DIRECTORY is None):
-        print("Config directory was None")
         project_dir = get_project_root_directory_path()
         config_file = os.path.join(project_dir, 'Public', 'Configs')
         return config_file
     else:
-        print("User directory was has the value: {}".format(instance_utils.CONFIG_DIRECTORY))
         config_file = os.path.join(instance_utils.CONFIG_DIRECTORY)
         return config_file
 
