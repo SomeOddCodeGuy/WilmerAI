@@ -1,6 +1,8 @@
 import json
 import os
 
+from Middleware.utilities import instance_utils
+
 
 def get_project_root_directory_path():
     """
@@ -39,11 +41,16 @@ def get_current_username():
 
     :return: The current username.
     """
-    project_dir = get_project_root_directory_path()
-    config_file = os.path.join(project_dir, 'Public', 'Configs', 'Users', '_current-user.json')
-    with open(config_file) as file:
-        data = json.load(file)
-    return data['currentUser']
+    if (instance_utils.USER is None):
+        print("User came from json")
+        config_dir = str(get_root_config_directory())
+        config_file = os.path.join(config_dir, 'Users', '_current-user.json')
+        with open(config_file) as file:
+            data = json.load(file)
+        return data['currentUser']
+    else:
+        print("User fetched from global")
+        return instance_utils.USER
 
 
 def get_user_config():
@@ -52,9 +59,9 @@ def get_user_config():
 
     :return: The current user's configuration data.
     """
-    project_dir = get_project_root_directory_path()
+    config_dir = str(get_root_config_directory())
     current_user_name = get_current_username()
-    config_path = os.path.join(project_dir, 'Public', 'Configs', 'Users', f'{current_user_name.lower()}.json')
+    config_path = os.path.join(config_dir, 'Users', f'{current_user_name.lower()}.json')
     with open(config_path) as file:
         config_data = json.load(file)
     return config_data
@@ -71,6 +78,22 @@ def get_config_value(key):
     return main_config.get(key)
 
 
+def get_root_config_directory():
+    """
+    Gets the root directory of the Configs folder
+    :return: os path of the config directory.
+    """
+    if (instance_utils.CONFIG_DIRECTORY is None):
+        print("Config directory was None")
+        project_dir = get_project_root_directory_path()
+        config_file = os.path.join(project_dir, 'Public', 'Configs')
+        return config_file
+    else:
+        print("User directory was has the value: {}".format(instance_utils.CONFIG_DIRECTORY))
+        config_file = os.path.join(instance_utils.CONFIG_DIRECTORY)
+        return config_file
+
+
 def get_config_path(sub_directory, file_name):
     """
     Constructs the file path for a given configuration file.
@@ -79,8 +102,8 @@ def get_config_path(sub_directory, file_name):
     :param file_name: The name of the configuration file.
     :return: The full path to the configuration file.
     """
-    project_dir = get_project_root_directory_path()
-    config_file = os.path.join(project_dir, 'Public', 'Configs', sub_directory, f'{file_name}.json')
+    config_dir = str(get_root_config_directory())
+    config_file = os.path.join(config_dir, sub_directory, f'{file_name}.json')
     return config_file
 
 
@@ -92,8 +115,8 @@ def get_preset_config_path(sub_directory, file_name):
     :param file_name: The name of the configuration file.
     :return: The full path to the configuration file.
     """
-    project_dir = get_project_root_directory_path()
-    config_file = os.path.join(project_dir, 'Public', 'Configs', 'Presets', sub_directory, f'{file_name}.json')
+    config_dir = str(get_root_config_directory())
+    config_file = os.path.join(config_dir, 'Presets', sub_directory, f'{file_name}.json')
     return config_file
 
 
@@ -107,6 +130,19 @@ def get_discussion_file_path(discussion_id, file_name):
     """
     directory = get_config_value('discussionDirectory')
     return os.path.join(directory, f'{discussion_id}_{file_name}.json')
+
+
+def get_custom_dblite_filepath():
+    """
+    Pulls the custom directory to put the dblite values, if specified.
+
+    :return: The full path to the discussion file.
+    """
+    directory = get_config_value('sqlLiteDirectory')
+    if (directory is None):
+        return get_project_root_directory_path()
+    else:
+        return str(os.path.join(directory))
 
 
 def get_application_port():
@@ -280,8 +316,8 @@ def get_workflow_path(workflow_name):
     :return: The full path to the workflow configuration file.
     """
     user_name = get_current_username()
-    project_dir = get_project_root_directory_path()
-    config_file = os.path.join(project_dir, 'Public', 'Configs', 'Workflows', user_name, f'{workflow_name}.json')
+    config_dir = str(get_root_config_directory())
+    config_file = os.path.join(config_dir, 'Workflows', user_name, f'{workflow_name}.json')
     return config_file
 
 
