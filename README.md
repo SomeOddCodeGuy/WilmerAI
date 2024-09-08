@@ -23,26 +23,61 @@ WilmerAI stands for **"What If Language Models Expertly Routed All Inference?"**
 
 ## Key Features
 
-- **Middleware Functionality:** WilmerAI sits between the interface you use to communicate with an LLM (such as
-  SillyTavern, OpenWebUI, or even a Python program's terminal) and the backend API serving the LLMs. It can handle
-  multiple backend LLMs simultaneously.
+- **Assistants Powered by Multiple LLMs in Tandem**: Incoming prompts can be routed to "categories", with each category
+  powered by a workflow. Each workflow can have as many nodes as you want, each node powered by a different LLM. For
+  example- if you ask your assistant "Can you write me a Snake game in python?", that might be categorized as CODING
+  and goes to your coding workflow. The first node of that workflow might ask Codestral-22b (or ChatGPT 4o if you want)
+  to answer the question. The second node might ask Deepseek V2 or Claude Sonnet to code review it. The next node might
+  ask Codestral to give a final once over and then respond to you. Whether your
+  workflow is just a single model responding because it's your best coder, or whether its many nodes of different LLMs
+  working together to generate a response- the choice is yours.
 
-- **Flexible Connections:** Example setup: SillyTavern -> WilmerAI -> Koboldcpp. You can also connect one SillyTavern
-  instance to WilmerAI, which can then connect to multiple LLM APIs (e.g., 4, 8, or 12).
+- **Support For The Offline Wikipedia API**: WilmerAI has a node that can make calls to the
+  [OfflineWikipediaTextApi](https://github.com/SomeOddCodeGuy/OfflineWikipediaTextApi). This means that you can have a
+  category, for example "FACTUAL", that looks at your
+  incoming message, generates a query from it, queries the wikipedia API for a related article, and uses that article
+  as RAG context injection to respond.
 
-- **API Endpoints:** It provides OpenAI API compatible `chat/Completions` and `v1/Completions` endpoints to connect to
-  via your front end, and can connect to either type on the back end. This allows for complex configurations such as
-  connecting SillyTavern to WilmerAI, and then having WilmerAI connected to multiple instances of KoboldCPP,
-  Text-Generation-WebUI, ChatGPT API, and the Mistral API simultaneously.
+- **Continually Generated Chat Summaries to Simulate a "Memory"**: The Chat Summary node will generate "memories",
+  by chunking your messages and then summarizing them and saving them to a file. It will then take those summarized
+  chunks and generate an ongoing, constantly updating, summary of the entire conversation, that can be pulled and
+  used within the prompt to the LLM. The results allow you to take 200k+ context conversations and keep relative track
+  of what has been said even when limiting the prompts to the LLM to 5k context or less.
 
-- **Prompt Templates:** Supports prompt templates for `v1/Completions` API endpoints. WilmerAI also has its own prompt
-  template for connections from a front end via `v1/Completions`. The template can be found in the "Docs" folder and is
-  ready for upload to SillyTavern.
+- **Use Multiple Computers To Parallel Process Memories and Responses**: If you have 2 computers that can run LLMs,
+  you can designate one to be the "responder" and one to be responsible for generating memories/summaries. This kind
+  of workflow lets you keep talking to your LLM while the memories/summary are being updated, while still using the
+  existing memories. This means not needing to ever wait for the summary to update, even if you task a large and
+  powerful
+  model to handle that task so that you have higher quality memories. (See example user `convo-role-dual-model`)
 
 - **Multi-LLM Group Chats In SillyTavern:** It is possible to use Wilmer to have a group chat in ST where every
   character is a different LLM, if you do desire (author personally does this.)  There are example characters available
   in `Docs\SillyTavern`, split into two groups. These example characters/groups are subsets of larger groups that the
   author uses.
+
+- **Middleware Functionality:** WilmerAI sits between the interface you use to communicate with an LLM (such as
+  SillyTavern, OpenWebUI, or even a Python program's terminal) and the backend API serving the LLMs. It can handle
+  multiple backend LLMs simultaneously.
+
+- **Using Multiple LLMs at Once:** Example setup: SillyTavern -> WilmerAI -> several instances of KoboldCpp. For
+  example, Wilmer could be connected to Command-R 35b, Codestral 22b, Gemma-2-27b, and use all of those in its
+  responses back to the user. As long as your LLM of choice is exposed via a v1/Completion or chat/Completion endpoint,
+  or KoboldCpp's Generate endpoint, you can use it.
+
+- **Customizable Presets**: Presets are saved in a json file that you can readily customize. Almost every about presets
+  can be managed via the json, including the parameter names. This means that you don't have to wait for a Wilmer update
+  to make use of something new. For example, DRY came out recently on KoboldCpp. If that wasn't in the preset json for
+  Wilmer, you should be able to simply add it and start using it.
+
+- **API Endpoints:** It provides OpenAI API compatible `chat/Completions` and `v1/Completions` endpoints to connect to
+  via your front end, and can connect to either type on the back end. This allows for complex configurations, such
+  as connecting to Wilmer as a v1/Completion API, and then having Wilmer connected to chat/Completion, v1/Completion
+  KoboldCpp Generate endpoints all at the same time.
+
+- **Prompt Templates:** Supports prompt templates for `v1/Completions` API endpoints. WilmerAI also has its own prompt
+  template for connections from a front end via `v1/Completions`. The template can be found in the "Docs" folder and is
+  ready for upload to SillyTavern.
 
 ## Some (Not So Pretty) Pictures to Help People Visualize What It Can Do
 
@@ -170,7 +205,7 @@ each step, 1 by 1, into an LLM and asking it to help you set the section up. Tha
 >
 > * C) By default, all the user files are set to turn on streaming responses. You either need to enable
     this in your front end that is calling Wilmer so that both match, or you need to go into Users/username.json
-    and set Stream to "false". If you have a mismatch, where the front end does/does not expect streaming and your 
+    and set Stream to "false". If you have a mismatch, where the front end does/does not expect streaming and your
     wilmer expects the opposite, nothing will likely show on the front end.
 
 ### Step 1: Installing the Program
@@ -240,7 +275,8 @@ First, choose which template user you'd like to use:
 
 * **assistant-multi-model**: This template is for using many models in tandem. Looking at the endpoints for
   this user, you can see that every category has its own endpoint. There is absolutely nothing stopping you from
-  re-using the same API for multiple categories. For example, you might use Llama 3.1 70b for coding, math, and reasoning,
+  re-using the same API for multiple categories. For example, you might use Llama 3.1 70b for coding, math, and
+  reasoning,
   and Command-R 35b 08-2024 for categorization, conversation, and factual. Don't feel like you NEED 10 different models.
   This is simply to allow you to bring that many if you want. This user uses appropriate presets for each node in the
   workflows.
@@ -268,7 +304,8 @@ First, choose which template user you'd like to use:
 
 
 * **group-chat-example**: This user is an example of my own personal group chats. The characters and the groups
-  included are actual characters and actual groups that I use. You can find the example characters in the `Docs/SillyTavern`
+  included are actual characters and actual groups that I use. You can find the example characters in
+  the `Docs/SillyTavern`
   folder. These are SillyTavern compatible characters that you can import directly into that program or any program
   that supports .png character import types. The dev team
   characters have only 1 node per workflow: they simply respond to you. The advisory group characters have 2 nodes
@@ -477,7 +514,8 @@ user JSON file, paste it as a duplicate, and then rename it. Here is an example 
 
 #### Users Folder, _current-user.json File
 
-Next, update the `_current-user.json` file to specify what user you want to use. Match the name of the new user JSON file,
+Next, update the `_current-user.json` file to specify what user you want to use. Match the name of the new user JSON
+file,
 without the `.json` extension.
 
 **NOTE**: You can ignore this if you want to use the --User argument when running Wilmer instead.
