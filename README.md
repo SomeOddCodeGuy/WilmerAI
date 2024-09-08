@@ -39,6 +39,11 @@ WilmerAI stands for **"What If Language Models Expertly Routed All Inference?"**
   template for connections from a front end via `v1/Completions`. The template can be found in the "Docs" folder and is
   ready for upload to SillyTavern.
 
+- **Multi-LLM Group Chats In SillyTavern:** It is possible to use Wilmer to have a group chat in ST where every
+  character is a different LLM, if you do desire (author personally does this.)  There are example characters available
+  in `Docs\SillyTavern`, split into two groups. These example characters/groups are subsets of larger groups that the
+  author uses.
+
 ## Some (Not So Pretty) Pictures to Help People Visualize What It Can Do
 
 #### Single Assistant Routing to Multiple LLMs
@@ -88,7 +93,7 @@ While I have primarily used this with SillyTavern, it might also work with Open-
 
 ### Connecting in SillyTavern
 
-#### Text Completion
+#### Text Completion (Author's preferred method)
 
 To connect as a Text Completion in SillyTavern, follow these steps (the below screenshot is from SillyTavern):
 
@@ -117,6 +122,8 @@ From SillyTavern:
 
 There are no expected newlines or characters between tags.
 
+Please ensure that Context Template is "Enabled" (checkbox above the dropdown)
+
 #### Chat Completions
 
 To connect as Chat Completions in SillyTavern, follow these steps (the below screenshot is from SillyTavern):
@@ -134,7 +141,10 @@ To connect as Chat Completions in SillyTavern, follow these steps (the below scr
 ### Additional Recommendations
 
 For either connection type, I recommend going to the "A" icon in SillyTavern and selecting "Include Names" and "Force
-Groups and Personas" under instruct mode.
+Groups and Personas" under instruct mode, and then going to the far left icon (where the samplers are) and checking
+"stream" on the top left, and then on the top right checking "unlock" under context and dragging it to 200,000+. Let
+Wilmer
+worry about the context.
 
 ## Quick-ish Setup
 
@@ -154,16 +164,14 @@ each step, 1 by 1, into an LLM and asking it to help you set the section up. Tha
     see the preset "OpenAI-API" for an example of what openAI accepts.
 >
 >
-> * B) In a lot of the prompts you'll see "You are in a roleplay conversation". This is because LLMs have no
-    identity of their own; they are just files without a persona. The moment you give them a persona, even if
-    that persona is "helpful AI", you are roleplaying with them. (Think of JARVIS from Ironman. The AI calling itself
-    JARVIS and being sassy is a form of roleplay). I use this prompting style to enforce personas for my Assistant
-    and "development team"
+> * B) I have recently replaced all prompts in Wilmer to go from using the second person to third person. This has
+    > had pretty decent results for me, and I'm hoping it will for you as well.
 >
 >
 > * C) By default, all the user files are set to turn on streaming responses. You either need to enable
     this in your front end that is calling Wilmer so that both match, or you need to go into Users/username.json
-    and set Stream to "false"
+    and set Stream to "false". If you have a mismatch, where the front end does/does not expect streaming and your
+    > wilmer expects the opposite, nothing will likely show on the front end.
 
 ### Step 1: Installing the Program
 
@@ -201,69 +209,96 @@ Alternatively, you can manually install the dependencies and run Wilmer with the
 The provided scripts are designed to streamline the process by setting up a virtual environment. However, you can safely
 ignore them if you prefer manual installation.
 
+> **NOTE:** When running either the bat file, the sh file or the python file, all three now accept "--ConfigDirectory"
+> and "--User" arguments. So, for example: "bash run_macos.sh --ConfigDirectory "/users/socg/Public/configs" --User
+"single-model-assistant". This means that you can start up multiple instances of wilmer at once with a single install
+> folder,
+> and that you don't have to update the current-user anymore if you dont want to. Specifying --User will ignore
+> current-user.json.
+
 ### Step 2 Fast Route: Use Pre-made Users
 
 Within the Public/Configs you will find a series of folders containing json files. The two that you are
 most interested in are the `Endpoints` folder and the `Users` folder.
 
-**NOTE:** The Factual workflow nodes of the `smallmodeltemplate`, `smallmultimodeltemplate`
-and `openaicloudapiservicetemplate` users will attempt to utilize the
+**NOTE:** The Factual workflow nodes of the `assistant-singlemode`, `assistant-multi-model`
+and `group-chat-example` users will attempt to utilize the
 [OfflineWikipediaTextApi](https://github.com/SomeOddCodeGuy/OfflineWikipediaTextApi)
 project to pull full wikipedia articles to RAG against. If you don't have this API, the workflow
 should not have any issues, but I personally use this API to help improve the factual responses I get.
+You can specify the IP address to your API in the user json if your choice.
 
 First, choose which template user you'd like to use:
 
-* **openaicloudapiservicetemplate**: This user is straight forward, has routing for "Factual/Technical/Conversation" and
-  uses a single endpoint, the `OpenAIEndpoint1` endpoint for everything. It also uses a single preset for all
-  nodes: `OpenAI-API`. If you want to use a single conversation workflow without routing, within the
-  Users/openaicloudapiservicetemplate.json file you can find a boolean to enable custom workflows, which is currently
-  set to a good conversation workflow.
+* **assistant-single-model**: This template is for a single small model being used on all nodes. The endpoint used here
+  is
+  `SmallModelEndpoint`. This also has routes for many different category types and uses appropriate presets for each
+  node. If you're wondering why there are routes for different categories when there is only 1 model: it's so that you
+  can
+  give each category their own presets, and also so that you can make custom workflows for them. Maybe you want the
+  coder to do multiple iterations to check itself, or the reasoning to think through things in multiple steps.
 
 
-* **smallmodeltemplate**: This template is for a single small model being used on all nodes. The endpoint used here is
-  `SmallModelEndpoint`. This also has routes for "Factual/Technical/Conversation", and uses appropriate presets for each
-  node
-
-
-* **smallmultimodeltemplate**: This template is for using three models in tandem: A coding model for the Technical
-  workflow,
-  a factual model for the Factual workflow, and a generalist model for conversation and all worker tasks in the
+* **assistant-multi-model**: This template is for using many models in tandem: Looking at the endpoints for
+  this user, you can see that every category has its own endpoint. There is absolutely nothing stopping you from
+  re-using the same api for multiple of them. For example, you might use Llama 3.1 70b for Coding, math, and reasoning,
+  and Command-R 35b 08-2024 for categorization, conversation, and factual. Don't feel like you NEED 10 different models.
+  This is simply to allow you to bring that many if you want. This user uses appropriate presets for each node in the
   workflows.
-  The endpoints used are `SmallMultiModelCodingEndpoint`, `SmallMultiModelFactualEndpoint`, and
-  `SmallMultiModelGeneralistEndpoint`. It uses appropriate presets for each node in the workflows.
 
 
-* **convoroleplaysinglemodeltemplate**: This user uses a single model with a custom workflow that is good for
+* **convo-roleplay-single-model**: This user uses a single model with a custom workflow that is good for
   conversations,
-  and should be good for roleplay (awaiting feedback to tweak if needed). This bypasses all routing. The model used is
-  `ConvoRoleplaySingleModelEndpoint`.
+  and should be good for roleplay (awaiting feedback to tweak if needed). This bypasses all routing.
 
 
-* **convoroleplaytwomodeltemplate**: This user uses two models with a custom workflow that is good for conversations,
-  and should be good for roleplay (awaiting feedback to tweak if needed). This bypasses all routing. The models used are
-  `ConvoRoleplayTwoModelWorkerEndpoint`, which is meant for a small model that handles the worker and processing nodes,
-  and `ConvoRoleplayTwoModelResponderEndpoint` which is used by response nodes and summarizing nodes.
+* **convo-roleplay-dual-model**: This user uses two models with a custom workflow that is good for conversations,
+  and should be good for roleplay (awaiting feedback to tweak if needed). This bypasses all routing. **NOTE**: This
+  workflow works best if you have 2 computers that can run LLMs. With the current setup for this user, when you send a
+  message
+  to Wilmer, the responder model (computer 1) will respond to you. Then the workflow will apply a "workflow lock" at
+  that
+  point. The memory/chat summary model (computer 2) will then begin updating the memories and summary of the
+  conversation so far, which is passed to the responder to help it remember stuff. If you were to send another prompt
+  while the memories are being written, the responder (Computer 1) will grab whatever existing summary exists and
+  go ahead and respond to you. The workflow lock will stop you from re-entering the new memories section. What this
+  means is that you can continue talking to your responder model while new memories are being written. This is a HUGE
+  performance boost. I've tried it out, and for me the response times were amazing. Without this, I get responses in 30
+  seconds 3-5 times, and then suddenly have a 2 minute wait to generate memories. With this, every message is 30
+  seconds, every time, on Llama 3.1 70b on my Mac Studio.
 
 
-* **groupchattemplate**: This user exists because I promised to show an example of how my "Development Team" in
-  SillyTavern works. It's fully functional, though a little stripped down. The endpoints it uses
-  are `GroupChatCodestralEndpoint`, `GroupChatLlama370bEndpoint`, `GroupChatWizardEndpoint`
-  and `GroupChatSmalWorkerModelEndpoint`
+* **group-chat-example**: This user is an example of my own personal group chats. The characters included and the groups
+  included are actual characters and actual groups that I use. You can find the example characters in `Docs/SillyTavern`
+  folder. These are SillyTavern compatible characters that you can import directly into that program or any program
+  that supports .png character import types. The dev team
+  characters have only 1 node per workflow: they simply respond to you. The advisory group characters have 2 nodes
+  per workflow: first node generates a response, and the second node enforces the character's "persona" (the endpoint
+  in charge of this is the `businessgroup-speaker` endpoint). The group
+  chat personas help a lot to vary up the responses you get, even if you use only 1 model. However, I aim to use
+  different models for every character (but re-using models between groups. So, for example, I have a Llama 3.1 70b
+  model character in each group).
 
 Once you have selected the user that you want to use, there are a couple of steps to perform:
 
-1) Update the endpoints for your user under Public/Configs/Endpoints. If using a cloud API with
-   openaicloudapiservicetemplate, then you need to update `OpenAIEndpoint1` with the appropriate URL
-   (can leave it alone if using openAI) and your API Key. If you using one of the local AI options,
-   then you will need to update the respective endpoints listed in the user description above
-   with the urls/ports of your API endpoints, and a model config name that matches the model
-   you are using. (If you don't see your model, you'll need to scroll down a bit to see how to
-   set one up!)
+1) Update the endpoints for your user under Public/Configs/Endpoints. The example characters are sorted into folders
+   for each. The user's endpoint folder is specified at the bottom of their user.json file. You will want to fill in
+   every endpoint
+   appropriately for the LLMs you are using. You can find some example endpoints under the examples folder.
+    1) **NOTE** Currently, there is best support for standard openai chat completions and v1 completions endpoints, and
+       recently KoboldCpp's generate endpoint was added to the mix, since that is the author's favorite to use. If you
+       use
+       koboldcpp, I HIGHLY recommend turning off context shifting (--noshift). It will absolutely break Wilmer.
 
-2) You will need to set it as your current user. You can do this in Public/Configs/Users/_current-user.json.
-   Simply put the name of the user as the current user and save. You can also specify in here what port you
-   want Wilmer to run on, and whether you want your responses streamed or not.
+2) You will need to set your current user. You can do this when running the bat/sh/py file by using the --User argument,
+   or you can do this in Public/Configs/Users/_current-user.json.
+   Simply put the name of the user as the current user and save.
+
+3) You will want to open your user json file and peek at the options. Here you can set whether you want streaming or
+   not,
+   can set the IP address to your offline wiki API (if you're using it), specify where you want your memories/summary
+   files
+   to go during DiscussionId flows, and also specify where you want the sqllite db to go if you use Workflow Locks.
 
 That's it! Run Wilmer, connect to it, and you should be good to go.
 
@@ -312,16 +347,26 @@ These configuration files represent the different API types that you might be hi
 
 ```json
 {
-  "nameForDisplayOnly": "KoboldCpp",
-  "type": "openAIV1Completion",
-  "truncateLengthPropertyName": "truncation_length",
-  "maxNewTokensPropertyName": "max_tokens",
+  "nameForDisplayOnly": "KoboldCpp Example",
+  "type": "koboldCppGenerate",
+  "presetType": "KoboldCpp",
+  "truncateLengthPropertyName": "max_context_length",
+  "maxNewTokensPropertyName": "max_length",
   "streamPropertyName": "stream"
 }
 ```
 
 - **type**: Can be either "openAIV1Completion" or "openAIChatCompletion". Use "openAIV1Completion" for KoboldCpp and "
   openAIChatCompletion" for OpenAI's API.
+- **presetType**: This specifies the name of the folder that houses the presets you want to use. If you peek in the
+  Presets
+  folder, you'll see what I mean. Kobold has the best support. I plan to add more support for others later. With that
+  said, there is absolutely nothing stopping you from making a new folder in Presets, putting your own json in with
+  whatever
+  your favorite LLM program accepts with the payload, making a new API type json, and using it. Very little about
+  presets are hardcoded. I suspect that when I try to add proper support for Ollama and text-generation-webui, I may not
+  need
+  any code changes at all; just some new jsons/folders.
 - **truncateLengthPropertyName**: This specifies what the API expects the max context size field to be called
   when sending a request. Compare the Open-AI-API file to the KoboldCpp file; Open-AI-API doesn't support this
   field at all, so we left it blank. Whereas KoboldCpp does support it, and it expects us to send the value
@@ -364,11 +409,11 @@ user JSON file, paste it as a duplicate, and then rename it. Here is an example 
 
 ```json
 {
-  "port": 5002,
+  "port": 5006,
   "stream": true,
-  "customWorkflowOverride": true,
-  "customWorkflow": "FullCustomWorkflow-WithRecent-ChatSummary",
-  "routingConfig": "socgSmallModelCategoriesConfig",
+  "customWorkflowOverride": false,
+  "customWorkflow": "CodingWorkflow-LargeModel-Centric",
+  "routingConfig": "assistantSingleModelCategoriesConfig",
   "categorizationWorkflow": "CustomCategorizationWorkflow",
   "defaultParallelProcessWorkflow": "SlowButQualityRagParallelProcessor",
   "fileMemoryToolWorkflow": "MemoryFileToolWorkflow",
@@ -376,11 +421,16 @@ user JSON file, paste it as a duplicate, and then rename it. Here is an example 
   "conversationMemoryToolWorkflow": "CustomConversationMemoryToolWorkflow",
   "recentMemoryToolWorkflow": "RecentMemoryToolWorkflow",
   "discussionIdMemoryFileWorkflowSettings": "_DiscussionId-MemoryFile-Workflow-Settings",
-  "discussionDirectory": "D:\\temp",
+  "discussionDirectory": "D:\\Temp",
+  "sqlLiteDirectory": "D:\\Temp",
   "chatPromptTemplateName": "_chatonly",
   "verboseLogging": true,
   "chatCompleteAddUserAssistant": true,
-  "chatCompletionAddMissingAssistantGenerator": true
+  "chatCompletionAddMissingAssistantGenerator": true,
+  "useOfflineWikiApi": true,
+  "offlineWikiApiHost": "127.0.0.1",
+  "offlineWikiApiPort": 5728,
+  "endpointConfigsSubDirectory": "assistant-single-model"
 }
 ```
 
@@ -409,6 +459,7 @@ user JSON file, paste it as a duplicate, and then rename it. Here is an example 
   prompts.
 - **discussionDirectory**: Specifies where discussion files are stored. Ensure this directory exists to avoid crashes
   when using `discussionId`.
+- **sqlLiteDirectory**: Specifies where the sql lite db will be created if you are using workflow locks.
 - **chatPromptTemplateName**: Specifies the chat prompt template.
 - **verboseLogging**: Currently unused but reserved for future use.
 - **chatCompleteAddUserAssistant**: When Wilmer is connected to as a chat/Completions endpoint, sometimes the front end
@@ -417,11 +468,20 @@ user JSON file, paste it as a duplicate, and then rename it. Here is an example 
 - **chatCompletionAddMissingAssistantGenerator**: Creates an empty "Assistant:" message as the last message, sort of
   like a prompt generator, when being connected to as chat/Completions endpoint. This is only used
   if `chatCompleteAddUserAssistant` is `true`.
+- **useOfflineWikiApi**: This specifies whether you want to use
+  the [OfflineWikipediaTextApi](https://github.com/SomeOddCodeGuy/OfflineWikipediaTextApi) for factual workflows
+  or for the example group's `DataFinder` character.
+- **offlineWikiApiHost**: IP of the computer running the API
+- **offlineWikiApiPort**: Port for your wiki API. Unless you specifically change this, it's already good in all the
+  example user configs.
+- **endpointConfigsSubDirectory**: Name of the subfolder in Endpoints where your endpoint jsons will live.
 
 #### Users Folder, _current-user.json File
 
 Next, update the `_current-user.json` file specify what user you want to use. Match the name of the new user JSON file,
 without the `.json` extension.
+
+**NOTE**: You can ignore this if you want to use the --User argument when running Wilmer instead.
 
 #### Routing Folder
 
