@@ -165,13 +165,13 @@ each step, 1 by 1, into an LLM and asking it to help you set the section up. Tha
 >
 >
 > * B) I have recently replaced all prompts in Wilmer to go from using the second person to third person. This has
-    > had pretty decent results for me, and I'm hoping it will for you as well.
+    had pretty decent results for me, and I'm hoping it will for you as well.
 >
 >
 > * C) By default, all the user files are set to turn on streaming responses. You either need to enable
     this in your front end that is calling Wilmer so that both match, or you need to go into Users/username.json
-    and set Stream to "false". If you have a mismatch, where the front end does/does not expect streaming and your
-    > wilmer expects the opposite, nothing will likely show on the front end.
+    and set Stream to "false". If you have a mismatch, where the front end does/does not expect streaming and your 
+    wilmer expects the opposite, nothing will likely show on the front end.
 
 ### Step 1: Installing the Program
 
@@ -221,27 +221,26 @@ ignore them if you prefer manual installation.
 Within the Public/Configs you will find a series of folders containing json files. The two that you are
 most interested in are the `Endpoints` folder and the `Users` folder.
 
-**NOTE:** The Factual workflow nodes of the `assistant-singlemode`, `assistant-multi-model`
+**NOTE:** The Factual workflow nodes of the `assistant-single-model`, `assistant-multi-model`
 and `group-chat-example` users will attempt to utilize the
 [OfflineWikipediaTextApi](https://github.com/SomeOddCodeGuy/OfflineWikipediaTextApi)
 project to pull full wikipedia articles to RAG against. If you don't have this API, the workflow
 should not have any issues, but I personally use this API to help improve the factual responses I get.
-You can specify the IP address to your API in the user json if your choice.
+You can specify the IP address to your API in the user json of your choice.
 
 First, choose which template user you'd like to use:
 
-* **assistant-single-model**: This template is for a single small model being used on all nodes. The endpoint used here
-  is
-  `SmallModelEndpoint`. This also has routes for many different category types and uses appropriate presets for each
+* **assistant-single-model**: This template is for a single small model being used on all nodes. This also has routes
+  for many different category types and uses appropriate presets for each
   node. If you're wondering why there are routes for different categories when there is only 1 model: it's so that you
   can
   give each category their own presets, and also so that you can make custom workflows for them. Maybe you want the
   coder to do multiple iterations to check itself, or the reasoning to think through things in multiple steps.
 
 
-* **assistant-multi-model**: This template is for using many models in tandem: Looking at the endpoints for
+* **assistant-multi-model**: This template is for using many models in tandem. Looking at the endpoints for
   this user, you can see that every category has its own endpoint. There is absolutely nothing stopping you from
-  re-using the same api for multiple of them. For example, you might use Llama 3.1 70b for Coding, math, and reasoning,
+  re-using the same API for multiple categories. For example, you might use Llama 3.1 70b for coding, math, and reasoning,
   and Command-R 35b 08-2024 for categorization, conversation, and factual. Don't feel like you NEED 10 different models.
   This is simply to allow you to bring that many if you want. This user uses appropriate presets for each node in the
   workflows.
@@ -260,7 +259,7 @@ First, choose which template user you'd like to use:
   that
   point. The memory/chat summary model (computer 2) will then begin updating the memories and summary of the
   conversation so far, which is passed to the responder to help it remember stuff. If you were to send another prompt
-  while the memories are being written, the responder (Computer 1) will grab whatever existing summary exists and
+  while the memories are being written, the responder (computer 1) will grab whatever summary exists and
   go ahead and respond to you. The workflow lock will stop you from re-entering the new memories section. What this
   means is that you can continue talking to your responder model while new memories are being written. This is a HUGE
   performance boost. I've tried it out, and for me the response times were amazing. Without this, I get responses in 30
@@ -268,15 +267,15 @@ First, choose which template user you'd like to use:
   seconds, every time, on Llama 3.1 70b on my Mac Studio.
 
 
-* **group-chat-example**: This user is an example of my own personal group chats. The characters included and the groups
-  included are actual characters and actual groups that I use. You can find the example characters in `Docs/SillyTavern`
+* **group-chat-example**: This user is an example of my own personal group chats. The characters and the groups
+  included are actual characters and actual groups that I use. You can find the example characters in the `Docs/SillyTavern`
   folder. These are SillyTavern compatible characters that you can import directly into that program or any program
   that supports .png character import types. The dev team
   characters have only 1 node per workflow: they simply respond to you. The advisory group characters have 2 nodes
   per workflow: first node generates a response, and the second node enforces the character's "persona" (the endpoint
   in charge of this is the `businessgroup-speaker` endpoint). The group
   chat personas help a lot to vary up the responses you get, even if you use only 1 model. However, I aim to use
-  different models for every character (but re-using models between groups. So, for example, I have a Llama 3.1 70b
+  different models for every character (but re-using models between groups; so, for example, I have a Llama 3.1 70b
   model character in each group).
 
 Once you have selected the user that you want to use, there are a couple of steps to perform:
@@ -284,7 +283,7 @@ Once you have selected the user that you want to use, there are a couple of step
 1) Update the endpoints for your user under Public/Configs/Endpoints. The example characters are sorted into folders
    for each. The user's endpoint folder is specified at the bottom of their user.json file. You will want to fill in
    every endpoint
-   appropriately for the LLMs you are using. You can find some example endpoints under the examples folder.
+   appropriately for the LLMs you are using. You can find some example endpoints under the `_example-endpoints` folder.
     1) **NOTE** Currently, there is best support for standard openai chat completions and v1 completions endpoints, and
        recently KoboldCpp's generate endpoint was added to the mix, since that is the author's favorite to use. If you
        use
@@ -333,8 +332,8 @@ file, `SmallModelEndpoint.json`, defines an endpoint:
   of API this is, minus the ".json" extension. "Open-AI-API" will probably work for most cloud services.
 - **maxContextTokenSize**: Specifies the max token size that your endpoint can accept
 - **modelNameToSendToAPI**: Specifies what model name to send to the API. For cloud services, this can be important.
-  For example, OpenAI may expected "gpt-3.5-turbo" here, or something like that. For local AI running in Kobold,
-  text-generation-webui, etc, this is mostly unused. (Ollama may use it, though)
+  For example, OpenAI may expect "gpt-3.5-turbo" here, or something like that. For local AI running in Kobold,
+  text-generation-webui, etc., this is mostly unused. (Ollama may use it, though)
 - **promptTemplate**: The exact json file name of the prompt template to use, minus the ".json" extension. These
   can be found in the PromptTemplates folder.
 - **addGenerationPrompt**: This boolean is for Text Completion endpoints to specify whether the model expects a
