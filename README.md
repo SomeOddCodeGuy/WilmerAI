@@ -374,7 +374,7 @@ These configuration files represent the different API types that you might be hi
   here is in the Endpoints config.
 - **maxNewTokensPropertyName**: Similar to the truncate length, this is the API's expected property name
   for the number of tokens you want the LLM to respond with. The actual value we send here is on each individual
-  node within workflows
+  node within workflows.
 - **streamPropertyName**: Same as max tokens and truncate length. This specifies the field name for whether to
   stream the response to the front end or send the whole response as a text block once it is done.
 
@@ -457,7 +457,7 @@ user JSON file, paste it as a duplicate, and then rename it. Here is an example 
 - **discussionIdMemoryFileWorkflowSettings**: Settings for the memory file, including memory chunk size and summary
   prompts.
 - **discussionDirectory**: Specifies where discussion files are stored. Ensure this directory exists to avoid crashes
-  when using `discussionId`.
+  when using `DiscussionId`.
 - **sqlLiteDirectory**: Specifies where the sql lite db will be created if you are using workflow locks.
 - **chatPromptTemplateName**: Specifies the chat prompt template.
 - **verboseLogging**: Currently unused but reserved for future use.
@@ -470,14 +470,14 @@ user JSON file, paste it as a duplicate, and then rename it. Here is an example 
 - **useOfflineWikiApi**: This specifies whether you want to use
   the [OfflineWikipediaTextApi](https://github.com/SomeOddCodeGuy/OfflineWikipediaTextApi) for factual workflows
   or for the example group's `DataFinder` character.
-- **offlineWikiApiHost**: IP of the computer running the API
+- **offlineWikiApiHost**: IP of the computer running the OfflineWikipediaTextApi.
 - **offlineWikiApiPort**: Port for your wiki API. Unless you specifically change this, it's already good in all the
   example user configs.
 - **endpointConfigsSubDirectory**: Name of the subfolder in Endpoints where your endpoint jsons will live.
 
 #### Users Folder, _current-user.json File
 
-Next, update the `_current-user.json` file specify what user you want to use. Match the name of the new user JSON file,
+Next, update the `_current-user.json` file to specify what user you want to use. Match the name of the new user JSON file,
 without the `.json` extension.
 
 **NOTE**: You can ignore this if you want to use the --User argument when running Wilmer instead.
@@ -526,8 +526,8 @@ Within the "Public" folder you should have:
 * You should have updated _current-user with your new username, or an existing one if you are using a pre-included user
 * You should have made a routing json file with your categories in the Routing folder, or chosen the one you want to use
   that is pre-existing
-* You should have ensured your new user json file has the correct routing config specified in it
-* You should have a folder with your user's name in the Workflows folder.
+* You should have ensured your new user json file has the correct routing config specified
+* You should have a folder with your user's name in the Workflows folder
     * This folder should contain a json matching every workflow from your user folder
     * This folder should contain a json matching every workflow from your Routing config
         * If you're missing a workflow, Wilmer will crash.
@@ -649,7 +649,7 @@ summarized memory chunks loosely related to what's being talked about.
 #### Chat Summary Node
 
 This node will also generate the same recent memories file above, if it doesn't exist already, and then will take all
-the memories and summarize them into a single large summary. This summary is saved in `discussionId_chatsummary.json`.
+the memories and summarize them into a single large summary. This summary is saved in `DiscussionId_chatsummary.json`.
 So `123456_chatsummary.json`, in our above example. If a chat summary already exists and was recently updated, it will
 simply use the one that already exists. If one exists and it hasnt been updated in a while, it will update the summary.
 
