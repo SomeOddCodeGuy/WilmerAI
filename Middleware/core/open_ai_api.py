@@ -9,7 +9,7 @@ from flask.views import MethodView
 from Middleware.utilities.config_utils import get_custom_workflow_is_active, \
     get_active_custom_workflow_name, get_application_port, get_is_streaming, get_is_chat_complete_add_user_assistant, \
     get_is_chat_complete_add_missing_assistant
-from Middleware.utilities.prompt_extraction_utils import parse_conversation
+from Middleware.utilities.prompt_extraction_utils import parse_conversation, extract_discussion_id
 from Middleware.utilities.text_utils import replace_brackets_in_list
 from Middleware.workflows.categorization.prompt_categorizer import PromptCategorizer
 from Middleware.workflows.managers.workflow_manager import WorkflowManager
@@ -154,12 +154,16 @@ class WilmerApi:
         :return: The processed prompt response.
         """
         request_id = str(uuid.uuid4())
+        discussion_id = extract_discussion_id(prompt_collection)
+        prompt = replace_brackets_in_list(prompt_collection)
+
+        print("Handle user prompt discussion_id: {}".format(discussion_id))
 
         if not get_custom_workflow_is_active():
-            prompt = replace_brackets_in_list(prompt_collection)
             request_routing_service: PromptCategorizer = PromptCategorizer()
-            return request_routing_service.get_prompt_category(prompt, stream, request_id)
+            return request_routing_service.get_prompt_category(prompt, stream, request_id, discussion_id)
         else:
             print("handle_user_prompt workflow exists")
             workflow_manager: WorkflowManager = WorkflowManager(get_active_custom_workflow_name())
-            return workflow_manager.run_workflow(prompt_collection, request_id, stream=stream)
+            return workflow_manager.run_workflow(prompt_collection, request_id, stream=stream,
+                                                 discussionId=discussion_id)

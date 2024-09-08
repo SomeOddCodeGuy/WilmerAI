@@ -1,0 +1,19 @@
+[
+  {
+    "title": "Checking AI's recent memory about this topic",
+    "agentName": "Chat Summary",
+    "type": "FullChatSummary",
+    "isManualConfig": true
+  },
+  {
+    "title": "Responding to User Request",
+    "agentName": "Response Agent Two",
+    "systemPrompt": "Below is an online chat with a user; this could be a standard conversation between a user and an AI assistant, could be a group chat of multiple individuals (including multiple AI assistants), or could be a roleplay scenario.\nPlease adhere to the below system instructions for the conversation, if there are any. Additionally, if a persona is specified in the instructions, please closely adhere to that persona and adopt any mannerisms, speech patterns, and other traits that are both explicitly defined or could be implied through reasonable judgment from the instructions.\nInstructions:\n[\n{chat_system_prompt}\n]\nSince the conversation began, some changes may have occurred through natural progression. A summary of the online chat up to now can be found here:\n[\n{agent1Output}\n]\nPlease continue the below conversation, closely adhering to the instructions given.\nIMPORTANT: Do not write dialogue for the user and do not deviate from the instructions given.",
+    "prompt": "",
+    "lastMessagesToSendInsteadOfPrompt": 20,
+    "endpointName": "Assistant-Multi-Model-Conversational-Endpoint",
+    "preset": "_Assistant_Multi_Model_Conversational_Preset",
+    "maxResponseSizeInTokens": 800,
+    "addUserTurnTemplate": false
+  }
+]

@@ -1,6 +1,5 @@
 import hashlib
 import re
-from copy import deepcopy
 from typing import List, Dict, Tuple, Optional
 
 from Middleware.utilities.prompt_extraction_utils import template
@@ -108,27 +107,29 @@ def hash_single_message(message: Dict[str, str]) -> str:
 def find_last_matching_hash_message(messagesOriginal: List[Dict[str, str]],
                                     hashed_chunks_original: List[Tuple[str, str]]) -> int:
     """
-    Find the index of the last message in the list of messages that matches any hash in the hashed chunks.
+    Find the index of the last message in the list of messages that matches any hash in the hashed chunks,
+    starting from the third-to-last item and working backwards.
 
     Parameters:
     messagesOriginal (List[Dict[str, str]]): A list of message dictionaries.
     hashed_chunks_original (List[Tuple[str, str]]): A list of tuples, each containing a text block and a hash.
 
     Returns:
-    int: The index of the last matching message, or -1 if no match is found.
+    int: The number of items it had to go back to find a match, or the start index (18) if it had to go back
+    the entire list, or -1 if no match is found.
     """
-    messageCopy = deepcopy(messagesOriginal)
-    messageCopy.reverse()
-
-    hashed_chunks_copy = deepcopy(hashed_chunks_original)
-
     print("Searching for hashes")
-    current_message_hashes = [hash_single_message(message) for message in messageCopy]
-    for i, message_hash in enumerate(current_message_hashes):
+    current_message_hashes = [hash_single_message(message) for message in messagesOriginal]
+
+    start_index = len(current_message_hashes) - 3  # Start at the third-to-last item
+
+    for i in range(start_index, -1, -1):
+        message_hash = current_message_hashes[i]
         print("Searching for Hash " + str(i) + ": " + message_hash)
-        if message_hash in (hash_tuple[1] for hash_tuple in hashed_chunks_copy):
-            return i  # Return the index from the reversed list
-    return -1
+        if message_hash in (hash_tuple[1] for hash_tuple in hashed_chunks_original):
+            return start_index - i
+
+    return start_index
 
 
 def find_last_matching_memory_hash(hashed_summary_chunk: Optional[List[Tuple[str, str]]],

@@ -1,0 +1,34 @@
+{
+  "CHATGPT": {
+    "description": "The upcoming response is from ChatGPT-4o-DevTeam-Interface",
+    "workflow": "ChatGpt-4o-Workflow-OnePrompt"
+  },
+  "Claire": {
+    "description": "The upcoming response is from CLAIRE",
+    "workflow": "Claire-TwoPrompt"
+  },
+  "DataFinder": {
+    "description": "The upcoming response is from Datafinder-Interface",
+    "workflow": "DataFinder-Factual-Workflow"
+  },
+  "Eve": {
+    "description": "The upcoming response is from EVE",
+    "workflow": "Eve-TwoPrompt"
+  },
+  "LePi": {
+    "description": "The upcoming response is from Le-Pi",
+    "workflow": "LePi-OnePrompt"
+  },
+  "Lex": {
+    "description": "The upcoming response is from LEX",
+    "workflow": "Lex-TwoPrompt"
+  },
+  "MrDramaLlama": {
+    "description": "The upcoming response is from Mr-Drama-Llama",
+    "workflow": "MrDramaLlama-OnePrompt"
+  },
+  "MusicalMinstral": {
+    "description": "The upcoming response is from Musical-Minstral",
+    "workflow": "MusicalMinstral-OnePrompt"
+  }
+}

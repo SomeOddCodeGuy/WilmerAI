@@ -137,7 +137,7 @@ class PromptCategorizer:
         attempts = 0
 
         while attempts < 4:
-            category = workflow_manager.run_workflow(user_request, request_id).strip()
+            category = workflow_manager.run_workflow(user_request, request_id, nonResponder=True).strip()
             print("Output from the LLM: " + category)
             print(self.categories)
             category = category.translate(str.maketrans('', '', string.punctuation))

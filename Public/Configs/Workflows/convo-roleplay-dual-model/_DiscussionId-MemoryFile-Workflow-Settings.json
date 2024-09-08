@@ -1,0 +1,10 @@
+{
+  "Display_Only_Description": "This file is not truly a workflow, but rather settings for a hardcoded workflow with a single node. You can change the system prompt/prompt, endpoint, preset, etc like normal, but this does not support multiple nodes.",
+  "systemPrompt": "This is a request from a user that requires intelligent and careful summarization of incoming text, including a contextual understanding of what that text is truly saying. The summaries should always be clear and concise, and never allow misplaced prompt template tags, odd parentheses or brackets, or other things to negatively affect them",
+  "prompt": "A user is currently in an online conversation via a chat program; this could be a standard conversation between two a user and an AI assistant, could be a group chat of multiple individuals (including multiple AI assistants), or could be a roleplay scenario.\nThe instructions for the conversation can be found here:\n[\n{chat_system_prompt}\n]\nThe conversation so far has been summarized into 'memory' chunks as it has progressed; the current collection of those memories can be found here, if any exist:\n[\n[Memory_file]\n]\nA new series of messages have occurred since the last time those memories were updated, which can be found here:\n[\n[TextChunk]\n]\nPlease summarize the new message in the form of a single paragraph in a book, as the existing 'memories' will be update to include the exact result of this request.\nPlease use the persona/user names explicitly, as some may write in first person but the descriptions must be written in third person. Please avoid implied speech and describe the memory in vivid detail.",
+  "endpointName": "Convo-Roleplay-Dual-Model-WorkerEndpoint",
+  "preset": "_Convo_Roleplay_Dual_Model_Summarization_Preset",
+  "maxResponseSizeInTokens": 400,
+  "chunkEstimatedTokenSize": 1500,
+  "chunksUntilNewMemory": 5
+}

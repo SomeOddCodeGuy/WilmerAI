@@ -1,0 +1,17 @@
+{
+  "title": "Performing Slow but Quality RAG on Search Results",
+  "agentName": "Slow but Quality RAG Agent",
+  "systemPrompt": "",
+  "prompt": "",
+  "multiModelList": [
+    {
+      "endpointName": "Convo-Roleplay-Dual-Model-WorkerEndpoint"
+    }
+  ],
+  "preset": "_Convo_Roleplay_Dual_Model_Worker_Preset",
+  "type": "SlowButQualityRAG",
+  "ragTarget": "",
+  "ragType": "RecentMemory",
+  "maxResponseSizeInTokens": 400,
+  "addUserTurnTemplate": true
+}

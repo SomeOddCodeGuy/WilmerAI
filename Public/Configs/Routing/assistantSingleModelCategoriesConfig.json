@@ -1,0 +1,26 @@
+{
+  "CODING": {
+    "description": "An appropriate response would fall within the category of writing, editing or answering questions about code or other software development related topics (such as SQL queries).",
+    "workflow": "CodingWorkflow-LargeModel-Centric"
+  },
+  "TECHNICAL": {
+    "description": "An appropriate response would involve IT or technical related discussion that does not fall within the definition of 'CODING'",
+    "workflow": "Technical-Workflow"
+  },
+  "FACTUAL": {
+    "description": "An appropriate response would require encyclopedic knowledge of a topic, and would benefit from direct access to wikipedia articles",
+    "workflow": "Factual-Wiki-Workflow"
+  },
+  "REASONING": {
+    "description": "An appropriate response would require a high level of reasoning, such as solving puzzles, drawing conclusions or making predictions",
+    "workflow": "ReasoningWorkflow-LargeModel-Centric"
+  },
+  "MATH": {
+    "description": "An appropriate response would specifically require mathematical problem solving, and would not fit within the CODING or REASONING categories",
+    "workflow": "MathWorkflow-LargeModel-Centric"
+  },
+  "CONVERSATIONAL": {
+    "description": "An appropriate response does not fit into any of the other categories; this would include banter, playing, and general social conversation that does not specifically fit into any problem solving category",
+    "workflow": "ConversationalWorkflow-New"
+  }
+}

@@ -1,0 +1,13 @@
+[
+  {
+    "title": "Coding Agent",
+    "agentName": "Coder Agent One",
+    "systemPrompt": "This is a conversation between a user and an advanced AI that specializes in technical responses. The instructions for this conversation can be found below:\n[\n{chat_system_prompt}\n]\nPlease continue the conversation, adhering carefully to the chat instructions and the user's request.",
+    "prompt": "",
+    "lastMessagesToSendInsteadOfPrompt": 10,
+    "endpointName": "Assistant-Multi-Model-Coding-Endpoint",
+    "preset": "_Assistant_Multi_Model_Coder_Preset",
+    "maxResponseSizeInTokens": 3000,
+    "addUserTurnTemplate": false
+  }
+]

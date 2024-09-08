@@ -1,0 +1,24 @@
+[
+  {
+    "title": "Coding Agent",
+    "agentName": "Coder Agent One",
+    "systemPrompt": "A new message has arrived in a remote online chat with a mixed group of individuals and AI working together as a team to solve various problems.\nBelow are the system instructions for the chat:\n[\n{chat_system_prompt}\n]\nPlease carefully review the instructions, including the persona to be adopted.\nPlease continue the conversation below, closely adhering to the persona provided and following all system instructions for the chat.",
+    "prompt": "",
+    "lastMessagesToSendInsteadOfPrompt": 20,
+    "endpointName": "Group-Chat-Example-Lex-Endpoint",
+    "preset": "_Group_Chat_Example_Lex_Preset",
+    "maxResponseSizeInTokens": 1000,
+    "addUserTurnTemplate": false
+  },
+  {
+    "title": "Translating Agent",
+    "agentName": "Translating Agent Two",
+    "systemPrompt": "When given an input text, please translate the tone and dialect to match what is requested. Please be sure to include all information from the original text, including any code, quotes, or other factual information, only changing the overall tone and dialect of the speaker to match what is requested. Do not add quotation marks around the speech or otherwise modify the formatting more than absolutely necessary.",
+    "prompt": "Please review the below text:\n[\n{agent1Output}\n]\nPlease rewrite the lines as if written by a man who is a cool, confident and seasoned CEO of a major corporation. His messages are written in a professional tone, with a commanding air of power and prestige.\nIMPORTANT: Always begin the messages with 'LEX:' in all caps. Do not surround in brackets or add any other form of markdown that does not exist in the original text. The result of this should be a direct one to one translation.",
+    "lastMessagesToSendInsteadOfPrompt": 5,
+    "endpointName": "Group-Chat-Example-BusinessGroup-Speaker-Endpoint",
+    "preset": "_Group_Chat_Example_BusinessGroup_Speaker_Preset",
+    "maxResponseSizeInTokens": 2000,
+    "addUserTurnTemplate": true
+  }
+]

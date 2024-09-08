@@ -45,7 +45,7 @@ class WorkflowVariableManager:
 
     def apply_variables(self, prompt: str, llm_handler: Any, messages: List[Dict[str, str]],
                         agent_outputs: Optional[Dict[str, Any]] = None, remove_all_system_override=None,
-                        config = None) -> str:
+                        config=None) -> str:
         """
         Applies the generated variables to the prompt and formats it using the specified template.
 
@@ -56,7 +56,7 @@ class WorkflowVariableManager:
         :return: The formatted prompt string.
         """
         variables = self.generate_variables(llm_handler, messages, agent_outputs, remove_all_system_override)
-        if config.get('jinja2', False):
+        if config is not None and config.get('jinja2', False):
             environment = jinja2.Environment()
             template = environment.from_string(prompt)
             variables['messages'] = messages

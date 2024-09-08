@@ -36,7 +36,7 @@ class WorkflowManager:
         :return: The result of the workflow execution.
         """
         workflow_gen = WorkflowManager(workflow_config_name=get_active_conversational_memory_tool_name())
-        return workflow_gen.run_workflow(messages, request_id, discussion_id)
+        return workflow_gen.run_workflow(messages, request_id, discussion_id, nonResponder=True)
 
     @staticmethod
     def handle_recent_memory_parser(request_id, discussion_id: str, messages: List[Dict[str, str]] = None):
@@ -48,7 +48,7 @@ class WorkflowManager:
         :return: The result of the workflow execution.
         """
         workflow_gen = WorkflowManager(workflow_config_name=get_active_recent_memory_tool_name())
-        return workflow_gen.run_workflow(messages, request_id, discussion_id)
+        return workflow_gen.run_workflow(messages, request_id, discussion_id, nonResponder=True)
 
     @staticmethod
     def handle_full_chat_summary_parser(request_id, discussion_id: str, messages: List[Dict[str, str]] = None):
@@ -60,7 +60,7 @@ class WorkflowManager:
         :return: The result of the workflow execution.
         """
         workflow_gen = WorkflowManager(workflow_config_name=get_chat_summary_tool_workflow_name())
-        return workflow_gen.run_workflow(messages, request_id, discussion_id)
+        return workflow_gen.run_workflow(messages, request_id, discussion_id, nonResponder=True)
 
     @staticmethod
     def process_file_memories(request_id, discussion_id: str, messages: List[Dict[str, str]] = None):
@@ -72,7 +72,7 @@ class WorkflowManager:
         :return: The result of the workflow execution.
         """
         workflow_gen = WorkflowManager(workflow_config_name=get_file_memory_tool_name())
-        return workflow_gen.run_workflow(messages, request_id, discussion_id)
+        return workflow_gen.run_workflow(messages, request_id, discussion_id, nonResponder=True)
 
     def __init__(self, workflow_config_name, **kwargs):
         """
@@ -91,7 +91,7 @@ class WorkflowManager:
         if 'lookbackStartTurn' in kwargs:
             self.lookbackStartTurn = kwargs['lookbackStartTurn']
 
-    def run_workflow(self, messages, request_id, discussionId: str = None, stream: bool = False):
+    def run_workflow(self, messages, request_id, discussionId: str = None, stream: bool = False, nonResponder=None):
         """
         Executes the workflow based on the configuration file.
 
@@ -121,11 +121,22 @@ class WorkflowManager:
                     for idx, config in enumerate(configs):
                         print(f'------Workflow {self.workflowConfigName}; ' +
                               f'step {idx}; node type: {config.get("type", "Standard")}')
+                        add_user_prompt = config.get('addUserTurnTemplate', False)
+                        force_generation_prompt_if_endpoint_allows = (
+                            config.get('forceGenerationPromptIfEndpointAllows', False))
+                        block_generation_prompt = (
+                            config.get('blockGenerationPrompt', False))
                         if not returned_to_user and (config.get('returnToUser', False) or idx == len(configs) - 1):
                             returned_to_user = True
+                            print("Returned to user flow")
+                            if (
+                                    nonResponder is None and not force_generation_prompt_if_endpoint_allows and not add_user_prompt) or block_generation_prompt:
+                                add_generation_prompt = False
+                            else:
+                                add_generation_prompt = None
                             result = self._process_section(config, request_id, workflow_id, discussion_id, messages,
                                                            agent_outputs,
-                                                           stream=stream)
+                                                           stream=stream, addGenerationPrompt=add_generation_prompt)
                             if stream:
                                 text_chunks = []
                                 for chunk in result:
@@ -140,11 +151,17 @@ class WorkflowManager:
                                 yield result
                             agent_outputs[f'agent{idx + 1}Output'] = result
                         else:
+                            if (
+                                    not force_generation_prompt_if_endpoint_allows and not add_user_prompt) or block_generation_prompt:
+                                add_generation_prompt = False
+                            else:
+                                add_generation_prompt = None
                             agent_outputs[f'agent{idx + 1}Output'] = self._process_section(config, request_id,
                                                                                            workflow_id,
                                                                                            discussion_id,
                                                                                            messages,
-                                                                                           agent_outputs)
+                                                                                           agent_outputs,
+                                                                                           addGenerationPrompt=add_generation_prompt)
                 except EarlyTerminationException:
                     print(f"Unlocking locks for InstanceID: '{INSTANCE_ID}' and workflow ID: '{workflow_id}'")
                     SqlLiteUtils.delete_node_locks(instance_utils.INSTANCE_ID, workflow_id)
@@ -176,7 +193,8 @@ class WorkflowManager:
     def _process_section(self, config: Dict, request_id, workflow_id, discussion_id: str,
                          messages: List[Dict[str, str]] = None,
                          agent_outputs: Dict = None,
-                         stream: bool = False):
+                         stream: bool = False,
+                         addGenerationPrompt: bool = None):
         """
         Processes a single section of the workflow configuration.
 
@@ -202,7 +220,8 @@ class WorkflowManager:
                                                                                    config.get("maxContextTokenSize",
                                                                                               4096),
                                                                                    config.get("maxResponseSizeInTokens",
-                                                                                              400))
+                                                                                              400),
+                                                                                   addGenerationPrompt)
         if "endpointName" not in config:
             self.llm_handler = LlmHandler(None, get_chat_template_name(), 0, 0, True)
 

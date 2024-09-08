@@ -1,6 +1,7 @@
 {
-  "nameForDisplayOnly": "KoboldCpp",
+  "nameForDisplayOnly": "Text-Generation-WebUI Example",
   "type": "openAIChatCompletion",
+  "presetType": "Text-Generation-WebUI",
   "truncateLengthPropertyName": "truncation_length",
   "maxNewTokensPropertyName": "max_tokens",
   "streamPropertyName": "stream"

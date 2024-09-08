@@ -1,0 +1,17 @@
+{
+  "title": "Performing Slow but Quality RAG on Search Results",
+  "agentName": "Slow but Quality RAG Agent",
+  "systemPrompt": "",
+  "prompt": "",
+  "multiModelList": [
+    {
+      "endpointName": "Assistant-Multi-Model-Worker-Endpoint"
+    }
+  ],
+  "preset": "_Assistant_Multi_Model_Worker_Preset",
+  "maxResponseSizeInTokens": 400,
+  "type": "SlowButQualityRAG",
+  "ragTarget": "",
+  "ragType": "RecentMemory",
+  "addUserTurnTemplate": true
+}

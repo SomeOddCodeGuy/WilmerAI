@@ -1,0 +1,21 @@
+{
+  "port": 5002,
+  "stream": true,
+  "customWorkflowOverride": true,
+  "customWorkflow": "FullCustomWorkflow-ChatSummary-WorkflowLocked",
+  "routingConfig": "_defaultCategoriesConfig",
+  "categorizationWorkflow": "CustomCategorizationWorkflow",
+  "defaultParallelProcessWorkflow": "SlowButQualityRagParallelProcessor",
+  "fileMemoryToolWorkflow": "MemoryFileToolWorkflow",
+  "chatSummaryToolWorkflow": "GetChatSummaryToolWorkflow",
+  "conversationMemoryToolWorkflow": "CustomConversationMemoryToolWorkflow",
+  "recentMemoryToolWorkflow": "RecentMemoryToolWorkflow",
+  "discussionIdMemoryFileWorkflowSettings": "_DiscussionId-MemoryFile-Workflow-Settings",
+  "discussionDirectory": "D:\\Temp",
+  "sqlLiteDirectory": "D:\\Temp",
+  "chatPromptTemplateName": "_chatonly",
+  "verboseLogging": true,
+  "chatCompleteAddUserAssistant": false,
+  "chatCompletionAddMissingAssistantGenerator": false,
+  "endpointConfigsSubDirectory": "convo-roleplay-dual-model"
+}

@@ -1,7 +1,8 @@
 {
-  "nameForDisplayOnly": "KoboldCpp",
-  "type": "openAIV1Completion",
-  "truncateLengthPropertyName": "truncation_length",
-  "maxNewTokensPropertyName": "max_tokens",
+  "nameForDisplayOnly": "KoboldCpp Example",
+  "type": "koboldCppGenerate",
+  "presetType": "KoboldCpp",
+  "truncateLengthPropertyName": "max_context_length",
+  "maxNewTokensPropertyName": "max_length",
   "streamPropertyName": "stream"
 }

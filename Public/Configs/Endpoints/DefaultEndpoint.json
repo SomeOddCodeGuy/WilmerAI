@@ -1,5 +1,5 @@
 {
-  "modelNameForDisplayOnly": "OpenHermes-2.5-Mistral-7b",
+  "modelNameForDisplayOnly": "Default Endpoint",
   "endpoint": "http://127.0.0.1:5000",
   "apiTypeConfigFileName": "KoboldCpp",
   "maxContextTokenSize": 16384,

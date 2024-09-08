@@ -9,7 +9,8 @@ from urllib3 import Retry
 
 from Middleware.models.open_ai_api_presets import OpenAiApiPresets
 from Middleware.utilities.config_utils import get_openai_preset_path, get_endpoint_config, \
-    get_is_chat_complete_add_user_assistant, get_is_chat_complete_add_missing_assistant, get_config_property_if_exists
+    get_is_chat_complete_add_user_assistant, get_is_chat_complete_add_missing_assistant, get_config_property_if_exists, \
+    get_api_type_config
 from Middleware.utilities.text_utils import return_brackets_in_string
 
 
@@ -30,8 +31,11 @@ class OpenAiLlmCompletionsApiService:
         :param truncate_length: The max context length of the model, if it applies
         :param max_tokens: The max number of tokens to generate from the response
         """
-        preset_file = get_openai_preset_path(presetname)
         endpoint_file = get_endpoint_config(endpoint)
+        api_type_config = get_api_type_config(
+            endpoint_file.get("apiTypeConfigFileName", "apiTypeConfigFileNameNotFoundInEndpoint"))
+        type = api_type_config.get("presetType", "")
+        preset_file = get_openai_preset_path(presetname, type)
         self.api_key = endpoint_file.get("apiKey", "")
         print("Api key found: " + self.api_key)
         self.endpoint_url = endpoint_file["endpoint"]
@@ -72,6 +76,7 @@ class OpenAiLlmCompletionsApiService:
         """
         full_prompt = system_prompt + prompt
         full_prompt = return_brackets_in_string(full_prompt)
+        full_prompt = full_prompt.strip() + " "
         print("\n************************************************")
         print("Formatted Prompt:", full_prompt)
         print("************************************************")

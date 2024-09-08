@@ -1,9 +1,0 @@
-{
-  "modelNameForDisplayOnly": "Small coding model for coding tasks",
-  "endpoint": "http://127.0.0.1:5001",
-  "apiTypeConfigFileName": "KoboldCpp",
-  "maxContextTokenSize": 16384,
-  "modelNameToSendToAPI": "",
-  "promptTemplate": "alpaca",
-  "addGenerationPrompt": true
-}
