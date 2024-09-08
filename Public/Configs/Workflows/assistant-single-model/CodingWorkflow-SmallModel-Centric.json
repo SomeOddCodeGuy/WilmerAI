@@ -1,0 +1,57 @@
+[
+  {
+    "title": "Analyzing the conversation context",
+    "agentName": "Conversation Analyzer Agent One",
+    "systemPrompt": "When given an ongoing conversation, take the last messages sent and use the other messages in the conversation to expertly outline exactly what the user is asking for or saying.",
+    "prompt": "Please consider the below messages:\n[\n{chat_user_prompt_last_ten}\n]\nIn order to appropriately respond to the user, it is important to first identify exactly what they are saying. Considering the full context of the messages provided, please specify exactly what the user's message is about or what the user's request is. Do not simply assume that it is discussing the most recent messages; consider the entire context that has been provided and think deeply about what the user might really be saying.",
+    "lastMessagesToSendInsteadOfPrompt": 5,
+    "endpointName": "Assistant-Single-Model-Endpoint",
+    "preset": "_Assistant_Single_Model_Worker_Preset",
+    "maxResponseSizeInTokens": 300,
+    "addUserTurnTemplate": true
+  },
+  {
+    "title": "Coding Agent",
+    "agentName": "Coder Agent Two",
+    "systemPrompt": "This is a conversation between a user and an advanced AI that specializes in technical responses. The instructions for this conversation can be found below:\n[\n{chat_system_prompt}\n]\nAdditionally, the context of what the user is requesting has been broken down, and can be found here:\n[\n{agent1Output}\n]\nPlease continue the conversation, adhering carefully to the chat instructions and the user's request.",
+    "prompt": "",
+    "lastMessagesToSendInsteadOfPrompt": 10,
+    "endpointName": "Assistant-Single-Model-Endpoint",
+    "preset": "_Assistant_Single_Model_Coder_Preset",
+    "maxResponseSizeInTokens": 2000,
+    "addUserTurnTemplate": false
+  },
+  {
+    "title": "Reviewing Agent",
+    "agentName": "Reviewing Agent Three",
+    "systemPrompt": "A user has sent a message in a conversation with an advanced AI that specializes in technical responses. The context of what the user is requesting has been analyzed, and can be found here:\n[\n{agent1Output}\n]\n",
+    "prompt": "Please consider the below conversation:\n[\n{chat_user_prompt_last_five}\n]\nA possible response has been constructed, and can be found here:\n[\n{agent2Output}\n]\nPlease critically review the response, checking for inaccuracies or missed requirements that might have been specified in the request. Please step through the response carefully, and detail any issues that might exist. Finally, present a series of challenge questions that would require the original solution author to think carefully about the efficacy and accuracy of the response.",
+    "lastMessagesToSendInsteadOfPrompt": 10,
+    "endpointName": "Assistant-Single-Model-Endpoint",
+    "preset": "_Assistant_Single_Model_Coder_Preset",
+    "maxResponseSizeInTokens": 2000,
+    "addUserTurnTemplate": true
+  },
+  {
+    "title": "Reviewing Agent",
+    "agentName": "Revising Agent Four",
+    "systemPrompt": "A user has sent a message in a conversation with an advanced AI that specializes in technical responses. The context of what the user is requesting has been analyzed, and can be found here:\n[\n{agent1Output}\n]\n",
+    "prompt": "Please consider the below conversation:\n[\n{chat_user_prompt_last_five}\n]\nA possible response has been constructed, and can be found here:\n[\n{agent2Output}\n]\nThis response was critically reviewed, and the review can be found here:\n[\n{agent3Output}\n]\nPlease consider the review carefully, and revise the response. Rewrite the full and complete response below.",
+    "lastMessagesToSendInsteadOfPrompt": 10,
+    "endpointName": "Assistant-Single-Model-Endpoint",
+    "preset": "_Assistant_Single_Model_Coder_Preset",
+    "maxResponseSizeInTokens": 2000,
+    "addUserTurnTemplate": true
+  },
+  {
+    "title": "Responding Agent",
+    "agentName": "Responding Agent Five",
+    "systemPrompt": "A user has sent a message in a conversation with an advanced AI that specializes in technical responses. The instructions for this conversation can be found below:\n[\n{chat_system_prompt}\n]\n The context of what the user is requesting has been analyzed, and can be found here:\n[\n{agent1Output}\n]\nA possible response to the user has been carefully formulated, and can be found here:\n[\n{agent4Output}\n]\nPlease carefully consider the possible response to the user, and then continue the conversation below.",
+    "prompt": "",
+    "lastMessagesToSendInsteadOfPrompt": 10,
+    "endpointName": "Assistant-Single-Model-Endpoint",
+    "preset": "_Assistant_Single_Model_Coder_Preset",
+    "maxResponseSizeInTokens": 2000,
+    "addUserTurnTemplate": false
+  }
+]

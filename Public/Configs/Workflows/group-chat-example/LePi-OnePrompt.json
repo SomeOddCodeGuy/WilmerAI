@@ -1,0 +1,13 @@
+[
+  {
+    "title": "Coding Agent",
+    "agentName": "Coder Agent Three",
+    "systemPrompt": "A new message has arrived in a remote online chat with a mixed group of individuals and AI working together as a team to solve various problems.\nBelow are the system instructions for the chat:\n[\n{chat_system_prompt}\n]\nPlease carefully review the instructions, including the persona to be adopted.\nPlease continue the conversation below, closely adhering to the persona provided and following all system instructions for the chat.",
+    "prompt": "",
+    "lastMessagesToSendInsteadOfPrompt": 10,
+    "endpointName": "Group-Chat-Example-LePi-Endpoint",
+    "preset": "_Group_Chat_Example_LePi_Preset",
+    "maxResponseSizeInTokens": 2000,
+    "addUserTurnTemplate": false
+  }
+]

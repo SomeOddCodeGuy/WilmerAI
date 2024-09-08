@@ -1,0 +1,29 @@
+[
+  {
+    "title": "Search Keyword Generation",
+    "agentName": "Keyword Generator Agent",
+    "systemPrompt": "Please respond with search keywords for the request below.",
+    "prompt": "Q: An ongoing conversation is taking place with a user. For each message, identify and extract key terms related to the topics discussed to facilitate recalling relevant prior discussions from a text database.\nConversation messages:\n[\nGerald: I really enjoy flying. It makes me happy I've always wanted to get a pilot's license. I think we talked about that before. I'd love to fly around in my own personal plane. Having it would be really helpful. Wonder if there's an app for getting more information about it? You wrote one didn't you?\nGerald: Or should I get a boat? Ugh I have no idea.\nRalf:\n]\nInstructions:\nThe message should be analyzed to pinpoint the main subjects. Keywords that closely represent the specific topics discussed should be selected, with a focus on proper nouns, technical terms, and specific products or tools mentioned. Adjectives or sentiments that might introduce bias or trigger unrelated associations should be avoided. For example, something like \"app\" could also be \"Application\", \"Program\", or \"Software.\" The user's meaning should be inferred—if the user says, \"Thanks for finding that thing about prompting for. Reading that was helpful,\" keywords could include things they can read like \"Paper,\" \"Report,\" or \"Article.\"\nResponse:\nKeywords should be provided based on the core topics or subjects discussed in the user's message, ensuring relevance to the actual entities or concepts mentioned.\nA: Flying Pilot License Plane Airplane Aircraft App Application Program Code Coding Develop Boat Ship Seacraft\nQ: An ongoing conversation is taking place with a user. For each message, identify and extract key terms related to the topics discussed to facilitate recalling relevant prior discussions from a text database.\nConversation messages:\n[\n{chat_user_prompt_last_five}\n]\nInstructions:\nThe message should be analyzed to pinpoint the main subjects. Keywords that closely represent the specific topics discussed should be selected, with a focus on proper nouns, technical terms, and specific products or tools mentioned. Adjectives or sentiments that might introduce bias or trigger unrelated associations should be avoided. For example, something like \"app\" could also be \"Application\", \"Program\", or \"Software.\" The user's meaning should be inferred—if the user says, \"Thanks for finding that thing about prompting for. Reading that was helpful,\" keywords could include things they can read like \"Paper,\" \"Report,\" or \"Article.\"\nResponse:\nKeywords should be provided based on the core topics or subjects discussed in the user's message, ensuring relevance to the actual entities or concepts mentioned.\nA:",
+    "endpointName": "Convo-Roleplay-Single-Model-Endpoint",
+    "preset": "_Convo_Roleplay_Single_Model_Worker_Preset",
+    "maxResponseSizeInTokens": 100,
+    "addUserTurnTemplate": true
+  },
+  {
+    "title": "Performing keyword search",
+    "agentName": "Keyword Search Agent",
+    "type": "MemoryKeywordSearchPerformerTool",
+    "searchTarget": "RecentMemories",
+    "keywords": "{agent1Output}"
+  },
+  {
+    "title": "Search Result Summarizer",
+    "agentName": "Search Result Summarizer Agent",
+    "systemPrompt": "This is a request from a user that requires intelligent and careful summarization of incoming text, including a contextual understanding of what that text is truly saying. The summaries should always be clear and concise, and never allow misplaced prompt template tags, odd parentheses or brackets, or other things to negatively affect them",
+    "prompt": "A user is currently in an online conversation via a chat program; this could be a standard conversation between two a user and an AI assistant, could be a group chat of multiple individuals (including multiple AI assistants), or could be a roleplay scenario. Below are several summarized chat logs that have been generated from that conversation:\n[\n{agent2Output}\n]\nPlease write a concise and yet vivid summary based on the above chat logs, taking extra care to capture as much information as possible, with minimal embellishments to fill the gaps. If something is unclear then please specify rather than making assumptions to fill in the blanks. If there are any names, definitions, code, or other explicitly defined things, please put them in the summary verbatim, so that the information is not lost. This summary will be used to respond to the user later, while the accompanying chat logs presented here will not, so please do not leave out important information to the current conversation. Please use the persona/user names explicitly.",
+    "endpointName": "Convo-Roleplay-Single-Model-Endpoint",
+    "preset": "_Convo_Roleplay_Single_Model_MemoryChatSummary_Preset",
+    "maxResponseSizeInTokens": 2000,
+    "addUserTurnTemplate": true
+  }
+]

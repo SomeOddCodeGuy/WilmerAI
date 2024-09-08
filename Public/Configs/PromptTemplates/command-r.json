@@ -1,7 +1,7 @@
 {
-  "promptTemplateSystemPrefix": "<|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|>",
+  "promptTemplateSystemPrefix": "<BOS_TOKEN><|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|>",
   "promptTemplateSystemSuffix": "<|END_OF_TURN_TOKEN|>",
-  "promptTemplateUserPrefix": "<BOS_TOKEN><|START_OF_TURN_TOKEN|><|USER_TOKEN|>",
+  "promptTemplateUserPrefix": "<|START_OF_TURN_TOKEN|><|USER_TOKEN|>",
   "promptTemplateUserSuffix": "<|END_OF_TURN_TOKEN|>",
   "promptTemplateAssistantPrefix": "<|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>",
   "promptTemplateAssistantSuffix": "<|END_OF_TURN_TOKEN|>",

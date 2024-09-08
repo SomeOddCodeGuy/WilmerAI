@@ -46,6 +46,7 @@ class SqlLiteUtils:
 
     @staticmethod
     def create_node_lock(wilmer_session_id, workflow_id, workflow_lock_id):
+        # This should hard fail if the db can't be found due to user file config, so no try here.
         conn = SqlLiteUtils.get_wilmerdb_connection()
         if conn is None:
             return
@@ -64,35 +65,42 @@ class SqlLiteUtils:
 
     @staticmethod
     def delete_node_locks(wilmer_session_id=None, workflow_id=None, workflow_lock_id=None):
-        conn = SqlLiteUtils.get_wilmerdb_connection()
-        if conn is None:
-            return
-        cursor = conn.cursor()
-
+        # Adding a try here because this gets called even if you don't have workflow locks
+        # Folks may not want to deal with the sql db if they don't have a desire to use it
+        # This will fail 9 times out of 10 because of a bad path in user json
         try:
-            # Start building the SQL query
-            query = f'DELETE FROM {SqlLiteUtils.TABLE_NAME} WHERE 1=1'
-            params = []
+            conn = SqlLiteUtils.get_wilmerdb_connection()
+            if conn is None:
+                return
+            cursor = conn.cursor()
 
-            # Add conditions based on the provided parameters
-            if wilmer_session_id is not None:
-                query += ' AND WilmerSessionId = ?'
-                params.append(wilmer_session_id)
+            try:
+                # Start building the SQL query
+                query = f'DELETE FROM {SqlLiteUtils.TABLE_NAME} WHERE 1=1'
+                params = []
 
-            if workflow_id is not None:
-                query += ' AND WorkflowId = ?'
-                params.append(workflow_id)
+                # Add conditions based on the provided parameters
+                if wilmer_session_id is not None:
+                    query += ' AND WilmerSessionId = ?'
+                    params.append(wilmer_session_id)
 
-            if workflow_lock_id is not None:
-                query += ' AND WorkflowLockId = ?'
-                params.append(workflow_lock_id)
+                if workflow_id is not None:
+                    query += ' AND WorkflowId = ?'
+                    params.append(workflow_id)
 
-            # Execute the query with the accumulated parameters
-            cursor.execute(query, params)
-            conn.commit()
+                if workflow_lock_id is not None:
+                    query += ' AND WorkflowLockId = ?'
+                    params.append(workflow_lock_id)
 
-        finally:
-            conn.close()
+                # Execute the query with the accumulated parameters
+                cursor.execute(query, params)
+                conn.commit()
+
+            finally:
+                conn.close()
+        except:
+            print("Error in unlocking locks. Ensure that the path to your database is correct in user file. "
+                  "If you don't use workflow locks you can safely ignore this.")
 
     @staticmethod
     def get_lock(workflow_lock_id):
@@ -129,17 +137,24 @@ class SqlLiteUtils:
 
     @staticmethod
     def delete_old_locks(wilmer_session_id):
-        conn = SqlLiteUtils.get_wilmerdb_connection()
-        if conn is None:
-            return
-        cursor = conn.cursor()
-
+        # Adding a try here because this gets called even if you don't have workflow locks
+        # Folks may not want to deal with the sql db if they don't have a desire to use it
+        # This will fail 9 times out of 10 because of a bad path in user json
         try:
-            cursor.execute(f'''
-                DELETE FROM {SqlLiteUtils.TABLE_NAME}
-                WHERE WilmerSessionId != ?
-            ''', (wilmer_session_id,))
+            conn = SqlLiteUtils.get_wilmerdb_connection()
+            if conn is None:
+                return
+            cursor = conn.cursor()
 
-            conn.commit()
-        finally:
-            conn.close()
+            try:
+                cursor.execute(f'''
+                    DELETE FROM {SqlLiteUtils.TABLE_NAME}
+                    WHERE WilmerSessionId != ?
+                ''', (wilmer_session_id,))
+
+                conn.commit()
+            finally:
+                conn.close()
+        except:
+            print("Error in deleting old locks. Ensure that the path to your database is correct in user file. "
+                  "If you don't use workflow locks you can safely ignore this.")

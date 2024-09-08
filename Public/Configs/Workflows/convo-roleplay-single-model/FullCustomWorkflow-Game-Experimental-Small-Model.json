@@ -1,0 +1,52 @@
+[
+  {
+    "title": "Workflow Lock",
+    "type": "WorkflowLock",
+    "workflowLockId": "FullCustomChatSummaryLock"
+  },
+  {
+    "title": "Grab the current summary from file",
+    "agentName": "Chat Summary File Puller Agent",
+    "type": "GetCurrentSummaryFromFile"
+  },
+  {
+    "title": "Context Summary Agent",
+    "agentName": "Summarizing Agent Three",
+    "systemPrompt": "Below is an online chat with a user consisting of a roleplay between an AI and an Assistant.\nBelow are the system instructions for the chat, including the personas involved:\n[\n{chat_system_prompt}\n]\nSince the conversation began, some changes may have occurred through natural progression. A summary of the online chat up to now can be found here:\n[\n{agent2Output}\n]\n",
+    "prompt": "Please consider the below conversation excerpt:\n[\n{chat_user_prompt_last_twenty}\n]\nPlease write a summary of exactly what happened in the most recent messages based on all context provided. Please carefully consider the full context when writing this summary.",
+    "lastMessagesToSendInsteadOfPrompt": 20,
+    "endpointName": "Convo-Roleplay-Single-Model-Endpoint",
+    "preset": "_Convo_Roleplay_Single_Model_Responder_Preset",
+    "maxResponseSizeInTokens": 800,
+    "addUserTurnTemplate": true
+  },
+  {
+    "title": "Action Determiner Agent",
+    "agentName": "Action Determiner Agent Four",
+    "systemPrompt": "Below is an online chat with a user consisting of a roleplay between an AI and an Assistant.\nBelow are the system instructions for the chat, including the personas involved:\n[\n{chat_system_prompt}\n]\nSince the conversation began, some changes may have occurred through natural progression. A summary of the online chat up to now can be found here:\n[\n{agent2Output}\n]\nAdditionally, a summary of what has happened in the most recent messages can be found here:\n[\n{agent3Output}\n]\n",
+    "prompt": "Below are the last few messages of the conversation:\n[\n{chat_user_prompt_last_five}\n]\nPlease write a summary of what the most appropriate actions the AI persona should take would be, based on all of the information provided. Please be realistic, and please ensure that the actions specified would keep the story interesting, engaging, rewarding, and fun for the human user.",
+    "lastMessagesToSendInsteadOfPrompt": 20,
+    "endpointName": "Convo-Roleplay-Single-Model-Endpoint",
+    "preset": "_Convo_Roleplay_Single_Model_Responder_Preset",
+    "maxResponseSizeInTokens": 800,
+    "addUserTurnTemplate": true
+  },
+  {
+    "title": "LLM Responding to User Request",
+    "agentName": "Response Agent Five",
+    "systemPrompt": "Below is an online chat with a user consisting of a roleplay between an AI and an Assistant.\nBelow are the system instructions for the chat, including the personas involved:\n[\n{chat_system_prompt}\n]\nSince the conversation began, some changes may have occurred through natural progression. A summary of the online chat up to now can be found here:\n[\n{agent2Output}\n]\nAdditionally, a summary of what has happened in the most recent messages can be found here:\n[\n{agent3Output}\n]\nFinally, a brief outline of the some recommended actions that the AI persona should take can be found here:\n[\n{agent4Output}\n]\nPlease continue the below conversation, closely adhering to the instructions and recommendations given.\nIMPORTANT: Do not write dialogue for the user and do not deviate from the instructions given.",
+    "prompt": "",
+    "lastMessagesToSendInsteadOfPrompt": 40,
+    "endpointName": "Convo-Roleplay-Single-Model-Endpoint",
+    "preset": "_Convo_Roleplay_Single_Model_Responder_Preset",
+    "maxResponseSizeInTokens": 800,
+    "addUserTurnTemplate": false,
+    "returnToUser": true
+  },
+  {
+    "title": "Checking AI's recent memory about this topic",
+    "agentName": "Chat Summary",
+    "type": "FullChatSummary",
+    "isManualConfig": false
+  }
+]

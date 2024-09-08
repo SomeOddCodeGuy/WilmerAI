@@ -1,0 +1,10 @@
+{
+  "modelNameForDisplayOnly": "Gpt-4o Example",
+  "endpoint": "https://api.openai.com",
+  "apiKey": "Your API Key Here",
+  "apiTypeConfigFileName": "Open-Ai-Api",
+  "maxContextTokenSize": 16384,
+  "modelNameToSendToAPI": "gpt-4o",
+  "promptTemplate": "_chatonly",
+  "addGenerationPrompt": true
+}

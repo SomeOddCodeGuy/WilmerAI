@@ -253,11 +253,14 @@ class PromptProcessor:
                 )
 
             if self.llm_handler.add_generation_prompt:
+                print("Entering add generation prompt")
                 prompt = add_assistant_end_token_to_user_turn(
                     prompt,
                     self.llm_handler.prompt_template_file_name,
                     isChatCompletion=self.llm_handler.takes_message_collection
                 )
+            else:
+                print("Did not enter add generation prompt")
 
             system_prompt = format_system_prompt_with_template(
                 system_prompt,
@@ -352,8 +355,7 @@ class PromptProcessor:
             prompt=str(prompt),
             llm_handler=self.llm_handler,
             messages=message_copy,
-            agent_outputs=agent_outputs,
-            config=config
+            agent_outputs=agent_outputs
         )
 
         offline_wiki_api_client = OfflineWikiApiClient()

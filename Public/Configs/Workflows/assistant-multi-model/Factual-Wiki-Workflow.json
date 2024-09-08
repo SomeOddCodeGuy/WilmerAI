@@ -1,0 +1,42 @@
+[
+  {
+    "title": "Analyzing the conversation context",
+    "agentName": "Conversation Analyzer Agent One",
+    "systemPrompt": "When given an ongoing conversation, take the last messages sent and use the other messages in the conversation to expertly outline exactly what the user is asking for or saying.",
+    "prompt": "Please consider the below messages:\n[\n{chat_user_prompt_last_ten}\n]\nIn order to appropriately search for information to help respond to the user, it is important to first identify what to look up. Considering the full context of the messages provided, please specify exactly what topic the last message is speaking about. Do not simply assume that it is discussing the most recent messages; consider the entire context that has been provided and think deeply about what the user might really be saying.",
+    "lastMessagesToSendInsteadOfPrompt": 5,
+    "endpointName": "Assistant-Multi-Model-Worker-Endpoint",
+    "preset": "_Assistant_Multi_Model_Worker_Preset",
+    "maxResponseSizeInTokens": 300,
+    "addUserTurnTemplate": true
+  },
+  {
+    "title": "Generating Wiki Api Search Query",
+    "agentName": "Query Generating Agent Two",
+    "systemPrompt": "When given a series of messages from a conversation, please craft a query that will be used to find an appropriate wikipedia article that would give more factual context for the conversation provided.\nWhen generating the query, always focus on keeping it specific and short. For example, if the latest message refers to coding in Python, it might be appropriate to generate the query 'Python programming', or when the user is asking about the television show 'House', an appropriate query may be 'House television series', or when the user is discussing Final Fantasy 14 the video game, it may be appropriate to generate several variations of the name within the query, such as 'Final Fantasy 14 FF14 Final Fantasy XIV FFXIV' Additionally, be sure to assist the search in finding higher quality results when querying ambiguous terms by adding other relevant keywords. For example, if the user is asking about 'bumblebees', be sure to include keywords like 'bumblebee insect', to avoid the search returning results for the Transformers character 'Bumblebee'.\nWhen determining what keywords to present, please consider the full context of the conversation, thinking carefully about exactly what the user is implicitly asking rather than simply assuming they are only following up on the last message.",
+    "prompt": "A new message has arrived in an ongoing online conversation. After review, the topic of the conversation as been identified, and is listed below:\n[\n{agent1Output}\n]\nPlease respond with the appropriate query to search wikipedia for. Do not respond with any other text than the query, as this verbatim response will be plugged into the search engine.",
+    "lastMessagesToSendInsteadOfPrompt": 5,
+    "endpointName": "Assistant-Multi-Model-Worker-Endpoint",
+    "preset": "_Assistant_Multi_Model_Worker_Preset",
+    "maxResponseSizeInTokens": 300,
+    "addUserTurnTemplate": true
+  },
+  {
+    "title": "Querying the offline wikipedia api",
+    "agentName": "Wikipedia Search Api Agent Three",
+    "promptToSearch": "{agent2Output}",
+    "type": "OfflineWikiApiFullArticle"
+  },
+  {
+    "title": "Answering user's question",
+    "agentName": "Answering Agent Four",
+    "systemPrompt": "This is a conversation between a user and an incredibly intelligent AI that specializes in giving factually correct responses to users. The instructions for the conversation can be found below:\n[\n{chat_system_prompt}\n]\nThe user has sent a message that requires a factually correct and accurate response. The context of the request has been considered, and can be found below:\n[\n{agent1Output}\n]\nWikipedia was searched for relevant information, the results of which can be found below:\n[\n{agent3Output}\n]\nPlease consider all the facts when responding to the user.\nWith the above instructions in mind, please continue the following conversation",
+    "prompt": "",
+    "lastMessagesToSendInsteadOfPrompt": 5,
+    "endpointName": "Assistant-Multi-Model-Factual-Endpoint",
+    "preset": "_Assistant_Multi_Model_Factual_Preset",
+    "maxResponseSizeInTokens": 2000,
+    "addUserTurnTemplate": false,
+    "forceGenerationPromptIfEndpointAllows": false
+  }
+]

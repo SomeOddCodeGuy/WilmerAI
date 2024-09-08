@@ -1,6 +1,7 @@
 {
-  "nameForDisplayOnly": "KoboldCpp",
+  "nameForDisplayOnly": "OpenAI Api Example",
   "type": "openAIChatCompletion",
+  "presetType": "OpenAiCompatibleApis",
   "truncateLengthPropertyName": "",
   "maxNewTokensPropertyName": "max_tokens",
   "streamPropertyName": "stream"

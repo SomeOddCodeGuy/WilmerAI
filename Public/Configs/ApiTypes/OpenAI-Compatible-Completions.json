@@ -1,0 +1,8 @@
+{
+  "nameForDisplayOnly": "OpenAI Compatible V1 Completions Example",
+  "type": "openAIV1Completion",
+  "presetType": "OpenAiCompatibleApis",
+  "truncateLengthPropertyName": "",
+  "maxNewTokensPropertyName": "max_tokens",
+  "streamPropertyName": "stream"
+}

@@ -1,0 +1,10 @@
+{
+  "modelNameForDisplayOnly": "Group Chat ChatGPT4o",
+  "endpoint": "https://api.openai.com",
+  "apiKey": "",
+  "apiTypeConfigFileName": "Open-Ai-Api",
+  "maxContextTokenSize": 128000,
+  "modelNameToSendToAPI": "gpt-4o",
+  "promptTemplate": "_chatonly",
+  "addGenerationPrompt": true
+}

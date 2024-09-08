@@ -1,0 +1,30 @@
+[
+  {
+    "title": "Chat Summary Memory Gathering Tool",
+    "agentName": "Chat Summary Memory Gathering Tool",
+    "type": "ChatSummaryMemoryGatheringTool",
+    "maxTurnsToPull": 30,
+    "maxSummaryChunksFromFile": 5
+  },
+  {
+    "title": "Grab the current summary from file",
+    "agentName": "Chat Summary File Puller Agent",
+    "type": "GetCurrentSummaryFromFile"
+  },
+  {
+    "title": "Result Summarizer",
+    "agentName": "Memory Summarizer Agent",
+    "systemPrompt": "This is a request from a user that requires intelligent and careful summarization of incoming text, including a contextual understanding of what that text is truly saying. The summaries should always be clear and concise, and never allow misplaced prompt template tags, odd parentheses or brackets, or other things to negatively affect them",
+    "prompt": "A new message has been received in an online chat with a user; this could be a standard conversation between a user and an AI assistant, could be a group chat of multiple individuals (including multiple AI assistants), or could be a roleplay scenario.\nThe instructions for the conversation can be found below:\n[\n{chat_system_prompt}\n]\nAdditionally, any updates or new events to the chat scenario since it began can be found here:\n[\n{agent2Output}\n]\nSince that update was a written, more messages have come in, which have been described below:\n[\n{agent1Output}\n]\nPlease consider the instructions, the entire summary of the chat up to now, and the described new messages that have occurred since the summary was written. Please update the summary, including the new information and changes that came with the described messages in order to create a more complete summary.\nPlease respond with the complete and updated summary. The response to this request will overwrite the previous summary.",
+    "endpointName": "Assistant-Multi-Model-MemoryChatSummary-Endpoint",
+    "preset": "_Assistant_Multi_Model_MemoryChatSummary_Preset",
+    "maxResponseSizeInTokens": 2000,
+    "addUserTurnTemplate": true
+  },
+  {
+    "title": "Save the chat summary if applicable, and return it",
+    "agentName": "Chat Summary Saver and Returner",
+    "type": "WriteCurrentSummaryToFileAndReturnIt",
+    "input": "{agent3Output}"
+  }
+]

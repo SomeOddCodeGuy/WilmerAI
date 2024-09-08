@@ -1,0 +1,9 @@
+{
+  "modelNameForDisplayOnly": "KoboldCpp Example Endpoint that is running command-r",
+  "endpoint": "http://192.168.1.100:5001",
+  "apiTypeConfigFileName": "KoboldCpp",
+  "maxContextTokenSize": 16384,
+  "modelNameToSendToAPI": "",
+  "promptTemplate": "command-r",
+  "addGenerationPrompt": true
+}

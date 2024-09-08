@@ -103,6 +103,17 @@ def get_config_path(sub_directory, file_name):
     return config_file
 
 
+def get_endpoint_config_path(sub_directory, file_name):
+    """
+    Constructs the file path for a given endpoint configuration file. Pulls subdirectory
+    from the user json
+    :param sub_directory: Optional subdirectory within the 'Public/Configs/Endpoints' directory.
+    :param file_name: Name of the endpoint configuration file.
+    :return: path to the endpoint configuration file.
+    """
+    return get_config_with_subdirectory("Endpoints", sub_directory, file_name)
+
+
 def get_preset_config_path(sub_directory, file_name):
     """
     Constructs the file path for a given preset configuration file.
@@ -111,8 +122,19 @@ def get_preset_config_path(sub_directory, file_name):
     :param file_name: The name of the configuration file.
     :return: The full path to the configuration file.
     """
+    return get_config_with_subdirectory("Presets", sub_directory, file_name)
+
+
+def get_config_with_subdirectory(directory, sub_directory, file_name):
+    """
+    Constructs the file path for a given configuration file when there is a subdirectory.
+    :param directory: The subdirectory within the 'Public/Configs/' directory.
+    :param sub_directory: Subdirectory within the directory.
+    :param file_name: The name of the configuration file.
+    :return: The full path to the configuration file.
+    """
     config_dir = str(get_root_config_directory())
-    config_file = os.path.join(config_dir, 'Presets', sub_directory, f'{file_name}.json')
+    config_file = os.path.join(config_dir, directory, sub_directory, f'{file_name}.json')
     return config_file
 
 
@@ -213,6 +235,19 @@ def get_active_conversational_memory_tool_name():
     return get_config_value('conversationMemoryToolWorkflow')
 
 
+def get_endpoint_subdirectory():
+    """
+    Retrieves the name of the active chat prompt template.
+
+    :return: The name of the active chat prompt template.
+    """
+    sub_directory = get_config_value('endpointConfigsSubDirectory')
+    if sub_directory:
+        return sub_directory
+    else:
+        return ""
+
+
 def get_active_recent_memory_tool_name():
     """
     Retrieves the name of the active recent memory tool workflow.
@@ -251,14 +286,14 @@ def get_categories_config():
     return load_config(config_path)
 
 
-def get_openai_preset_path(config_name):
+def get_openai_preset_path(config_name, type="OpenAiCompatibleApis"):
     """
     Retrieves the file path to a preset configuration file.
 
     :param config_name: The name of the preset configuration.
     :return: The full path to the preset configuration file.
     """
-    return get_preset_config_path("OpenAiCompatibleApis", config_name)
+    return get_preset_config_path(type, config_name)
 
 
 def get_endpoint_config(endpoint):
@@ -268,8 +303,9 @@ def get_endpoint_config(endpoint):
     :param endpoint: The name of the endpoint configuration.
     :return: The full path to the endpoint configuration file.
     """
-    endpoint_file = get_config_path('Endpoints', endpoint)
-    return load_config(endpoint_file)
+    sub_directory = get_endpoint_subdirectory()
+    config = get_endpoint_config_path(sub_directory, endpoint)
+    return load_config(config)
 
 
 def get_api_type_config(api_type):

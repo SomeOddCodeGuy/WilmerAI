@@ -1,0 +1,37 @@
+[
+  {
+    "title": "Recent memory gathering",
+    "agentName": "Recent Memory Gathering Tool",
+    "type": "RecentMemorySummarizerTool",
+    "maxTurnsToPull": 30,
+    "maxSummaryChunksFromFile": 3
+  },
+  {
+    "title": "Grab the memory chunks from file",
+    "agentName": "Recent Memory File Puller Agent",
+    "type": "GetCurrentMemoryFromFile"
+  },
+  {
+    "title": "Performing Slow but Quality RAG on Search Results",
+    "agentName": "Slow but Quality RAG Agent",
+    "systemPrompt": "This is a request from a user that requires intelligent and careful summarization of incoming text, including a contextual understanding of what that text is truly saying. The summaries should always be clear and concise, and never allow misplaced prompt template tags, odd parentheses or brackets, or other things to negatively affect them",
+    "prompt": "A user is currently in an online conversation via a chat program; this could be a standard conversation between two a user and an AI assistant, could be a group chat of multiple individuals (including multiple AI assistants), or could be a roleplay scenario. The instructions for the conversation can be found here:\n[\n{chat_system_prompt}\n]\nThe chat logs of the conversation have been chunked and summarized as it has progressed; the current collection of those summaries can be found here, if any exist:\n[\n{agent2Output}\n]\nA new series of messages have occurred since the last time those summaries were updated:\n[\n[TextChunk]\n]\nPlease summarize the important details of these new messages, being sure to capture key points of context: what was said, who said it, and how they seemed to feel. Capture as much detail as possible from the new messages into the memory, as this memory will be utilized later when to craft a response to the user.\nPlease use the persona/user names explicitly",
+    "endpointName": "Convo-Roleplay-Dual-Model-WorkerEndpoint",
+    "preset": "_Convo_Roleplay_Dual_Model_Summarization_Preset",
+    "maxResponseSizeInTokens": 400,
+    "type": "SlowButQualityRAG",
+    "ragTarget": "{agent1Output}",
+    "ragType": "CurrentConversation",
+    "addUserTurnTemplate": true
+  },
+  {
+    "title": "Result Summarizer",
+    "agentName": "Memory Summarizer agent",
+    "systemPrompt": "This is a request from a user that requires intelligent and careful summarization of incoming text, including a contextual understanding of what that text is truly saying. The summaries should always be clear and concise, and never allow misplaced prompt template tags, odd parentheses or brackets, or other things to negatively affect them",
+    "prompt": "A user is currently in an online conversation via a chat program; this could be a standard conversation between two a user and an AI assistant, could be a group chat of multiple individuals (including multiple AI assistants), or could be a roleplay scenario. The conversation so far has been summarized into 'memory' chunks as it has progressed; the current collection of those memories can be found here, if any exist:\n[\n{agent3Output}\n]\nBased on these memories, please write a vivid and detailed summary of the current situation, as well as all of the events and information leading up to it. Try to write it in such a way that someone who doesn't have access to the chat logs can full understand what is happening.\nNote: If the brackets are empty, then there was nothing to summarize.",
+    "endpointName": "Convo-Roleplay-Dual-Model-WorkerEndpoint",
+    "preset": "_Convo_Roleplay_Dual_Model_Summarization_Preset",
+    "maxResponseSizeInTokens": 2000,
+    "addUserTurnTemplate": true
+  }
+]
