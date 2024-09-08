@@ -14,7 +14,7 @@
     "title": "Determining category of prompt",
     "agentName": "Categorization Agent Two",
     "systemPrompt": "When given a message and a series of categories to choose from, always respond with only a single word: the expected category. Do not include any other words than the single appropriate category that was chosen.\nIMPORTANT: When categorizing, always consider whether a topic has concluded or the subject has been changed, and adjust the category accordingly.",
-    "prompt": "A user is currently in an online conversation, and has sent a new message. The intent and context of the message has been described below:\n[\n{agent1Output}\n]\nPlease categorize the user's message into one of the following categories: {category_colon_descriptions}. Return only one word for the response.\n\nPlease response with one of the following: {categoriesSeparatedByOr}.",
+    "prompt": "A user is currently in an online conversation, and has sent a new message. The intent and context of the message has been described below:\n[\n{agent1Output}\n]\nPlease categorize the user's message into one of the following categories: {category_colon_descriptions}. Return only one word for the response.\n\nPlease respond with one of the following: {categoriesSeparatedByOr}.",
     "endpointName": "Assistant-Single-Model-Endpoint",
     "preset": "_Assistant_Single_Model_Categorizer_Preset",
     "maxResponseSizeInTokens": 300,
