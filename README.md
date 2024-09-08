@@ -39,9 +39,10 @@ WilmerAI stands for **"What If Language Models Expertly Routed All Inference?"**
   template for connections from a front end via `v1/Completions`. The template can be found in the "Docs" folder and is
   ready for upload to SillyTavern.
 
-- **Multi-LLM Group Chats In SillyTavern:** There is an example character to show you how, but it is possible to use
-  Wilmer to have a group chat in ST where every character is a different LLM, if you do desire (author personally does
-  this. The example characters and two groups are subsets of larger groups that he uses).
+- **Multi-LLM Group Chats In SillyTavern:** It is possible to use Wilmer to have a group chat in ST where every
+  character is a different LLM, if you do desire (author personally does this.)  There are example characters available
+  in `Docs\SillyTavern`, split into two groups. These example characters/groups are subsets of larger groups that the
+  author uses.
 
 ## Some (Not So Pretty) Pictures to Help People Visualize What It Can Do
 
@@ -267,14 +268,16 @@ First, choose which template user you'd like to use:
   seconds, every time, on Llama 3.1 70b on my Mac Studio.
 
 
-* **group-chat-example**: This user is an example of my own personal group chats. This is a subset of a larger group,
-  but
-  but the characters included and the groups included are actual characters and actual groups that I use. The dev team
+* **group-chat-example**: This user is an example of my own personal group chats. The characters included and the groups
+  included are actual characters and actual groups that I use. You can find the example characters in `Docs/SillyTavern`
+  folder. These are SillyTavern compatible characters that you can import directly into that program or any program
+  that supports .png character import types. The dev team
   characters have only 1 node per workflow: they simply respond to you. The advisory group characters have 2 nodes
-  per workflow: first node generates a response, and the second node enforces the character's "persona". The group
+  per workflow: first node generates a response, and the second node enforces the character's "persona" (the endpoint
+  in charge of this is the `businessgroup-speaker` endpoint). The group
   chat personas help a lot to vary up the responses you get, even if you use only 1 model. However, I aim to use
   different models for every character (but re-using models between groups. So, for example, I have a Llama 3.1 70b
-  model character in each group)
+  model character in each group).
 
 Once you have selected the user that you want to use, there are a couple of steps to perform:
 
