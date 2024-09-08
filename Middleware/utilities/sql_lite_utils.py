@@ -67,7 +67,7 @@ class SqlLiteUtils:
     def delete_node_locks(wilmer_session_id=None, workflow_id=None, workflow_lock_id=None):
         # Adding a try here because this gets called even if you don't have workflow locks
         # Folks may not want to deal with the sql db if they don't have a desire to use it
-        # This will fail 9 times out of 10 because of a bad path in user json
+        # If this fails, 9 out of 10 times it would be because of a bad path in user json
         try:
             conn = SqlLiteUtils.get_wilmerdb_connection()
             if conn is None:
@@ -139,7 +139,7 @@ class SqlLiteUtils:
     def delete_old_locks(wilmer_session_id):
         # Adding a try here because this gets called even if you don't have workflow locks
         # Folks may not want to deal with the sql db if they don't have a desire to use it
-        # This will fail 9 times out of 10 because of a bad path in user json
+        # If this fails, 9 out of 10 times it would be because of a bad path in user json
         try:
             conn = SqlLiteUtils.get_wilmerdb_connection()
             if conn is None:
