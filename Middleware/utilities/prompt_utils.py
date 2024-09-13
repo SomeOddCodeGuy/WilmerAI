@@ -105,7 +105,8 @@ def hash_single_message(message: Dict[str, str]) -> str:
 
 
 def find_last_matching_hash_message(messagesOriginal: List[Dict[str, str]],
-                                    hashed_chunks_original: List[Tuple[str, str]]) -> int:
+                                    hashed_chunks_original: List[Tuple[str, str]],
+                                    skip_system: bool = False) -> int:
     """
     Find the index of the last message in the list of messages that matches any hash in the hashed chunks,
     starting from the third-to-last item and working backwards.
@@ -113,23 +114,30 @@ def find_last_matching_hash_message(messagesOriginal: List[Dict[str, str]],
     Parameters:
     messagesOriginal (List[Dict[str, str]]): A list of message dictionaries.
     hashed_chunks_original (List[Tuple[str, str]]): A list of tuples, each containing a text block and a hash.
+    skip_system (bool): Don't include the system messages indexing when getting last messages.
 
     Returns:
     int: The number of items it had to go back to find a match, or the start index (18) if it had to go back
     the entire list, or -1 if no match is found.
     """
     print("Searching for hashes")
-    current_message_hashes = [hash_single_message(message) for message in messagesOriginal]
 
-    start_index = len(current_message_hashes) - 3  # Start at the third-to-last item
+    # Conditionally filter out system messages if skip_system is True
+    filtered_messages = [message for message in messagesOriginal if
+                         message["role"] != "system"] if skip_system else messagesOriginal
 
-    for i in range(start_index, -1, -1):
+    current_message_hashes = [hash_single_message(message) for message in filtered_messages]
+
+    # Iterate from the most recent message backwards from the bottom
+    for i in range(len(current_message_hashes) - 1, -1, -1):
         message_hash = current_message_hashes[i]
         print("Searching for Hash " + str(i) + ": " + message_hash)
-        if message_hash in (hash_tuple[1] for hash_tuple in hashed_chunks_original):
-            return start_index - i
 
-    return start_index
+        # Compare hashes with the existing memory hashes
+        if message_hash in (hash_tuple[1] for hash_tuple in hashed_chunks_original):
+            return len(current_message_hashes) - i  # Return the number of messages since last memory
+
+    return len(current_message_hashes)
 
 
 def find_last_matching_memory_hash(hashed_summary_chunk: Optional[List[Tuple[str, str]]],

@@ -14,11 +14,12 @@ discussion_identifiers = {
 }
 
 
-def extract_last_n_turns(messages: List[Dict[str, str]], n: int, include_sysmes: bool = True
-                         , remove_all_systems_override=False) -> List[Dict[str, str]]:
+def extract_last_n_turns(messages: List[Dict[str, str]], n: int, include_sysmes: bool = True,
+                         remove_all_systems_override=False) -> List[Dict[str, str]]:
     """
     Extract the last n messages, including system messages if include_sysmes is True.
     When include_sysmes is True, only system messages at the very beginning of the list are excluded.
+
     Parameters:
     messages (List[Dict[str, str]]): The list of messages.
     n (int): The number of messages to extract.
@@ -26,19 +27,24 @@ def extract_last_n_turns(messages: List[Dict[str, str]], n: int, include_sysmes:
     Returns:
     List[Dict[str, str]]: The last n messages, with system messages included as specified.
     """
+
     if not messages:
         return []
+
+    # If remove_all_systems_override is True, filter out all system messages
     if remove_all_systems_override:
         filtered_messages = [message for message in messages if message["role"] != "system"]
-        return filtered_messages
+        return filtered_messages[-n:]  # Return the last n non-system messages
 
-    first_non_system_index = next((i for i, message in enumerate(messages) if message["role"] != "system"), None)
-
+    # If include_sysmes is False, filter out all system messages
     if not include_sysmes:
         filtered_messages = [message for message in messages if message["role"] != "system"]
     else:
-        filtered_messages = messages[first_non_system_index:] if first_non_system_index is not None else messages
+        # Find the first non-system message and slice from that point to exclude leading system messages
+        first_non_system_index = next((i for i, message in enumerate(messages) if message["role"] != "system"), 0)
+        filtered_messages = messages[first_non_system_index:]  # Slice from the first non-system message onwards
 
+    # Return only the last n messages from the filtered list
     return filtered_messages[-n:]
 
 

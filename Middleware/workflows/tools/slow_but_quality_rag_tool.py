@@ -331,7 +331,7 @@ class SlowButQualityRAGTool:
 
         rag_system_prompt = discussion_id_workflow_config['systemPrompt']
         rag_prompt = discussion_id_workflow_config['prompt']
-        chunk_size = discussion_id_workflow_config.get('chunkEstimatedTokenSize', 1500)
+        chunk_size = discussion_id_workflow_config.get('chunkEstimatedTokenSize', 1000)
         chunks_til_new_memory = discussion_id_workflow_config.get('chunksUntilNewMemory', 5)
 
         discussion_chunks = read_chunks_with_hashes(filepath)
@@ -348,6 +348,7 @@ class SlowButQualityRAGTool:
             if index > chunks_til_new_memory:
                 trimmed_discussion_pairs = extract_last_n_turns(messages_copy, index, remove_all_systems_override=True)
                 trimmed_discussion_pairs.reverse()
+                print("Trimmed discussion pairs: " + str(trimmed_discussion_pairs))
                 print("Trimmed discussion message length: ", len(trimmed_discussion_pairs))
                 print(trimmed_discussion_pairs)
                 print("Entering chunking")
