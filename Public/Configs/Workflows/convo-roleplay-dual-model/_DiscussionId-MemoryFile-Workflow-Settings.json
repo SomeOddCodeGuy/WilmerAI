@@ -5,6 +5,6 @@
   "endpointName": "Convo-Roleplay-Dual-Model-WorkerEndpoint",
   "preset": "_Convo_Roleplay_Dual_Model_Summarization_Preset",
   "maxResponseSizeInTokens": 400,
-  "chunkEstimatedTokenSize": 1500,
-  "chunksUntilNewMemory": 5
+  "chunkEstimatedTokenSize": 1000,
+  "chunksUntilNewMemory": 2
 }

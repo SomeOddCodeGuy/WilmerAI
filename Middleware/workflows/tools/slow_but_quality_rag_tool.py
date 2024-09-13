@@ -345,14 +345,27 @@ class SlowButQualityRAGTool:
         else:
             index = find_last_matching_hash_message(messages_copy, discussion_chunks)
             print("Number of messages since last memory chunk update: ", index)
+
+            # Ensure we're not using the last three messages when extracting turns
             if index > chunks_til_new_memory:
-                trimmed_discussion_pairs = extract_last_n_turns(messages_copy, index, remove_all_systems_override=True)
+
+                if len(messages_copy) > 3:
+                    messages_to_process = messages_copy[:-3]
+                    index -= 3
+                else:
+                    messages_to_process = messages_copy
+
+                trimmed_discussion_pairs = extract_last_n_turns(messages_to_process, index,
+                                                                remove_all_systems_override=True)
+
                 trimmed_discussion_pairs.reverse()
                 print("Trimmed discussion pairs: " + str(trimmed_discussion_pairs))
                 print("Trimmed discussion message length: ", len(trimmed_discussion_pairs))
                 print(trimmed_discussion_pairs)
                 print("Entering chunking")
+
                 trimmed_discussion_chunks = chunk_messages_with_hashes(trimmed_discussion_pairs, chunk_size)
+                trimmed_discussion_chunks.reverse()
                 if len(trimmed_discussion_chunks) > 1:
                     chunks = trimmed_discussion_chunks[:-1]
                     pass_chunks = extract_text_blocks_from_hashed_chunks(chunks)
@@ -360,6 +373,7 @@ class SlowButQualityRAGTool:
                     self.process_new_memory_chunks(pass_chunks, trimmed_discussion_chunks, rag_system_prompt,
                                                    rag_prompt, discussion_id_workflow_config, discussionId,
                                                    messages_copy)
+
             elif index == -1:
                 print("-1 flow hit. Processing discussions")
                 self.process_full_discussion_flow(messages_copy, rag_system_prompt, rag_prompt,
@@ -381,10 +395,8 @@ class SlowButQualityRAGTool:
         """
         print("Beginning full discussion flow")
         new_messages = deepcopy(messages)
-        if (len(new_messages) > 1
-                and new_messages[-1]['role'] == 'assistant'
-                and len(new_messages[-1].get('content', '')) < 30):
-            new_messages = new_messages[:-1]
+        if len(new_messages) > 3:
+            new_messages = new_messages[:-3]  # Create a copy excluding the last two messages
 
         new_messages.reverse()
         filtered_messaged_to_chunk = [message for message in new_messages if message["role"] != "system"]

@@ -5,6 +5,6 @@
   "endpointName": "Assistant-Single-Model-Endpoint",
   "preset": "_Assistant_Single_Model_MemoryChatSummary_Preset",
   "maxResponseSizeInTokens": 400,
-  "chunkEstimatedTokenSize": 1500,
-  "chunksUntilNewMemory": 5
+  "chunkEstimatedTokenSize": 1000,
+  "chunksUntilNewMemory": 2
 }

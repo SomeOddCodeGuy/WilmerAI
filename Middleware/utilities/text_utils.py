@@ -96,7 +96,8 @@ def split_into_tokenized_chunks(text: str, chunk_size: int) -> List[str]:
 
 
 def chunk_messages_by_token_size(messages: List[Dict[str, str]], chunk_size: int) -> List[List[Dict[str, str]]]:
-    """Chunks messages based on a specified token size.
+    """Chunks messages based on a specified token size, starting from the end of the list,
+    but keeps the order of messages intact within each chunk.
 
     This function groups messages into chunks where each chunk is below the
     specified token size. It allows for a slight overflow to avoid splitting
@@ -114,32 +115,34 @@ def chunk_messages_by_token_size(messages: List[Dict[str, str]], chunk_size: int
     current_chunk = []
     current_chunk_size = 0
 
-    for message in messages:
+    # Iterate through the messages in reverse order (starting from the bottom)
+    for message in reversed(messages):
         message_token_count = rough_estimate_token_length(message['content'])
 
         if message_token_count > chunk_size:
             if current_chunk_size + message_token_count <= chunk_size * 1.1:
-                current_chunk.append(message)
+                current_chunk.insert(0, message)
                 current_chunk_size += message_token_count
                 continue
             elif current_chunk:
-                chunks.append(current_chunk)
+                current_chunk.reverse()
+                chunks.insert(0, current_chunk)
                 current_chunk = []
                 current_chunk_size = 0
 
+
         if current_chunk_size + message_token_count > chunk_size:
-            chunks.append(current_chunk)
+            current_chunk.reverse()
+            chunks.insert(0, current_chunk)
             current_chunk = []
             current_chunk_size = 0
 
-        current_chunk.append(message)
+        current_chunk.insert(0, message)
         current_chunk_size += message_token_count
 
     if current_chunk:
-        chunks.append(current_chunk)
-
-    for i in range(len(chunks)):
-        chunks[i] = chunks[i][::-1]
+        current_chunk.reverse()
+        chunks.insert(0, current_chunk)
 
     return chunks
 
