@@ -1,4 +1,5 @@
 import json
+import logging
 import time
 import uuid
 from typing import Any, Dict, Union, List
@@ -16,6 +17,7 @@ from Middleware.workflows.managers.workflow_manager import WorkflowManager
 
 app = Flask(__name__)
 
+logger = logging.getLogger(__name__)
 
 class ModelsAPI(MethodView):
     @staticmethod
@@ -48,12 +50,12 @@ class CompletionsAPI(MethodView):
 
         :return: A JSON response if streaming is disabled, or a streaming response if enabled.
         """
-        print("CompletionsAPI request received")
+        logger.info("CompletionsAPI request received")
         data: Dict[str, Any] = request.json
-        print("CompletionsAPI request received: " + json.dumps(data))
+        logger.debug(f"CompletionsAPI request received: {json.dumps(data)}")
         prompt: str = data.get("prompt", "")
 
-        print("CompletionsAPI Processing Data")
+        logger.info("CompletionsAPI Processing Data")
         stream: bool = get_is_streaming()
         messages = parse_conversation(prompt)
 
@@ -92,7 +94,7 @@ class ChatCompletionsAPI(MethodView):
         add_user_assistant = get_is_chat_complete_add_user_assistant()
         add_missing_assistant = get_is_chat_complete_add_missing_assistant()
         request_data: Dict[str, Any] = request.get_json()
-        print("ChatCompletionsAPI request received: " + json.dumps(request_data))
+        logger.info(f"ChatCompletionsAPI request received: {json.dumps(request_data)}")
 
         # Validate the presence of the 'messages' field
         if 'messages' not in request_data:
@@ -132,7 +134,7 @@ class WilmerApi:
         self.stream: bool = True
 
     @staticmethod
-    def run_api() -> None:
+    def run_api(debug: bool) -> None:
         """
         Initializes the Flask app with the defined API endpoints and starts the server.
         """
@@ -142,7 +144,7 @@ class WilmerApi:
         app.add_url_rule('/models', view_func=ModelsAPI.as_view('models_api'))
         app.add_url_rule('/completions', view_func=CompletionsAPI.as_view('completions_api'))
         app.add_url_rule('/chat/completions', view_func=ChatCompletionsAPI.as_view('chat_completions_api'))
-        app.run(host='0.0.0.0', port=port, debug=False)
+        app.run(host='0.0.0.0', port=port, debug=debug)
 
     @staticmethod
     def handle_user_prompt(prompt_collection: List[Dict[str, str]], stream: bool) -> str:

@@ -1,7 +1,11 @@
 import argparse
+import logging
+from logging.handlers import RotatingFileHandler
 
 from Middleware.core.open_ai_api import WilmerApi
 from Middleware.utilities import sql_lite_utils, instance_utils
+
+logger = logging.getLogger(__name__)
 
 
 def parse_arguments():
@@ -27,12 +31,30 @@ def parse_arguments():
 if __name__ == '__main__':
     parse_arguments()
 
-    print(f"Config Directory: {instance_utils.CONFIG_DIRECTORY}")
-    print(f"User: {instance_utils.USER}")
+    logging.basicConfig(
+        handlers=[
+            logging.StreamHandler(),
+            RotatingFileHandler(
+                "logs/wilmerai.log",
+                maxBytes=1048576 * 5,
+                backupCount=7,
+            ),
+        ],
+        level=logging.DEBUG,
+        format="[%(asctime)s] %(levelname)s [%(name)s.%(funcName)s:%(lineno)d] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
 
-    print(f"Deleting old locks that do not belong to Wilmer Instance_Id: '{instance_utils.INSTANCE_ID}'")
+    logger.info(f"Config Directory: {instance_utils.CONFIG_DIRECTORY}")
+    logger.info(f"User: {instance_utils.USER}")
+
+    logger.info(
+        f"Deleting old locks that do not belong to Wilmer Instance_Id: '{instance_utils.INSTANCE_ID}'"
+    )
     sql_lite_utils.SqlLiteUtils.delete_old_locks(instance_utils.INSTANCE_ID)
 
-    print("Starting API")
+    logger.info("Starting API")
+
     api = WilmerApi()
-    api.run_api()
+    # Set debug=True to enable auto-reloading.
+    api.run_api(debug=False)
