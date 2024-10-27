@@ -1,5 +1,6 @@
 import json
 import os
+from typing import Dict
 
 
 def ensure_json_file_exists(filepath, initial_data=None):
@@ -87,3 +88,21 @@ def get_logger_filename():
     middleware_dir = os.path.dirname(util_dir)
     project_dir = os.path.dirname(middleware_dir)
     return os.path.join(project_dir, "logs", 'wilmerai.log')
+
+
+def load_timestamp_file(filepath: str) -> Dict[str, str]:
+    """Load the timestamp file if it exists, otherwise return an empty dictionary."""
+    if os.path.exists(filepath):
+        print(f"File exists: {filepath}")
+        with open(filepath, 'r') as file:
+            print(f"Opening file: {filepath}")
+            return json.load(file)
+    else:
+        print(f"File does not exist: {filepath}")
+        return {}
+
+
+def save_timestamp_file(filepath: str, timestamps: Dict[str, str]):
+    """Save the timestamp data to the appropriate file."""
+    with open(filepath, 'w') as file:
+        json.dump(timestamps, file, indent=4)

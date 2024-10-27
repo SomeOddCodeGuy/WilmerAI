@@ -41,6 +41,7 @@
     "endpointName": "Assistant-Multi-Model-Coding-Endpoint",
     "preset": "_Assistant_Multi_Model_Coder_Preset",
     "maxResponseSizeInTokens": 2000,
-    "addUserTurnTemplate": false
+    "addUserTurnTemplate": false,
+    "addDiscussionIdTimestampsForLLM": false
   }
 ]

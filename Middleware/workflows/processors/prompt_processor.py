@@ -3,11 +3,14 @@ from copy import deepcopy
 from typing import Dict, Any, Optional, List
 
 from Middleware.utilities.automation_utils import run_dynamic_module
-from Middleware.utilities.config_utils import get_discussion_memory_file_path, get_discussion_chat_summary_file_path
-from Middleware.utilities.file_utils import read_chunks_with_hashes, update_chunks_with_hashes
+from Middleware.utilities.config_utils import get_discussion_chat_summary_file_path, get_discussion_memory_file_path
+from Middleware.utilities.file_utils import update_chunks_with_hashes, read_chunks_with_hashes
+from Middleware.utilities.memory_utils import handle_get_current_summary_from_file, \
+    get_latest_memory_chunks_with_hashes_since_last_summary
 from Middleware.utilities.prompt_extraction_utils import extract_last_n_turns
 from Middleware.utilities.prompt_template_utils import format_user_turn_with_template, \
-    add_assistant_end_token_to_user_turn, format_system_prompt_with_template, get_formatted_last_n_turns_as_string
+    add_assistant_end_token_to_user_turn, format_system_prompt_with_template, get_formatted_last_n_turns_as_string, \
+    format_assistant_turn_with_template
 from Middleware.workflows.tools.offline_wikipedia_api_tool import OfflineWikiApiClient
 from Middleware.workflows.tools.slow_but_quality_rag_tool import SlowButQualityRAGTool
 
@@ -109,86 +112,6 @@ class PromptProcessor:
                 llm_handler=self.llm_handler, discussion_id=discussion_id
             )
 
-    def save_summary_to_file(self, config: Dict, messages: List[Dict[str, str]], discussion_id: str,
-                             agent_outputs: Optional[Dict] = None) -> Exception | Any:
-        """
-        Saves a chat summary to a file after processing the user prompt and applying variables.
-
-        :param config: The configuration dictionary containing summary parameters.
-        :param messages: The list of messages in the conversation.
-        :param agent_outputs: Optional dictionary containing previous agent outputs (default: None).
-        :return: The processed summary string.
-        """
-        if "input" in config:
-            summary = config["input"]
-        else:
-            return Exception("No summary found")
-
-        # The summary is coming from a previous agent, so we need those
-        summary = self.workflow_variable_service.apply_variables(
-            summary,
-            self.llm_handler,
-            messages,
-            agent_outputs,
-            config=config
-        )
-
-        if discussion_id is None:
-            return summary
-
-        memory_filepath = get_discussion_memory_file_path(discussion_id)
-        hashed_chunks = read_chunks_with_hashes(memory_filepath)
-
-        last_chunk = hashed_chunks[-1]
-        old_text, old_hash = last_chunk
-        last_chunk = summary, old_hash
-
-        chunks = [last_chunk]
-
-        print(f"Old_text: {old_text}")
-        print(f"Old_hash: {old_hash}")
-        print(f"Summary:\n{summary}")
-
-        filepath = get_discussion_chat_summary_file_path(discussion_id)
-        update_chunks_with_hashes(chunks, filepath, "overwrite")
-
-        return summary
-
-    def gather_recent_memories(self, messages: List[Dict[str, str]], discussion_id: str, max_turns_to_pull=0,
-                               max_summary_chunks_from_file=0) -> Any:
-        """
-        Gathers recent memories from the conversation based on the specified limits.
-
-        :param messages: The list of messages in the conversation.
-        :param max_turns_to_pull: The maximum number of turns to pull from the conversation (default: 0).
-        :param max_summary_chunks_from_file: The maximum number of summary chunks to pull from the file (default: 0).
-        :return: A list of recent memories.
-        """
-        return self.slow_but_quality_rag_service.get_recent_memories(
-            messages=messages,
-            max_turns_to_search=max_turns_to_pull,
-            max_summary_chunks_from_file=max_summary_chunks_from_file,
-            discussion_id=discussion_id
-        )
-
-    def gather_chat_summary_memories(self, messages: List[Dict[str, str]], discussion_id: str,
-                                     max_turns_to_pull: int = 0,
-                                     max_summary_chunks_from_file: int = 0):
-        """
-        Gathers chat summary memories from the conversation based on the specified limits.
-
-        :param messages: The list of messages in the conversation.
-        :param max_turns_to_pull: The maximum number of turns to pull from the conversation (default: 0).
-        :param max_summary_chunks_from_file: The maximum number of summary chunks to pull from the file (default: 0).
-        :return: A list of tuples containing the chat summary memories.
-        """
-        return self.slow_but_quality_rag_service.get_chat_summary_memories(
-            messages=messages,
-            discussion_id=discussion_id,
-            max_turns_to_search=max_turns_to_pull,
-            max_summary_chunks_from_file=max_summary_chunks_from_file
-        )
-
     def handle_memory_file(self, discussion_id: str, messages: List[Dict[str, str]]) -> Any:
         """
         Handles the memory file associated with a discussion ID, processing the user/assistant pairs.
@@ -231,14 +154,30 @@ class PromptProcessor:
                     config=config
                 )
 
+                print("Config: ")
+                print(config)
                 if "addUserTurnTemplate" in config:
                     add_user_turn_template = config["addUserTurnTemplate"]
                     print(f"Adding user turn template {add_user_turn_template}")
                 else:
-                    add_user_turn_template = True
+                    add_user_turn_template = False
+
+                if "addOpenEndedAssistantTurnTemplate" in config:
+                    add_open_ended_assistant_turn_template = config.get("addOpenEndedAssistantTurnTemplate", False)
+                    print("Adding open-ended assistant turn template")
+                else:
+                    add_open_ended_assistant_turn_template = False
+
                 if add_user_turn_template:
                     print("Adding user turn")
                     prompt = format_user_turn_with_template(
+                        prompt,
+                        self.llm_handler.prompt_template_file_name,
+                        isChatCompletion=self.llm_handler.takes_message_collection
+                    )
+                if add_open_ended_assistant_turn_template:
+                    print("Adding open ended assistant turn")
+                    prompt = format_assistant_turn_with_template(
                         prompt,
                         self.llm_handler.prompt_template_file_name,
                         isChatCompletion=self.llm_handler.takes_message_collection
@@ -301,6 +240,164 @@ class PromptProcessor:
                 collection.extend(last_n_turns)
 
             return self.llm_handler.llm.get_response_from_llm(collection)
+
+    def handle_process_chat_summary(self, config: Dict, messages: List[Dict[str, str]],
+                                    agent_outputs: Dict[str, str], discussion_id: str) -> Any:
+        """
+        Handles a chat summarizer node by checking for agent outputs containing a delimiter and processing them
+        based on the prompts in the config. If more than one agent output is found, or if no relevant output is found,
+        it calls handle_conversation_type_node.
+
+        :param config: Configuration dictionary containing the prompt, system prompt, and other parameters.
+        :param messages: List of message dictionaries representing the conversation.
+        :param agent_outputs: Dictionary of strings representing the outputs of agents.
+        :param discussion_id: The discussion id for the current conversation
+        :return: The result of handle_conversation_type_node or modified agent outputs based on the delimiter.
+        """
+        # Fetch only the memory chunks that are new since the last summary
+        memory_chunks_with_hashes = get_latest_memory_chunks_with_hashes_since_last_summary(discussion_id)
+        current_chat_summary = handle_get_current_summary_from_file(discussion_id)
+
+        # Debug: show initial values
+        print(f"[DEBUG] Initial memory chunks with hashes: {memory_chunks_with_hashes}")
+        print(f"[DEBUG] Current chat summary: {current_chat_summary}")
+
+        # If there are no new memories, return the current chat summary.
+        if not memory_chunks_with_hashes:
+            print("[DEBUG] No new memories found. Returning current chat summary.")
+            return current_chat_summary
+
+        system_prompt = config.get('systemPrompt', '')
+        prompt = config.get('prompt', '')
+
+        minMemoriesPerSummary = config.get('minMemoriesPerSummary', 3)
+
+        # Debug: show system_prompt and prompt
+        print(f"[DEBUG] Initial system prompt: {system_prompt}")
+        print(f"[DEBUG] Initial prompt: {prompt}")
+
+        # If neither [CHAT_SUMMARY] nor [LATEST_MEMORIES] are found in the prompt or system prompt, just run handle_conversation_type_node.
+        if '[CHAT_SUMMARY]' not in system_prompt and '[CHAT_SUMMARY]' not in prompt and \
+                '[LATEST_MEMORIES]' not in system_prompt and '[LATEST_MEMORIES]' not in prompt:
+            print("[DEBUG] No [CHAT_SUMMARY] or [LATEST_MEMORIES] found in the prompts.")
+            summary = self.handle_conversation_type_node(config, messages, agent_outputs)
+
+            # Save the updated summary to file after processing the current chunk.
+            print("[DEBUG] Saving summary to file after processing batch.")
+            self.save_summary_to_file(config, messages, discussion_id, agent_outputs, summary)
+
+            return summary
+
+        # Split memory chunks into manageable batches.
+        max_memories_per_loop = config.get('loopIfMemoriesExceed', 3)
+
+        # If there are memories, but fewer than or equal to max_memories_per_loop, replace and return the result.
+        if len(memory_chunks_with_hashes) <= max_memories_per_loop:
+            if (len(memory_chunks_with_hashes) < minMemoriesPerSummary):
+                return current_chat_summary
+
+            latest_memories = '\n------------\n'.join(
+                [chunk for chunk, _ in memory_chunks_with_hashes])  # Join memory text blocks
+            updated_system_prompt = system_prompt.replace("[CHAT_SUMMARY]", current_chat_summary).replace(
+                "[LATEST_MEMORIES]", latest_memories)
+            updated_prompt = prompt.replace("[CHAT_SUMMARY]", current_chat_summary).replace("[LATEST_MEMORIES]",
+                                                                                            latest_memories)
+
+            # Debug: show updated prompts
+            print(f"[DEBUG] Updated system prompt (fewer than max): {updated_system_prompt}")
+            print(f"[DEBUG] Updated prompt (fewer than max): {updated_prompt}")
+
+            summary = self.handle_conversation_type_node(
+                {**config, 'systemPrompt': updated_system_prompt, 'prompt': updated_prompt},
+                messages,
+                agent_outputs
+            )
+
+            # Save the updated summary to file and pass the last hash.
+            last_hash = memory_chunks_with_hashes[-1][1]  # Get the hash of the last memory chunk (hash is at index 1)
+            print(f"[DEBUG] Saving summary to file. Last memory chunk hash: {last_hash}")
+            self.save_summary_to_file(config, messages, discussion_id, agent_outputs, summary, last_hash)
+
+            return summary
+
+        # If there are more memories than the max per loop, process them in batches.
+        while len(memory_chunks_with_hashes) > max_memories_per_loop:
+            # Take the first N memories (up to max_memories_per_loop).
+            batch_chunks = memory_chunks_with_hashes[:max_memories_per_loop]
+            latest_memories_chunk = '\n------------\n'.join(
+                [chunk for chunk, _ in batch_chunks])  # Join memory text blocks
+            last_hash = batch_chunks[-1][1]  # Get the hash of the last memory chunk in the batch (hash is at index 1)
+
+            # Debug: show the memory chunk and last hash being processed
+            print(f"[DEBUG] Processing memory chunk: {latest_memories_chunk}")
+            print(f"[DEBUG] Last memory chunk hash: {last_hash}")
+
+            # Reset the system_prompt and prompt each iteration.
+            system_prompt = config.get('systemPrompt', '')
+            prompt = config.get('prompt', '')
+
+            # Replace [CHAT_SUMMARY] and [LATEST_MEMORIES] with the appropriate values.
+            updated_system_prompt = system_prompt.replace("[CHAT_SUMMARY]", current_chat_summary).replace(
+                "[LATEST_MEMORIES]", latest_memories_chunk)
+            updated_prompt = prompt.replace("[CHAT_SUMMARY]", current_chat_summary).replace(
+                "[LATEST_MEMORIES]", latest_memories_chunk)
+
+            # Debug: show updated prompts during batch processing
+            print(f"[DEBUG] Updated system prompt (batch): {updated_system_prompt}")
+            print(f"[DEBUG] Updated prompt (batch): {updated_prompt}")
+
+            # Call the conversation type handler with the updated prompts.
+            summary = self.handle_conversation_type_node(
+                {**config, 'systemPrompt': updated_system_prompt, 'prompt': updated_prompt},
+                messages,
+                agent_outputs
+            )
+
+            # Save the updated summary to file after processing the current chunk and pass the last hash.
+            print(f"[DEBUG] Saving summary to file. Last memory chunk hash: {last_hash}")
+            self.save_summary_to_file(config, messages, discussion_id, agent_outputs, summary, last_hash)
+
+            # Remove processed chunks from memory_chunks_with_hashes
+            memory_chunks_with_hashes = memory_chunks_with_hashes[max_memories_per_loop:]
+
+            # Re-fetch updated current summary from the file.
+            current_chat_summary = handle_get_current_summary_from_file(discussion_id)
+
+            # Debug: show updated values after each loop iteration
+            print(f"[DEBUG] Refetched current_chat_summary: {current_chat_summary}")
+
+        # Process any remaining memories after the loop (fewer than max_memories_per_loop).
+        if 0 < len(memory_chunks_with_hashes) <= max_memories_per_loop and len(
+                memory_chunks_with_hashes) >= minMemoriesPerSummary:
+            latest_memories_chunk = '\n------------\n'.join([chunk for chunk, _ in memory_chunks_with_hashes])
+            last_hash = memory_chunks_with_hashes[-1][
+                1]  # Get the hash of the last remaining chunk (hash is at index 1)
+            updated_system_prompt = system_prompt.replace("[CHAT_SUMMARY]", current_chat_summary).replace(
+                "[LATEST_MEMORIES]", latest_memories_chunk)
+            updated_prompt = prompt.replace("[CHAT_SUMMARY]", current_chat_summary).replace("[LATEST_MEMORIES]",
+                                                                                            latest_memories_chunk)
+
+            # Debug: show updated prompts for remaining memories
+            print(f"[DEBUG] Updated system prompt (remaining): {updated_system_prompt}")
+            print(f"[DEBUG] Updated prompt (remaining): {updated_prompt}")
+
+            summary = self.handle_conversation_type_node(
+                {**config, 'systemPrompt': updated_system_prompt, 'prompt': updated_prompt},
+                messages,
+                agent_outputs
+            )
+
+            # Save the updated summary to file after processing the current chunk and pass the last hash.
+            print(f"[DEBUG] Saving summary to file. Last memory chunk hash: {last_hash}")
+            self.save_summary_to_file(config, messages, discussion_id, agent_outputs, summary, last_hash)
+
+            # At the end, return the final summary.
+            print("[DEBUG] Returning final summary.")
+            return summary
+
+        else:
+            print("[DEBUG] No remaining memories, returning the current summary.")
+            return current_chat_summary
 
     def handle_python_module(self, config: Dict, messages: List[Dict[str, str]], module_path: str,
                              agent_outputs: Optional[Dict] = None, *args, **kwargs) -> Any:
@@ -370,3 +467,56 @@ class PromptProcessor:
                 result = results[0]
 
         return result
+
+    def save_summary_to_file(self, config: Dict, messages: List[Dict[str, str]], discussion_id: str,
+                             agent_outputs: Optional[Dict] = None, summaryOverride: str = None,
+                             lastHashOverride: str = None) -> Exception | Any:
+        """
+        Saves a chat summary to a file after processing the user prompt and applying variables.
+
+        :param config: The configuration dictionary containing summary parameters.
+        :param messages: The list of messages in the conversation.
+        :param agent_outputs: Optional dictionary containing previous agent outputs (default: None).
+        :return: The processed summary string.
+        """
+        if (summaryOverride is None):
+            if "input" in config:
+                summary = config["input"]
+            else:
+                return Exception("No summary found")
+
+            # The summary is coming from a previous agent, so we need those
+            summary = self.workflow_variable_service.apply_variables(
+                summary,
+                self.llm_handler,
+                messages,
+                agent_outputs,
+                config=config
+            )
+        else:
+            summary = summaryOverride
+
+        if discussion_id is None:
+            return summary
+
+        memory_filepath = get_discussion_memory_file_path(discussion_id)
+        hashed_chunks = read_chunks_with_hashes(memory_filepath)
+
+        if lastHashOverride is None:
+            last_chunk = hashed_chunks[-1]
+            old_text, old_hash = last_chunk
+            last_chunk = summary, old_hash
+            print(f"Old_text: {old_text}")
+            print(f"Old_hash: {old_hash}")
+        else:
+            last_chunk = summary, lastHashOverride
+            print(f"lastHashOverride: {lastHashOverride}")
+
+        chunks = [last_chunk]
+
+        print(f"Summary:\n{summary}")
+
+        filepath = get_discussion_chat_summary_file_path(discussion_id)
+        update_chunks_with_hashes(chunks, filepath, "overwrite")
+
+        return summary

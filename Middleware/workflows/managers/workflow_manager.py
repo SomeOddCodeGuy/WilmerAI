@@ -2,6 +2,7 @@ import json
 import time
 import traceback
 import uuid
+from copy import deepcopy
 from typing import Dict, List
 
 from Middleware.exceptions.early_termination_exception import EarlyTerminationException
@@ -14,9 +15,13 @@ from Middleware.utilities.config_utils import get_active_conversational_memory_t
     get_chat_summary_tool_workflow_name
 from Middleware.utilities.file_utils import read_chunks_with_hashes
 from Middleware.utilities.instance_utils import INSTANCE_ID
+from Middleware.utilities.memory_utils import gather_chat_summary_memories, \
+    handle_get_current_summary_from_file, gather_recent_memories
 from Middleware.utilities.prompt_extraction_utils import extract_discussion_id, remove_discussion_id_tag
-from Middleware.utilities.prompt_utils import find_last_matching_memory_hash, extract_text_blocks_from_hashed_chunks
+from Middleware.utilities.prompt_utils import find_how_many_new_memories_since_last_summary, \
+    extract_text_blocks_from_hashed_chunks
 from Middleware.utilities.sql_lite_utils import SqlLiteUtils
+from Middleware.utilities.time_tracking_utils import track_message_timestamps
 from Middleware.workflows.managers.workflow_variable_manager import WorkflowVariableManager
 from Middleware.workflows.processors.prompt_processor import PromptProcessor
 
@@ -25,6 +30,16 @@ class WorkflowManager:
     """
     Manages the execution of workflows for various types of LLM-based tasks.
     """
+
+    @staticmethod
+    def run_custom_workflow(workflow_name, request_id, discussion_id: str, messages: List[Dict[str, str]] = None,
+                            non_responder=None, is_streaming=False, first_node_system_prompt_override=None,
+                            first_node_prompt_override=None):
+        workflow_gen = WorkflowManager(workflow_config_name=workflow_name)
+        return workflow_gen.run_workflow(messages, request_id, discussion_id, nonResponder=non_responder,
+                                         stream=is_streaming,
+                                         first_node_system_prompt_override=first_node_system_prompt_override,
+                                         first_node_prompt_override=first_node_prompt_override)
 
     @staticmethod
     def handle_conversation_memory_parser(request_id, discussion_id: str, messages: List[Dict[str, str]] = None):
@@ -91,7 +106,8 @@ class WorkflowManager:
         if 'lookbackStartTurn' in kwargs:
             self.lookbackStartTurn = kwargs['lookbackStartTurn']
 
-    def run_workflow(self, messages, request_id, discussionId: str = None, stream: bool = False, nonResponder=None):
+    def run_workflow(self, messages, request_id, discussionId: str = None, stream: bool = False, nonResponder=None,
+                     first_node_system_prompt_override=None, first_node_prompt_override=None):
         """
         Executes the workflow based on the configuration file.
 
@@ -107,6 +123,12 @@ class WorkflowManager:
             discussion_id = discussionId
 
         remove_discussion_id_tag(messages)
+
+        self.override_first_available_prompts = False
+
+        if (first_node_system_prompt_override is not None and first_node_prompt_override is not None):
+            self.override_first_available_prompts = True
+
         try:
             start_time = time.perf_counter()
             config_file = get_workflow_path(self.workflowConfigName)
@@ -121,6 +143,15 @@ class WorkflowManager:
                     for idx, config in enumerate(configs):
                         print(f'------Workflow {self.workflowConfigName}; ' +
                               f'step {idx}; node type: {config.get("type", "Standard")}')
+
+                        if "systemPrompt" in config or "prompt" in config:
+                            if self.override_first_available_prompts:
+                                if first_node_system_prompt_override is not None:
+                                    config["systemPrompt"] = first_node_system_prompt_override
+                                if first_node_prompt_override is not None:
+                                    config["prompt"] = first_node_prompt_override
+                                self.override_first_available_prompts = False
+
                         add_user_prompt = config.get('addUserTurnTemplate', False)
                         force_generation_prompt_if_endpoint_allows = (
                             config.get('forceGenerationPromptIfEndpointAllows', False))
@@ -134,7 +165,20 @@ class WorkflowManager:
                                 add_generation_prompt = False
                             else:
                                 add_generation_prompt = None
-                            result = self._process_section(config, request_id, workflow_id, discussion_id, messages,
+
+                            add_timestamps = config.get("addDiscussionIdTimestampsForLLM", False)
+
+                            if (nonResponder is None and discussion_id is not None and add_timestamps):
+                                print("Timestamp is true")
+                                messageCopy = deepcopy(messages)
+                                messagesToSend = track_message_timestamps(messages=messageCopy,
+                                                                          discussion_id=discussion_id)
+                            else:
+                                print("Timestamp is false")
+                                messagesToSend = messages
+
+                            result = self._process_section(config, request_id, workflow_id, discussion_id,
+                                                           messagesToSend,
                                                            agent_outputs,
                                                            stream=stream, addGenerationPrompt=add_generation_prompt)
                             if stream:
@@ -260,22 +304,30 @@ class WorkflowManager:
                                                                    agent_outputs)
         if config["type"] == "RecentMemorySummarizerTool":
             print("Recent memory summarization tool")
-            return prompt_processor_service.gather_recent_memories(messages,
-                                                                   discussion_id,
-                                                                   config["maxTurnsToPull"],
-                                                                   config["maxSummaryChunksFromFile"])
+            prompt_processor_service.handle_memory_file(discussion_id, messages)
+            memories = gather_recent_memories(messages,
+                                              discussion_id,
+                                              config["maxTurnsToPull"],
+                                              config["maxSummaryChunksFromFile"])
+            custom_delimiter = config.get("customDelimiter", None)
+            if custom_delimiter is not None:
+                return memories.replace("--ChunkBreak--", custom_delimiter)
+            else:
+                return memories
         if config["type"] == "ChatSummaryMemoryGatheringTool":
             print("Chat summary memory gathering tool")
-            return prompt_processor_service.gather_chat_summary_memories(messages,
-                                                                         discussion_id,
-                                                                         config["maxTurnsToPull"],
-                                                                         config["maxSummaryChunksFromFile"])
+            return gather_chat_summary_memories(messages,
+                                                discussion_id,
+                                                config["maxTurnsToPull"])
         if config["type"] == "GetCurrentSummaryFromFile":
             print("Getting current summary from File")
-            return self.handle_get_current_summary_from_file(discussion_id)
+            return handle_get_current_summary_from_file(discussion_id)
+        if config["type"] == "chatSummarySummarizer":
+            print("Summarizing the chat memory into a single chat summary")
+            return prompt_processor_service.handle_process_chat_summary(config, messages, agent_outputs, discussion_id)
         if config["type"] == "GetCurrentMemoryFromFile":
             print("Getting current memories from File")
-            return self.handle_get_current_summary_from_file(discussion_id)
+            return handle_get_current_summary_from_file(discussion_id)
         if config["type"] == "WriteCurrentSummaryToFileAndReturnIt":
             print("Writing current summary to file")
             return prompt_processor_service.save_summary_to_file(config,
@@ -319,6 +371,53 @@ class WorkflowManager:
                     f"Lock for Instance_ID: '{INSTANCE_ID}' and workflow_id '{workflow_id}' and workflow_lock_id: '"
                     f"{workflow_lock_id}' has been acquired.")
 
+        if config["type"] == "CustomWorkflow":
+            return self.handle_custom_workflow(config, messages, agent_outputs, stream, request_id, discussion_id)
+
+    def handle_custom_workflow(self, config, messages, agent_outputs, stream, request_id, discussion_id):
+        print("Custom Workflow initiated")
+        workflow_name = config.get("workflowName", "No_Workflow_Name_Supplied")
+        print("Running custom workflow with name: ", workflow_name)
+        is_responder = config.get("isResponder", False)
+
+        firstNodeSystemPromptOverride = config.get("firstNodeSystemPromptOverride", None)
+        firstNodePromptOverride = config.get("firstNodePromptOverride", None)
+
+        if (firstNodeSystemPromptOverride not in [None, ""]):
+            systemPrompt = self.workflow_variable_service.apply_variables(
+                firstNodeSystemPromptOverride,
+                self.llm_handler,
+                messages,
+                agent_outputs,
+                config=config
+            )
+        else:
+            systemPrompt = firstNodeSystemPromptOverride
+
+        if (firstNodePromptOverride not in [None, ""]):
+            prompt = self.workflow_variable_service.apply_variables(
+                firstNodePromptOverride,
+                self.llm_handler,
+                messages,
+                agent_outputs,
+                config=config
+            )
+        else:
+            prompt = firstNodePromptOverride
+
+        if (is_responder):
+            non_responder = None
+            allow_streaming = stream
+        else:
+            non_responder = True
+            allow_streaming = False
+
+        return self.run_custom_workflow(workflow_name=workflow_name, request_id=request_id,
+                                        discussion_id=discussion_id, messages=messages, non_responder=non_responder,
+                                        is_streaming=allow_streaming,
+                                        first_node_system_prompt_override=systemPrompt,
+                                        first_node_prompt_override=prompt)
+
     def handle_python_module(self, config, prompt_processor_service, messages, agent_outputs):
         """
         Handles the execution of a Python module within the workflow.
@@ -351,11 +450,10 @@ class WorkflowManager:
         :param discussion_id: The discussion id pulled from the prompt for summaries and chats
         :return: The result of the full chat summary workflow execution.
         """
-        print("CHeckingpoint1: ")
         print("Discussion ID: ", discussion_id)
         if discussion_id is not None:
             print("Full chat summary discussion id is not none")
-            if hasattr(config, "isManualConfig") and config["isManualConfig"]:
+            if "isManualConfig" in config and config["isManualConfig"]:
                 print("Manual summary flow")
                 filepath = get_discussion_chat_summary_file_path(discussion_id)
                 summary_chunk = read_chunks_with_hashes(filepath)
@@ -378,7 +476,7 @@ class WorkflowManager:
                 filepath)
 
             print("Number of hash summary chunks read:", len(hashed_summary_chunk))
-            index = find_last_matching_memory_hash(hashed_summary_chunk, hashed_memory_chunks)
+            index = find_how_many_new_memories_since_last_summary(hashed_summary_chunk, hashed_memory_chunks)
 
             print("Number of memory chunks since last summary update: " + str(index))
 
@@ -388,7 +486,7 @@ class WorkflowManager:
                 return extract_text_blocks_from_hashed_chunks(hashed_summary_chunk)
 
     def handle_quality_memory_workflow(self, request_id, messages: List[Dict[str, str]], prompt_processor_service,
-                                       discussion_id):
+                                       discussion_id: str):
         """
         Handles the workflow for processing quality memory.
 
@@ -401,40 +499,8 @@ class WorkflowManager:
 
         if discussion_id is None:
             print("Quality memory discussion_id is none")
-            return self.handle_recent_memory_parser(request_id, discussion_id, messages)
+            return self.handle_recent_memory_parser(request_id, None, messages)
         else:
             print("Quality memory discussion_id flow")
             prompt_processor_service.handle_memory_file(discussion_id, messages)
             return self.process_file_memories(request_id, discussion_id, messages)
-
-    def handle_get_current_summary_from_file(self, discussion_id: str):
-        """
-        Retrieves the current summary from a file based on the user's prompt.
-
-        :param discussion_id: Discussion id used for memories and chat summary
-        :return: The current summary extracted from the file or a message indicating the absence of a summary file.
-        """
-        filepath = get_discussion_chat_summary_file_path(discussion_id)
-
-        current_summary = read_chunks_with_hashes(filepath)
-
-        if current_summary is None or len(current_summary) == 0:
-            return "There is not yet a summary file"
-
-        return extract_text_blocks_from_hashed_chunks(current_summary)
-
-    def handle_get_current_memories_from_file(self, discussion_id):
-        """
-        Retrieves the current summary from a file based on the user's prompt.
-
-        :param discussion_id: Discussion id used for memories and chat summary
-        :return: The current summary extracted from the file or a message indicating the absence of a summary file.
-        """
-        filepath = get_discussion_memory_file_path(discussion_id)
-
-        current_memories = read_chunks_with_hashes(filepath)
-
-        if current_memories is None or len(current_memories) == 0:
-            return "There are not yet any memories"
-
-        return extract_text_blocks_from_hashed_chunks(current_memories)

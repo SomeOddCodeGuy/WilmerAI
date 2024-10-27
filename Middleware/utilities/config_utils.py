@@ -150,6 +150,18 @@ def get_discussion_file_path(discussion_id, file_name):
     return os.path.join(directory, f'{discussion_id}_{file_name}.json')
 
 
+def get_discussion_timestamp_file_path(discussion_id):
+    """
+    Constructs the file path for a discussion-related file.
+
+    :param discussion_id: The ID of the discussion.
+    :param file_name: The base name of the file.
+    :return: The full path to the discussion file.
+    """
+    directory = get_config_value('discussionDirectory')
+    return os.path.join(directory, f'{discussion_id}_timestamps.json')
+
+
 def get_custom_dblite_filepath():
     """
     Pulls the custom directory to put the dblite values, if specified.

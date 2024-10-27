@@ -52,6 +52,7 @@
     "endpointName": "Assistant-Single-Model-Endpoint",
     "preset": "_Assistant_Single_Model_Coder_Preset",
     "maxResponseSizeInTokens": 2000,
-    "addUserTurnTemplate": false
+    "addUserTurnTemplate": false,
+    "addDiscussionIdTimestampsForLLM": false
   }
 ]

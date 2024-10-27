@@ -19,7 +19,8 @@
     "preset": "_Convo_Roleplay_Single_Model_Responder_Preset",
     "maxResponseSizeInTokens": 800,
     "addUserTurnTemplate": false,
-    "returnToUser": true
+    "returnToUser": true,
+    "addDiscussionIdTimestampsForLLM": false
   },
   {
     "title": "Checking AI's recent memory about this topic",

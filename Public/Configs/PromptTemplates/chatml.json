@@ -5,5 +5,7 @@
   "promptTemplateSystemPrefix": "<|im_start|>system\n",
   "promptTemplateSystemSuffix": "<|im_end|>\n",
   "promptTemplateUserPrefix": "<|im_start|>user\n",
-  "promptTemplateUserSuffix": "<|im_end|>\n"
+  "promptTemplateUserSuffix": "<|im_end|>\n",
+  "promptTemplateSystemmesPrefix": "<|im_start|>system\n",
+  "promptTemplateSystemmesSuffix": "<|im_end|>\n"
 }

@@ -1,9 +1,9 @@
 {
-  "promptTemplateSystemPrefix": "",
+  "promptTemplateSystemPrefix": "BEGINNING OF CONVERSATION:\n",
   "promptTemplateSystemSuffix": " ",
-  "promptTemplateUserPrefix": "USER: ",
+  "promptTemplateUserPrefix": "\nUSER: ",
   "promptTemplateUserSuffix": " ",
-  "promptTemplateAssistantPrefix": "ASSISTANT: ",
+  "promptTemplateAssistantPrefix": "\nASSISTANT: ",
   "promptTemplateAssistantSuffix": "</s>",
   "promptTemplateEndToken": ""
 }

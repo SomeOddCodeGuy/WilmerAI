@@ -37,6 +37,7 @@
     "preset": "_Assistant_Multi_Model_Factual_Preset",
     "maxResponseSizeInTokens": 2000,
     "addUserTurnTemplate": false,
-    "forceGenerationPromptIfEndpointAllows": false
+    "forceGenerationPromptIfEndpointAllows": false,
+    "addDiscussionIdTimestampsForLLM": false
   }
 ]

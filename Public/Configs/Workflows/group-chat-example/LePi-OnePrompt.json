@@ -8,6 +8,7 @@
     "endpointName": "Group-Chat-Example-LePi-Endpoint",
     "preset": "_Group_Chat_Example_LePi_Preset",
     "maxResponseSizeInTokens": 2000,
-    "addUserTurnTemplate": false
+    "addUserTurnTemplate": false,
+    "addDiscussionIdTimestampsForLLM": false
   }
 ]

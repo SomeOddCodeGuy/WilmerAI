@@ -19,6 +19,7 @@
     "endpointName": "Group-Chat-Example-BusinessGroup-Speaker-Endpoint",
     "preset": "_Group_Chat_Example_BusinessGroup_Speaker_Preset",
     "maxResponseSizeInTokens": 2000,
-    "addUserTurnTemplate": true
+    "addUserTurnTemplate": true,
+    "addDiscussionIdTimestampsForLLM": false
   }
 ]

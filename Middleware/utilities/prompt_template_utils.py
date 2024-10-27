@@ -104,6 +104,26 @@ def format_user_turn_with_template(user_turn: str, template_file_name: str, isCh
     return strip_tags(formatted_turn)
 
 
+def format_assistant_turn_with_template(assistant_turn: str, template_file_name: str, isChatCompletion: bool) -> str:
+    """
+    Formats a single assistant turn using the specified template, but without an ending tag. This is
+    for forcing a completion.
+
+    Parameters:
+    - assistant_turn (str): The assistant's message to be formatted and completed.
+    - template_file_name (str): The name of the template file to use for formatting.
+
+    Returns:
+    - str: The formatted user turn.
+    """
+    if (isChatCompletion):
+        return strip_tags(assistant_turn)
+
+    prompt_template = load_template_from_json(template_file_name)
+    formatted_turn = f"{prompt_template['promptTemplateAssistantPrefix']}{assistant_turn}"
+    return strip_tags(formatted_turn)
+
+
 def format_system_prompt_with_template(system_prompt: str, template_file_name: str, isChatCompletion: bool) -> str:
     """
     Formats a system prompt using the specified template.
