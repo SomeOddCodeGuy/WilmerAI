@@ -1,4 +1,5 @@
 import re
+from copy import deepcopy
 from typing import List, Dict
 
 
@@ -95,7 +96,8 @@ def split_into_tokenized_chunks(text: str, chunk_size: int) -> List[str]:
     return chunks
 
 
-def chunk_messages_by_token_size(messages: List[Dict[str, str]], chunk_size: int) -> List[List[Dict[str, str]]]:
+def chunk_messages_by_token_size(messages: List[Dict[str, str]], chunk_size: int, max_messages_before_chunk: int) -> \
+        List[List[Dict[str, str]]]:
     """Chunks messages based on a specified token size, starting from the end of the list,
     but keeps the order of messages intact within each chunk.
 
@@ -106,6 +108,7 @@ def chunk_messages_by_token_size(messages: List[Dict[str, str]], chunk_size: int
     Args:
         messages (List[Dict[str, str]]): The list of messages.
         chunk_size (int): The target size for each chunk, in tokens.
+        max_messages_before_chunk (int): Maximum messages needed before the token size is ignored
 
     Returns:
         List[List[Dict[str, str]]]: A list of chunks, each containing messages
@@ -114,35 +117,39 @@ def chunk_messages_by_token_size(messages: List[Dict[str, str]], chunk_size: int
     chunks = []
     current_chunk = []
     current_chunk_size = 0
+    print("Chunk size: " + str(chunk_size))
 
     # Iterate through the messages in reverse order (starting from the bottom)
     for message in reversed(messages):
         message_token_count = rough_estimate_token_length(message['content'])
+        print("message_token_count: " + str(message_token_count))
 
-        if message_token_count > chunk_size:
-            if current_chunk_size + message_token_count <= chunk_size * 1.1:
-                current_chunk.insert(0, message)
-                current_chunk_size += message_token_count
-                continue
-            elif current_chunk:
-                current_chunk.reverse()
-                chunks.insert(0, current_chunk)
-                current_chunk = []
-                current_chunk_size = 0
-
-
-        if current_chunk_size + message_token_count > chunk_size:
+        if current_chunk_size + message_token_count <= chunk_size * 0.8:
+            print("Adding message to current chunk")
+            current_chunk.insert(0, message)
+            current_chunk_size += message_token_count
+            continue
+        elif current_chunk:
+            print("Adding current chunk to chunks and then adding message to current chunk")
+            print("Current chunk would have been: " + str(current_chunk_size + message_token_count))
             current_chunk.reverse()
             chunks.insert(0, current_chunk)
+
             current_chunk = []
             current_chunk_size = 0
+            current_chunk_size += message_token_count
+            current_chunk.insert(0, message)
+            continue
 
-        current_chunk.insert(0, message)
-        current_chunk_size += message_token_count
-
+    print("Checking if current chunk is empty")
     if current_chunk:
-        current_chunk.reverse()
-        chunks.insert(0, current_chunk)
+        print("Current chunk is not empty")
+        print("Length of current chunk: " + str(len(current_chunk)))
+        print("Max messages before chunk: " + str(max_messages_before_chunk))
+        if (len(current_chunk) > max_messages_before_chunk):
+            print("Adding chunk")
+            current_chunk.reverse()
+            chunks.insert(0, current_chunk)
 
     return chunks
 
@@ -202,7 +209,8 @@ def reduce_messages_down_to_wilmer_acceptable_length(system_prompt: str, message
     return messages
 
 
-def messages_into_chunked_text_of_token_size(messages: List[Dict[str, str]], chunk_size: int) -> List[str]:
+def messages_into_chunked_text_of_token_size(messages: List[Dict[str, str]], chunk_size: int,
+                                             max_messages_before_chunk: int) -> List[str]:
     """Converts messages into chunked text of a specified token size.
 
     This function chunks the messages into specified token sizes and then converts these chunks into formatted text blocks.
@@ -214,7 +222,7 @@ def messages_into_chunked_text_of_token_size(messages: List[Dict[str, str]], chu
     Returns:
         List[str]: A list of text blocks, each corresponding to a chunk of messages.
     """
-    chunked_messages = chunk_messages_by_token_size(messages, chunk_size)
+    chunked_messages = chunk_messages_by_token_size(messages, chunk_size, max_messages_before_chunk)
     text_blocks = [messages_to_text_block(chunk) for chunk in chunked_messages]
     return text_blocks
 
@@ -238,6 +246,56 @@ def messages_to_text_block(messages: List[Dict[str, str]]) -> str:
     return chunk
 
 
+def get_message_chunks(messages: List[Dict[str, str]], lookbackStartTurn: int, chunk_size: int,
+                       max_messages_before_chunk: int = 0) -> List[str]:
+    """
+    Break down the conversation into chunks of a specified size for processing.
+
+    Args:
+        messages (List[Dict[str, str]]): The list of message dictionaries for the discussion.
+        lookbackStartTurn (int): The number of turns to look back in the conversation.
+        chunk_size (int): The maximum size of each chunk in tokens.
+
+    Returns:
+        List[str]: The list of message chunks.
+    """
+    pairs = []
+    messageCopy = deepcopy(messages)
+    if lookbackStartTurn > 0:
+        pairs = messageCopy[-lookbackStartTurn:]
+    else:
+        if len(messageCopy) > 1:
+            pairs = messageCopy[:-1]
+
+    return messages_into_chunked_text_of_token_size(pairs, chunk_size, max_messages_before_chunk)
+
+
+def clear_out_user_assistant_from_chunks(search_result_chunks):
+    """
+    Clears out the user assistant from each chunk in the given search result chunks.
+
+    :param search_result_chunks: A list of chunks, each representing a response from a user assistant.
+    :return: A new list of chunks with the user assistant removed.
+
+    Example usage:
+    search_result_chunks = ['User: Hello', 'Assistant: Hi', 'User: How are you?', 'Assistant: I'm good']
+    new_chunks = clear_out_user_assistant_from_chunks(search_result_chunks)
+    print(new_chunks)
+    # Output: ['Hello', 'Hi', 'How are you?', "I'm good"]
+    """
+    new_chunks = []
+    for chunk in search_result_chunks:
+        if chunk is not None:
+            chunk = chunk.replace('User: ', '')
+            chunk = chunk.replace('USER: ', '')
+            chunk = chunk.replace('Assistant: ', '')
+            chunk = chunk.replace('ASSISTANT: ', '')
+            chunk = chunk.replace('systemMes: ', '')
+            chunk = chunk.replace('SYSTEMMES: ', '')
+            new_chunks.append(chunk)
+    return new_chunks
+
+
 def replace_brackets_in_list(input_list: List[Dict[str, str]]) -> List[Dict[str, str]]:
     """Replaces brackets in the 'content' element of each dictionary in the list.
 
@@ -257,20 +315,44 @@ def replace_brackets_in_list(input_list: List[Dict[str, str]]) -> List[Dict[str,
     return replace_characters_in_collection(input_list, bracket_dict)
 
 
+def escape_unmatched_braces(prompt: str) -> str:
+    """
+       This function pattern matches '{', '}', and any valid format field like '{variable}'
+       remains unchanged
+
+       Returns:
+           str: The prompt with escaped unmatched braces.
+       """
+    pattern = r'({{)|(}})|{[^{}]*}'
+    parts = re.split(pattern, prompt)
+    new_parts = []
+    for part in parts:
+        if part is None:
+            continue
+        if part == '{{' or part == '}}' or (part.startswith('{') and part.endswith('}')):
+            # Keep valid format fields and escaped braces as is
+            new_parts.append(part)
+        else:
+            # Escape any single braces in the literal text
+            part = part.replace('{', '{{').replace('}', '}}')
+            new_parts.append(part)
+    return ''.join(new_parts)
+
+
 def return_brackets(input_list: List[Dict[str, str]]) -> List[Dict[str, str]]:
     """Replaces escaped brackets in the 'content' element of each dictionary in the list.
 
-    This function iterates over a list of dictionaries and replaces specific patterns
-    of brackets within the 'content' value to ensure they are properly escaped and
-    do not interfere with text processing.
+     This function iterates over a list of dictionaries and replaces specific patterns
+     of brackets within the 'content' value to ensure they are properly escaped and
+     do not interfere with text processing.
 
-    Args:
-        input_list (List[Dict[str, str]]): The list of dictionaries containing 'content'
-                                          to be replaced.
+     Args:
+         input_list (List[Dict[str, str]]): The list of dictionaries containing 'content'
+                                           to be replaced.
 
-    Returns:
-        List[Dict[str, str]]: The list of dictionaries with replaced brackets in 'content'.
-    """
+     Returns:
+         List[Dict[str, str]]: The list of dictionaries with replaced brackets in 'content'.
+     """
     bracket_dict = {r'|{{|': r'{', r'|}}|': r'}'}
     return replace_characters_in_collection(input_list, bracket_dict)
 

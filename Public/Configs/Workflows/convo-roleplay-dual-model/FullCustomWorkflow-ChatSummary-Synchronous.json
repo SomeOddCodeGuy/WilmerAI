@@ -14,6 +14,7 @@
     "endpointName": "Convo-Roleplay-Dual-Model-ResponderEndpoint",
     "preset": "_Convo_Roleplay_Dual_Model_Responder_Preset",
     "maxResponseSizeInTokens": 800,
-    "addUserTurnTemplate": false
+    "addUserTurnTemplate": false,
+    "addDiscussionIdTimestampsForLLM": false
   }
 ]

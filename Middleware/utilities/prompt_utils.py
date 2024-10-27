@@ -52,7 +52,8 @@ def strip_tags(input_string: str) -> str:
 
 
 def chunk_messages_with_hashes(messages: List[Dict[str, str]], chunk_size: int = 500,
-                               use_first_message_hash: bool = False) -> List[Tuple[str, str]]:
+                               use_first_message_hash: bool = False, max_messages_before_chunk: int = 0) -> List[
+    Tuple[str, str]]:
     """
     Chunk messages into blocks of a maximum token size and hash either the last or first message.
 
@@ -70,7 +71,8 @@ def chunk_messages_with_hashes(messages: List[Dict[str, str]], chunk_size: int =
     List[Tuple[str, str]]: A list of tuples, each containing a text block and the hash of the first/last message.
     """
     print("In chunk messages with hash")
-    chunked_messages = chunk_messages_by_token_size(messages, chunk_size)
+    print("max_messages_before_chunk: " + str(max_messages_before_chunk))
+    chunked_messages = chunk_messages_by_token_size(messages, chunk_size, max_messages_before_chunk)
 
     # Adjust whether we hash the first or last message based on the boolean flag
     return [(messages_to_text_block(chunk), hash_single_message(chunk[0] if use_first_message_hash else chunk[-1]))
@@ -147,8 +149,8 @@ def find_last_matching_hash_message(messagesOriginal: List[Dict[str, str]],
     return len(current_message_hashes)  # If no match found, return the total number of messages
 
 
-def find_last_matching_memory_hash(hashed_summary_chunk: Optional[List[Tuple[str, str]]],
-                                   hashed_memory_chunks: List[Tuple[str, str]]) -> int:
+def find_how_many_new_memories_since_last_summary(hashed_summary_chunk: Optional[List[Tuple[str, str]]],
+                                                  hashed_memory_chunks: List[Tuple[str, str]]) -> int:
     """
     Find the index of the last hashed summary chunk that matches any hash in the hashed memory chunks.
 
@@ -159,10 +161,16 @@ def find_last_matching_memory_hash(hashed_summary_chunk: Optional[List[Tuple[str
     Returns:
     int: The index of the last matching memory hash, or -1 if no match is found.
     """
-    if not hashed_summary_chunk or not hashed_memory_chunks:
+    if not hashed_memory_chunks:
         return -1
-    summary_hash = hashed_summary_chunk[0][1]
+
+    if not hashed_summary_chunk:
+        return len(hashed_memory_chunks)
+
+    summary_hash = hashed_summary_chunk[-1][1]
+
     memory_hashes = [hash_tuple[1] for hash_tuple in hashed_memory_chunks]
+
     return memory_hashes[::-1].index(summary_hash) if summary_hash in memory_hashes else -1
 
 

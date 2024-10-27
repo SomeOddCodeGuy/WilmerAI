@@ -8,6 +8,7 @@
     "endpointName": "Group-Chat-Example-ChatGPT4o-Endpoint",
     "preset": "_Group_Chat_Example_ChatGPT4o_Preset",
     "maxResponseSizeInTokens": 3000,
-    "addUserTurnTemplate": false
+    "addUserTurnTemplate": false,
+    "addDiscussionIdTimestampsForLLM": false
   }
 ]

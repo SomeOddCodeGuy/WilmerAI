@@ -9,7 +9,7 @@ class OfflineWikiApiClient:
     (https://github.com/SomeOddCodeGuy/OfflineWikipediaTextApi).
     """
 
-    def __init__(self):
+    def __init__(self, activateWikiApi=False, baseurl='127.0.0.1', port=5728):
         """
         Initialize the OfflineWikiApiClient.
 
@@ -18,8 +18,8 @@ class OfflineWikiApiClient:
         and port for API requests. Defaults to default of the API project.
         """
         config = get_user_config()
-        self.use_offline_wiki_api = config.get('useOfflineWikiApi', False)
-        self.base_url = f"http://{config.get('offlineWikiApiHost', '127.0.0.1')}:{config.get('offlineWikiApiPort', 5728)}"
+        self.use_offline_wiki_api = config.get('useOfflineWikiApi', activateWikiApi)
+        self.base_url = f"http://{config.get('offlineWikiApiHost', baseurl)}:{config.get('offlineWikiApiPort', port)}"
 
     def get_full_article_by_title(self, title):
         """

@@ -15,6 +15,7 @@
     "preset": "_Assistant_Multi_Model_Conversational_Preset",
     "maxResponseSizeInTokens": 800,
     "addUserTurnTemplate": false,
-    "forceGenerationPromptIfEndpointAllows": false
+    "forceGenerationPromptIfEndpointAllows": false,
+    "addDiscussionIdTimestampsForLLM": false
   }
 ]

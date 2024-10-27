@@ -4,6 +4,7 @@ from typing import Dict, Any, Optional, List
 import jinja2
 
 from Middleware.utilities.config_utils import get_chat_template_name
+from Middleware.utilities.memory_utils import handle_get_current_summary_from_file, gather_chat_summary_memories
 from Middleware.utilities.prompt_extraction_utils import extract_last_n_turns_as_string
 from Middleware.utilities.prompt_template_utils import (
     format_system_prompts, format_templated_prompt, get_formatted_last_n_turns_as_string
@@ -172,4 +173,19 @@ class WorkflowVariableManager:
                 isChatCompletion=llm_handler.takes_message_collection),
             "chat_user_prompt_last_one": extract_last_n_turns_as_string(messages, 1,
                                                                         include_sysmes, remove_all_system_override)
+        }
+
+    @staticmethod
+    def generate_chat_summary_variables(messages, discussion_id) -> Dict[str, str]:
+        """
+        Generates the variables used for pulling the chat summary.
+
+        :param originalMessages: The conversation turns.
+        :param llm_handler: The LLM handler.
+        :return: A dictionary of variables for user prompts at different turn lengths.
+        """
+        return {
+            "newest_chat_summary_memories": gather_chat_summary_memories(messages,
+                                                                         discussion_id),
+            "current_chat_summary": handle_get_current_summary_from_file(discussion_id)
         }

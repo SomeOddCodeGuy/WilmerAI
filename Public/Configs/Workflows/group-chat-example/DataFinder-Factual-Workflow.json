@@ -36,6 +36,7 @@
     "endpointName": "Group-Chat-Example-Datafinder-Endpoint",
     "preset": "_Group_Chat_Example_Datafinder_Preset",
     "maxResponseSizeInTokens": 2000,
-    "addUserTurnTemplate": false
+    "addUserTurnTemplate": false,
+    "addDiscussionIdTimestampsForLLM": false
   }
 ]

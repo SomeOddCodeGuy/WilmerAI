@@ -7,6 +7,7 @@
     "endpointName": "Group-Chat-Example-Categorization-Endpoint",
     "preset": "_Group_Chat_Example_Categorization_Preset",
     "maxResponseSizeInTokens": 100,
-    "addUserTurnTemplate": true
+    "addUserTurnTemplate": true,
+    "addDiscussionIdTimestampsForLLM": false
   }
 ]
