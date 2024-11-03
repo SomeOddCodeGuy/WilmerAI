@@ -31,6 +31,9 @@ def parse_arguments():
     if args.LoggingDirectory and args.LoggingDirectory.strip():
         instance_utils.LOGGING_DIRECTORY = args.LoggingDirectory.strip()
 
+    if "$user$" in instance_utils.LOGGING_DIRECTORY:
+        instance_utils.LOGGING_DIRECTORY = instance_utils.LOGGING_DIRECTORY.replace("$user$", instance_utils.USER)
+
 
 if __name__ == '__main__':
     parse_arguments()
