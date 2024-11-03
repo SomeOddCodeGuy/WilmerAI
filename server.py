@@ -36,7 +36,7 @@ if __name__ == '__main__':
             logging.StreamHandler(),
             RotatingFileHandler(
                 "logs/wilmerai.log",
-                maxBytes=1048576 * 5,
+                maxBytes=1048576 * 3,
                 backupCount=7,
             ),
         ],
