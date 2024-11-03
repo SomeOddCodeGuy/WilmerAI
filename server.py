@@ -3,7 +3,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 
 from Middleware.core.open_ai_api import WilmerApi
-from Middleware.utilities import sql_lite_utils, instance_utils
+from Middleware.utilities import sql_lite_utils, instance_utils, config_utils
 
 logger = logging.getLogger(__name__)
 
@@ -31,15 +31,16 @@ def parse_arguments():
 if __name__ == '__main__':
     parse_arguments()
 
+    handlers = [logging.StreamHandler()]
+    if config_utils.get_use_file_logging():
+        handlers.append(RotatingFileHandler(
+            "logs/wilmerai.log",
+            maxBytes=1048576 * 3,
+            backupCount=7,
+        ))
+
     logging.basicConfig(
-        handlers=[
-            logging.StreamHandler(),
-            RotatingFileHandler(
-                "logs/wilmerai.log",
-                maxBytes=1048576 * 3,
-                backupCount=7,
-            ),
-        ],
+        handlers=handlers,
         level=logging.DEBUG,
         format="[%(asctime)s] %(levelname)s [%(name)s.%(funcName)s:%(lineno)d] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
