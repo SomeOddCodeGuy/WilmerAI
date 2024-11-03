@@ -425,3 +425,13 @@ def get_is_chat_complete_add_missing_assistant() -> bool:
     """
     data = get_user_config()
     return data['chatCompletionAddMissingAssistantGenerator']
+
+
+def get_use_file_logging() -> bool:
+    """
+    Retrieves the useFileLogging configuration setting.
+    If true, Wilmer logs to a file in addition to the console.
+
+    :return: The useFileLogging setting from the user configuration.
+    """
+    return get_config_value('useFileLogging')
