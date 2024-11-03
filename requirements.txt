@@ -3,4 +3,3 @@ urllib3~=2.2.2
 scikit-learn~=1.5.0
 Flask~=3.0.3
 Jinja2~=3.1.4
-ipdb~=0.13.13
