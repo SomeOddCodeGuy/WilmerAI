@@ -1,5 +1,5 @@
 .idea
 .venv
 /venv
-logs/**/wilmerai.log
+logs/**/wilmerai.log*
 *.sqlite
