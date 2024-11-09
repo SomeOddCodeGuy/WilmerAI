@@ -1,6 +1,9 @@
 import re
 from copy import deepcopy
+import logging
 from typing import List, Dict
+
+logger = logging.getLogger(__name__)
 
 
 # Based on this response from ruby_coder on OpenAI forums:
@@ -241,8 +244,8 @@ def messages_to_text_block(messages: List[Dict[str, str]]) -> str:
     """
     formatted_messages = [f"{message['content']}" for message in messages]
     chunk = "\n".join(formatted_messages)
-    print("***************************************")
-    print("Chunk created: " + str(chunk))
+    logger.info("***************************************")
+    logger.info("Chunk created: " + str(chunk))
     return chunk
 
 
@@ -452,8 +455,8 @@ def replace_delimiter_in_file(filepath: str, delimit_on: str, delimit_replacer: 
         return modified_text
 
     except FileNotFoundError:
-        print(f"Error: The file at {filepath} was not found.")
+        logger.info(f"Error: The file at {filepath} was not found.")
         raise
     except IOError:
-        print(f"Error: An IOError occurred while reading the file at {filepath}.")
+        logger.info(f"Error: An IOError occurred while reading the file at {filepath}.")
         raise

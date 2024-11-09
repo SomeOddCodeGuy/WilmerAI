@@ -1,4 +1,5 @@
 from copy import deepcopy
+import logging
 from typing import List, Dict
 
 from Middleware.services.llm_service import LlmHandlerService
@@ -18,6 +19,7 @@ from Middleware.utilities.text_utils import get_message_chunks, clear_out_user_a
 from Middleware.workflows.managers.workflow_variable_manager import WorkflowVariableManager
 from Middleware.workflows.tools.parallel_llm_processing_tool import ParallelLlmProcessingTool
 
+logger = logging.getLogger(__name__)
 
 class SlowButQualityRAGTool:
     """
@@ -46,12 +48,12 @@ class SlowButQualityRAGTool:
                 result = self.perform_conversation_search(keywords, messages, llm_handler, lookbackStartTurn)
                 return result
             else:
-                print("Fatal Workflow Error: cannot perform keyword search; no user prompt")
+                logger.info("Fatal Workflow Error: cannot perform keyword search; no user prompt")
         elif target == "RecentMemories":
             if 'messages' in kwargs:
                 messages = kwargs['messages']
-                print("In recent memories")
-                print(messages)
+                logger.info("In recent memories")
+                logger.info(messages)
                 result = self.perform_memory_file_keyword_search(keywords, messages, llm_handler, discussion_id)
                 return result
 
@@ -67,7 +69,7 @@ class SlowButQualityRAGTool:
         Returns:
             str: A string representing the search result chunks joined by '--ChunkBreak--'.
         """
-        print("Entering perform_conversation_search")
+        logger.info("Entering perform_conversation_search")
 
         # If we have fewer pairs than lookbackStartTurn, we can stop here
         if len(messagesOriginal) <= lookbackStartTurn:
@@ -81,15 +83,15 @@ class SlowButQualityRAGTool:
         # The speakers would trigger tons of erroneous hits
         last_n_turns = extract_last_n_turns(message_copy, 10, llm_handler.takes_message_collection)
         keywords = filter_keywords_by_speakers(last_n_turns, keywords)
-        print("Keywords: " + str(keywords))
+        logger.info("Keywords: " + str(keywords))
 
         search_result_chunks = advanced_search_in_chunks(pair_chunks, keywords, 10)
         search_result_chunks = clear_out_user_assistant_from_chunks(search_result_chunks)
         filtered_chunks = [s for s in search_result_chunks if s]
 
-        print("******** BEGIN SEARCH RESULT CHUNKS ************")
-        print("Search result chunks: ", '\n\n'.join(filtered_chunks))
-        print("******** END SEARCH RESULT CHUNKS ************")
+        logger.info("******** BEGIN SEARCH RESULT CHUNKS ************")
+        logger.info("Search result chunks: ", '\n\n'.join(filtered_chunks))
+        logger.info("******** END SEARCH RESULT CHUNKS ************")
 
         return '--ChunkBreak--'.join(filtered_chunks)
 
@@ -104,7 +106,7 @@ class SlowButQualityRAGTool:
         Returns:
             str: A string representing the search result chunks joined by '--ChunkBreak--'.
         """
-        print("Entering perform_memory_file_keyword_search")
+        logger.info("Entering perform_memory_file_keyword_search")
         filepath = get_discussion_memory_file_path(discussion_id)
 
         message_copy = deepcopy(messagesOriginal)
@@ -119,15 +121,15 @@ class SlowButQualityRAGTool:
         # The speakers would trigger tons of erroneous hits
         last_n_turns = extract_last_n_turns(message_copy, 10, llm_handler.takes_message_collection)
         keywords = filter_keywords_by_speakers(last_n_turns, keywords)
-        print("Keywords: " + str(keywords))
+        logger.info("Keywords: " + str(keywords))
 
         search_result_chunks = search_in_chunks(pair_chunks, keywords, 10)
         search_result_chunks = clear_out_user_assistant_from_chunks(search_result_chunks)
         filtered_chunks = [s for s in search_result_chunks if s]
 
-        print("******** BEGIN SEARCH RESULT CHUNKS ************")
-        print("Search result chunks: ", '\n\n'.join(filtered_chunks))
-        print("******** END SEARCH RESULT CHUNKS ************")
+        logger.info("******** BEGIN SEARCH RESULT CHUNKS ************")
+        logger.info("Search result chunks: ", '\n\n'.join(filtered_chunks))
+        logger.info("******** END SEARCH RESULT CHUNKS ************")
 
         return '\n\n'.join(filtered_chunks)
 
@@ -140,14 +142,14 @@ class SlowButQualityRAGTool:
         chunks.reverse()
 
         all_chunks = "--ChunkBreak--".join(chunks)
-        print("Processing chunks:", all_chunks)
+        logger.info("Processing chunks: ", all_chunks)
 
         result = rag_tool.perform_rag_on_memory_chunk(rag_system_prompt, rag_prompt, all_chunks, workflow, messages,
                                                       discussionId, "--rag_break--", chunks_per_memory)
         results = result.split("--rag_break--")
         results.reverse()
-        print("Total results:", len(results))
-        print("Total chunks:", len(hash_chunks))
+        logger.info("Total results: " + str(len(results)))
+        logger.info("Total chunks: " + str(len(hash_chunks)))
         hash_chunks.reverse()
 
         replaced = [(summary, hash_code) for summary, (_, hash_code) in zip(results, hash_chunks)]
@@ -178,8 +180,9 @@ class SlowButQualityRAGTool:
         filepath = get_discussion_memory_file_path(discussionId)
         messages_copy = deepcopy(messagesOriginal)
 
-        print("Entering discussionId Workflow")
-        discussion_id_workflow_config = load_config(get_discussion_id_workflow_path())
+        logger.info("Entering discussionId Workflow")
+        discussion_id_workflow_filepath = get_discussion_id_workflow_path()
+        discussion_id_workflow_config = load_config(discussion_id_workflow_filepath)
 
         rag_system_prompt = discussion_id_workflow_config['systemPrompt']
         rag_prompt = discussion_id_workflow_config['prompt']
@@ -191,6 +194,7 @@ class SlowButQualityRAGTool:
         discussion_chunks.reverse()  # Reverse to maintain correct chronological order when processing
 
         if len(discussion_chunks) == 0:
+            logger.info("No discussion chunks")
             self.process_full_discussion_flow(messages_copy, rag_system_prompt, rag_prompt,
                                               discussion_id_workflow_config, discussionId)
         else:
@@ -200,10 +204,10 @@ class SlowButQualityRAGTool:
             else:
                 number_of_messages_to_pull = 0
 
-            print("Number of messages since last memory chunk update: ", number_of_messages_to_pull)
+            logger.info("Number of messages since last memory chunk update: ", number_of_messages_to_pull)
 
             messages_to_process = messages_copy[:-3] if len(messages_copy) > 3 else messages_copy
-            print("Messages to process: ", messages_to_process)
+            logger.info("Messages to process: ", messages_to_process)
             if (len(messages_to_process) == 0):
                 return
 
@@ -211,26 +215,26 @@ class SlowButQualityRAGTool:
                     '\n'.join(value for content in messages_to_process for value in content.values())) > chunk_size) \
                     or number_of_messages_to_pull > max_messages_between_chunks:
 
-                print("number_of_messages_to_pull is: " + str(number_of_messages_to_pull))
+                logger.info("number_of_messages_to_pull is: " + str(number_of_messages_to_pull))
                 trimmed_discussion_pairs = extract_last_n_turns(messages_to_process, number_of_messages_to_pull,
                                                                 remove_all_systems_override=True)
                 if (len(trimmed_discussion_pairs) == 0):
                     return
 
                 trimmed_discussion_pairs.reverse()  # Reverse to process in chronological order
-                print("Retrieved number of trimmed_discussion_pairs: " + str(len(trimmed_discussion_pairs)))
+                logger.info("Retrieved number of trimmed_discussion_pairs: " + str(len(trimmed_discussion_pairs)))
 
-                print("Trimmed discussion pairs:", trimmed_discussion_pairs)
+                logger.info("Trimmed discussion pairs:" + str(trimmed_discussion_pairs))
 
                 print("Before chunk messages with hashes")
                 trimmed_discussion_chunks = chunk_messages_with_hashes(trimmed_discussion_pairs, chunk_size,
                                                                        max_messages_before_chunk=max_messages_between_chunks)
-                print("Past chunk messages with hashes")
+                logger.info("Past chunk messages with hashes")
 
                 if len(trimmed_discussion_chunks) >= 1:
                     pass_chunks = extract_text_blocks_from_hashed_chunks(trimmed_discussion_chunks)
 
-                    print("Processing new memories")
+                    logger.info("Processing new memories")
                     self.process_new_memory_chunks(pass_chunks, trimmed_discussion_chunks, rag_system_prompt,
                                                    rag_prompt,
                                                    discussion_id_workflow_config, discussionId, messages_copy)
@@ -249,7 +253,7 @@ class SlowButQualityRAGTool:
             print("Less than 3 messages, no memory will be generated.")
             return
 
-        print("Beginning full discussion flow")
+        logger.info("Beginning full discussion flow")
 
         new_messages = deepcopy(messages)
         if len(new_messages) > 3:
@@ -325,6 +329,8 @@ class SlowButQualityRAGTool:
                 memory_chunks) >= 3 else '\n--------------\n'.join(memory_chunks)
             if current_memories is None:
                 current_memories = ""
+
+            logger.info("Processing memory chunk. Current memories is: [[" + current_memories.strip() + "]]")
             system_prompt = rag_system_prompt.replace('[Memory_file]', current_memories.strip())
             prompt = rag_prompt.replace('[Memory_file]', current_memories.strip())
 

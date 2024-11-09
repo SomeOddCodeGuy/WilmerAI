@@ -45,8 +45,9 @@ class WorkflowVariableManager:
         self.set_categories_from_kwargs(**kwargs)
 
     def apply_variables(self, prompt: str, llm_handler: Any, messages: List[Dict[str, str]],
-                        agent_outputs: Optional[Dict[str, Any]] = None, remove_all_system_override=None,
-                        config=None) -> str:
+                        agent_outputs: Optional[Dict[str, Any]] = None,
+                        remove_all_system_override = None,
+                        config: Dict = None) -> str:
         """
         Applies the generated variables to the prompt and formats it using the specified template.
 

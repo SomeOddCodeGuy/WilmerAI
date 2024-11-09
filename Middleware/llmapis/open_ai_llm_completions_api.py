@@ -4,6 +4,8 @@ import traceback
 from typing import Any, Dict, Generator, Optional, Union
 
 import requests
+import logging
+from textwrap import dedent
 from requests.adapters import HTTPAdapter
 from urllib3 import Retry
 
@@ -13,6 +15,7 @@ from Middleware.utilities.config_utils import get_openai_preset_path, get_endpoi
     get_api_type_config
 from Middleware.utilities.text_utils import return_brackets_in_string
 
+logger = logging.getLogger(__name__)
 
 class OpenAiLlmCompletionsApiService:
     """
@@ -37,7 +40,7 @@ class OpenAiLlmCompletionsApiService:
         type = api_type_config.get("presetType", "")
         preset_file = get_openai_preset_path(presetname, type)
         self.api_key = endpoint_file.get("apiKey", "")
-        print("Api key found: " + self.api_key)
+        logger.info("Api key found: %s", self.api_key)
         self.endpoint_url = endpoint_file["endpoint"]
         self.model_name = endpoint_file["modelNameToSendToAPI"]
         self.is_busy: bool = False
@@ -77,9 +80,10 @@ class OpenAiLlmCompletionsApiService:
         full_prompt = system_prompt + prompt
         full_prompt = return_brackets_in_string(full_prompt)
         full_prompt = full_prompt.strip() + " "
-        print("\n************************************************")
-        print("Formatted Prompt:", full_prompt)
-        print("************************************************")
+        logger.info(dedent('''
+        ************************************************
+        Formatted Prompt: %s
+        ************************************************"'''), full_prompt)
 
         try:
             self.is_busy = True
@@ -91,13 +95,13 @@ class OpenAiLlmCompletionsApiService:
                 result = self._api.invoke_non_streaming(prompt=full_prompt, endpoint=self.endpoint,
                                                         model_name=self.model_name,
                                                         params=self._gen_input)
-                print("######################################")
-                print("Non-streaming output: ", result)
-                print("######################################")
+                logger.info(dedent('''\
+                ######################################
+                Non-streaming output: %s
+                ######################################'''), result)
                 return result
         except Exception as e:
-            print("Exception in callApi:", e)
-            traceback.print_exc()  # This prints the stack trace
+            logger.exception("Exception in callApi:")
             raise
         finally:
             self.is_busy = False
@@ -132,7 +136,7 @@ class OpenAiCompletionsApi:
         retries: Retry = Retry(total=5, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
         self.session.mount('http://', HTTPAdapter(max_retries=retries))
         self.session.mount('https://', HTTPAdapter(max_retries=retries))
-        print("Initialized OpenAiCompletionsApi with retries configured.")
+        logger.info("Initialized OpenAiCompletionsApi with retries configured.")
 
     def invoke_streaming(self, prompt: str, endpoint: str, model_name: str,
                          params: Optional[Dict[str, Any]] = None) -> Generator[str, None, None]:
@@ -156,10 +160,10 @@ class OpenAiCompletionsApi:
         add_user_assistant = get_is_chat_complete_add_user_assistant()
         add_missing_assistant = get_is_chat_complete_add_missing_assistant()
 
-        print(f"Streaming flow!")
-        print(f"URL: {url}")
-        print(f"Headers: {self.headers}")
-        print(f"Sending request with data: {json.dumps(data, indent=2)}")
+        logger.info(f"Streaming flow!")
+        logger.info(f"URL: {url}")
+        logger.debug(f"Headers: {self.headers}")
+        logger.debug(f"Sending request with data: {json.dumps(data, indent=2)}")
 
         def generate_sse_stream():
             def sse_format(data: str) -> str:
@@ -167,11 +171,13 @@ class OpenAiCompletionsApi:
 
             try:
                 with requests.post(url, headers=self.headers, json=data, stream=True) as r:
-                    print(f"Response status code: {r.status_code}")
+                    logger.info(f"Response status code: {r.status_code}")
                     buffer = ""
                     first_chunk_buffer = ""
                     first_chunk_processed = False
                     max_buffer_length = 100
+                    logging_buffer = ""
+                    max_logging_buffer_length = 1000
 
                     for chunk in r.iter_content(chunk_size=1024, decode_unicode=True):
                         buffer += chunk
@@ -186,7 +192,9 @@ class OpenAiCompletionsApi:
                             buffer = buffer[end_pos + 1:]
 
                             if data_str == "[DONE]" or data_str == "data: [DONE]":
-                                print("Stream done signal received.")
+                                if logging_buffer:
+                                    logger.info('Stream piece: %s', logging_buffer)
+                                logger.info("Stream done signal received.")
                                 yield sse_format("[DONE]")
                                 return
 
@@ -223,6 +231,10 @@ class OpenAiCompletionsApi:
                                                 "model": "Wilmer-AI",
                                                 "object": "chat.completion.chunk"
                                             }
+                                            logging_buffer += content
+                                            if len(logging_buffer) > max_logging_buffer_length:
+                                                logger.info('Stream piece: %s', logging_buffer)
+                                                logging_buffer = ''
                                             yield sse_format(json.dumps(completion_data))
                                 elif 'choices' in chunk_data.get("response", {}):
                                     for choice in chunk_data["response"].get("choices", []):
@@ -255,6 +267,10 @@ class OpenAiCompletionsApi:
                                                 "model": "Wilmer-AI",
                                                 "object": "chat.completion.chunk"
                                             }
+                                            logging_buffer += content
+                                            if len(logging_buffer) > max_logging_buffer_length:
+                                                logger.info('Stream piece: %s', logging_buffer)
+                                                logging_buffer = ''
                                             yield sse_format(json.dumps(completion_data))
                                 elif 'content' in chunk_data:
                                     content = chunk_data["content"]
@@ -284,10 +300,13 @@ class OpenAiCompletionsApi:
                                         "model": "Wilmer-AI",
                                         "object": "chat.completion.chunk"
                                     }
+                                    logging_buffer += content
+                                    if len(logging_buffer) > max_logging_buffer_length:
+                                        logger.info('Stream piece: %s', logging_buffer)
+                                        logging_buffer = ''
                                     yield sse_format(json.dumps(completion_data))
                             except json.JSONDecodeError as e:
-                                print(f"Failed to parse JSON: {e}")
-                                traceback.print_exc()  # This prints the stack trace
+                                logger.exception(f"Failed to parse JSON: {e}")
                                 continue
 
                     # Flush remaining buffer
@@ -321,10 +340,8 @@ class OpenAiCompletionsApi:
                                 traceback.print_exc()  # This prints the stack trace
 
             except requests.RequestException as e:
-                print(f"Request failed: {e}")
-                traceback.print_exc()  # This prints the stack trace
+                logger.exception(f"Request failed:")
                 raise
-
         return generate_sse_stream()
 
     def invoke_non_streaming(self, prompt: str, endpoint: str, model_name: str,
@@ -348,17 +365,15 @@ class OpenAiCompletionsApi:
 
         for attempt in range(retries):
             try:
-                print(f"Non-Streaming flow! Attempt: {attempt + 1}")
-                print("Headers: ")
-                print(json.dumps(self.headers, indent=2))
-                print("Data: ")
-                print(json.dumps(data, indent=2))
+                logger.info(f"Non-Streaming flow! Attempt: {attempt + 1}")
+                logger.debug("Headers:\n%s", json.dumps(self.headers, indent=2))
+                logger.debug("Data:\n%s", json.dumps(data, indent=2))
                 response = self.session.post(url, headers=self.headers, json=data, timeout=14400)
                 response.raise_for_status()  # Raises HTTPError for bad responses
 
                 payload = response.json()
-                print("Response: ", response)
-                print("Payload: ", json.dumps(payload, indent=2))
+                logger.info("Response: %s", response)
+                logger.debug("Payload: %s", json.dumps(payload, indent=2))
 
                 # Check for your original format first
                 if 'choices' in payload and payload['choices'][0] and 'text' in payload['choices'][0]:
@@ -374,11 +389,9 @@ class OpenAiCompletionsApi:
                 else:
                     return ''
             except requests.exceptions.RequestException as e:
-                print(f"Attempt {attempt + 1} failed with error: {e}")
-                traceback.print_exc()  # This prints the stack trace
+                logger.exception(f"Attempt {attempt + 1} failed with error:")
                 if attempt == retries - 1:
                     raise
             except Exception as e:
-                print("Unexpected error:", e)
-                traceback.print_exc()  # This prints the stack trace
+                logger.exception("Unexpected error: ")
                 raise

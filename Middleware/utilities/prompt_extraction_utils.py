@@ -1,5 +1,8 @@
+import logging
 import re
 from typing import Dict, Tuple, List, Optional, Any
+
+logger = logging.getLogger(__name__)
 
 template = {
     "Begin_Sys": "[Beg_Sys]",
@@ -190,7 +193,7 @@ def parse_conversation(input_string: str) -> List[Dict[str, str]]:
                     conversation.append(message)
     if beg_sys_message:
         conversation.insert(0, beg_sys_message)
-    print("Parse conversation result: ", conversation)
+    logger.debug("Parse conversation result: %s", conversation)
     return conversation
 
 
