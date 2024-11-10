@@ -5,5 +5,7 @@
   "endpointName": "Convo-Roleplay-Single-Model-Endpoint",
   "preset": "_Convo_Roleplay_Single_Model_MemoryChatSummary_Preset",
   "maxResponseSizeInTokens": 250,
-  "chunkEstimatedTokenSize": 2500
+  "chunkEstimatedTokenSize": 2500,
+  "maxMessagesBetweenChunks": 20,
+  "lookbackStartTurn": 7
 }

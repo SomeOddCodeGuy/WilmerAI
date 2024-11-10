@@ -1,11 +1,11 @@
 {
-  "promptTemplateSystemPrefix": "",
-  "promptTemplateSystemSuffix": "[/INST]",
-  "promptTemplateUserPrefix": "[INST]",
-  "promptTemplateUserSuffix": "[/INST]",
-  "promptTemplateAssistantPrefix": " ",
-  "promptTemplateAssistantSuffix": "",
+  "promptTemplateSystemPrefix": "<s>\n[INST]\n|SYSTEM PROMPT|\n",
+  "promptTemplateSystemSuffix": "\n|END OF SYSTEM PROMPT|",
+  "promptTemplateUserPrefix": "\n[INST]",
+  "promptTemplateUserSuffix": "",
+  "promptTemplateAssistantPrefix": "\n[/INST]",
+  "promptTemplateAssistantSuffix": "\n</s>",
   "promptTemplateEndToken": "",
-  "promptTemplateSystemmesPrefix": "[INST] ",
-  "promptTemplateSystemmesSuffix": "[/INST]"
+  "promptTemplateSystemmesPrefix": "\n[INST]",
+  "promptTemplateSystemmesSuffix": ""
 }
