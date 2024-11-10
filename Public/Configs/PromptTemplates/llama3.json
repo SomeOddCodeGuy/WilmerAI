@@ -1,9 +1,11 @@
 {
+  "promptTemplateSystemPrefix": "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n",
+  "promptTemplateSystemSuffix": "<|eot_id|>",
   "promptTemplateAssistantPrefix": "<|start_header_id|>assistant<|end_header_id|>\n\n",
   "promptTemplateAssistantSuffix": "<|eot_id|>",
   "promptTemplateEndToken": "",
-  "promptTemplateSystemPrefix": "<|start_header_id|>system<|end_header_id|>\n\n",
-  "promptTemplateSystemSuffix": "<|eot_id|>",
   "promptTemplateUserPrefix": "<|start_header_id|>user<|end_header_id|>\n\n",
-  "promptTemplateUserSuffix": "<|eot_id|>"
+  "promptTemplateUserSuffix": "<|eot_id|>",
+  "promptTemplateSystemmesPrefix": "<|start_header_id|>system<|end_header_id|>\n\n",
+  "promptTemplateSystemmesSuffix": "<|eot_id|>"
 }
