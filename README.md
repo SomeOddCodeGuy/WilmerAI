@@ -244,12 +244,28 @@ Alternatively, you can manually install the dependencies and run Wilmer with the
 The provided scripts are designed to streamline the process by setting up a virtual environment. However, you can safely
 ignore them if you prefer manual installation.
 
-> **NOTE:** When running either the bat file, the sh file or the python file, all three now accept "--ConfigDirectory"
-> and "--User" arguments. So, for example: "bash run_macos.sh --ConfigDirectory "/users/socg/Public/configs" --User
-"single-model-assistant". This means that you can start up multiple instances of wilmer at once with a single install
-> folder,
-> and that you don't have to update the current-user anymore if you dont want to. Specifying --User will ignore
-> current-user.json.
+#### Script arguments for .bat, .sh and .py files:
+
+**NOTE**: When running either the bat file, the sh file or the python file, all three now accept the following
+OPTIONAL arguments:
+
+* "--ConfigDirectory": Directory where your config files can be found. By default, this is the "Public" folder within
+  the Wilmer root.
+* "--LoggingDirectory": The directory where file logs, if enabled, are stored. Be default file logging is turned OFF,
+  and in the event that they are enabled in the user json, they default to going to the "logs" folder in the Wilmer root
+* "--User": The user that you want to run under.
+
+So, for example, consider the following possible runs:
+
+* `bash run_macos.sh` (will use user specified in _current-user.json, configs in "Public", logs in "logs")
+* `bash run_macos.sh --User "single-model-assistant"` (will default to public for configs and "log" for logs)
+* `bash run_macos.sh --ConfigDirectory "/users/socg/Public/configs" --User "single-model-assistant"` (will just
+  use default for "logs"
+* `bash run_macos.sh --ConfigDirectory "/users/socg/Public/configs" --User "single-model-assistant" --LoggingDirectory
+  "/users/socg/wilmerlogs"`
+
+This these optional arguments allow users to spin up multiple instances of WilmerAI, each instance using a different
+user profile, logging to a different place, and specifying configs at a different location, if desired.
 
 ### Step 2 Fast Route: Use Pre-made Users
 
@@ -466,7 +482,8 @@ user JSON file, paste it as a duplicate, and then rename it. Here is an example 
   "useOfflineWikiApi": true,
   "offlineWikiApiHost": "127.0.0.1",
   "offlineWikiApiPort": 5728,
-  "endpointConfigsSubDirectory": "assistant-single-model"
+  "endpointConfigsSubDirectory": "assistant-single-model",
+  "useFileLogging": false
 }
 ```
 
@@ -511,6 +528,10 @@ user JSON file, paste it as a duplicate, and then rename it. Here is an example 
 - **offlineWikiApiPort**: Port for your wiki API. Unless you specifically change this, it's already good in all the
   example user configs.
 - **endpointConfigsSubDirectory**: Name of the subfolder in Endpoints where your endpoint jsons will live.
+- **useFileLogging**: Specifies whether to log the outputs from Wilmer to a file. By default this is false, and if the
+  value does not exist in the config it is false. When false, the logs will be printed to the console. NOTE: The
+  optional argument --LoggingDirectory for the .bat, .sh or .py files allow you to override where the logs are written.
+  By default they go to the root WilmerAI/logs directory.
 
 #### Users Folder, _current-user.json File
 
@@ -665,16 +686,55 @@ You can use several variables within these prompts. These will be appropriately 
 
 ### Other Types of Nodes
 
+#### Recent Memory Summarizer Tool
+
+> NOTE: For a deeper understanding of how memories work, please see
+> the [Understanding Memories section](#understanding-memories)
+
+This node will pull N number of memories (or most recent messages if no DiscussionId is present) and add a custom
+delimiter between them. So if you have a memory file with 3 memories, and choose a delimiter of "\n---------\n" then
+you might get the following:
+
+```text
+This is the first memory
+---------
+This is the second memory
+---------
+This is the third memory
+```
+
+Combining this node with the chat summary can allow the LLM to receive not only the summarized breakdown of the entire
+conversation as a whole, but also a list of all the memories that summary was built off of, which may contain more
+detailed and granular information about it. Sending both of those together, alongside the last 15-20 messages, can
+create the impression of a continual and persistent memory of the entire chat up to the most recent messages. Special
+care to craft good prompts for the generation of the memories can help to ensure the details you care about are
+captured, while less pertinent details are ignored.
+
+This node will generate any necessary memories, if it determines generation is needed.
+
+```json
+{
+  "title": "Recent memory gathering",
+  "agentName": "Recent Memory Gathering Tool",
+  "type": "RecentMemorySummarizerTool",
+  "maxTurnsToPull": 30,
+  "maxSummaryChunksFromFile": 30,
+  "customDelimiter": "\n------------\n"
+}
+```
+
 #### Recent/Quality Memory Node
 
-This node will group together the messages that you send the LLM into small chunks, and then use an LLM to summarize
-them. This triggers a call to the "RecentMemoryToolWorkflow", and then will save the output of that to a memory file.
-This node will look for `[DiscussionId]#####[/DiscussionId]` anywhere in the conversation, either in the system prompt
-or the messages (where #### is any number. So, for example, `[DiscussionId]123456[/DiscussionId]`. The file will be
-written as the `DiscussionId + _memories.json`; so `123456_memories.json`, in our example. I recommend not putting it in
-the system prompt, as then the memory will be shared between all chats. Once this file is created, this node will do a
-keyword search against the memories for anything related to the current conversation. So the result may be several
+This node will do a keyword search against the memories for anything related to the current conversation. So the result
+may be several
 summarized memory chunks loosely related to what's being talked about.
+
+This is different from the recent memory summarizer tool in that this will take the memories in the file and run them
+through an LLM to have the LLM further summarize them in the context of what is being said, while the previous recent
+memory tool will just dump all the memories raw for the LLM.
+
+Between the two, the Recent Memory Summarizer Tool is faster and often has better results, though will eat up more of
+the LLM's available context.
 
 ```json
 {
@@ -684,7 +744,7 @@ summarized memory chunks loosely related to what's being talked about.
 }
 ```
 
-#### Chat Summary Node
+#### Full Chat Summary Node
 
 This node will also generate the same recent memories file above, if it doesn't exist already, and then will take all
 the memories and summarize them into a single large summary. This summary is saved in `DiscussionId_chatsummary.json`.
@@ -703,6 +763,20 @@ simply use the one that already exists. If one exists and it hasnt been updated 
 * isManualConfig is supposed to tell the chatSummary to look for a summary file but not write to it, so that the user
   can write their own summaries. However, I think this field is actually bugged and does nothing. Just leave this false
   for now.
+
+#### Get Current Chat Summary From File
+
+Additionally, another node exists that allows you to simply grab the chat summary file without triggering memories to
+be processed or a new chat summary to be created. This node will only grab whatever is in the chat summary file and
+return it; it will do nothing else. If there is no file or memories, it will not generate them.
+
+```json
+  {
+  "title": "Grab the current summary from file",
+  "agentName": "Chat Summary File Puller Agent",
+  "type": "GetCurrentSummaryFromFile"
+}
+```
 
 #### Parallel Processing Node
 
@@ -805,12 +879,160 @@ The only difference from the previous node is the type.
 
 ## Understanding Memories
 
-### Quality Memory (utilizing "Recent Memories")
+### What are "Recent Memories"?
 
 The "Recent Memories" function is designed to enhance your conversation experience by chunking and summarizing your
-messages, writing them to a specified text file. This feature continuously searches these memories via keywords relevant
-to your current topic. After every few messages, it adds a new memory to ensure the conversation stays contextually up
-to date.
+messages, and then writing them to a specified text file.
+
+When creating memories, Wilmer will group together the messages that you send the LLM into small chunks, and then use an
+LLM that you specify to summarize them. Wilmer will then save these summary chunks to a memory file.
+In order to trigger memories to be created, Wilmer will first look for a recent memory node in your workflow and then
+will look for a Discussion Id, which is signified by having `[DiscussionId]#####[/DiscussionId]` anywhere in the
+conversation, in either the system prompt, standard prompt or any of the messages (where #### is any number.
+So, for example, `[DiscussionId]123456[/DiscussionId]`).
+
+The memory file will be written as the `DiscussionId + _memories.json`; so `123456_memories.json`, in our example.
+
+> NOTE: It is recommended to not put it in the system prompt, as then the memory will be shared between all chats.
+> Also, some front ends have variables that may help streamline the naming of memories. For example, one possible
+> discussion id in SillyTavern might be `[DiscussionId]{{char}}_2024-11-10[/DiscussionId]`, which for the character
+> TestPersona would result in a file called `TestPersona_2024-11-10_memories.json`
+
+The settings for how these memories are generated can be
+found in the file `_DiscussionId_MemoryFile-Workflow-Settings.json` for most users, though a different file name can be
+specified in the user json file within the field `discussionIdMemoryFileWorkflowSettings`.
+
+Example of the `_DiscussionId_MemoryFile-Workflow-Settings` file:
+
+```json
+{
+  "Display_Only_Description": "A brief description that is not used for anything; display purposes only",
+  "systemPrompt": "Put your system system prompt here for the LLM to use when generating memories",
+  "prompt": "Put the prompt for generating memories here. Best to specify the format, what details you want, etc.",
+  "endpointName": "Your-Endpoint",
+  "preset": "_Your_MemoryChatSummary_Preset",
+  "maxResponseSizeInTokens": 250,
+  "chunkEstimatedTokenSize": 2500,
+  "maxMessagesBetweenChunks": 20,
+  "lookbackStartTurn": 7
+}
+```
+
+Breaking down the above:
+
+* System Prompt: Your system prompt to use when having the LLM take in messages and summarize them
+* Prompt: The prompt to use when having an LLM take in memories and summarize them
+* Endpoint: The endpoint to use for memory generation
+* Preset: The preset to use for memory generation
+* maxResponseSizeInTokens: The maximum size you want your memory summary to be in tokens. This will be enforced by the
+  LLM.
+* chunkEstimatedTokenSize: This is telling Wilmer how large of a chunk of messages you want to be gathered before making
+  a memory. This is estimated tokens, and may be off by a bit from actual token sizes. If you put 2500 here, then Wilmer
+  will try to wait until your messages are at or a little under 2500 tokens, and then will send those messages to the
+  LLM to generate a new memory. It will remember that spot, and begin counting again from there. So after another 2500
+  tokens, it will generate another memory
+* maxMessagesBetweenChunks: This is an override for Wilmer during normal conversation flow to use instead of the token
+  size. So say that you set 2500 tokens in the previous value, but every message is really small; this means you could
+  go 50 messages before making a memory. If you put 20 here, then if you haven't hit 2500 tokens by 20 messages since
+  the last memory, it will make one there. So, essentially, a memory is generated when the first of these two are hit-
+  either the token limit or message limit. (NOTE: this is ignored when rebuilding older memories, often triggered by 
+  deleting the memory file well into a conversation. Will explain more below)
+* lookbackStartTurn: This tells Wilmer to ignore the last N messages when making memories. If you put 7 here, then
+  starting from the most recent message sent, it will count backwards 7 messages before beginning its memory
+  work. (This has value for some chat front ends like SillyTavern that place static text within the first 1-5 messages.
+  That static text can confuse or even break the memories entirely, so by going backwards 7 or more messages, we are
+  safer from that happening).
+
+The above file is not a normal workflow file; this is a static file where you can only change the values for the fields
+you see here. Adding more nodes will do nothing, and will probably break it.
+
+This file also has a series of prompt injectible variables that are unique only to it. Those can be found below:
+
+* [TextChunk]: The chunk of messages that were created based on the settings (using either token size or max messages).
+  This is what you want to have the LLM summarize
+* [Memory_file]: Up to the most recent 3 memories generated in the memory file. This was added recently to allow the
+  the LLM to not only have additional context around what happened recently, but also to be able to maintain a level of
+  consistency between memories.
+* [Full_Memory_file]: All currently generated memories
+* [Chat_Summary]: The chat summary from file, if it exists
+
+#### How memories are stored and tracked
+
+The memories are generated as json files, alongside the chat summary (if you have nodes for either in your workflow).
+Each memory is generated alongside a hash representing the last message in the chunk that the memory was made off of.
+For example, if you have 20 messages that will be turned into a memory, then the most recent memory in that chunk 
+will be hashed (this generates a unique string of characters and numbers that represents that string of text), 
+and that hass is stored with the memory. Now Wilmer knows that the memory ended with this message.
+
+This is important for Wilmer to determine when it needs to make new memories. Lets say that you have a new conversation,
+and you send 20 messages; if your settings require it, a new memory will be made for messages 1-20. The hash on the
+memory will be for message #20. When you send a new message, #21, Wilmer will be able to see that there has only been 1
+new message since the last memory. Later, when you reach message #40, your settings may require another new memory to be
+created. Message #40 will be hashed, and that new memory + the hash will be appended to your memory file alongside the
+first memory and the hash of message #20.
+
+Now, this represents a pitfall within memories. If you go back and delete message #20, then the message that was hashed
+as a bookmark for where the first memory was created will be gone. How this affects Wilmer depends:
+
+* In the case that your last memory was marked with message #20 (so, in our example, you are on message #27 and it
+  should count 7 messages since the last memory), then by deleting message #20 it will suddenly think there have been
+  26 messages since the last memory (as it can no longer find a message that matches up to the hash it stored alongside 
+  the memory, and will think that it needs to generate a new memory. This could mean you have two memories in your file
+  for the first 20 messages or so, so it will generate this new memory and append it to the file. So your first memory
+  in the file might be messages 1-20, and the second memory might be messages 1-26. This could confuse the LLM a little,
+  passing two separate summarized memories of the same events/conversation.
+* In the case that your last memory was marked with message #40 (so, in our example, you should have 2 memories by this point 
+  and perhaps are on message #43; it should count 3 messages since the last memory), deleting message #20 should have 
+  no effect. Wilmer doesn't care about the hashed bookmarks earlier than the most recent, so you're safe. When you send
+  message #44, it will ask "when was my last memory made?", see it was message #40 (or #39 now that we deleted an earlier
+  message) and count that it's not yet time to make a memory. However, if you deleted message #40 that was the hashed
+  message attached to the memory, you'd have the same issue as the first bullet point.
+
+#### Redoing memories
+
+> NOTE: Always back up your memory and chat summary json files before opening, modifying or deleting them, unless
+> you are positive you don't need or want the current memories/summary any longer.
+
+If you are unhappy with the last memory generated, it would cause Wilmer no issue for you to open up the memory json
+file and delete that memory so that on the next run it gets regenerated.
+
+Also, it will also not cause Wilmer issue if you simply delete the entire memory file. The memories will be re-generated on the
+next message. In fact, Socg does this quite often to clean up memories for his assistants.
+
+One important note: in the discussion id workflow settings file, there are two variables I'd like to point out: 
+
+```
+  "chunkEstimatedTokenSize": 2500,
+  "maxMessagesBetweenChunks": 20,
+```
+
+When generating memories over the normal course of a conversation, both settings are respected. However, if you were to
+delete the memory file and start over, or delete several old memories and regenerate them, ONLY the chunk estimated token
+size will be respected.
+
+The reason for this is to allow consolidation down the line. The max messages exists because, to save tokens sent to the
+LLM, it might be preferable to send only the last 30 or so messages at a time and rely on memories/summary to do the rest. 
+This means any message past 30 is lost from the context. By using "maxMessagesBetweenChunks" with a value of 20, it 
+helps ensure that the minimum amount of information possible is missing from the context during the conversation, by
+having a new memory being forced to generate every 20 messages even if they don't hit the token limit.
+
+If the messages DO hit the token limit before 20, the new memory would be generated earlier instead. But in our example,
+lets say that 20 messages comes in well below 2500 tokens.
+
+Now, since each message generates up to 250 tokens of memory, then 120 messages may result in 1,500 tokens of memories.
+But what if those 120 messages only amounted to 5,000 tokens of conversation, with 20 messages coming in well below the 
+specified 2500 token limit specified? Based on the settings above, Wilmer would instead trigger new memories based on 
+the max messages setting, generating 6 memories for 120 messages (one memory every 20 messages). 
+
+Now, lets say that after message 120  you were to delete that memory file and regenerate it; in that situation, 
+Wilmer would instead focus on the "chunkEstimatedTokenSize", which is 2500 tokens, and completely ignore the max
+message setting for the old memories. This means that the 5000 tokens of 120 messages would become only 2 memories,
+down from 6. So that 1,500 tokens of memories suddenly becomes 500.
+
+This helps a lot for ensuring memories remain current for a conversation as its happening, but also allowing the user
+to go back and consolidate memories over time to keep the prompt being sent to the LLM lean.
+
+#### Enabling the memory
 
 To enable this, include a tag in your conversation: `[DiscussionId]#######[/DiscussionId]`, where `######` is any
 numerical value. For example `[DiscussionId]123456[/DiscussionId]`. You can insert this tag anywhere in the system
@@ -826,12 +1048,6 @@ note.
 The "Chat Summary" function builds upon the "Recent Memories" by summarizing the entire conversation up to the current
 point. It updates the summary every time new memories are added. Similar to "Recent Memories," this feature requires
 the `[DiscussionId]#######[/DiscussionId]` tag to function correctly.
-
-### Resetting Memories and Summary
-
-At any point, you can simply delete the files and they will get rebuilt, if applicable. I recommend this over modifying
-them directly. (Note that if you delete the Memories file, you should also remove the Summary file, but you can safely
-delete the Summary by itself.)
 
 ### Parallel Processing
 
