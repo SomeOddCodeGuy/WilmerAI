@@ -5,5 +5,7 @@
   "endpointName": "Assistant-Multi-Model-MemoryChatSummary-Endpoint",
   "preset": "_Assistant_Multi_Model_MemoryChatSummary_Preset",
   "maxResponseSizeInTokens": 250,
-  "chunkEstimatedTokenSize": 2500
+  "chunkEstimatedTokenSize": 2500,
+  "maxMessagesBetweenChunks": 20,
+  "lookbackStartTurn": 7
 }
