@@ -114,7 +114,7 @@ def hash_single_message(message: Dict[str, str]) -> str:
 
 def find_last_matching_hash_message(messagesOriginal: List[Dict[str, str]],
                                     hashed_chunks_original: List[Tuple[str, str]],
-                                    skip_system: bool = False) -> int:
+                                    skip_system: bool = False, turns_to_skip_looking_back=4) -> int:
     """
     Find the number of messages since the last matching hash, starting from the third-to-last message.
 
@@ -134,8 +134,7 @@ def find_last_matching_hash_message(messagesOriginal: List[Dict[str, str]],
 
     current_message_hashes = [hash_single_message(message) for message in filtered_messages]
 
-    # We want to start from the third-to-last message (hence len(current_message_hashes) - 3)
-    start_index = len(current_message_hashes) - 4
+    start_index = len(current_message_hashes) - turns_to_skip_looking_back
 
     # Iterate from the third-to-last message backwards
     for i in range(start_index, -1, -1):

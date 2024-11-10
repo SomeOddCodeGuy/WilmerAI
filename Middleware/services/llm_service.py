@@ -29,12 +29,12 @@ class LlmHandlerService:
         api_type_config = get_api_type_config(config_data["apiTypeConfigFileName"])
         llm_type = api_type_config["type"]
         if llm_type == "openAIV1Completion":
-            logger.info('Loading v1 Completions endpoint: ' + endpoint)
+            logger.info('Loading v1 Completions endpoint: %s', endpoint)
             llm = OpenAiLlmCompletionsApiService(endpoint=endpoint, presetname=preset,
                                                  stream=stream, api_type_config=api_type_config,
                                                  max_tokens=max_tokens)
         elif llm_type == "openAIChatCompletion":
-            logger.info('Loading chat Completions endpoint: ' + endpoint)
+            logger.info('Loading chat Completions endpoint: %s', endpoint)
             llm = OpenAiLlmChatCompletionsApiService(endpoint=endpoint, presetname=preset,
                                                      stream=stream, api_type_config=api_type_config,
                                                      max_tokens=max_tokens)
@@ -59,7 +59,7 @@ class LlmHandlerService:
     def load_model_from_config(self, config_name, preset, stream=False, truncate_length=4096, max_tokens=400,
                                addGenerationPrompt=None):
         try:
-            logger.info("Loading model from: " + config_name)
+            logger.info("Loading model from: %s", config_name)
             config_file = get_endpoint_config(config_name)
             return self.initialize_llm_handler(config_file, preset, config_name, stream, truncate_length, max_tokens,
                                                addGenerationPrompt)

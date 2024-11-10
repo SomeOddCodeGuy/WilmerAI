@@ -1,8 +1,9 @@
-from copy import deepcopy
 import logging
+from copy import deepcopy
 from typing import List, Dict
 
 from Middleware.services.llm_service import LlmHandlerService
+from Middleware.utilities import memory_utils
 from Middleware.utilities.config_utils import get_discussion_memory_file_path, load_config, \
     get_discussion_id_workflow_path, get_endpoint_config
 from Middleware.utilities.file_utils import read_chunks_with_hashes, \
@@ -20,6 +21,7 @@ from Middleware.workflows.managers.workflow_variable_manager import WorkflowVari
 from Middleware.workflows.tools.parallel_llm_processing_tool import ParallelLlmProcessingTool
 
 logger = logging.getLogger(__name__)
+
 
 class SlowButQualityRAGTool:
     """
@@ -90,7 +92,7 @@ class SlowButQualityRAGTool:
         filtered_chunks = [s for s in search_result_chunks if s]
 
         logger.info("******** BEGIN SEARCH RESULT CHUNKS ************")
-        logger.info("Search result chunks: ", '\n\n'.join(filtered_chunks))
+        logger.info("Search result chunks: %s", '\n\n'.join(filtered_chunks))
         logger.info("******** END SEARCH RESULT CHUNKS ************")
 
         return '--ChunkBreak--'.join(filtered_chunks)
@@ -128,7 +130,7 @@ class SlowButQualityRAGTool:
         filtered_chunks = [s for s in search_result_chunks if s]
 
         logger.info("******** BEGIN SEARCH RESULT CHUNKS ************")
-        logger.info("Search result chunks: ", '\n\n'.join(filtered_chunks))
+        logger.info("Search result chunks: %s", '\n\n'.join(filtered_chunks))
         logger.info("******** END SEARCH RESULT CHUNKS ************")
 
         return '\n\n'.join(filtered_chunks)
@@ -142,14 +144,14 @@ class SlowButQualityRAGTool:
         chunks.reverse()
 
         all_chunks = "--ChunkBreak--".join(chunks)
-        logger.info("Processing chunks: ", all_chunks)
+        logger.info("Processing chunks: %s", all_chunks)
 
         result = rag_tool.perform_rag_on_memory_chunk(rag_system_prompt, rag_prompt, all_chunks, workflow, messages,
                                                       discussionId, "--rag_break--", chunks_per_memory)
         results = result.split("--rag_break--")
         results.reverse()
-        logger.info("Total results: " + str(len(results)))
-        logger.info("Total chunks: " + str(len(hash_chunks)))
+        logger.info("Total results: %s", len(results))
+        logger.info("Total chunks: %s", len(hash_chunks))
         hash_chunks.reverse()
 
         replaced = [(summary, hash_code) for summary, (_, hash_code) in zip(results, hash_chunks)]
@@ -186,6 +188,11 @@ class SlowButQualityRAGTool:
 
         rag_system_prompt = discussion_id_workflow_config['systemPrompt']
         rag_prompt = discussion_id_workflow_config['prompt']
+        messages_from_most_recent_to_skip = discussion_id_workflow_config['lookbackStartTurn']
+        if not messages_from_most_recent_to_skip or messages_from_most_recent_to_skip < 1:
+            messages_from_most_recent_to_skip = 3
+        logger.info("Skipping most recent messages. Number of most recent messages to skip: " + str(
+            messages_from_most_recent_to_skip))
 
         chunk_size = discussion_id_workflow_config.get('chunkEstimatedTokenSize', 1000)
         max_messages_between_chunks = discussion_id_workflow_config.get('maxMessagesBetweenChunks', 0)
@@ -198,17 +205,19 @@ class SlowButQualityRAGTool:
             self.process_full_discussion_flow(messages_copy, rag_system_prompt, rag_prompt,
                                               discussion_id_workflow_config, discussionId)
         else:
-            number_of_messages_to_pull = find_last_matching_hash_message(messages_copy, discussion_chunks)
-            if (number_of_messages_to_pull > 3):
-                number_of_messages_to_pull = number_of_messages_to_pull - 3
+            number_of_messages_to_pull = find_last_matching_hash_message(messages_copy, discussion_chunks,
+                                                                         turns_to_skip_looking_back=messages_from_most_recent_to_skip)
+            if (number_of_messages_to_pull > messages_from_most_recent_to_skip):
+                number_of_messages_to_pull = number_of_messages_to_pull - messages_from_most_recent_to_skip
             else:
                 number_of_messages_to_pull = 0
 
-            logger.info("Number of messages since last memory chunk update: ", number_of_messages_to_pull)
+            logger.info("Number of messages since last memory chunk update: %s", number_of_messages_to_pull)
 
-            messages_to_process = messages_copy[:-3] if len(messages_copy) > 3 else messages_copy
-            logger.info("Messages to process: ", messages_to_process)
-            if (len(messages_to_process) == 0):
+            messages_to_process = messages_copy[:-messages_from_most_recent_to_skip] if len(
+                messages_copy) > messages_from_most_recent_to_skip else messages_copy
+            logger.info("Messages to process: %s", messages_to_process)
+            if len(messages_to_process) == 0:
                 return
 
             if (rough_estimate_token_length(
@@ -313,6 +322,7 @@ class SlowButQualityRAGTool:
 
         discussion_chunks = read_chunks_with_hashes(get_discussion_memory_file_path(discussionId))
         memory_chunks = extract_text_blocks_from_hashed_chunks(discussion_chunks)
+        chat_summary = memory_utils.handle_get_current_summary_from_file(discussionId)
 
         endpoint_data = get_endpoint_config(config['endpointName'])
         llm_handler_service = LlmHandlerService()
@@ -330,9 +340,19 @@ class SlowButQualityRAGTool:
             if current_memories is None:
                 current_memories = ""
 
-            logger.info("Processing memory chunk. Current memories is: [[" + current_memories.strip() + "]]")
+            full_memories = '\n--------------\n'.join(memory_chunks)
+            if full_memories is None:
+                full_memories = ""
+
+            logger.info("Processing memory chunk")
             system_prompt = rag_system_prompt.replace('[Memory_file]', current_memories.strip())
             prompt = rag_prompt.replace('[Memory_file]', current_memories.strip())
+
+            system_prompt = system_prompt.replace('[Full_Memory_file]', full_memories.strip())
+            prompt = prompt.replace('[Full_Memory_file]', full_memories.strip())
+
+            system_prompt = system_prompt.replace('[Chat_Summary]', chat_summary.strip())
+            prompt = prompt.replace('[Chat_Summary]', chat_summary.strip())
 
             result_chunk = SlowButQualityRAGTool.process_single_chunk(chunk, llm_handler, prompt, system_prompt,
                                                                       messages, config)
