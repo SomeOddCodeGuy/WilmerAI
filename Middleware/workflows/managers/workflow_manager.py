@@ -1,7 +1,6 @@
 import json
 import logging
 import time
-import traceback
 import uuid
 from copy import deepcopy
 from typing import Dict, List
@@ -14,7 +13,7 @@ from Middleware.utilities.config_utils import get_active_conversational_memory_t
     get_active_recent_memory_tool_name, get_file_memory_tool_name, \
     get_chat_template_name, get_discussion_chat_summary_file_path, get_discussion_memory_file_path, get_workflow_path, \
     get_chat_summary_tool_workflow_name
-from Middleware.utilities.file_utils import read_chunks_with_hashes
+from Middleware.utilities.file_utils import read_chunks_with_hashes, load_custom_file
 from Middleware.utilities.instance_utils import INSTANCE_ID
 from Middleware.utilities.memory_utils import gather_chat_summary_memories, \
     handle_get_current_summary_from_file, gather_recent_memories
@@ -27,6 +26,7 @@ from Middleware.workflows.managers.workflow_variable_manager import WorkflowVari
 from Middleware.workflows.processors.prompt_processor import PromptProcessor
 
 logger = logging.getLogger(__name__)
+
 
 class WorkflowManager:
     """
@@ -144,7 +144,7 @@ class WorkflowManager:
                 try:
                     for idx, config in enumerate(configs):
                         logger.info(f'------Workflow {self.workflowConfigName}; ' +
-                              f'step {idx}; node type: {config.get("type", "Standard")}')
+                                    f'step {idx}; node type: {config.get("type", "Standard")}')
 
                         if "systemPrompt" in config or "prompt" in config:
                             if self.override_first_available_prompts:
@@ -305,16 +305,17 @@ class WorkflowManager:
                                                                    agent_outputs)
         if config["type"] == "RecentMemorySummarizerTool":
             logger.info("Recent memory summarization tool")
-            prompt_processor_service.handle_memory_file(discussion_id, messages)
             memories = gather_recent_memories(messages,
                                               discussion_id,
                                               config["maxTurnsToPull"],
                                               config["maxSummaryChunksFromFile"])
             custom_delimiter = config.get("customDelimiter", None)
-            if custom_delimiter is not None:
+            if custom_delimiter is not None and memories is not None:
                 return memories.replace("--ChunkBreak--", custom_delimiter)
-            else:
+            elif memories is not None:
                 return memories
+            else:
+                return "There are not yet any memories"
         if config["type"] == "ChatSummaryMemoryGatheringTool":
             logger.info("Chat summary memory gathering tool")
             return gather_chat_summary_memories(messages,
@@ -345,8 +346,13 @@ class WorkflowManager:
             logger.info("Python Module")
             return self.handle_python_module(config, prompt_processor_service, messages, agent_outputs)
         if config["type"] == "OfflineWikiApiFullArticle":
+            # DEPRECATED. REMOVING SOON
             logger.info("Offline Wikipedia Api Full Article")
             return prompt_processor_service.handle_offline_wiki_node(messages, config["promptToSearch"], agent_outputs)
+        if config["type"] == "OfflineWikiApiBestFullArticle":
+            logger.info("Offline Wikipedia Api Best Full Article")
+            return prompt_processor_service.handle_offline_wiki_node(messages, config["promptToSearch"], agent_outputs,
+                                                                     use_new_best_article_endpoint=True)
         if config["type"] == "OfflineWikiApiPartialArticle":
             logger.info("Offline Wikipedia Api Summary Only")
             return prompt_processor_service.handle_offline_wiki_node(messages, config["promptToSearch"], agent_outputs,
@@ -374,6 +380,27 @@ class WorkflowManager:
 
         if config["type"] == "CustomWorkflow":
             return self.handle_custom_workflow(config, messages, agent_outputs, stream, request_id, discussion_id)
+        if config["type"] == "GetCustomFile":
+            logger.info("Get custom file")
+            delimiter = config.get("delimiter")
+            custom_return_delimiter = config.get("customReturnDelimiter")
+            filepath = config.get("filepath")
+
+            if filepath is None:
+                return "No filepath specified"
+
+            if delimiter is None:
+                if custom_return_delimiter is None:
+                    custom_return_delimiter = "\n"
+                    delimiter = custom_return_delimiter
+                else:
+                    delimiter = custom_return_delimiter
+            elif custom_return_delimiter is None:
+                custom_return_delimiter = delimiter
+
+            file = load_custom_file(filepath=filepath, delimiter=delimiter, custom_delimiter=custom_return_delimiter)
+            logger.info("Custom file result: %s", file)
+            return file
 
     def handle_custom_workflow(self, config, messages, agent_outputs, stream, request_id, discussion_id):
         print("Custom Workflow initiated")

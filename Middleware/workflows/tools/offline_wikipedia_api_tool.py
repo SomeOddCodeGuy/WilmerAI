@@ -79,6 +79,7 @@ class OfflineWikiApiClient:
         else:
             raise Exception(f"Error: {response.status_code}, {response.text}")
 
+    # DEPRECATED. REMOVING SOON
     def get_full_wiki_article_by_prompt(self, prompt, percentile=0.5, num_results=1):
         """
         Get full text of Wikipedia articles based on a prompt.
@@ -109,5 +110,38 @@ class OfflineWikiApiClient:
         if response.status_code == 200:
             results = response.json()
             return [result.get('text', "No text element found") for result in results]
+        else:
+            raise Exception(f"Error: {response.status_code}, {response.text}")
+
+    def get_top_full_wiki_article_by_prompt(self, prompt, percentile=0.5, num_results=10):
+        """
+        Get full text of Wikipedia articles based on a prompt.
+
+        Args:
+            prompt (str): The prompt to generate the articles.
+            percentile (float): The relevance percentile to match articles. Default is 0.5.
+            num_results (int): The number of results to return. Default is 10.
+
+        Returns:
+            list: A list containing the article text.
+
+        Raises:
+            Exception: If the API request fails.
+        """
+        if not self.use_offline_wiki_api:
+            return ["No additional information provided"]
+
+        url = f"{self.base_url}/top_article"
+        params = {
+            'prompt': prompt,
+            'percentile': percentile,
+            'num_results': num_results
+        }
+        response = requests.get(url, params=params)
+        print(f"Response Status Code: {response.status_code}")
+        print(f"Response Text: {response.text}")
+        if response.status_code == 200:
+            result = response.json()
+            return [result.get('text', "No text element found")]  # Wrap the single text in a list
         else:
             raise Exception(f"Error: {response.status_code}, {response.text}")

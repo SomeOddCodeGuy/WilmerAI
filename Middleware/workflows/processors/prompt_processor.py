@@ -444,7 +444,8 @@ class PromptProcessor:
         return run_dynamic_module(module_path, *new_args, **kwargs)
 
     def handle_offline_wiki_node(self, messages: List[Dict[str, str]], prompt,
-                                 agent_outputs: [Dict], get_full_article: bool = True) -> Any:
+                                 agent_outputs: [Dict], get_full_article: bool = True,
+                                 use_new_best_article_endpoint: bool = False) -> Any:
 
         message_copy = deepcopy(messages)
 
@@ -456,7 +457,10 @@ class PromptProcessor:
         )
 
         offline_wiki_api_client = OfflineWikiApiClient()
-        if get_full_article:
+        if get_full_article and use_new_best_article_endpoint:
+            result = offline_wiki_api_client.get_top_full_wiki_article_by_prompt(variabled_prompt)
+            return result
+        elif get_full_article:
             results = offline_wiki_api_client.get_full_wiki_article_by_prompt(variabled_prompt)
         else:
             results = offline_wiki_api_client.get_wiki_summary_by_prompt(variabled_prompt)

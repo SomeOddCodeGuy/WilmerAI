@@ -654,6 +654,20 @@ at the endpoint.
 - **addUserTurnTemplate**: Whether to wrap the prompt being sent to the LLM within a user turn template. If you send the
   last few messages, set this as `false` (see first example node above). If you send a prompt, set this as `true` (see
   second example node above).
+- **returnToUser**: This forces a node that is not the final node in a workflow to be the one to return its output
+  to the user. This can be especially helpful in workflow lock scenarios. (please see
+  the [Workflow lock section](#workflow-lock)). **IMPORTANT**: This only works for streaming workflows. This does not
+  work for non-streaming.
+- **addDiscussionIdTimestampsForLLM**: This will generate timestamps and track them across your conversation starting
+  from the moment you add this. The timestamps will be added to the beginning of any message sent to the LLM
+  where that timestamp has been tracked. So, for example, if you turn this on after 10 messages have been sent, messages
+  11 onward will be tracked on when the message arrived. When the messages are sent to the LLM, the timestamps will be
+  included.
+
+`NOTE: The addDiscussionIdTimestampsForLLM feature was an experiment, and truthfully I am not happy with how the
+experiment went. Even the largest LLMs misread the timestamps, got confused by them, etc. I have other plans for this
+feature which should be far more useful, but I left it in and won't be removing it, even though I don't necessarily
+recommend using it. -Socg`
 
 ### Variables in Prompts
 
@@ -710,7 +724,8 @@ create the impression of a continual and persistent memory of the entire chat up
 care to craft good prompts for the generation of the memories can help to ensure the details you care about are
 captured, while less pertinent details are ignored.
 
-This node will generate any necessary memories, if it determines generation is needed.
+This node will NOT generate new memories; this is so that workflow locks can be respected if you are using them
+on a multi-computer setup. Currently the best way to generate memories is the FullChatSummary node.
 
 ```json
 {
@@ -746,10 +761,15 @@ the LLM's available context.
 
 #### Full Chat Summary Node
 
-This node will also generate the same recent memories file above, if it doesn't exist already, and then will take all
+> NOTE: For a deeper understanding of how chat summaries work, please see
+> the [Understanding The Chat Summary section](#understanding-the-chat-summary)
+
+This node is only activate if [DiscussionId] is used.
+
+This node will also generate a recent memories file, if one doesn't exist already, and then will take all
 the memories and summarize them into a single large summary. This summary is saved in `DiscussionId_chatsummary.json`.
 So `123456_chatsummary.json`, in our above example. If a chat summary already exists and was recently updated, it will
-simply use the one that already exists. If one exists and it hasnt been updated in a while, it will update the summary.
+simply use the one that already exists. If one exists and it hasn't been updated in a while, it will update the summary.
 
 ```json
 {
@@ -840,12 +860,27 @@ the [OfflineWikipediaTextApi](https://github.com/SomeOddCodeGuy/OfflineWikipedia
 and will pull back a response based on the promptToSearch that you pass in. You can use this text to pass
 into other nodes for factual responses (see factual workflows in the sample users).
 
+`NOTE: The below node is deprecated and will be replaced. The new node is right below it. I'm not removing it yet
+in case someone is actively using it.`
+
 ```json
   {
   "title": "Querying the offline wikipedia api",
   "agentName": "Wikipedia Search Api Agent Three",
   "promptToSearch": "{agent1Output}",
   "type": "OfflineWikiApiFullArticle"
+}
+```
+
+`NOTE: This is the new node. This node will require you to be using the newest version of the OfflineWikipediaTextApi.
+If you are using an older version, you will not have the required "top_article" endpoint and this will crash.`
+
+```json
+  {
+  "title": "Querying the offline wikipedia api",
+  "agentName": "Wikipedia Search Api Agent Three",
+  "promptToSearch": "{agent1Output}",
+  "type": "OfflineWikiApiBestFullArticle"
 }
 ```
 
@@ -869,13 +904,156 @@ paragraph of the wiki article. If that is all you need, then this endpoint will 
 The only difference from the previous node is the type.
 
 ```json
-  {
+{
   "title": "Querying the offline wikipedia api",
   "agentName": "Wikipedia Search Api Agent Three",
   "promptToSearch": "{agent1Output}",
   "type": "OfflineWikiApiPartialArticle"
 }
 ```
+
+### Get Custom File
+
+This node allows you to load a custom text file in a workflow. The text file can contain anything that you want,
+and will be treated as any other output node. So if this node is the first in your workflow, then you can reference
+the file using `{agent1Output}` in future nodes of that workflow, for example.
+
+- `filepath`: The specific file you want to load. This must be a single .txt file
+- `delimiter`: The separator that you use in the file to separate different topics, if applicable.
+- `customReturnDelimiter`: What you'd like to replace the delimiter with when returning the text from the file
+  as an agent output.
+
+Example for delimiter: perhaps in your file you have 5 paragraphs, each separated by 2 newlines. You'd like to
+break those into individual items, separated by asterisks. Your delimiter might be "\n\n" while your custom
+delimiter might be "\n\n******\n\n" This would cause the below
+
+```text
+paragraph 1
+
+paragraph 2
+```
+
+to become
+
+```text
+paragraph 1
+
+******
+
+paragraph 2
+```
+
+This node can be added with the following syntax:
+
+```json
+{
+  "title": "Custom File Grabber",
+  "type": "GetCustomFile",
+  "filepath": "D:\\Temp\\some_custom_file.txt",
+  "delimiter": "\n\n",
+  "customReturnDelimiter": "\n\n"
+}
+```
+
+### Workflow Lock
+
+A workflow lock acts as a way to lock a workflow at a certain point during asynchronous operations, so that you don't
+encounter race conditions of two instances of a workflow crashing into each other via consecutive calls.
+
+To put it more simply, lets use an example workflow:
+
+```text
+Node 1: "GetCurrentSummaryFromFile" type node. This does NOT generate a chat summary;
+it only pulls the existing summary out of the file if one is there.
+
+Node 2: "RecentMemorySummarizerTool" type node. This does NOT generate memories; it
+only pulls existing memories out of the file if they exist.
+
+Node 3: Responder node. Just a regular chat node with no "type" that would output text.
+However, since we want this one to respond to the user, we will be setting `returnToUser`
+to true. This will force this node to output its response to the user, even though it's
+only halfway through the workflow.
+
+Node 4: "WorkflowLock" type node. This node will generate a workflow lock at this point.
+We will give the WorkflowLock an ID, and until that workflow lock is released, any node
+of this type with that ID for this Wilmer instance will not be allowed to progress past
+the lock.
+
+Node 5: "FullChatSummary" type node. This will generate memories and generate a chat
+summary. This can be a very long and intensive process. 
+```
+
+Ok, so looking at the above, let's make a couple of assumptions to help make workflow locks make sense.
+
+- Lets assume that you own 2 computers, both serving a different LLM. Maybe Llama 3.1 8b on computer A, and Qwen2.5 7b
+  on Computer B.
+- The LLM you use to respond to the user in Node 3 is on Computer A, using Llama 3.1
+- The LLM you use to generate memories and chat summaries in Node 5 is on Computer B, using Qwen2.5
+- For the below example, lets assume you have 200 messages in your chat, and have not yet generated
+  a memory or chat summary file.
+- You are using a streaming workflow; ie your front end has streaming enabled. If this is not true,
+  then node 3 won't respond to you and the workflow lock is useless. Most people have this on.
+
+Based on these assumptions, lets step through the workflow.
+
+1) You send a message.
+2) Nodes 1 and 2 gathering your memories and chat summary file. They don't GENERATE anything, they
+   only pull what exists from the file. If nothing exists, they pull nothing
+3) Node 3 utilizes the outputs of Nodes 1 and 2, the memories and chat summary, to generate a response.
+   Because respondToUser is true, that response is sent to the front end UI for the user to read.
+4) Node 4, the workflow lock, engages a lock on whatever the ID is. Lets say the ID is "MyMemoryLock". So
+   now Wilmer has registered that there is a workflow lock called "MyMemoryLock", and it is turned on.
+5) The FullChatSummary node begins generating memories and a summary. Because you have 200 messages, this will
+   take around 5 minutes to complete.
+
+Ok, so you likely got your response from Node 3 in about 10 seconds. But now your memories and summary are being
+generated, and that could take up to 5 minutes, so... no more robits for you for 5 minutes?
+
+Nope. Thanks to the workflow lock, that isn't the case.
+
+Lets consider if you immediately send another message after receiving the response to your UI from Node 3, meaning
+you that start talking to the AI while there is still 4 minutes of work left for Node 5 on generating memories and
+the chat summary. Also remember that Computer A was used to respond to you, while Computer B is the one generating
+the memories.
+
+1) You send a message.
+2) Nodes 1 and 2 gathering your memories and chat summary file. They don't GENERATE anything, they
+   only pull what exists from the file. If nothing exists, they pull nothing
+3) Node 3 utilizes the outputs of Nodes 1 and 2, the memories and chat summary, to generate a response.
+   Because respondToUser is true, that response is sent to the front end.
+4) Workflow hits the workflow lock node. It sees that "MyMemoryLock" is engaged, and ends the workflow here,
+   not progressing past this point.
+
+So what happened? You sent a message, the LLM on Computer A (your responder AI, which currently has nothing
+else to do but respond to you) responds to you, and then the workflow lock stops the workflow immediately after.
+Computer B is still busy generating memories and summaries from your first message, so we don't want to send
+another request to it yet. But computer B being busy means nothing for computer A, which is ready to go and will
+happily keep talking to you.
+
+This means that, using workflow locks, you can keep talking to your LLM while memories and summaries are being
+generated. In this example we used small models, but in reality we might use large ones. For example, Socg might
+use a Mac Studio with Llama 3.1 70b running, and a Macbook with another instance of Llama 3.1 70b running. Both of
+those, on a mac, can take up to 2 minutes to respond on a lengthy prompt, so writing memories and summaries can take
+forever. Thanks to this workflow locks, there is no need to wait for those memories/summaries to complete, as the
+conversation can continue using the Studio to respond while the Macbook works tirelessly in the background
+updating memories/summaries.
+
+```json
+  {
+  "title": "Workflow Lock",
+  "type": "WorkflowLock",
+  "workflowLockId": "FullCustomChatSummaryLock"
+}
+```
+
+**IMPORTANT**: Workflow locks automatically unlock when a workflow has finished its task, and workflow locks
+automatically release when Wilmer is restarted. Each user gets their own workflow lock tracking,
+which is done in the user's sqlLite database (the path to which can be configured in the user json). Workflow locks
+are tracked by a combination if ID, user, and API instance. So as long as you are in the same instance of Wilmer and
+the same User, you can use the same workflow id in as many workflows as you want. Meaning 1 workflow can cause locks
+in other workflows, if that's what you desire.
+
+Workflow locks work best in multi-computer setups.
 
 ## Understanding Memories
 
@@ -935,7 +1113,7 @@ Breaking down the above:
   size. So say that you set 2500 tokens in the previous value, but every message is really small; this means you could
   go 50 messages before making a memory. If you put 20 here, then if you haven't hit 2500 tokens by 20 messages since
   the last memory, it will make one there. So, essentially, a memory is generated when the first of these two are hit-
-  either the token limit or message limit. (NOTE: this is ignored when rebuilding older memories, often triggered by 
+  either the token limit or message limit. (NOTE: this is ignored when rebuilding older memories, often triggered by
   deleting the memory file well into a conversation. Will explain more below)
 * lookbackStartTurn: This tells Wilmer to ignore the last N messages when making memories. If you put 7 here, then
   starting from the most recent message sent, it will count backwards 7 messages before beginning its memory
@@ -960,8 +1138,8 @@ This file also has a series of prompt injectible variables that are unique only 
 
 The memories are generated as json files, alongside the chat summary (if you have nodes for either in your workflow).
 Each memory is generated alongside a hash representing the last message in the chunk that the memory was made off of.
-For example, if you have 20 messages that will be turned into a memory, then the most recent memory in that chunk 
-will be hashed (this generates a unique string of characters and numbers that represents that string of text), 
+For example, if you have 20 messages that will be turned into a memory, then the most recent memory in that chunk
+will be hashed (this generates a unique string of characters and numbers that represents that string of text),
 and that hass is stored with the memory. Now Wilmer knows that the memory ended with this message.
 
 This is important for Wilmer to determine when it needs to make new memories. Lets say that you have a new conversation,
@@ -976,15 +1154,17 @@ as a bookmark for where the first memory was created will be gone. How this affe
 
 * In the case that your last memory was marked with message #20 (so, in our example, you are on message #27 and it
   should count 7 messages since the last memory), then by deleting message #20 it will suddenly think there have been
-  26 messages since the last memory (as it can no longer find a message that matches up to the hash it stored alongside 
+  26 messages since the last memory (as it can no longer find a message that matches up to the hash it stored alongside
   the memory, and will think that it needs to generate a new memory. This could mean you have two memories in your file
   for the first 20 messages or so, so it will generate this new memory and append it to the file. So your first memory
   in the file might be messages 1-20, and the second memory might be messages 1-26. This could confuse the LLM a little,
   passing two separate summarized memories of the same events/conversation.
-* In the case that your last memory was marked with message #40 (so, in our example, you should have 2 memories by this point 
-  and perhaps are on message #43; it should count 3 messages since the last memory), deleting message #20 should have 
+* In the case that your last memory was marked with message #40 (so, in our example, you should have 2 memories by this
+  point
+  and perhaps are on message #43; it should count 3 messages since the last memory), deleting message #20 should have
   no effect. Wilmer doesn't care about the hashed bookmarks earlier than the most recent, so you're safe. When you send
-  message #44, it will ask "when was my last memory made?", see it was message #40 (or #39 now that we deleted an earlier
+  message #44, it will ask "when was my last memory made?", see it was message #40 (or #39 now that we deleted an
+  earlier
   message) and count that it's not yet time to make a memory. However, if you deleted message #40 that was the hashed
   message attached to the memory, you'd have the same issue as the first bullet point.
 
@@ -996,10 +1176,11 @@ as a bookmark for where the first memory was created will be gone. How this affe
 If you are unhappy with the last memory generated, it would cause Wilmer no issue for you to open up the memory json
 file and delete that memory so that on the next run it gets regenerated.
 
-Also, it will also not cause Wilmer issue if you simply delete the entire memory file. The memories will be re-generated on the
+Also, it will also not cause Wilmer issue if you simply delete the entire memory file. The memories will be re-generated
+on the
 next message. In fact, Socg does this quite often to clean up memories for his assistants.
 
-One important note: in the discussion id workflow settings file, there are two variables I'd like to point out: 
+One important note: in the discussion id workflow settings file, there are two variables I'd like to point out:
 
 ```
   "chunkEstimatedTokenSize": 2500,
@@ -1007,12 +1188,14 @@ One important note: in the discussion id workflow settings file, there are two v
 ```
 
 When generating memories over the normal course of a conversation, both settings are respected. However, if you were to
-delete the memory file and start over, or delete several old memories and regenerate them, ONLY the chunk estimated token
+delete the memory file and start over, or delete several old memories and regenerate them, ONLY the chunk estimated
+token
 size will be respected.
 
 The reason for this is to allow consolidation down the line. The max messages exists because, to save tokens sent to the
-LLM, it might be preferable to send only the last 30 or so messages at a time and rely on memories/summary to do the rest. 
-This means any message past 30 is lost from the context. By using "maxMessagesBetweenChunks" with a value of 20, it 
+LLM, it might be preferable to send only the last 30 or so messages at a time and rely on memories/summary to do the
+rest.
+This means any message past 30 is lost from the context. By using "maxMessagesBetweenChunks" with a value of 20, it
 helps ensure that the minimum amount of information possible is missing from the context during the conversation, by
 having a new memory being forced to generate every 20 messages even if they don't hit the token limit.
 
@@ -1020,11 +1203,11 @@ If the messages DO hit the token limit before 20, the new memory would be genera
 lets say that 20 messages comes in well below 2500 tokens.
 
 Now, since each message generates up to 250 tokens of memory, then 120 messages may result in 1,500 tokens of memories.
-But what if those 120 messages only amounted to 5,000 tokens of conversation, with 20 messages coming in well below the 
-specified 2500 token limit specified? Based on the settings above, Wilmer would instead trigger new memories based on 
-the max messages setting, generating 6 memories for 120 messages (one memory every 20 messages). 
+But what if those 120 messages only amounted to 5,000 tokens of conversation, with 20 messages coming in well below the
+specified 2500 token limit specified? Based on the settings above, Wilmer would instead trigger new memories based on
+the max messages setting, generating 6 memories for 120 messages (one memory every 20 messages).
 
-Now, lets say that after message 120  you were to delete that memory file and regenerate it; in that situation, 
+Now, lets say that after message 120 you were to delete that memory file and regenerate it; in that situation,
 Wilmer would instead focus on the "chunkEstimatedTokenSize", which is 2500 tokens, and completely ignore the max
 message setting for the old memories. This means that the 5000 tokens of 120 messages would become only 2 memories,
 down from 6. So that 1,500 tokens of memories suddenly becomes 500.
@@ -1043,11 +1226,83 @@ defaults to searching the last N number of messages instead.
 share the same memories, leading to confusion. I recommend putting it somewhere in the conversation or the author's
 note.
 
-### Chat Summary
+### Understanding the Chat Summary
 
 The "Chat Summary" function builds upon the "Recent Memories" by summarizing the entire conversation up to the current
 point. It updates the summary every time new memories are added. Similar to "Recent Memories," this feature requires
 the `[DiscussionId]#######[/DiscussionId]` tag to function correctly.
+
+The chat summary is created via an internal loop within the `chatSummarySummarizer` type node. Like the DiscussionId
+settings file, this workflow is a single node workflow (a change from early days where it could be multi-node) and is
+still a work in progress.
+
+The reason it was changed from multi-node to single-node was because there was an issue with how summaries were being
+generated over time. In the early days, if you deleted memories and generated your summary, depending on how long the
+conversation was you could have too many memories in your prompt; either it would exceed the summary endpoint's context
+window or it would just be so full of text that the LLM would lose information.
+
+On top of this, memories were being generated without a lot of context surrounding the history of the conversation.
+Changes
+were made to the way memories were being generated to account for this, and the chat summary changes were part of them.
+
+To correct these issues, an internal loop was created. If you delete the memories and summary, the summary node will
+begin
+regenerating memories; for every N number of memories, it will generate a new chat summary. So, starting from 0 memories
+in a 100+ message conversation, it might generate 2 memories and then write a summary. Then 2 more memories and update
+the summary with those.
+
+This accomplished another goal as well- the memories being generated will also actively have access to the summary
+up to that point. So now the new memories will not only have the last 3 memories passed in, but also the entire chat
+summary. This allows new memories being generated to have as clear of a picture as possible of exactly what has
+transpired in the conversation up to this point, and vastly improved the overall quality of both the memories and
+summary.
+
+Below is an example of a Chat Summary workflow (which only supports 1 node):
+
+```json
+[
+  {
+    "title": "Chat Summarizer",
+    "agentName": "Chat Summarizer Agent",
+    "systemPrompt": "Put your system system prompt here for the LLM to use when generating chat summaries",
+    "prompt": "Put the prompt for generating summaries here. Best to specify the format, what details you want, etc.",
+    "endpointName": "Your-Endpoint",
+    "preset": "_Your_MemoryChatSummary_Preset",
+    "maxResponseSizeInTokens": 2000,
+    "addUserTurnTemplate": true,
+    "type": "chatSummarySummarizer",
+    "loopIfMemoriesExceed": 3,
+    "minMemoriesPerSummary": 2
+  }
+]
+```
+
+Breaking down the above:
+
+* System Prompt: Your system prompt to use when having the LLM take in memories and summarize them
+* Prompt: The prompt to use when having an LLM take in memories and summarize them
+* Endpoint: The endpoint to use for chat summary generation
+* Preset: The preset to use for chat summary generation
+* maxResponseSizeInTokens: Maximum size you want your Chat Summaries to be
+* addUserTurnTemplate: Leave this as true
+* loopIfMemoriesExceed: This specifies that, when generating large numbers of memories at once, it should generate a
+  new chat summary every N number of memories. So if you have a chat with 100+ messages that might generate 6 memories,
+  and you delete the memory file, then on the next run it will regenerate those 6. If you set this value to "2", then
+  every 2 memories it creates, it will stop and generate/update a chat summary. So it will generate 6 total memories and
+  1 chat summary, but it will generate the memories 2 at a time, then update the summary, to accomplish that goal. This
+  is valuable for adding quality to both memories and summary.
+* minMemoriesPerSummary: This ensures that during a normal conversation flow, it will not generate a new summary until
+  there are at least N number of memories ready. So as you're chatting, if 1 memory gets generated but this value is "
+  2", the chat summary workflow won't be kicked off. On the next memory generated, however, it will kick the summary
+  off.
+
+The chatSummarySummarizer node also has a series of prompt injectible variables that are unique only to it.
+Those can be found below:
+
+* [CHAT_SUMMARY]: The current chat summary that exists, if one is available.
+* [LATEST_MEMORIES]: This pulls N number of memories, where N is the number of new memories generated since the last
+  summary was written. If 5 new memories have occurred since the last time the summary was updated, then this will pull
+  5 memories.
 
 ### Parallel Processing
 

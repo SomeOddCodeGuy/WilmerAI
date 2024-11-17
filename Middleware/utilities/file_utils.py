@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 from typing import Dict
 
 
@@ -106,3 +107,29 @@ def save_timestamp_file(filepath: str, timestamps: Dict[str, str]):
     """Save the timestamp data to the appropriate file."""
     with open(filepath, 'w') as file:
         json.dump(timestamps, file, indent=4)
+
+
+def load_custom_file(filepath: str, delimiter: str | None, custom_delimiter: str | None):
+    """
+    Load a custom file that contains simple text.
+
+    Args:
+    filepath (str): The path to the file to load
+    delimiter (str): The delimiter to use when reading the file.
+    custom_delimiter (str): The delimiter to replace the file delimiter with when returning the contents of the file
+
+    Returns:
+    The contents of the file, separated by the custom_delimiter if applicable.
+    """
+    path = Path(filepath)
+    if path.exists():
+        with path.open('r') as f:
+            content = f.read()
+        if not content:
+            return "No additional information added"
+        if delimiter is not None and custom_delimiter is not None:
+            content = content.replace(delimiter, custom_delimiter)
+        print("Returning content")
+        return content
+    else:
+        return "Custom instruction file did not exist"
