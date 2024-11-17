@@ -25,7 +25,7 @@
     "title": "Querying the offline wikipedia api",
     "agentName": "Wikipedia Search Api Agent Three",
     "promptToSearch": "{agent2Output}",
-    "type": "OfflineWikiApiFullArticle"
+    "type": "OfflineWikiApiBestFullArticle"
   },
   {
     "title": "Answering user's question",
