@@ -1,0 +1,21 @@
+[
+  {
+    "title": "Checking AI's recent memory about this topic",
+    "agentName": "Chat Summary",
+    "type": "FullChatSummary",
+    "isManualConfig": true
+  },
+  {
+    "title": "Responding to User Request",
+    "agentName": "Response Agent Two",
+    "systemPrompt": "Below is an excerpt from an online discussion being conducted in a chat program between a user and an AI.\nDetailed instructions about the discussion can be found in brackets below:\n[\n{chat_system_prompt}\n]\nThe entire conversation up to this point may have been summarized; if so, then that summary can be found in brackets below:\n[\n{agent1Output}\n]\nGiven this information, please continue the conversation below.",
+    "prompt": "",
+    "lastMessagesToSendInsteadOfPrompt": 20,
+    "endpointName": "OpenWebUI-Routing-Multi-Model-Conversational-Endpoint",
+    "preset": "_OpenWebUI_Routing_Multi_Model_Conversational_Preset",
+    "maxResponseSizeInTokens": 800,
+    "addUserTurnTemplate": false,
+    "forceGenerationPromptIfEndpointAllows": false,
+    "addDiscussionIdTimestampsForLLM": false
+  }
+]

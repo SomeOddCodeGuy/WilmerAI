@@ -1,0 +1,19 @@
+[
+  {
+    "title": "Checking AI's recent memory about this topic",
+    "agentName": "Chat Summary",
+    "type": "FullChatSummary",
+    "isManualConfig": true
+  },
+  {
+    "title": "Responding to User Request",
+    "agentName": "Response Agent Two",
+    "systemPrompt": "Below is an online chat between a user and an AI assistant that is occurring within a web based chat program.\nPlease adhere to the below system instructions for the conversation, if there are any.\nInstructions:\n[\n{chat_system_prompt}\n]\nSince the conversation began, some changes may have occurred through natural progression. A summary of the online chat up to now can be found here:\n[\n{agent1Output}\n]\nPlease continue the below conversation, closely adhering to the instructions given.\nIMPORTANT: Do not write dialogue for the user and do not deviate from the instructions given.",
+    "prompt": "",
+    "lastMessagesToSendInsteadOfPrompt": 20,
+    "endpointName": "OpenWebUI-NoRouting-Single-Model-Endpoint",
+    "preset": "_OpenWebUI_NoRouting_Single_Model_Responder_Preset",
+    "maxResponseSizeInTokens": 800,
+    "addUserTurnTemplate": false
+  }
+]

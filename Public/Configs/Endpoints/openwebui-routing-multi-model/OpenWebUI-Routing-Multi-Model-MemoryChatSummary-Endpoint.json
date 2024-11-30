@@ -1,0 +1,9 @@
+{
+  "modelNameForDisplayOnly": "Assistant Summarizer",
+  "endpoint": "http://127.0.0.1:5001",
+  "apiTypeConfigFileName": "Open-AI-API",
+  "maxContextTokenSize": 8192,
+  "modelNameToSendToAPI": "",
+  "promptTemplate": "_chatOnly",
+  "addGenerationPrompt": true
+}

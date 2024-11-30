@@ -1,0 +1,9 @@
+{
+  "modelNameForDisplayOnly": "Ollama api/generate Example Endpoint that is running any model. Prompt template matters on this one",
+  "endpoint": "http://192.168.1.100:11434",
+  "apiTypeConfigFileName": "OllamaApiGenerate",
+  "maxContextTokenSize": 8192,
+  "modelNameToSendToAPI": "modelname/must-match-ollama-model-you-want-to-call-this-really-matters",
+  "promptTemplate": "llama3",
+  "addGenerationPrompt": true
+}

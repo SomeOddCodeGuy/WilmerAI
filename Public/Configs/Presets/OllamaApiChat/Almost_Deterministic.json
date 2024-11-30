@@ -1,0 +1,20 @@
+{
+  "temperature": 0.1,
+  "min_p": 0,
+  "top_k": 0,
+  "top_p": 1,
+  "tfs_z": 1,
+  "typical_p": 1,
+  "presence_penalty": 0,
+  "frequency_penalty": 0,
+  "repeat_last_n": 256,
+  "repeat_penalty": 1,
+  "mirostat": 0,
+  "mirostat_tau": 5.0,
+  "mirostat_eta": 0.1,
+  "penalize_newline": false,
+  "stop": [
+    "<|im_end|>",
+    "</s>"
+  ]
+}

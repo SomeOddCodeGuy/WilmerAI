@@ -1,0 +1,17 @@
+{
+  "title": "Performing Slow but Quality RAG on Search Results",
+  "agentName": "Slow but Quality RAG Agent",
+  "systemPrompt": "",
+  "prompt": "",
+  "multiModelList": [
+    {
+      "endpointName": "OpenWebUI-NoRouting-Dual-Model-WorkerEndpoint"
+    }
+  ],
+  "preset": "_OpenWebUI_NoRouting_Dual_Model_Worker_Preset",
+  "maxResponseSizeInTokens": 400,
+  "type": "SlowButQualityRAG",
+  "ragTarget": "",
+  "ragType": "RecentMemory",
+  "addUserTurnTemplate": true
+}
