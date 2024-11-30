@@ -8,6 +8,20 @@
 > WilmerAI reflects the work of a single developer and the efforts of his personal time and resources; any views,
 > methodologies, etc. found within are his own and should not reflect upon his employer.
 
+## Author's Note:
+
+> This is a passion project that is being supported in my free time. I do not have the ability to contribute to this
+> during standard business hours on
+> weekdays due to work, so my only times to make code updates are weekends, and some weekday late nights.
+>
+> If you find a bug or other issue, a fix may take a week or two to go out. I apologize in
+> advance
+> if that ends up being the case, but please don't take it as meaning I am not taking the issue seriously. In reality,
+> I likely
+> won't have the ability to even look at the issue until the following Friday or Saturday.
+>
+> -Socg
+
 ## What is WilmerAI?
 
 WilmerAI is a sophisticated middleware system designed to take incoming prompts and perform various tasks on them before
@@ -123,16 +137,44 @@ WilmerAI stands for **"What If Language Models Expertly Routed All Inference?"**
 
 ## Connecting to Wilmer
 
-Wilmer exposes both an OpenAI v1/Completions and chat/Completions endpoint, making it compatible with most front ends.
-While I have primarily used this with SillyTavern, it might also work with Open-WebUI.
+Wilmer exposes several different APIs on the front end, allowing you to connect most applications in the LLM space
+to it.
+
+Wilmer exposes the following APIs that other apps can connect to it with:
+
+- OpenAI Compatible v1/completions
+- OpenAI Compatible chat/completions
+- Ollama Compatible api/generate
+- Ollama Compatible api/chat
+
+On the backend, Wilmer is capable to connecting to various APIs, where it will send its prompts to LLMs. Wilmer
+currently is capable of connecting to the following API types:
+
+- OpenAI Compatible v1/completions
+- OpenAI Compatible chat/completions
+- Ollama Compatible api/generate
+- Ollama Compatible api/chat
+- KoboldCpp Compatible api/v1/generate (non-streaming generate)
+- KoboldCpp Compatible /api/extra/generate/stream (streaming generate)
+
+Wilmer supports both streaming and non-streaming connections, and has been tested using both Sillytavern
+and Open WebUI.
 
 ### Connecting in SillyTavern
 
-#### Text Completion (Author's preferred method)
+#### Text Completion
 
 To connect as a Text Completion in SillyTavern, follow these steps (the below screenshot is from SillyTavern):
 
-![Text Completion Settings](Docs/Examples/Images/ST_text_completion_settings.png)
+Connect as OpenAI Compatible v1/Completions:
+
+![OpenAI Text Completion Settings](Docs/Examples/Images/ST_text_completion_settings.png)
+
+OR
+
+Connect as Ollama api/generate:
+
+![Ollama Text Completion Settings](Docs/Examples/Images/ST_ollama_text_completion_settings.png)
 
 When using text completions, you need to use a WilmerAI-specific Prompt Template format. An importable ST file can be
 found within `Docs/SillyTavern/InstructTemplate`. The context template is also included if you'd like to use that as
@@ -159,9 +201,9 @@ There are no expected newlines or characters between tags.
 
 Please ensure that Context Template is "Enabled" (checkbox above the dropdown)
 
-#### Chat Completions
+#### Chat Completions (Not Recommended)
 
-To connect as Chat Completions in SillyTavern, follow these steps (the below screenshot is from SillyTavern):
+To connect as Open AI Chat Completions in SillyTavern, follow these steps (the below screenshot is from SillyTavern):
 
 ![Chat Completion Settings](Docs/Examples/Images/ST_chat_completion_settings.png)
 
@@ -180,6 +222,12 @@ Groups and Personas" under instruct mode, and then going to the far left icon (w
 "stream" on the top left, and then on the top right checking "unlock" under context and dragging it to 200,000+. Let
 Wilmer
 worry about the context.
+
+### Connecting in Open WebUI
+
+When connecting to Wilmer from Open WebUI, simply connect to it as if it were an Ollama instance.
+
+![Ollama Open WebUI Settings](Docs/Examples/Images/OW_ollama_settings.png)
 
 ## Quick-ish Setup
 
@@ -331,6 +379,22 @@ First, choose which template user you'd like to use:
   different models for every character (but re-using models between groups; so, for example, I have a Llama 3.1 70b
   model character in each group).
 
+
+* **openwebui-norouting-single-model**: This user is essentially the convo-roleplay-single-model, but the prompts are
+  more tailored for openwebui, which has no concept of a persona.
+
+
+* **openwebui-norouting-dual-model**: This user is essentially the convo-roleplay-dual-model, but the prompts are
+  more tailored for openwebui, which has no concept of a persona.
+
+
+* **openwebui-routing-multi-model**: This user is essentially the assistant-multi-model, but the prompts are
+  more tailored for openwebui, which has no concept of a persona.
+
+
+* **openwebui-routing-single-model**: This user is essentially the assistant-single-model, but the prompts are
+  more tailored for openwebui, which has no concept of a persona.
+
 Once you have selected the user that you want to use, there are a couple of steps to perform:
 
 1) Update the endpoints for your user under Public/Configs/Endpoints. The example characters are sorted into folders
@@ -408,8 +472,8 @@ These configuration files represent the different API types that you might be hi
 }
 ```
 
-- **type**: Can be either "openAIV1Completion" or "openAIChatCompletion". Use "openAIV1Completion" for KoboldCpp and "
-  openAIChatCompletion" for OpenAI's API.
+- **type**: Can be either: `koboldCppGenerate`, `ollamaApiChat`, `ollamaApiGenerate`, `openAIChatCompletion` or
+  `openAIV1Completion`.
 - **presetType**: This specifies the name of the folder that houses the presets you want to use. If you peek in the
   Presets
   folder, you'll see what I mean. Kobold has the best support. I plan to add more support for others later. With that
