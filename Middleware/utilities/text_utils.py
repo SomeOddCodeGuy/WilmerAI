@@ -1,6 +1,6 @@
+import logging
 import re
 from copy import deepcopy
-import logging
 from typing import List, Dict
 
 logger = logging.getLogger(__name__)
@@ -120,21 +120,21 @@ def chunk_messages_by_token_size(messages: List[Dict[str, str]], chunk_size: int
     chunks = []
     current_chunk = []
     current_chunk_size = 0
-    print("Chunk size: " + str(chunk_size))
+    logger.debug("Chunk size: %s", str(chunk_size))
 
     # Iterate through the messages in reverse order (starting from the bottom)
     for message in reversed(messages):
         message_token_count = rough_estimate_token_length(message['content'])
-        print("message_token_count: " + str(message_token_count))
+        logger.debug("message_token_count: %s", str(message_token_count))
 
         if current_chunk_size + message_token_count <= chunk_size * 0.8:
-            print("Adding message to current chunk")
+            logger.debug("Adding message to current chunk")
             current_chunk.insert(0, message)
             current_chunk_size += message_token_count
             continue
         elif current_chunk:
-            print("Adding current chunk to chunks and then adding message to current chunk")
-            print("Current chunk would have been: " + str(current_chunk_size + message_token_count))
+            logger.debug("Adding current chunk to chunks and then adding message to current chunk")
+            logger.debug("Current chunk would have been: %s", str(current_chunk_size + message_token_count))
             current_chunk.reverse()
             chunks.insert(0, current_chunk)
 
@@ -144,13 +144,13 @@ def chunk_messages_by_token_size(messages: List[Dict[str, str]], chunk_size: int
             current_chunk.insert(0, message)
             continue
 
-    print("Checking if current chunk is empty")
+    logger.debug("Checking if current chunk is empty")
     if current_chunk:
-        print("Current chunk is not empty")
-        print("Length of current chunk: " + str(len(current_chunk)))
-        print("Max messages before chunk: " + str(max_messages_before_chunk))
+        logger.debug("Current chunk is not empty")
+        logger.debug("Length of current chunk: %s", str(len(current_chunk)))
+        logger.debug("Max messages before chunk: %s", str(max_messages_before_chunk))
         if (len(current_chunk) > max_messages_before_chunk):
-            print("Adding chunk")
+            logger.debug("Adding chunk")
             current_chunk.reverse()
             chunks.insert(0, current_chunk)
 
@@ -245,7 +245,7 @@ def messages_to_text_block(messages: List[Dict[str, str]]) -> str:
     formatted_messages = [f"{message['content']}" for message in messages]
     chunk = "\n".join(formatted_messages)
     logger.info("***************************************")
-    logger.info("Chunk created: " + str(chunk))
+    logger.info("Chunk created: %s", str(chunk))
     return chunk
 
 

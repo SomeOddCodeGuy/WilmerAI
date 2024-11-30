@@ -1,7 +1,10 @@
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Dict
+
+logger = logging.getLogger(__name__)
 
 
 def ensure_json_file_exists(filepath, initial_data=None):
@@ -94,12 +97,12 @@ def get_logger_filename():
 def load_timestamp_file(filepath: str) -> Dict[str, str]:
     """Load the timestamp file if it exists, otherwise return an empty dictionary."""
     if os.path.exists(filepath):
-        print(f"File exists: {filepath}")
+        logger.debug(f"File exists: {filepath}")
         with open(filepath, 'r') as file:
-            print(f"Opening file: {filepath}")
+            logger.info(f"Opening file: {filepath}")
             return json.load(file)
     else:
-        print(f"File does not exist: {filepath}")
+        logger.warning(f"File does not exist: {filepath}")
         return {}
 
 
@@ -129,7 +132,6 @@ def load_custom_file(filepath: str, delimiter: str | None, custom_delimiter: str
             return "No additional information added"
         if delimiter is not None and custom_delimiter is not None:
             content = content.replace(delimiter, custom_delimiter)
-        print("Returning content")
         return content
     else:
         return "Custom instruction file did not exist"
