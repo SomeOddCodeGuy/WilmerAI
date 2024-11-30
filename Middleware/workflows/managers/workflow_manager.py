@@ -8,7 +8,7 @@ from typing import Dict, List
 from Middleware.exceptions.early_termination_exception import EarlyTerminationException
 from Middleware.models.llm_handler import LlmHandler
 from Middleware.services.llm_service import LlmHandlerService
-from Middleware.utilities import instance_utils
+from Middleware.utilities import instance_utils, api_utils
 from Middleware.utilities.config_utils import get_active_conversational_memory_tool_name, \
     get_active_recent_memory_tool_name, get_file_memory_tool_name, \
     get_chat_template_name, get_discussion_chat_summary_file_path, get_discussion_memory_file_path, get_workflow_path, \
@@ -161,7 +161,7 @@ class WorkflowManager:
                             config.get('blockGenerationPrompt', False))
                         if not returned_to_user and (config.get('returnToUser', False) or idx == len(configs) - 1):
                             returned_to_user = True
-                            print("Returned to user flow")
+                            logger.debug("Returned to user flow")
                             if (
                                     nonResponder is None and not force_generation_prompt_if_endpoint_allows and not add_user_prompt) or block_generation_prompt:
                                 add_generation_prompt = False
@@ -171,12 +171,12 @@ class WorkflowManager:
                             add_timestamps = config.get("addDiscussionIdTimestampsForLLM", False)
 
                             if (nonResponder is None and discussion_id is not None and add_timestamps):
-                                print("Timestamp is true")
+                                logger.debug("Timestamp is true")
                                 messageCopy = deepcopy(messages)
                                 messagesToSend = track_message_timestamps(messages=messageCopy,
                                                                           discussion_id=discussion_id)
                             else:
-                                print("Timestamp is false")
+                                logger.debug("Timestamp is false")
                                 messagesToSend = messages
 
                             result = self._process_section(config, request_id, workflow_id, discussion_id,
@@ -186,15 +186,19 @@ class WorkflowManager:
                             if stream:
                                 text_chunks = []
                                 for chunk in result:
-                                    if chunk.strip() != '[DONE]' and chunk.strip() != 'data: [DONE]':
-                                        text_chunks.append(
-                                            json.loads(chunk.removeprefix('data:'))['choices'][0]['text'])
-                                        yield chunk
-                                    else:
-                                        yield chunk
+                                    # Extract text using the helper function
+                                    extracted_text = api_utils.extract_text_from_chunk(chunk)
+                                    if extracted_text:
+                                        text_chunks.append(extracted_text)
+                                    yield chunk
                                 result = ''.join(text_chunks)
+                                logger.info("**************************************")
+                                logger.info("Output from the LLM: %s", result)
+                                logger.info("**************************************")
                             else:
                                 yield result
+
+                            # Assign the final result to the agent's output field
                             agent_outputs[f'agent{idx + 1}Output'] = result
                         else:
                             if (
@@ -209,7 +213,7 @@ class WorkflowManager:
                                                                                            agent_outputs,
                                                                                            addGenerationPrompt=add_generation_prompt)
                 except EarlyTerminationException:
-                    print(f"Unlocking locks for InstanceID: '{INSTANCE_ID}' and workflow ID: '{workflow_id}'")
+                    logger.info(f"Unlocking locks for InstanceID: '{INSTANCE_ID}' and workflow ID: '{workflow_id}'")
                     SqlLiteUtils.delete_node_locks(instance_utils.INSTANCE_ID, workflow_id)
                     raise
 
@@ -227,11 +231,11 @@ class WorkflowManager:
                 assert len(exhaust_generator) == 1
                 return exhaust_generator[0]
         except EarlyTerminationException:
-            print(f"Unlocking locks for InstanceID: '{INSTANCE_ID}' and workflow ID: '{workflow_id}'")
+            logger.info(f"Unlocking locks for InstanceID: '{INSTANCE_ID}' and workflow ID: '{workflow_id}'")
             SqlLiteUtils.delete_node_locks(instance_utils.INSTANCE_ID, workflow_id)
             raise
         except Exception as e:
-            logger.exception("An error occurred while processing the workflow: %s", e)
+            logger.error("An error occurred while processing the workflow: %s", e)
             logger.info(f"Unlocking locks for InstanceID: '{INSTANCE_ID}' and workflow ID: '{workflow_id}'")
             SqlLiteUtils.delete_node_locks(instance_utils.INSTANCE_ID, workflow_id)
 
@@ -254,8 +258,8 @@ class WorkflowManager:
             preset = config["preset"]
         if "endpointName" in config:
             # load the model
-            logger.info("\n\n#########\n" + config["title"])
-            logger.info("\n" + "Loading model from config " + config["endpointName"])
+            logger.info("\n\n#########\n%s", config["title"])
+            logger.info("\nLoading model from config %s", config["endpointName"])
             if config["endpointName"] == "" and hasattr(config, "multiModelList"):
                 self.llm_handler = LlmHandler(None, get_chat_template_name(), 0, 0, True)
             else:
@@ -358,7 +362,7 @@ class WorkflowManager:
             return prompt_processor_service.handle_offline_wiki_node(messages, config["promptToSearch"], agent_outputs,
                                                                      False)
         if config["type"] == "WorkflowLock":
-            print("Workflow Lock")
+            logger.info("Workflow Lock")
 
             workflow_lock_id = config.get("workflowLockId")
             if not workflow_lock_id:
@@ -369,12 +373,12 @@ class WorkflowManager:
 
             if lock_exists:
                 # Lock exists and is still valid, throw an early termination exception
-                print(f"Lock for {workflow_lock_id} is currently active, terminating workflow.")
+                logger.info(f"Lock for {workflow_lock_id} is currently active, terminating workflow.")
                 raise EarlyTerminationException(f"Workflow is locked by {workflow_lock_id}. Please try again later.")
             else:
                 # No lock or expired lock, create a new one
                 SqlLiteUtils.create_node_lock(INSTANCE_ID, workflow_id, workflow_lock_id)
-                print(
+                logger.info(
                     f"Lock for Instance_ID: '{INSTANCE_ID}' and workflow_id '{workflow_id}' and workflow_lock_id: '"
                     f"{workflow_lock_id}' has been acquired.")
 
@@ -403,9 +407,9 @@ class WorkflowManager:
             return file
 
     def handle_custom_workflow(self, config, messages, agent_outputs, stream, request_id, discussion_id):
-        print("Custom Workflow initiated")
+        logger.info("Custom Workflow initiated")
         workflow_name = config.get("workflowName", "No_Workflow_Name_Supplied")
-        print("Running custom workflow with name: ", workflow_name)
+        logger.info("Running custom workflow with name: %s", workflow_name)
         is_responder = config.get("isResponder", False)
 
         firstNodeSystemPromptOverride = config.get("firstNodeSystemPromptOverride", None)
@@ -478,11 +482,11 @@ class WorkflowManager:
         :param discussion_id: The discussion id pulled from the prompt for summaries and chats
         :return: The result of the full chat summary workflow execution.
         """
-        print("Discussion ID: ", discussion_id)
+        logger.info("Discussion ID: %s", discussion_id)
         if discussion_id is not None:
             logger.info("Full chat summary discussion id is not none")
             if hasattr(config, "isManualConfig") and config["isManualConfig"]:
-                print("Manual summary flow")
+                logger.info("Manual summary flow")
                 filepath = get_discussion_chat_summary_file_path(discussion_id)
                 summary_chunk = read_chunks_with_hashes(filepath)
                 if len(summary_chunk) > 0:
@@ -497,16 +501,16 @@ class WorkflowManager:
             hashed_memory_chunks = read_chunks_with_hashes(
                 filepath)
 
-            logger.info("Number of hash memory chunks read: %d", len(hashed_memory_chunks))
+            logger.info("Number of hash memory chunks read: %s", len(hashed_memory_chunks))
 
             filepath = get_discussion_chat_summary_file_path(discussion_id)
             hashed_summary_chunk = read_chunks_with_hashes(
                 filepath)
 
-            logger.info("Number of hash summary chunks read: %d", len(hashed_summary_chunk))
+            logger.info("Number of hash summary chunks read: %s", len(hashed_summary_chunk))
             index = find_how_many_new_memories_since_last_summary(hashed_summary_chunk, hashed_memory_chunks)
 
-            logger.info("Number of memory chunks since last summary update: %d", index)
+            logger.info("Number of memory chunks since last summary update: %s", index)
 
             if index > 1 or index < 0:
                 return self.handle_full_chat_summary_parser(request_id, discussion_id, messages)

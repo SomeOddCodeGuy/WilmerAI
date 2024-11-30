@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import re
 from typing import List, Dict, Tuple, Optional
 
@@ -8,6 +9,8 @@ from Middleware.utilities.text_utils import chunk_messages_by_token_size, messag
 # Centralized tag replacement logic
 TAG_REPLACEMENTS = {re.escape(k): ' ' for k in template.values()}
 TAG_PATTERN = re.compile('|'.join(TAG_REPLACEMENTS.keys()))
+
+logger = logging.getLogger(__name__)
 
 
 def combine_initial_system_prompts(messages: List[Dict[str, str]], prefix: str, suffix: str) -> str:
@@ -70,8 +73,8 @@ def chunk_messages_with_hashes(messages: List[Dict[str, str]], chunk_size: int =
     Returns:
     List[Tuple[str, str]]: A list of tuples, each containing a text block and the hash of the first/last message.
     """
-    print("In chunk messages with hash")
-    print("max_messages_before_chunk: " + str(max_messages_before_chunk))
+    logger.debug("In chunk messages with hash")
+    logger.debug("max_messages_before_chunk: %s", str(max_messages_before_chunk))
     chunked_messages = chunk_messages_by_token_size(messages, chunk_size, max_messages_before_chunk)
 
     # Adjust whether we hash the first or last message based on the boolean flag
@@ -106,9 +109,9 @@ def hash_single_message(message: Dict[str, str]) -> str:
     str: The SHA-256 hash of the message content.
     """
     hash = _hash_message(message['content'])
-    print("Hashing message: " + message['content'])
-    print("Hash is: " + str(hash))
-    print("***************************************")
+    logger.debug("Hashing message: %s", message['content'])
+    logger.debug("Hash is: %s", str(hash))
+    logger.debug("***************************************")
     return hash
 
 
@@ -126,7 +129,7 @@ def find_last_matching_hash_message(messagesOriginal: List[Dict[str, str]],
     Returns:
     int: The number of messages since the last matching hash, or the length of filtered_messages if no match is found.
     """
-    print("Searching for hashes")
+    logger.debug("Searching for hashes")
 
     # Conditionally filter out system messages if skip_system is True
     filtered_messages = [message for message in messagesOriginal if
@@ -139,7 +142,7 @@ def find_last_matching_hash_message(messagesOriginal: List[Dict[str, str]],
     # Iterate from the third-to-last message backwards
     for i in range(start_index, -1, -1):
         message_hash = current_message_hashes[i]
-        print(f"Searching for Hash {i}: {message_hash}")
+        logger.debug(f"Searching for Hash {i}: {message_hash}")
 
         # Compare hashes with the existing memory hashes
         if message_hash in (hash_tuple[1] for hash_tuple in hashed_chunks_original):

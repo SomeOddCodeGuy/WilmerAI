@@ -1,9 +1,12 @@
+import logging
 from datetime import datetime, timedelta
 from typing import List, Dict
 
 from Middleware.utilities.config_utils import get_discussion_timestamp_file_path
 from Middleware.utilities.file_utils import load_timestamp_file, save_timestamp_file
 from Middleware.utilities.prompt_utils import hash_single_message
+
+logger = logging.getLogger(__name__)
 
 
 def _current_timestamp() -> str:
@@ -37,7 +40,7 @@ def track_message_timestamps(messages: List[Dict[str, str]], discussion_id: str)
     - List[Dict[str, str]]: The updated list of messages with timestamps appended where applicable.
     """
 
-    print("Processing timestamps")
+    logger.debug("Processing timestamps")
 
     # Load or initialize the timestamp file
     timestamp_file = get_discussion_timestamp_file_path(discussion_id)
@@ -116,7 +119,7 @@ def track_message_timestamps(messages: List[Dict[str, str]], discussion_id: str)
     if timestamps_updated:
         save_timestamp_file(timestamp_file, timestamps)
 
-    print("Timestamp messages output:")
-    print(messages)
+    logger.debug("Timestamp messages output:")
+    logger.debug(messages)
 
     return messages

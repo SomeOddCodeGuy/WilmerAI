@@ -5,9 +5,17 @@
     "type": "GetCurrentSummaryFromFile"
   },
   {
+    "title": "Recent memory gathering",
+    "agentName": "Recent Memory Gathering Tool",
+    "type": "RecentMemorySummarizerTool",
+    "maxTurnsToPull": 30,
+    "maxSummaryChunksFromFile": 30,
+    "customDelimiter": "\n------------\n"
+  },
+  {
     "title": "LLM Responding to User Request",
-    "agentName": "Response Agent Five",
-    "systemPrompt": "Below is an online chat with a user; this could be a standard conversation between a user and an AI assistant, could be a group chat of multiple individuals (including multiple AI assistants), or could be a roleplay scenario.\n\nPlease adhere to the below system instructions for the conversation, if there are any. Additionally, if a persona is specified in the instructions, please closely adhere to that persona and adopt any mannerisms, speech patterns, and other traits that are both explicitly defined or could be implied through reasonable judgment from the instructions.\nInstructions:\n[\n\n[\n{chat_system_prompt}\n]\nSince the conversation began, some changes may have occurred through natural progression. A summary of the online chat up to now can be found here:\n[\n{agent1Output}\n]\nPlease continue the below conversation, closely adhering to the instructions given.\n\nIMPORTANT: Do not write dialogue for the user and do not deviate from the instructions given.",
+    "agentName": "Response Agent Four",
+    "systemPrompt": "Below is an excerpt from an online discussion being conducted in a chat program between a user and an AI portraying a persona.\nDetailed instructions about the discussion and persona can be found in brackets below:\n[\n{chat_system_prompt}\n]\nThe entire conversation up to this point may have been summarized; if so, then that summary can be found in brackets below:\n[\n{agent1Output}\n]\nAlong with the rolling summary of the conversation, the AI also generates 'memories' of key and pertinent information found through the conversation as it progresses. These 'memories' may span the entire chat, or if the chat is too long may only cover part of the discussion. The 'memories' can be found below:\n[\n{agent2Output}\n]\nGiven this information, please continue the conversation below, following any persona instructions that have been provided, while also focusing on maximum response believability and user enjoyment, ensuring that the user's experience is the best that it can be.",
     "prompt": "",
     "lastMessagesToSendInsteadOfPrompt": 20,
     "endpointName": "Assistant-Multi-Model-Conversational-Endpoint",

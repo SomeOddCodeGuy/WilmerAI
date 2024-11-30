@@ -1,0 +1,8 @@
+{
+  "nameForDisplayOnly": "Ollama api/generate Compatible Api Example",
+  "type": "ollamaApiGenerate",
+  "presetType": "OllamaApiGenerate",
+  "truncateLengthPropertyName": "num_ctx",
+  "maxNewTokensPropertyName": "num_predict",
+  "streamPropertyName": "stream"
+}

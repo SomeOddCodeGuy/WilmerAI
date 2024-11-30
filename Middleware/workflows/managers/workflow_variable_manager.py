@@ -1,3 +1,4 @@
+import logging
 from copy import deepcopy
 from typing import Dict, Any, Optional, List
 
@@ -9,6 +10,8 @@ from Middleware.utilities.prompt_extraction_utils import extract_last_n_turns_as
 from Middleware.utilities.prompt_template_utils import (
     format_system_prompts, format_templated_prompt, get_formatted_last_n_turns_as_string
 )
+
+logger = logging.getLogger(__name__)
 
 
 class WorkflowVariableManager:
@@ -46,7 +49,7 @@ class WorkflowVariableManager:
 
     def apply_variables(self, prompt: str, llm_handler: Any, messages: List[Dict[str, str]],
                         agent_outputs: Optional[Dict[str, Any]] = None,
-                        remove_all_system_override = None,
+                        remove_all_system_override=None,
                         config: Dict = None) -> str:
         """
         Applies the generated variables to the prompt and formats it using the specified template.
@@ -80,7 +83,7 @@ class WorkflowVariableManager:
         variables = {}
 
         if messages:
-            print("Inside generate variables")
+            logger.debug("Inside generate variables")
             prompt_configurations = self.generate_conversation_turn_variables(messages, llm_handler,
                                                                               remove_all_system_override)
             variables.update(prompt_configurations)
@@ -117,7 +120,6 @@ class WorkflowVariableManager:
         if 'category_descriptions' in kwargs:
             self.category_descriptions = kwargs['category_descriptions']
         if 'category_colon_descriptions' in kwargs:
-            print("Found in kwargs")
             self.category_colon_descriptions = kwargs['category_colon_descriptions']
         if 'categoriesSeparatedByOr' in kwargs:
             self.categoriesSeparatedByOr = kwargs['categoriesSeparatedByOr']

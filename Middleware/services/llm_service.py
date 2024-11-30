@@ -1,8 +1,6 @@
 import logging
 
-from Middleware.llmapis.kobold_llm_generate_api import KoboldApiGenerateService
-from Middleware.llmapis.open_ai_llm_chat_completions_api import OpenAiLlmChatCompletionsApiService
-from Middleware.llmapis.open_ai_llm_completions_api import OpenAiLlmCompletionsApiService
+from Middleware.llmapis.llm_api import LlmApiService
 from Middleware.models.llm_handler import LlmHandler
 from Middleware.utilities.config_utils import get_chat_template_name, \
     get_endpoint_config, get_api_type_config
@@ -28,23 +26,10 @@ class LlmHandlerService:
             add_generation_prompt = addGenerationPrompt
         api_type_config = get_api_type_config(config_data["apiTypeConfigFileName"])
         llm_type = api_type_config["type"]
-        if llm_type == "openAIV1Completion":
-            logger.info('Loading v1 Completions endpoint: %s', endpoint)
-            llm = OpenAiLlmCompletionsApiService(endpoint=endpoint, presetname=preset,
-                                                 stream=stream, api_type_config=api_type_config,
-                                                 max_tokens=max_tokens)
-        elif llm_type == "openAIChatCompletion":
-            logger.info('Loading chat Completions endpoint: %s', endpoint)
-            llm = OpenAiLlmChatCompletionsApiService(endpoint=endpoint, presetname=preset,
-                                                     stream=stream, api_type_config=api_type_config,
-                                                     max_tokens=max_tokens)
-        elif llm_type == "koboldCppGenerate":
-            print('Loading KoboldCpp Generation endpoint: ' + endpoint)
-            llm = KoboldApiGenerateService(endpoint=endpoint, presetname=preset,
-                                           stream=stream, api_type_config=api_type_config,
-                                           max_tokens=max_tokens)
-        else:
-            raise ValueError(f"Unsupported LLM type: {llm_type}")
+        logger.info(f'Attempting to load {llm_type} endpoint: %s', endpoint)
+        llm = LlmApiService(endpoint=endpoint, presetname=preset,
+                            stream=stream,
+                            max_tokens=max_tokens)
 
         prompt_template = config_data["promptTemplate"]
         if prompt_template is not None:
@@ -64,5 +49,5 @@ class LlmHandlerService:
             return self.initialize_llm_handler(config_file, preset, config_name, stream, truncate_length, max_tokens,
                                                addGenerationPrompt)
         except Exception as e:
-            logger.exception(f"Error loading model from config.")
+            logger.error(f"Error loading model from config.")
             raise

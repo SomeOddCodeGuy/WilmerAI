@@ -2,7 +2,7 @@ import json
 import string
 
 from Middleware.utilities.config_utils import get_active_categorization_workflow_name, get_categories_config
-from Middleware.workflows.managers.workflow_manager import WorkflowManager
+from Middleware.workflows.managers.workflow_manager import WorkflowManager, logger
 
 
 class PromptCategorizer:
@@ -58,10 +58,10 @@ class PromptCategorizer:
                 description = info['description']
                 self._add_category(category, workflow_name, description)
         except FileNotFoundError:
-            print("Routing configuration file not found.")
+            logger.warning("Routing configuration file not found.")
             raise
         except json.JSONDecodeError:
-            print("Error decoding JSON from routing configuration file.")
+            logger.warning("Error decoding JSON from routing configuration file.")
             raise
 
     def get_prompt_category(self, prompt, stream, request_id, discussion_id: str = None):
@@ -76,15 +76,15 @@ class PromptCategorizer:
             str: The result of the workflow execution.
         """
         category = self._categorize_request(prompt, request_id)
-        print("Category: ", category)
+        logger.info("Category: %s", category)
 
         if category in self.categories:
-            print("Response initiated")
+            logger.info("Response initiated")
             workflow_name = self.categories[category]['workflow']
             workflow = WorkflowManager(workflow_config_name=workflow_name)
             return workflow.run_workflow(prompt, request_id, discussionId=discussion_id, stream=stream)
         else:
-            print("Default response initiated")
+            logger.info("Default response initiated")
             return self.conversational_method(prompt, request_id, discussion_id, stream)
 
     def _initialize_categories(self):
@@ -131,15 +131,15 @@ class PromptCategorizer:
         Returns:
             str: The matched category or 'UNKNOWN' if no match is found.
         """
-        print("Categorizing request")
+        logger.info("Categorizing request")
         category_data = self._initialize_categories()
         workflow_manager = self._configure_workflow_manager(category_data)
         attempts = 0
 
         while attempts < 4:
             category = workflow_manager.run_workflow(user_request, request_id, nonResponder=True).strip()
-            print("Output from the LLM: " + category)
-            print(self.categories)
+            logger.info("Output from the LLM: %s", category)
+            logger.debug(self.categories)
             category = category.translate(str.maketrans('', '', string.punctuation))
             matched_category = self._match_category(category)
 

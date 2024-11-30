@@ -1,0 +1,9 @@
+{
+  "modelNameForDisplayOnly": "Single Model No Routing",
+  "endpoint": "http://192.168.50.180:5003",
+  "apiTypeConfigFileName": "KoboldCpp",
+  "maxContextTokenSize": 16384,
+  "modelNameToSendToAPI": "",
+  "promptTemplate": "command-r",
+  "addGenerationPrompt": true
+}

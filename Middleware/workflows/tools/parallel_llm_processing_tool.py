@@ -1,3 +1,4 @@
+import logging
 import traceback
 from queue import Queue, Empty
 from threading import Thread
@@ -8,6 +9,8 @@ from Middleware.utilities.prompt_extraction_utils import remove_discussion_id_ta
 from Middleware.utilities.prompt_template_utils import format_user_turn_with_template, \
     format_system_prompt_with_template
 from Middleware.workflows.managers.workflow_variable_manager import WorkflowVariableManager
+
+logger = logging.getLogger(__name__)
 
 
 class ParallelLlmProcessingTool:
@@ -36,7 +39,7 @@ class ParallelLlmProcessingTool:
         """
         self.workflow_config = config
         llm_handler_service = LlmHandlerService()
-        print("config: ", self.workflow_config)
+        logger.debug("config: %s", self.workflow_config)
 
         self.llm_handlers = []
         for endpoint in config['multiModelList']:
@@ -98,7 +101,7 @@ class ParallelLlmProcessingTool:
         while True:
             try:
                 chunk, index = chunks_queue.get_nowait()
-                print(f"Handler for model {handler.prompt_template_file_name} is processing chunk {index}.")
+                logger.info(f"Handler for model {handler.prompt_template_file_name} is processing chunk {index}.")
                 self.process_single_chunk(chunk=chunk,
                                           index=index,
                                           llm_handler=handler,
@@ -108,11 +111,11 @@ class ParallelLlmProcessingTool:
                                           messages=messages)
                 chunks_queue.task_done()
             except Empty:
-                print(f"No more chunks to process by handler for model {handler.prompt_template_file_name}.")
+                logger.info(f"No more chunks to process by handler for model {handler.prompt_template_file_name}.")
                 break  # Exit if no more chunks are available
             except Exception as e:
-                print(f"Error processing chunk at index {index} by handler for model "
-                      f"{handler.prompt_template_file_name}: {str(e)}")
+                logger.error(f"Error processing chunk at index {index} by handler for model "
+                             f"{handler.prompt_template_file_name}: {str(e)}")
                 traceback.print_exc()  # This prints the stack trace
                 raise
 

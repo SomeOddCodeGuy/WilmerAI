@@ -85,7 +85,7 @@ class SlowButQualityRAGTool:
         # The speakers would trigger tons of erroneous hits
         last_n_turns = extract_last_n_turns(message_copy, 10, llm_handler.takes_message_collection)
         keywords = filter_keywords_by_speakers(last_n_turns, keywords)
-        logger.info("Keywords: " + str(keywords))
+        logger.info("Keywords: %s", str(keywords))
 
         search_result_chunks = advanced_search_in_chunks(pair_chunks, keywords, 10)
         search_result_chunks = clear_out_user_assistant_from_chunks(search_result_chunks)
@@ -123,7 +123,7 @@ class SlowButQualityRAGTool:
         # The speakers would trigger tons of erroneous hits
         last_n_turns = extract_last_n_turns(message_copy, 10, llm_handler.takes_message_collection)
         keywords = filter_keywords_by_speakers(last_n_turns, keywords)
-        logger.info("Keywords: " + str(keywords))
+        logger.info("Keywords: %s", str(keywords))
 
         search_result_chunks = search_in_chunks(pair_chunks, keywords, 10)
         search_result_chunks = clear_out_user_assistant_from_chunks(search_result_chunks)
@@ -161,12 +161,12 @@ class SlowButQualityRAGTool:
         # Read existing chunks from the file
         existing_chunks = read_chunks_with_hashes(filepath)
 
-        print("Existing chunks before reverse: ", str(existing_chunks))
+        logger.debug("Existing chunks before reverse: %s", str(existing_chunks))
         replaced.reverse()
 
         # Append new chunks at the end
         updated_chunks = existing_chunks + replaced
-        print("Updated chunks: " + str(updated_chunks))
+        logger.debug("Updated chunks: %s", str(updated_chunks))
 
         # Save updated chunks to the file
         update_chunks_with_hashes(updated_chunks, filepath, mode="overwrite")
@@ -176,7 +176,7 @@ class SlowButQualityRAGTool:
         Handle the discussion flow based on the discussion ID and messages provided.
         """
         if len(messagesOriginal) < 3:
-            print("Less than 3 messages, no memory will be generated.")
+            logger.debug("Less than 3 messages, no memory will be generated.")
             return
 
         filepath = get_discussion_memory_file_path(discussionId)
@@ -191,7 +191,7 @@ class SlowButQualityRAGTool:
         messages_from_most_recent_to_skip = discussion_id_workflow_config['lookbackStartTurn']
         if not messages_from_most_recent_to_skip or messages_from_most_recent_to_skip < 1:
             messages_from_most_recent_to_skip = 3
-        logger.info("Skipping most recent messages. Number of most recent messages to skip: " + str(
+        logger.info("Skipping most recent messages. Number of most recent messages to skip: %s", str(
             messages_from_most_recent_to_skip))
 
         chunk_size = discussion_id_workflow_config.get('chunkEstimatedTokenSize', 1000)
@@ -224,21 +224,21 @@ class SlowButQualityRAGTool:
                     '\n'.join(value for content in messages_to_process for value in content.values())) > chunk_size) \
                     or number_of_messages_to_pull > max_messages_between_chunks:
 
-                logger.info("number_of_messages_to_pull is: " + str(number_of_messages_to_pull))
+                logger.info("number_of_messages_to_pull is: %s", str(number_of_messages_to_pull))
                 trimmed_discussion_pairs = extract_last_n_turns(messages_to_process, number_of_messages_to_pull,
                                                                 remove_all_systems_override=True)
                 if (len(trimmed_discussion_pairs) == 0):
                     return
 
                 trimmed_discussion_pairs.reverse()  # Reverse to process in chronological order
-                logger.info("Retrieved number of trimmed_discussion_pairs: " + str(len(trimmed_discussion_pairs)))
+                logger.debug("Retrieved number of trimmed_discussion_pairs: %s", str(len(trimmed_discussion_pairs)))
 
-                logger.info("Trimmed discussion pairs:" + str(trimmed_discussion_pairs))
+                logger.debug("Trimmed discussion pairs:%s", str(trimmed_discussion_pairs))
 
-                print("Before chunk messages with hashes")
+                logger.debug("Before chunk messages with hashes")
                 trimmed_discussion_chunks = chunk_messages_with_hashes(trimmed_discussion_pairs, chunk_size,
                                                                        max_messages_before_chunk=max_messages_between_chunks)
-                logger.info("Past chunk messages with hashes")
+                logger.debug("Past chunk messages with hashes")
 
                 if len(trimmed_discussion_chunks) >= 1:
                     pass_chunks = extract_text_blocks_from_hashed_chunks(trimmed_discussion_chunks)
@@ -259,7 +259,7 @@ class SlowButQualityRAGTool:
         last chunk is outdated.
         """
         if len(messages) < 3:
-            print("Less than 3 messages, no memory will be generated.")
+            logger.debug("Less than 3 messages, no memory will be generated.")
             return
 
         logger.info("Beginning full discussion flow")
@@ -277,7 +277,7 @@ class SlowButQualityRAGTool:
                                                   max_messages_before_chunk=max_messages_between_chunks)
         chunk_hashes.reverse()  # Reverse chunks to maintain correct order
 
-        print("Past chunking hashes")
+        logger.debug("Past chunking hashes")
 
         pass_chunks = extract_text_blocks_from_hashed_chunks(chunk_hashes)
         pass_chunks.reverse()  # Ensure correct order for chunk processing

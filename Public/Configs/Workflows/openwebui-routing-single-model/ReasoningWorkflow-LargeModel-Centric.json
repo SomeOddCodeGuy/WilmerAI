@@ -1,0 +1,15 @@
+[
+  {
+    "title": "Responding to the User",
+    "agentName": "Response Agent One",
+    "systemPrompt": "This is a conversation between a user and an advanced AI that specializes in responses that require logic and reasoning. The instructions for this conversation can be found below:\n[\n{chat_system_prompt}\n]\nPlease continue the conversation, adhering carefully to the chat instructions and the user's request.",
+    "prompt": "",
+    "lastMessagesToSendInsteadOfPrompt": 10,
+    "endpointName": "OpenWebUI-Routing-Single-Model-Endpoint",
+    "preset": "_OpenWebUI_Routing_Single_Model_Reasoning_Preset",
+    "maxResponseSizeInTokens": 2000,
+    "addUserTurnTemplate": false,
+    "forceGenerationPromptIfEndpointAllows": false,
+    "addDiscussionIdTimestampsForLLM": false
+  }
+]

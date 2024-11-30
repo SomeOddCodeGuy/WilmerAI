@@ -1,0 +1,9 @@
+{
+  "modelNameForDisplayOnly": "Ollama api/chat Example Endpoint that is running any model you want to load",
+  "endpoint": "http://192.168.1.100:11434",
+  "apiTypeConfigFileName": "OllamaApiChat",
+  "maxContextTokenSize": 8192,
+  "modelNameToSendToAPI": "modelname/must-match-ollama-model-you-want-to-call-this-really-matters",
+  "promptTemplate": "_chatonly",
+  "addGenerationPrompt": true
+}

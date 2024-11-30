@@ -1,3 +1,4 @@
+import logging
 import os
 import sqlite3
 import traceback
@@ -5,6 +6,8 @@ from datetime import datetime, timedelta
 
 from Middleware.utilities import config_utils
 from Middleware.utilities.config_utils import get_custom_dblite_filepath
+
+logger = logging.getLogger(__name__)
 
 
 class SqlLiteUtils:
@@ -23,7 +26,7 @@ class SqlLiteUtils:
         conn = sqlite3.connect(db_name)
 
         if not os.path.exists(db_name):
-            print("No database found at " + db_name)
+            logger.error("No database found at %s", db_name)
             return None
 
         if conn is not None:
@@ -99,8 +102,8 @@ class SqlLiteUtils:
             finally:
                 conn.close()
         except:
-            print("Error in unlocking locks. Ensure that the path to your database is correct in user file. "
-                  "If you don't use workflow locks you can safely ignore this.")
+            logger.warning("Error in unlocking locks. Ensure that the path to your database is correct in user file. "
+                           "If you don't use workflow locks you can safely ignore this.")
 
     @staticmethod
     def get_lock(workflow_lock_id):
@@ -126,7 +129,7 @@ class SqlLiteUtils:
                 return True
 
         except Exception as e:
-            print(f"Error in get_lock: {e}")
+            logger.error(f"Error in get_lock: {e}")
             traceback.print_exc()  # This prints the stack trace
             raise
 
@@ -156,5 +159,5 @@ class SqlLiteUtils:
             finally:
                 conn.close()
         except:
-            print("Error in deleting old locks. Ensure that the path to your database is correct in user file. "
-                  "If you don't use workflow locks you can safely ignore this.")
+            logger.warn("Error in deleting old locks. Ensure that the path to your database is correct in user file. "
+                        "If you don't use workflow locks you can safely ignore this.")

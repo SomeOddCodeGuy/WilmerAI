@@ -1,0 +1,11 @@
+{
+  "promptTemplateSystemPrefix": "[Beg_Sys]",
+  "promptTemplateSystemSuffix": "",
+  "promptTemplateUserPrefix": "[Beg_User]",
+  "promptTemplateUserSuffix": "",
+  "promptTemplateAssistantPrefix": "[Beg_Assistant]",
+  "promptTemplateAssistantSuffix": "",
+  "promptTemplateEndToken": "",
+  "promptTemplateSystemmesPrefix": "[Beg_SysMes]",
+  "promptTemplateSystemmesSuffix": ""
+}

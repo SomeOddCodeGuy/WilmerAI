@@ -1,0 +1,8 @@
+{
+  "nameForDisplayOnly": "Ollama api/chat Compatible Api Example",
+  "type": "ollamaApiChat",
+  "presetType": "OllamaApiChat",
+  "truncateLengthPropertyName": "num_ctx",
+  "maxNewTokensPropertyName": "num_predict",
+  "streamPropertyName": "stream"
+}

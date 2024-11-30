@@ -1,6 +1,10 @@
+import logging
+
 import requests
 
 from Middleware.utilities.config_utils import get_user_config
+
+logger = logging.getLogger(__name__)
 
 
 class OfflineWikiApiClient:
@@ -39,8 +43,8 @@ class OfflineWikiApiClient:
 
         url = f"{self.base_url}/articles/{title}"
         response = requests.get(url)
-        print(f"Response Status Code: {response.status_code}")
-        print(f"Response Text: {response.text}")
+        logger.info(f"Response Status Code: {response.status_code}")
+        logger.info(f"Response Text: {response.text}")
         if response.status_code == 200:
             return response.json().get('text', "No text element found")
         else:
@@ -71,8 +75,8 @@ class OfflineWikiApiClient:
             'num_results': num_results
         }
         response = requests.get(url, params=params)
-        print(f"Response Status Code: {response.status_code}")
-        print(f"Response Text: {response.text}")
+        logger.info(f"Response Status Code: {response.status_code}")
+        logger.info(f"Response Text: {response.text}")
         if response.status_code == 200:
             results = response.json()
             return [result.get('text', "No text element found") for result in results]
@@ -105,8 +109,8 @@ class OfflineWikiApiClient:
             'num_results': num_results
         }
         response = requests.get(url, params=params)
-        print(f"Response Status Code: {response.status_code}")
-        print(f"Response Text: {response.text}")
+        logger.info(f"Response Status Code: {response.status_code}")
+        logger.info(f"Response Text: {response.text}")
         if response.status_code == 200:
             results = response.json()
             return [result.get('text', "No text element found") for result in results]
@@ -138,8 +142,8 @@ class OfflineWikiApiClient:
             'num_results': num_results
         }
         response = requests.get(url, params=params)
-        print(f"Response Status Code: {response.status_code}")
-        print(f"Response Text: {response.text}")
+        logger.info(f"Response Status Code: {response.status_code}")
+        logger.info(f"Response Text: {response.text}")
         if response.status_code == 200:
             result = response.json()
             return [result.get('text', "No text element found")]  # Wrap the single text in a list

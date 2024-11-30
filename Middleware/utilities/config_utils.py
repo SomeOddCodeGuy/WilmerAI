@@ -1,7 +1,10 @@
 import json
+import logging
 import os
 
 from Middleware.utilities import instance_utils
+
+logger = logging.getLogger(__name__)
 
 
 def get_project_root_directory_path():
@@ -383,7 +386,7 @@ def get_discussion_memory_file_path(discussion_id):
     :return: The full path to the discussion's memory file.
     """
     result = get_discussion_file_path(discussion_id, 'memories')
-    print("Getting discussion id path: " + result)
+    logger.debug("Getting discussion id path: %s", result)
     return result
 
 
