@@ -1,7 +1,8 @@
 import argparse
 import logging
-from logging.handlers import RotatingFileHandler
 import os
+from logging.handlers import RotatingFileHandler
+
 from Middleware.core.open_ai_api import WilmerApi
 from Middleware.utilities import sql_lite_utils, instance_utils, config_utils
 
@@ -50,7 +51,7 @@ if __name__ == '__main__':
 
     logging.basicConfig(
         handlers=handlers,
-        level=logging.DEBUG,
+        level=logging.INFO,
         format="[%(asctime)s] %(levelname)s [%(name)s.%(funcName)s:%(lineno)d] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )

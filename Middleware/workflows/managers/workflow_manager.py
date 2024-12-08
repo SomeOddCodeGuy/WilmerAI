@@ -192,9 +192,11 @@ class WorkflowManager:
                                         text_chunks.append(extracted_text)
                                     yield chunk
                                 result = ''.join(text_chunks)
-                                logger.info("**************************************")
-                                logger.info("Output from the LLM: %s", result)
-                                logger.info("**************************************")
+                                logger.info(
+                                    "\n\n*****************************************************************************\n")
+                                logger.info("\n\nOutput from the LLM: %s", result)
+                                logger.info(
+                                    "\n*****************************************************************************\n\n")
                             else:
                                 yield result
 
@@ -274,45 +276,46 @@ class WorkflowManager:
         if "endpointName" not in config:
             self.llm_handler = LlmHandler(None, get_chat_template_name(), 0, 0, True)
 
-        logger.info("Prompt processor Checkpoint")
+        logger.debug("Prompt processor Checkpoint")
         logger.info("Config Type: %s", config.get("type", "No Type Found"))
         prompt_processor_service = PromptProcessor(self.workflow_variable_service, self.llm_handler)
 
         if "type" not in config or config["type"] == "Standard":
-            logger.info("Standard")
+            logger.debug("Standard")
             return prompt_processor_service.handle_conversation_type_node(config, messages, agent_outputs)
         if config["type"] == "ConversationMemory":
-            logger.info("Conversation Memory")
+            logger.debug("Conversation Memory")
             return self.handle_conversation_memory_parser(request_id, discussion_id, messages)
         if config["type"] == "FullChatSummary":
-            logger.info("Entering full chat summary")
+            logger.debug("Entering full chat summary")
             return self.handle_full_chat_summary(messages, config, prompt_processor_service, request_id, discussion_id)
         if config["type"] == "RecentMemory":
-            logger.info("RecentMemory")
+            logger.debug("RecentMemory")
 
             if discussion_id is not None:
                 prompt_processor_service.handle_memory_file(discussion_id, messages)
 
             return self.handle_recent_memory_parser(request_id, discussion_id, messages)
         if config["type"] == "ConversationalKeywordSearchPerformerTool":
-            logger.info("Conversational Keyword Search Performer")
+            logger.debug("Conversational Keyword Search Performer")
             return prompt_processor_service.perform_keyword_search(config,
                                                                    messages,
                                                                    discussion_id,
                                                                    agent_outputs,
                                                                    config["lookbackStartTurn"])
         if config["type"] == "MemoryKeywordSearchPerformerTool":
-            logger.info("Memory Keyword Search Performer")
+            logger.debug("Memory Keyword Search Performer")
             return prompt_processor_service.perform_keyword_search(config,
                                                                    messages,
                                                                    discussion_id,
                                                                    agent_outputs)
         if config["type"] == "RecentMemorySummarizerTool":
-            logger.info("Recent memory summarization tool")
+            logger.debug("Recent memory summarization tool")
             memories = gather_recent_memories(messages,
                                               discussion_id,
                                               config["maxTurnsToPull"],
-                                              config["maxSummaryChunksFromFile"])
+                                              config["maxSummaryChunksFromFile"],
+                                              config.get("lookbackStart", 0))
             custom_delimiter = config.get("customDelimiter", None)
             if custom_delimiter is not None and memories is not None:
                 return memories.replace("--ChunkBreak--", custom_delimiter)
@@ -321,48 +324,48 @@ class WorkflowManager:
             else:
                 return "There are not yet any memories"
         if config["type"] == "ChatSummaryMemoryGatheringTool":
-            logger.info("Chat summary memory gathering tool")
+            logger.debug("Chat summary memory gathering tool")
             return gather_chat_summary_memories(messages,
                                                 discussion_id,
                                                 config["maxTurnsToPull"])
         if config["type"] == "GetCurrentSummaryFromFile":
-            logger.info("Getting current summary from File")
+            logger.debug("Getting current summary from File")
             return handle_get_current_summary_from_file(discussion_id)
         if config["type"] == "chatSummarySummarizer":
-            logger.info("Summarizing the chat memory into a single chat summary")
+            logger.debug("Summarizing the chat memory into a single chat summary")
             return prompt_processor_service.handle_process_chat_summary(config, messages, agent_outputs, discussion_id)
         if config["type"] == "GetCurrentMemoryFromFile":
-            logger.info("Getting current memories from File")
+            logger.debug("Getting current memories from File")
             return handle_get_current_summary_from_file(discussion_id)
         if config["type"] == "WriteCurrentSummaryToFileAndReturnIt":
-            logger.info("Writing current summary to file")
+            logger.debug("Writing current summary to file")
             return prompt_processor_service.save_summary_to_file(config,
                                                                  messages,
                                                                  discussion_id,
                                                                  agent_outputs)
         if config["type"] == "SlowButQualityRAG":
-            logger.info("SlowButQualityRAG")
+            logger.debug("SlowButQualityRAG")
             return prompt_processor_service.perform_slow_but_quality_rag(config, messages, agent_outputs)
         if config["type"] == "QualityMemory":
-            logger.info("Quality memory")
+            logger.debug("Quality memory")
             return self.handle_quality_memory_workflow(request_id, messages, prompt_processor_service, discussion_id)
         if config["type"] == "PythonModule":
-            logger.info("Python Module")
+            logger.debug("Python Module")
             return self.handle_python_module(config, prompt_processor_service, messages, agent_outputs)
         if config["type"] == "OfflineWikiApiFullArticle":
             # DEPRECATED. REMOVING SOON
-            logger.info("Offline Wikipedia Api Full Article")
+            logger.debug("Offline Wikipedia Api Full Article")
             return prompt_processor_service.handle_offline_wiki_node(messages, config["promptToSearch"], agent_outputs)
         if config["type"] == "OfflineWikiApiBestFullArticle":
-            logger.info("Offline Wikipedia Api Best Full Article")
+            logger.debug("Offline Wikipedia Api Best Full Article")
             return prompt_processor_service.handle_offline_wiki_node(messages, config["promptToSearch"], agent_outputs,
                                                                      use_new_best_article_endpoint=True)
         if config["type"] == "OfflineWikiApiPartialArticle":
-            logger.info("Offline Wikipedia Api Summary Only")
+            logger.debug("Offline Wikipedia Api Summary Only")
             return prompt_processor_service.handle_offline_wiki_node(messages, config["promptToSearch"], agent_outputs,
                                                                      False)
         if config["type"] == "WorkflowLock":
-            logger.info("Workflow Lock")
+            logger.debug("Workflow Lock")
 
             workflow_lock_id = config.get("workflowLockId")
             if not workflow_lock_id:
@@ -385,7 +388,7 @@ class WorkflowManager:
         if config["type"] == "CustomWorkflow":
             return self.handle_custom_workflow(config, messages, agent_outputs, stream, request_id, discussion_id)
         if config["type"] == "GetCustomFile":
-            logger.info("Get custom file")
+            logger.debug("Get custom file")
             delimiter = config.get("delimiter")
             custom_return_delimiter = config.get("customReturnDelimiter")
             filepath = config.get("filepath")
@@ -403,7 +406,7 @@ class WorkflowManager:
                 custom_return_delimiter = delimiter
 
             file = load_custom_file(filepath=filepath, delimiter=delimiter, custom_delimiter=custom_return_delimiter)
-            logger.info("Custom file result: %s", file)
+            logger.debug("Custom file result: %s", file)
             return file
 
     def handle_custom_workflow(self, config, messages, agent_outputs, stream, request_id, discussion_id):
@@ -486,11 +489,11 @@ class WorkflowManager:
         if discussion_id is not None:
             logger.info("Full chat summary discussion id is not none")
             if hasattr(config, "isManualConfig") and config["isManualConfig"]:
-                logger.info("Manual summary flow")
+                logger.debug("Manual summary flow")
                 filepath = get_discussion_chat_summary_file_path(discussion_id)
                 summary_chunk = read_chunks_with_hashes(filepath)
                 if len(summary_chunk) > 0:
-                    logger.info("returning manual summary")
+                    logger.debug("returning manual summary")
                     return extract_text_blocks_from_hashed_chunks(summary_chunk)
                 else:
                     return "No summary found"
@@ -501,16 +504,16 @@ class WorkflowManager:
             hashed_memory_chunks = read_chunks_with_hashes(
                 filepath)
 
-            logger.info("Number of hash memory chunks read: %s", len(hashed_memory_chunks))
+            logger.debug("Number of hash memory chunks read: %s", len(hashed_memory_chunks))
 
             filepath = get_discussion_chat_summary_file_path(discussion_id)
             hashed_summary_chunk = read_chunks_with_hashes(
                 filepath)
 
-            logger.info("Number of hash summary chunks read: %s", len(hashed_summary_chunk))
+            logger.debug("Number of hash summary chunks read: %s", len(hashed_summary_chunk))
             index = find_how_many_new_memories_since_last_summary(hashed_summary_chunk, hashed_memory_chunks)
 
-            logger.info("Number of memory chunks since last summary update: %s", index)
+            logger.debug("Number of memory chunks since last summary update: %s", index)
 
             if index > 1 or index < 0:
                 return self.handle_full_chat_summary_parser(request_id, discussion_id, messages)
@@ -530,9 +533,9 @@ class WorkflowManager:
         """
 
         if discussion_id is None:
-            logger.info("Quality memory discussionid is none")
+            logger.debug("Quality memory discussionid is none")
             return self.handle_recent_memory_parser(request_id, None, messages)
         else:
-            logger.info("Quality memory discussion_id flow")
+            logger.debug("Quality memory discussion_id flow")
             prompt_processor_service.handle_memory_file(discussion_id, messages)
             return self.process_file_memories(request_id, discussion_id, messages)

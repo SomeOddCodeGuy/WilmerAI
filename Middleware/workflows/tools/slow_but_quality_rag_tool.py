@@ -50,12 +50,12 @@ class SlowButQualityRAGTool:
                 result = self.perform_conversation_search(keywords, messages, llm_handler, lookbackStartTurn)
                 return result
             else:
-                logger.info("Fatal Workflow Error: cannot perform keyword search; no user prompt")
+                logger.error("Fatal Workflow Error: cannot perform keyword search; no user prompt")
         elif target == "RecentMemories":
             if 'messages' in kwargs:
                 messages = kwargs['messages']
-                logger.info("In recent memories")
-                logger.info(messages)
+                logger.debug("In recent memories")
+                logger.debug(messages)
                 result = self.perform_memory_file_keyword_search(keywords, messages, llm_handler, discussion_id)
                 return result
 
@@ -71,7 +71,7 @@ class SlowButQualityRAGTool:
         Returns:
             str: A string representing the search result chunks joined by '--ChunkBreak--'.
         """
-        logger.info("Entering perform_conversation_search")
+        logger.debug("Entering perform_conversation_search")
 
         # If we have fewer pairs than lookbackStartTurn, we can stop here
         if len(messagesOriginal) <= lookbackStartTurn:
@@ -108,7 +108,7 @@ class SlowButQualityRAGTool:
         Returns:
             str: A string representing the search result chunks joined by '--ChunkBreak--'.
         """
-        logger.info("Entering perform_memory_file_keyword_search")
+        logger.debug("Entering perform_memory_file_keyword_search")
         filepath = get_discussion_memory_file_path(discussion_id)
 
         message_copy = deepcopy(messagesOriginal)
@@ -144,14 +144,14 @@ class SlowButQualityRAGTool:
         chunks.reverse()
 
         all_chunks = "--ChunkBreak--".join(chunks)
-        logger.info("Processing chunks: %s", all_chunks)
+        logger.debug("Processing chunks: %s", all_chunks)
 
         result = rag_tool.perform_rag_on_memory_chunk(rag_system_prompt, rag_prompt, all_chunks, workflow, messages,
                                                       discussionId, "--rag_break--", chunks_per_memory)
         results = result.split("--rag_break--")
         results.reverse()
-        logger.info("Total results: %s", len(results))
-        logger.info("Total chunks: %s", len(hash_chunks))
+        logger.debug("Total results: %s", len(results))
+        logger.debug("Total chunks: %s", len(hash_chunks))
         hash_chunks.reverse()
 
         replaced = [(summary, hash_code) for summary, (_, hash_code) in zip(results, hash_chunks)]
@@ -182,7 +182,7 @@ class SlowButQualityRAGTool:
         filepath = get_discussion_memory_file_path(discussionId)
         messages_copy = deepcopy(messagesOriginal)
 
-        logger.info("Entering discussionId Workflow")
+        logger.debug("Entering discussionId Workflow")
         discussion_id_workflow_filepath = get_discussion_id_workflow_path()
         discussion_id_workflow_config = load_config(discussion_id_workflow_filepath)
 
@@ -191,7 +191,7 @@ class SlowButQualityRAGTool:
         messages_from_most_recent_to_skip = discussion_id_workflow_config['lookbackStartTurn']
         if not messages_from_most_recent_to_skip or messages_from_most_recent_to_skip < 1:
             messages_from_most_recent_to_skip = 3
-        logger.info("Skipping most recent messages. Number of most recent messages to skip: %s", str(
+        logger.debug("Skipping most recent messages. Number of most recent messages to skip: %s", str(
             messages_from_most_recent_to_skip))
 
         chunk_size = discussion_id_workflow_config.get('chunkEstimatedTokenSize', 1000)
@@ -201,7 +201,7 @@ class SlowButQualityRAGTool:
         discussion_chunks.reverse()  # Reverse to maintain correct chronological order when processing
 
         if len(discussion_chunks) == 0:
-            logger.info("No discussion chunks")
+            logger.debug("No discussion chunks")
             self.process_full_discussion_flow(messages_copy, rag_system_prompt, rag_prompt,
                                               discussion_id_workflow_config, discussionId)
         else:
@@ -216,7 +216,7 @@ class SlowButQualityRAGTool:
 
             messages_to_process = messages_copy[:-messages_from_most_recent_to_skip] if len(
                 messages_copy) > messages_from_most_recent_to_skip else messages_copy
-            logger.info("Messages to process: %s", messages_to_process)
+            logger.debug("Messages to process: %s", messages_to_process)
             if len(messages_to_process) == 0:
                 return
 
@@ -224,7 +224,7 @@ class SlowButQualityRAGTool:
                     '\n'.join(value for content in messages_to_process for value in content.values())) > chunk_size) \
                     or number_of_messages_to_pull > max_messages_between_chunks:
 
-                logger.info("number_of_messages_to_pull is: %s", str(number_of_messages_to_pull))
+                logger.debug("number_of_messages_to_pull is: %s", str(number_of_messages_to_pull))
                 trimmed_discussion_pairs = extract_last_n_turns(messages_to_process, number_of_messages_to_pull,
                                                                 remove_all_systems_override=True)
                 if (len(trimmed_discussion_pairs) == 0):
@@ -262,7 +262,7 @@ class SlowButQualityRAGTool:
             logger.debug("Less than 3 messages, no memory will be generated.")
             return
 
-        logger.info("Beginning full discussion flow")
+        logger.debug("Beginning full discussion flow")
 
         new_messages = deepcopy(messages)
         if len(new_messages) > 3:
@@ -344,7 +344,7 @@ class SlowButQualityRAGTool:
             if full_memories is None:
                 full_memories = ""
 
-            logger.info("Processing memory chunk")
+            logger.debug("Processing memory chunk")
             system_prompt = rag_system_prompt.replace('[Memory_file]', current_memories.strip())
             prompt = rag_prompt.replace('[Memory_file]', current_memories.strip())
 

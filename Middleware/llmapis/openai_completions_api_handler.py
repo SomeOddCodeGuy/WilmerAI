@@ -52,8 +52,8 @@ class OpenAiCompletionsApiHandler(LlmApiHandler):
 
         logger.info(f"OpenAI Completions Streaming flow!")
         logger.info(f"URL: {url}")
-        logger.info(f"Headers: {self.headers}")
-        logger.info(f"Sending request with data: {json.dumps(data, indent=2)}")
+        logger.debug(f"Headers: {self.headers}")
+        logger.debug(f"Sending request with data: {json.dumps(data, indent=2)}")
 
         output_format = instance_utils.API_TYPE
 
@@ -158,7 +158,7 @@ class OpenAiCompletionsApiHandler(LlmApiHandler):
                     yield api_utils.sse_format(final_completion_json, output_format)
 
                     if output_format != 'ollama':
-                        logger.info("End of stream reached, sending [DONE] signal.")
+                        logger.debug("End of stream reached, sending [DONE] signal.")
                         yield api_utils.sse_format("[DONE]", output_format)
 
             except requests.RequestException as e:
@@ -196,10 +196,11 @@ class OpenAiCompletionsApiHandler(LlmApiHandler):
         for attempt in range(retries):
             try:
                 logger.info(f"OpenAI Completions Non-Streaming flow! Attempt: {attempt + 1}")
-                logger.info("Headers:")
-                logger.info(json.dumps(self.headers, indent=2))
-                logger.info("Data:")
-                logger.info(json.dumps(data, indent=2))
+                logger.info(f"URL: {url}")
+                logger.debug("Headers:")
+                logger.debug(json.dumps(self.headers, indent=2))
+                logger.debug("Data:")
+                logger.debug(json.dumps(data, indent=2))
                 response = self.session.post(url, headers=self.headers, json=data, timeout=14400)
                 response.raise_for_status()
 
@@ -214,9 +215,9 @@ class OpenAiCompletionsApiHandler(LlmApiHandler):
                     if "Assistant:" in result_text:
                         result_text = api_utils.remove_assistant_prefix(result_text)
 
-                    logger.info("**************************************")
-                    logger.info("Output from the LLM: %s", result_text)
-                    logger.info("**************************************")
+                    logger.info("\n\n*****************************************************************************\n")
+                    logger.info("\n\nOutput from the LLM: %s", result_text)
+                    logger.info("\n*****************************************************************************\n\n")
 
                     return result_text
                 elif 'content' in payload:
@@ -252,8 +253,8 @@ def prep_full_prompt(system_prompt, prompt):
     full_prompt = return_brackets_in_string(full_prompt)
     full_prompt = full_prompt.strip() + " "
 
-    logger.info("\n************************************************")
-    logger.info("Formatted_Prompt: %s", full_prompt)
-    logger.info("************************************************")
+    logger.info("\n\n*****************************************************************************\n")
+    logger.info("\n\nFormatted_Prompt: %s", full_prompt)
+    logger.info("\n*****************************************************************************\n\n")
 
     return full_prompt

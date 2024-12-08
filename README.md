@@ -798,9 +798,15 @@ on a multi-computer setup. Currently the best way to generate memories is the Fu
   "type": "RecentMemorySummarizerTool",
   "maxTurnsToPull": 30,
   "maxSummaryChunksFromFile": 30,
+  "lookbackStart": 20,
   "customDelimiter": "\n------------\n"
 }
 ```
+
+Note that if DiscussionId is null, this will instead pull a series of messages, starting from N number since the
+most recent. So if lookbackStart is 20, then it will ignore the most recent 20 messages, and will instead begin
+at message 21. Starting there, it will go back "maxTurnsToPull" number of messages. So if your lookback is 20,
+and maxTurns is 30, it will start at message 21 and pull to message 51.
 
 #### Recent/Quality Memory Node
 

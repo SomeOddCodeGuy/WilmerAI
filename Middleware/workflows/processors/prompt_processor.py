@@ -102,14 +102,14 @@ class PromptProcessor:
         )
 
         if "searchTarget" not in config or config["searchTarget"] == "CurrentConversation":
-            logger.info("Performing search on Current Conversation")
+            logger.debug("Performing search on Current Conversation")
             return self.slow_but_quality_rag_service.perform_keyword_search(
                 keywords, "CurrentConversation", messages=messages, lookbackStartTurn=lookbackStartTurn,
                 llm_handler=self.llm_handler, discussion_id=discussion_id
             )
 
         if config["searchTarget"] == "RecentMemories":
-            logger.info("Performing search on Recent Memories")
+            logger.debug("Performing search on Recent Memories")
             return self.slow_but_quality_rag_service.perform_keyword_search(
                 keywords, "RecentMemories", messages=messages, lookbackStartTurn=lookbackStartTurn,
                 llm_handler=self.llm_handler, discussion_id=discussion_id
@@ -262,12 +262,12 @@ class PromptProcessor:
         current_chat_summary = handle_get_current_summary_from_file(discussion_id)
 
         # Debug: show initial values
-        logger.info(f"[DEBUG] Initial memory chunks with hashes: {memory_chunks_with_hashes}")
-        logger.info(f"[DEBUG] Current chat summary: {current_chat_summary}")
+        logger.debug(f"[DEBUG] Initial memory chunks with hashes: {memory_chunks_with_hashes}")
+        logger.debug(f"[DEBUG] Current chat summary: {current_chat_summary}")
 
         # If there are no new memories, return the current chat summary.
         if not memory_chunks_with_hashes:
-            logger.info("[DEBUG] No new memories found. Returning current chat summary.")
+            logger.debug("[DEBUG] No new memories found. Returning current chat summary.")
             return current_chat_summary
 
         system_prompt = config.get('systemPrompt', '')
@@ -332,8 +332,8 @@ class PromptProcessor:
             last_hash = batch_chunks[-1][1]  # Get the hash of the last memory chunk in the batch (hash is at index 1)
 
             # Debug: show the memory chunk and last hash being processed
-            logger.info(f"[DEBUG] Processing memory chunk: {latest_memories_chunk}")
-            logger.info(f"[DEBUG] Last memory chunk hash: {last_hash}")
+            logger.debug(f"[DEBUG] Processing memory chunk: {latest_memories_chunk}")
+            logger.debug(f"[DEBUG] Last memory chunk hash: {last_hash}")
 
             # Reset the system_prompt and prompt each iteration.
             system_prompt = config.get('systemPrompt', '')

@@ -47,8 +47,10 @@ class OpenAiApiHandler(LlmApiHandler):
 
         add_user_assistant = get_is_chat_complete_add_user_assistant()
         add_missing_assistant = get_is_chat_complete_add_missing_assistant()
-        logger.info(f"Streaming flow!")
-        logger.info(f"Sending request to {url} with data: {json.dumps(data, indent=2)}")
+        logger.info(f"OpenAI Chat Completions Streaming flow!")
+        logger.info(f"URL: {url}")
+        logger.debug(f"Headers: {self.headers}")
+        logger.debug(f"Sending request with data: {json.dumps(data, indent=2)}")
 
         output_format = instance_utils.API_TYPE
 
@@ -139,7 +141,7 @@ class OpenAiApiHandler(LlmApiHandler):
                     yield api_utils.sse_format(final_completion_json, output_format)
 
                     if output_format != 'ollama':
-                        logger.info("End of stream reached, sending [DONE] signal.")
+                        logger.debug("End of stream reached, sending [DONE] signal.")
                         yield api_utils.sse_format("[DONE]", output_format)
 
             except requests.RequestException as e:
@@ -175,7 +177,12 @@ class OpenAiApiHandler(LlmApiHandler):
         retries: int = 3
         for attempt in range(retries):
             try:
-                logger.info(f"Non-Streaming flow! Attempt: {attempt + 1}")
+                logger.info(f"OpenAI Chat Completions Non-Streaming flow! Attempt: {attempt + 1}")
+                logger.info(f"URL: {url}")
+                logger.debug("Headers:")
+                logger.debug(json.dumps(self.headers, indent=2))
+                logger.debug("Data:")
+                logger.debug(json.dumps(data, indent=2))
                 response = self.session.post(url, headers=self.headers, json=data, timeout=14400)
                 response.raise_for_status()
                 payload = response.json()
@@ -191,9 +198,9 @@ class OpenAiApiHandler(LlmApiHandler):
                     if "Assistant:" in result_text:
                         result_text = api_utils.remove_assistant_prefix(result_text)
 
-                    logger.info("**************************************")
-                    logger.info("Output from the LLM: %s", result_text)
-                    logger.info("**************************************")
+                    logger.info("\n\n*****************************************************************************\n")
+                    logger.info("\n\nOutput from the LLM: %s", result_text)
+                    logger.info("\n*****************************************************************************\n\n")
 
                     return result_text
                 else:
@@ -234,8 +241,8 @@ def prep_corrected_conversation(conversation, system_prompt, prompt):
         corrected_conversation.pop()
 
     full_prompt = "\n".join(msg["content"] for msg in corrected_conversation)
-    logger.info("\n************************************************")
-    logger.info("Formatted_Prompt: %s", full_prompt)
-    logger.info("************************************************\n")
+    logger.info("\n\n*****************************************************************************\n")
+    logger.info("\n\nFormatted_Prompt: %s", full_prompt)
+    logger.info("\n*****************************************************************************\n\n")
 
     return corrected_conversation

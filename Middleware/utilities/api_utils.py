@@ -147,7 +147,7 @@ def extract_text_from_chunk(chunk: str) -> str:
 
 
 def get_model_name():
-    return f"Wilmer-AI_{get_current_username()}"
+    return f"{get_current_username()}"
 
 
 def sse_format(data: str, output_format: str) -> str:

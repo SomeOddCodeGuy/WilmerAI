@@ -150,7 +150,7 @@ class KoboldCppApiHandler(LlmApiHandler):
                     yield api_utils.sse_format(final_completion_json, output_format)
 
                     if output_format != 'ollama':
-                        logger.info("End of stream reached, sending [DONE] signal.")
+                        logger.debug("End of stream reached, sending [DONE] signal.")
                         yield api_utils.sse_format("[DONE]", output_format)
 
             except requests.RequestException as e:
@@ -187,10 +187,11 @@ class KoboldCppApiHandler(LlmApiHandler):
         for attempt in range(retries):
             try:
                 logger.info(f"KoboldCpp Non-Streaming flow! Attempt: {attempt + 1}")
-                logger.info("Headers: ")
-                logger.info(json.dumps(self.headers, indent=2))
-                logger.info("Data: ")
-                logger.info(json.dumps(data, indent=2))
+                logger.info(f"URL: {url}")
+                logger.debug("Headers: ")
+                logger.debug(json.dumps(self.headers, indent=2))
+                logger.debug("Data: ")
+                logger.debug(json.dumps(data, indent=2))
                 response = self.session.post(url, headers=self.headers, json=data, timeout=14400)
                 response.raise_for_status()
 
@@ -207,9 +208,9 @@ class KoboldCppApiHandler(LlmApiHandler):
                     if "Assistant:" in result_text:
                         result_text = api_utils.remove_assistant_prefix(result_text)
 
-                    logger.info("**************************************")
-                    logger.info("Output from the LLM: %s", result_text)
-                    logger.info("**************************************")
+                    logger.info("\n\n*****************************************************************************\n")
+                    logger.info("\n\nOutput from the LLM: %s", result_text)
+                    logger.info("\n*****************************************************************************\n\n")
 
                     return result_text
                 else:
@@ -242,8 +243,8 @@ def prep_full_prompt(system_prompt, prompt):
     full_prompt = return_brackets_in_string(full_prompt)
     full_prompt = full_prompt.strip() + " "
 
-    logger.info("\n************************************************")
-    logger.info("Formatted_Prompt: %s", full_prompt)
-    logger.info("************************************************\n")
+    logger.info("\n\n*****************************************************************************\n")
+    logger.info("\n\nFormatted_Prompt: %s", full_prompt)
+    logger.info("\n*****************************************************************************\n\n")
 
     return full_prompt

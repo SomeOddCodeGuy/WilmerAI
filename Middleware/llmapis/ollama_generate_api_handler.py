@@ -53,8 +53,8 @@ class OllamaGenerateHandler(LlmApiHandler):
 
         logger.info(f"Ollama Streaming flow!")
         logger.info(f"URL: {url}")
-        logger.info(f"Headers: {self.headers}")
-        logger.info(f"Sending request with data: {json.dumps(data, indent=2)}")
+        logger.debug(f"Headers: {self.headers}")
+        logger.debug(f"Sending request with data: {json.dumps(data, indent=2)}")
 
         output_format = instance_utils.API_TYPE
 
@@ -181,15 +181,16 @@ class OllamaGenerateHandler(LlmApiHandler):
         for attempt in range(retries):
             try:
                 logger.info(f"Ollama Non-Streaming flow! Attempt: {attempt + 1}")
-                logger.info("Headers:")
-                logger.info(json.dumps(self.headers, indent=2))
-                logger.info("Data:")
-                logger.info(json.dumps(data, indent=2))
+                logger.info(f"URL: {url}")
+                logger.debug("Headers:")
+                logger.debug(json.dumps(self.headers, indent=2))
+                logger.debug("Data:")
+                logger.debug(json.dumps(data, indent=2))
                 response = self.session.post(url, headers=self.headers, json=data, timeout=14400)
                 response.raise_for_status()
 
                 payload = response.json()
-                logger.info("Response: %s", response)
+                logger.debug("Response: %s", response)
                 logger.debug("Payload: %s", json.dumps(payload, indent=2))
 
                 if 'response' in payload:
@@ -201,9 +202,9 @@ class OllamaGenerateHandler(LlmApiHandler):
                     if "Assistant:" in result_text:
                         result_text = api_utils.remove_assistant_prefix(result_text)
 
-                    logger.info("**************************************")
-                    logger.info("Output from the LLM: %s", result_text)
-                    logger.info("**************************************")
+                    logger.info("\n\n*****************************************************************************\n")
+                    logger.info("\n\nOutput from the LLM: %s", result_text)
+                    logger.info("\n*****************************************************************************\n\n")
 
                     return result_text
                 else:
@@ -234,8 +235,8 @@ def prep_full_prompt(system_prompt, prompt):
     full_prompt = return_brackets_in_string(full_prompt)
     full_prompt = full_prompt.strip() + " "
 
-    logger.info("\n************************************************")
-    logger.info("Formatted_Prompt: %s", full_prompt)
-    logger.info("************************************************")
+    logger.info("\n\n*****************************************************************************\n")
+    logger.info("\n\nFormatted_Prompt: %s", full_prompt)
+    logger.info("\n*****************************************************************************\n\n")
 
     return full_prompt

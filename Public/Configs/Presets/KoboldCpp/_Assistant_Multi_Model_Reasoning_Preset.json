@@ -1,6 +1,6 @@
 {
   "temperature": 0.3,
-  "min_p": 0,
+  "min_p": 0.05,
   "top_a": 0,
   "top_k": 0,
   "top_p": 1,
@@ -15,15 +15,6 @@
   "rep_pen": 1,
   "rep_pen_range": 256,
   "rep_pen_slope": 1,
-  "dry_multiplier": 0,
-  "dry_base": 0,
-  "dry_allowed_length": 0,
-  "dry_sequence_breakers": [
-    "\n",
-    ":",
-    "\"",
-    "*"
-  ],
   "sampler_order": [
     6,
     0,
