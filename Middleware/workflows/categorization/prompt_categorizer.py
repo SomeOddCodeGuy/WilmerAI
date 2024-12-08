@@ -79,12 +79,12 @@ class PromptCategorizer:
         logger.info("Category: %s", category)
 
         if category in self.categories:
-            logger.info("Response initiated")
+            logger.debug("Response initiated")
             workflow_name = self.categories[category]['workflow']
             workflow = WorkflowManager(workflow_config_name=workflow_name)
             return workflow.run_workflow(prompt, request_id, discussionId=discussion_id, stream=stream)
         else:
-            logger.info("Default response initiated")
+            logger.debug("Default response initiated")
             return self.conversational_method(prompt, request_id, discussion_id, stream)
 
     def _initialize_categories(self):
@@ -138,7 +138,11 @@ class PromptCategorizer:
 
         while attempts < 4:
             category = workflow_manager.run_workflow(user_request, request_id, nonResponder=True).strip()
-            logger.info("Output from the LLM: %s", category)
+            logger.info(
+                "\n\n*****************************************************************************\n")
+            logger.info("\n\nOutput from the LLM: %s", category)
+            logger.info(
+                "\n*****************************************************************************\n\n")
             logger.debug(self.categories)
             category = category.translate(str.maketrans('', '', string.punctuation))
             matched_category = self._match_category(category)

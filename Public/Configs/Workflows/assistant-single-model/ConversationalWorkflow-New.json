@@ -9,8 +9,9 @@
     "title": "Recent memory gathering",
     "agentName": "Recent Memory Gathering Tool",
     "type": "RecentMemorySummarizerTool",
-    "maxTurnsToPull": 30,
-    "maxSummaryChunksFromFile": 30,
+    "maxTurnsToPull": 10,
+    "maxSummaryChunksFromFile": 10,
+    "lookbackStart": 20,
     "customDelimiter": "\n------------\n"
   },
   {

@@ -17,11 +17,11 @@ class LlmHandlerService:
                                addGenerationPrompt=None):
         logger.info("Initialize llm hander config_data: {}".format(config_data))
         if (addGenerationPrompt is None):
-            logger.info("Add generation prompt is None")
+            logger.debug("Add generation prompt is None")
             add_generation_prompt = config_data.get("addGenerationPrompt", False)
-            logger.info("Add_generation_prompt: {}".format(add_generation_prompt))
+            logger.debug("Add_generation_prompt: {}".format(add_generation_prompt))
         else:
-            logger.info("Add generation prompt is {}".format(addGenerationPrompt))
+            logger.debug("Add generation prompt is {}".format(addGenerationPrompt))
             logger.info("Stream is {}".format(stream))
             add_generation_prompt = addGenerationPrompt
         api_type_config = get_api_type_config(config_data["apiTypeConfigFileName"])

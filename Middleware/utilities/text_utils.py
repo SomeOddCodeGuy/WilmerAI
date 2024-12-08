@@ -244,8 +244,8 @@ def messages_to_text_block(messages: List[Dict[str, str]]) -> str:
     """
     formatted_messages = [f"{message['content']}" for message in messages]
     chunk = "\n".join(formatted_messages)
-    logger.info("***************************************")
-    logger.info("Chunk created: %s", str(chunk))
+    logger.debug("***************************************")
+    logger.debug("Chunk created: %s", str(chunk))
     return chunk
 
 
@@ -455,8 +455,8 @@ def replace_delimiter_in_file(filepath: str, delimit_on: str, delimit_replacer: 
         return modified_text
 
     except FileNotFoundError:
-        logger.info(f"Error: The file at {filepath} was not found.")
+        logger.error(f"Error: The file at {filepath} was not found.")
         raise
     except IOError:
-        logger.info(f"Error: An IOError occurred while reading the file at {filepath}.")
+        logger.error(f"Error: An IOError occurred while reading the file at {filepath}.")
         raise

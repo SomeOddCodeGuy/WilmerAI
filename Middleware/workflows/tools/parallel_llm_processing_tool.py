@@ -101,7 +101,7 @@ class ParallelLlmProcessingTool:
         while True:
             try:
                 chunk, index = chunks_queue.get_nowait()
-                logger.info(f"Handler for model {handler.prompt_template_file_name} is processing chunk {index}.")
+                logger.debug(f"Handler for model {handler.prompt_template_file_name} is processing chunk {index}.")
                 self.process_single_chunk(chunk=chunk,
                                           index=index,
                                           llm_handler=handler,
@@ -111,7 +111,7 @@ class ParallelLlmProcessingTool:
                                           messages=messages)
                 chunks_queue.task_done()
             except Empty:
-                logger.info(f"No more chunks to process by handler for model {handler.prompt_template_file_name}.")
+                logger.debug(f"No more chunks to process by handler for model {handler.prompt_template_file_name}.")
                 break  # Exit if no more chunks are available
             except Exception as e:
                 logger.error(f"Error processing chunk at index {index} by handler for model "

@@ -52,17 +52,18 @@ class OllamaChatHandler(LlmApiHandler):
         add_user_assistant = get_is_chat_complete_add_user_assistant()
         add_missing_assistant = get_is_chat_complete_add_missing_assistant()
         logger.info(f"Streaming flow!")
-        logger.info(f"Sending request to {url} with data: {json.dumps(data, indent=2)}")
+        logger.debug(f"Sending request to {url} with data: {json.dumps(data, indent=2)}")
 
         output_format = instance_utils.API_TYPE
 
         def generate_sse_stream():
             try:
                 logger.info(f"Streaming flow!")
-                logger.info("Headers: ")
-                logger.info(json.dumps(self.headers, indent=2))
-                logger.info("Data: ")
-                logger.info(data)
+                logger.info(f"URL: {url}")
+                logger.debug("Headers: ")
+                logger.debug(json.dumps(self.headers, indent=2))
+                logger.debug("Data: ")
+                logger.debug(data)
                 with self.session.post(url, headers=self.headers, json=data, stream=True) as r:
                     logger.info(f"Response status code: {r.status_code}")
                     buffer = ""
@@ -180,10 +181,11 @@ class OllamaChatHandler(LlmApiHandler):
         for attempt in range(retries):
             try:
                 logger.info(f"Non-Streaming flow! Attempt: {attempt + 1}")
-                logger.info("Headers: ")
-                logger.info(json.dumps(self.headers, indent=2))
-                logger.info("Data: ")
-                logger.info(data)
+                logger.info(f"URL: {url}")
+                logger.debug("Headers: ")
+                logger.debug(json.dumps(self.headers, indent=2))
+                logger.debug("Data: ")
+                logger.debug(data)
                 response = self.session.post(url, headers=self.headers, json=data, timeout=14400)
                 logger.debug("Response:")
                 logger.debug(response.text)
@@ -201,9 +203,9 @@ class OllamaChatHandler(LlmApiHandler):
                         if "Assistant:" in result_text:
                             result_text = api_utils.remove_assistant_prefix(result_text)
 
-                    logger.info("**************************************")
-                    logger.info("Output from the LLM: %s", result_text)
-                    logger.info("**************************************")
+                    logger.info("\n\n*****************************************************************************\n")
+                    logger.info("\n\nOutput from the LLM: %s", result_text)
+                    logger.info("\n*****************************************************************************\n\n")
 
                     return result_text
                 else:
@@ -242,8 +244,8 @@ def prep_corrected_conversation(conversation, system_prompt, prompt):
         corrected_conversation.pop()
 
     full_prompt = "\n".join(msg["content"] for msg in corrected_conversation)
-    logger.info("\n************************************************")
-    logger.info("Formatted_Prompt: %s", full_prompt)
-    logger.info("************************************************\n")
+    logger.info("\n\n*****************************************************************************\n")
+    logger.info("\n\nFormatted_Prompt: %s", full_prompt)
+    logger.info("\n*****************************************************************************\n\n")
 
     return corrected_conversation

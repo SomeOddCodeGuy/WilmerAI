@@ -28,25 +28,27 @@ def gather_chat_summary_memories(messages: List[Dict[str, str]], discussion_id: 
 
 
 def gather_recent_memories(messages: List[Dict[str, str]], discussion_id: str, max_turns_to_pull=0,
-                           max_summary_chunks_from_file=0) -> Any:
+                           max_summary_chunks_from_file=0, lookback_start=0) -> Any:
     """
         Gathers recent memories from the conversation based on the specified limits.
 
         :param messages: The list of messages in the conversation.
         :param max_turns_to_pull: The maximum number of turns to pull from the conversation (default: 0).
         :param max_summary_chunks_from_file: The maximum number of summary chunks to pull from the file (default: 0).
+        :param lookback_start: The number of messages to go back before starting to pull "memory" messages
         :return: A list of recent memories.
     """
     return get_recent_memories(
         messages=messages,
         max_turns_to_search=max_turns_to_pull,
         max_summary_chunks_from_file=max_summary_chunks_from_file,
-        discussion_id=discussion_id
+        discussion_id=discussion_id,
+        lookback_start=lookback_start
     )
 
 
 def get_recent_memories(messages: List[Dict[str, str]], discussion_id: str, max_turns_to_search=0,
-                        max_summary_chunks_from_file=0) -> str:
+                        max_summary_chunks_from_file=0, lookback_start=0) -> str:
     """
     Retrieves recent memories from chat messages or memory files.
 
@@ -54,6 +56,7 @@ def get_recent_memories(messages: List[Dict[str, str]], discussion_id: str, max_
         messages (List[Dict[str, str]]): The list of recent chat messages.
         max_turns_to_search (int): Maximum turns to search in the chat history.
         max_summary_chunks_from_file (int): Maximum summary chunks to retrieve from memory files.
+        lookback_start (int): Number of messages to go back before starting to pull messages for the memory
 
     Returns:
         str: The recent memories concatenated as a single string with '--ChunkBreak--' delimiter.
@@ -61,15 +64,14 @@ def get_recent_memories(messages: List[Dict[str, str]], discussion_id: str, max_
     logger.debug("Entered get_recent_memories")
 
     if discussion_id is None:
-        final_pairs = get_recent_chat_messages_up_to_max(max_turns_to_search, messages)
+        final_pairs = get_recent_chat_messages_up_to_max(max_turns_to_search, messages, lookback_start)
         logger.debug("Recent Memory complete. Total number of pair chunks: {}".format(len(final_pairs)))
         return '--ChunkBreak--'.join(final_pairs)
     else:
         filepath = get_discussion_memory_file_path(discussion_id)
         hashed_chunks = read_chunks_with_hashes(filepath)
         if len(hashed_chunks) == 0:
-            final_pairs = get_recent_chat_messages_up_to_max(max_turns_to_search, messages)
-            return '--ChunkBreak--'.join(final_pairs)
+            return "No memories have been generated yet"
         else:
             chunks = extract_text_blocks_from_hashed_chunks(hashed_chunks)
             if max_summary_chunks_from_file == 0:
@@ -169,34 +171,57 @@ def get_chat_summary_memories(messages: List[Dict[str, str]], discussion_id: str
     return '\n------------\n'.join(memory_chunks)
 
 
-def get_recent_chat_messages_up_to_max(max_turns_to_search: int, messages: List[Dict[str, str]]) -> List[str]:
+def get_recent_chat_messages_up_to_max(max_turns_to_search: int, messages: List[Dict[str, str]],
+                                       lookback_start: int = 0) -> \
+        List[str]:
     """
-    Retrieves recent chat messages up to a maximum number of turns to search.
+    Retrieves recent chat messages starting at a lookback_start point up to a maximum number of turns to search.
 
     Args:
         max_turns_to_search (int): Maximum number of turns to search in the chat history.
         messages (List[Dict[str, str]]): The list of recent chat messages.
+        lookback_start (int): The index (counted from the end) where the lookback should start.
 
     Returns:
-        List[str]: The recent chat messages as a list of chunks.
+        List[str]: The recent chat messages as a list of chunks or a message indicating no memories available.
     """
-    if len(messages) <= 1:
-        logger.debug("No memory chunks")
-        return []
+    if len(messages) <= 1:  # If we don't have enough messages
+        logger.debug("No memory chunks available.")
+        return ["There are no memories to grab yet"]
 
-    logger.debug("Number of pairs: %s", str(len(messages)))
+    logger.debug("Total number of messages: %s", str(len(messages)))
 
-    # Take the last max_turns_to_search number of pairs from the collection
+    # If the lookback_start is greater than the length of the messages, return no memories
+    if lookback_start >= len(messages):
+        logger.debug("Lookback start exceeds the total number of messages.")
+        return ["There are no memories to grab yet"]
+
+    # Create a copy of messages
     message_copy = deepcopy(messages)
-    if max_turns_to_search > 0:
-        message_copy = message_copy[-min(max_turns_to_search, len(message_copy)):]
 
-    logger.debug("Max turns to search: %s", str(max_turns_to_search))
-    logger.info("Number of pairs: %s", str(len(message_copy)))
+    # Calculate the start index (from the end of the list) for slicing
+    start_index = max(0, len(message_copy) - lookback_start)
+    logger.debug("Lookback start index (from the end): %s", str(start_index))
 
-    pair_chunks = text_utils.get_message_chunks(message_copy, 0, 400)
+    # Calculate the end index for slicing such that we grab max_turns_to_search messages
+    end_index = max(0, start_index - max_turns_to_search)
+    logger.debug("Lookback end index: %s", str(end_index))
+
+    # Slice the messages to get the desired range
+    selected_messages = message_copy[end_index:start_index]
+    logger.debug("Number of messages selected: %s", str(len(selected_messages)))
+
+    if not selected_messages:  # If no messages were selected
+        logger.debug("No messages found within the specified range.")
+        return ["There are no memories to grab yet"]
+
+    # Process the selected messages into chunks
+    pair_chunks = text_utils.get_message_chunks(selected_messages, 0, 400)
+
+    # Filter out empty chunks
     filtered_chunks = [s for s in pair_chunks if s]
 
+    # Clear out user and assistant identifiers
     final_pairs = text_utils.clear_out_user_assistant_from_chunks(filtered_chunks)
 
     return final_pairs

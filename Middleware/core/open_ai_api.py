@@ -61,7 +61,7 @@ class CompletionsAPI(MethodView):
         logger.debug(f"CompletionsAPI request received: {json.dumps(data)}")
         prompt: str = data.get("prompt", "")
 
-        logger.info("CompletionsAPI Processing Data")
+        logger.debug("CompletionsAPI Processing Data")
 
         stream: bool = data.get("stream", False)
         messages = parse_conversation(prompt)
@@ -178,7 +178,7 @@ class GenerateAPI(MethodView):
         :return: A JSON response if streaming is disabled, or a streaming response if enabled.
         """
         instance_utils.API_TYPE = "ollamagenerate"
-        logger.info("GenerateAPI request received")
+        logger.debug("GenerateAPI request received")
         data: Dict[str, Any] = request.get_json()
         logger.debug(f"GenerateAPI request received: {json.dumps(data)}")
 
@@ -199,7 +199,7 @@ class GenerateAPI(MethodView):
 
         messages = parse_conversation(prompt)
 
-        logger.info("GenerateAPI Processing Data")
+        logger.debug("GenerateAPI Processing Data")
         logger.debug(f"Messages: {json.dumps(messages)}")
 
         if stream:
@@ -386,7 +386,7 @@ class WilmerApi:
         discussion_id = extract_discussion_id(prompt_collection)
         prompt = replace_brackets_in_list(prompt_collection)
 
-        logger.info("Handle user prompt discussion_id: {}".format(discussion_id))
+        logger.debug("Handle user prompt discussion_id: {}".format(discussion_id))
 
         if not get_custom_workflow_is_active():
             request_routing_service: PromptCategorizer = PromptCategorizer()
