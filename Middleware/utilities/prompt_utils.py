@@ -135,20 +135,26 @@ def find_last_matching_hash_message(messagesOriginal: List[Dict[str, str]],
     filtered_messages = [message for message in messagesOriginal if
                          message["role"] != "system"] if skip_system else messagesOriginal
 
+    filtered_messages = [message for message in filtered_messages if message["role"] != "images"]
+
     current_message_hashes = [hash_single_message(message) for message in filtered_messages]
 
-    start_index = len(current_message_hashes) - turns_to_skip_looking_back
+    # Adjusting the start_index calculation
+    start_index = len(current_message_hashes) - turns_to_skip_looking_back - 1
+    if start_index < 0:
+        start_index = len(current_message_hashes) - 1
 
-    # Iterate from the third-to-last message backwards
+    logger.debug("Searching for matching hash. current_message_hashes length: %s", str(len(current_message_hashes)))
+    logger.debug("Searching for matching hash. Start index: %s", str(start_index))
+
     for i in range(start_index, -1, -1):
         message_hash = current_message_hashes[i]
         logger.debug(f"Searching for Hash {i}: {message_hash}")
 
-        # Compare hashes with the existing memory hashes
         if message_hash in (hash_tuple[1] for hash_tuple in hashed_chunks_original):
-            return len(current_message_hashes) - i  # Return the number of messages since the last memory
+            return len(current_message_hashes) - i
 
-    return len(current_message_hashes)  # If no match found, return the total number of messages
+    return len(current_message_hashes)
 
 
 def find_how_many_new_memories_since_last_summary(hashed_summary_chunk: Optional[List[Tuple[str, str]]],

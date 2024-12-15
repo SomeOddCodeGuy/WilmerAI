@@ -12,6 +12,7 @@ from Middleware.utilities.config_utils import (
 from .koboldcpp_api_handler import KoboldCppApiHandler
 from .llm_api_handler import LlmApiHandler
 from .ollama_chat_api_handler import OllamaChatHandler
+from .ollama_chat_api_image_specific_handler import OllamaApiChatImageSpecificHandler
 from .ollama_generate_api_handler import OllamaGenerateHandler
 from .openai_api_handler import OpenAiApiHandler
 from .openai_completions_api_handler import OpenAiCompletionsApiHandler
@@ -33,6 +34,7 @@ class LlmApiService:
             presetname (str): The name of the preset file containing API parameters.
             max_tokens (int): The max number of tokens to generate.
             stream (bool): Whether to use streaming or not.
+            llm_type (str): The LLM type to use.
         """
         self.max_tokens = max_tokens
         self.endpoint_file = get_endpoint_config(endpoint)
@@ -124,6 +126,19 @@ class LlmApiService:
             )
         elif self.llm_type == "ollamaApiGenerate":
             return OllamaGenerateHandler(
+                base_url=self.endpoint_url,
+                api_key=self.api_key,
+                gen_input=self._gen_input,
+                model_name=self.model_name,
+                headers=self.headers,
+                strip_start_stop_line_breaks=self.strip_start_stop_line_breaks,
+                stream=self.stream,
+                api_type_config=self.api_type_config,
+                endpoint_config=self.endpoint_file,
+                max_tokens=self.max_tokens
+            )
+        elif self.llm_type == "ollamaApiChatImageSpecific":
+            return OllamaApiChatImageSpecificHandler(
                 base_url=self.endpoint_url,
                 api_key=self.api_key,
                 gen_input=self._gen_input,

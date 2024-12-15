@@ -52,7 +52,7 @@ def track_message_timestamps(messages: List[Dict[str, str]], discussion_id: str)
     # Track the hashes of non-system messages
     message_hashes = []
     for message in messages:
-        if message['role'] not in ['system', 'sysmes']:
+        if message['role'] not in ['system', 'systemMes']:
             message_hashes.append(hash_single_message(message))
         else:
             message_hashes.append(None)  # For system messages, we add None
@@ -65,7 +65,7 @@ def track_message_timestamps(messages: List[Dict[str, str]], discussion_id: str)
 
     # Handle the last three non-system messages
     non_system_messages = [
-        i for i, message in enumerate(messages) if message['role'] not in ['system', 'sysmes']
+        i for i, message in enumerate(messages) if message['role'] not in ['system', 'systemMes']
     ]
 
     # Handle a new conversation with 3 messages and no timestamps on the first two

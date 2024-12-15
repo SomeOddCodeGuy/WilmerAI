@@ -243,6 +243,9 @@ def prep_corrected_conversation(conversation, system_prompt, prompt):
         "content"] == "":
         corrected_conversation.pop()
 
+    if corrected_conversation:
+        corrected_conversation = [item for item in corrected_conversation if item["role"] != "images"]
+
     full_prompt = "\n".join(msg["content"] for msg in corrected_conversation)
     logger.info("\n\n*****************************************************************************\n")
     logger.info("\n\nFormatted_Prompt: %s", full_prompt)

@@ -758,8 +758,11 @@ You can use several variables within these prompts. These will be appropriately 
 - `{category_colon_descriptions}`: Pulls the categories and descriptions from your `Routing` JSON file.
     - Example: "CODING: Any request which requires a code snippet as a response; FACTUAL: Requests that require factual
       information or data; CONVERSATIONAL: Casual conversation or non-specific inquiries".
+- `{category_colon_descriptions_newline_bulletpoint}`: Same as above except uses a bulletpoint list instead of semicolon
+  delimited.
 - `{categoriesSeparatedByOr}`: Pulls the category names, separated by "OR".
     - Example: "CODING OR FACTUAL OR CONVERSATION".
+- `{categoryNameBulletpoints}`: Same as above, but bullet points instead of "OR"
 - `[TextChunk]`: A special variable unique to the parallel processor, likely not used often.
 
 ### Other Types of Nodes

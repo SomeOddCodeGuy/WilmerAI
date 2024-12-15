@@ -100,7 +100,9 @@ class PromptCategorizer:
 
         return {
             'category_colon_descriptions': '; '.join(category_colon_description),
+            'category_colon_descriptions_newline_bulletpoint': "\n- " + '\n- '.join(category_colon_description),
             'categoriesSeparatedByOr': ' or '.join(category_list),
+            'categoryNameBulletpoints': "\n- " + '\n- '.join(category_list),
             'category_list': category_list,
             'category_descriptions': category_descriptions
         }
