@@ -42,6 +42,8 @@ class WorkflowVariableManager:
         self.category_list = None
         self.categoriesSeparatedByOr = None
         self.category_colon_descriptions = None
+        self.category_colon_descriptions_newline_bulletpoint = None
+        self.categoryNameBulletpoints = None
         self.category_descriptions = None
         self.categories = None
         self.chatPromptTemplate = get_chat_template_name()
@@ -105,7 +107,8 @@ class WorkflowVariableManager:
         """
         attributes = {}
         attribute_list = ["category_list", "category_descriptions", "category_colon_descriptions",
-                          "categoriesSeparatedByOr"]
+                          "categoriesSeparatedByOr", "category_colon_descriptions_newline_bulletpoint",
+                          "categoryNameBulletpoints"]
         for attribute in attribute_list:
             if hasattr(self, attribute) and getattr(self, attribute) is not None:
                 attributes[attribute] = getattr(self, attribute)
@@ -123,6 +126,11 @@ class WorkflowVariableManager:
             self.category_colon_descriptions = kwargs['category_colon_descriptions']
         if 'categoriesSeparatedByOr' in kwargs:
             self.categoriesSeparatedByOr = kwargs['categoriesSeparatedByOr']
+        if 'category_colon_descriptions_newline_bulletpoint' in kwargs:
+            self.category_colon_descriptions_newline_bulletpoint = kwargs[
+                'category_colon_descriptions_newline_bulletpoint']
+        if 'categoryNameBulletpoints' in kwargs:
+            self.categoryNameBulletpoints = kwargs['categoryNameBulletpoints']
         if 'category_list' in kwargs:
             self.category_list = kwargs['category_list']
 

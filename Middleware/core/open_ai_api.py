@@ -174,11 +174,12 @@ class GenerateAPI(MethodView):
         """
         Handles POST requests for the generate endpoint, matching Ollama's API.
         https://github.com/ollama/ollama/blob/main/docs/api.md#request-json-mode
-
         :return: A JSON response if streaming is disabled, or a streaming response if enabled.
         """
         instance_utils.API_TYPE = "ollamagenerate"
         logger.debug("GenerateAPI request received")
+
+        # Parse the JSON request
         data: Dict[str, Any] = request.get_json()
         logger.debug(f"GenerateAPI request received: {json.dumps(data)}")
 
@@ -190,22 +191,34 @@ class GenerateAPI(MethodView):
         # Extract optional parameters
         prompt: str = data.get("prompt", "")
         suffix: str = data.get("suffix", "")
-        options: Dict[str, Any] = data.get("options", {})
         system: str = data.get("system", "")
-
-        # Ollama is backwards. If stream isn't in the payload, it's true
+        # Ollama is backwards: If stream isn't in the payload, it's true
         stream: bool = data.get("stream", True)
-        raw: bool = data.get("raw", False)
 
+        if system:
+            prompt = system + prompt
+
+        # Parse the conversation from the prompt
         messages = parse_conversation(prompt)
+
+        # Handle the "images" array
+        images = data.get("images", [])
+        if images:
+            for image_base64 in images:
+                # Add each image with a role of "images" to the messages collection
+                messages.append({
+                    "role": "images",
+                    "content": image_base64
+                })
 
         logger.debug("GenerateAPI Processing Data")
         logger.debug(f"Messages: {json.dumps(messages)}")
 
+        # Generate and return the appropriate response
         if stream:
-            return Response(WilmerApi.handle_user_prompt(messages, True), content_type='application/json')
+            return Response(WilmerApi.handle_user_prompt(messages, stream=True), content_type='application/json')
         else:
-            return_response: str = WilmerApi.handle_user_prompt(messages, False)
+            return_response: str = WilmerApi.handle_user_prompt(messages, stream=False)
             current_time: int = int(time.time())
             response = {
                 "id": f"gen-{current_time}",
@@ -245,43 +258,46 @@ class ApiChatAPI(MethodView):
 
         logger.info(f"ApiChatAPI request received: {json.dumps(request_data)}")
 
+        # Validate 'model' and 'messages' fields
         if 'model' not in request_data or 'messages' not in request_data:
             return jsonify({"error": "Both 'model' and 'messages' fields are required."}), 400
 
         messages: List[Dict[str, Any]] = request_data["messages"]
+        transformed_messages: List[Dict[str, Any]] = []
+
         for message in messages:
+            # Validate that each message has 'role' and 'content'
             if "role" not in message or "content" not in message:
                 return jsonify({"error": "Each message must have 'role' and 'content' fields."}), 400
 
-        # Ollama is backwards. If stream isn't in the payload, it's true
-        stream: bool = request_data.get("stream", True)
-
-        if isinstance(stream, str):
-            stream = stream.lower() == 'true'
-
-        transformed_messages: List[Dict[str, Any]] = []
-        for message in messages:
             role = message["role"]
             content = message["content"]
 
-            if add_user_assistant:
-                if role == "user":
-                    content = "User: " + content
-                elif role == "assistant":
-                    content = "Assistant: " + content
+            # Process the 'images' field if it exists
+            if "images" in message and isinstance(message["images"], list):
+                for image_base64 in message["images"]:
+                    # Add each image as its own message with the role "images"
+                    transformed_messages.append({
+                        "role": "images",
+                        "content": image_base64
+                    })
 
+            # Add the original message to the collection
             transformed_message = {"role": role, "content": content}
-            for optional_field in ["images", "tool_calls"]:
-                if optional_field in message:
-                    transformed_message[optional_field] = message[optional_field]
-
             transformed_messages.append(transformed_message)
 
-        if add_missing_assistant:
-            if add_user_assistant and messages and messages[-1]["role"] != "assistant":
+        # Add assistant response if necessary
+        if add_user_assistant:
+            if transformed_messages and transformed_messages[-1]["role"] != "assistant":
                 transformed_messages.append({"role": "assistant", "content": "Assistant: "})
-            elif messages and messages[-1]["role"] != "assistant":
+        elif add_missing_assistant:
+            if transformed_messages and transformed_messages[-1]["role"] != "assistant":
                 transformed_messages.append({"role": "assistant", "content": ""})
+
+        # Process the response
+        stream = request_data.get("stream", True)
+        if isinstance(stream, str):
+            stream = stream.lower() == 'true'
 
         response_data = WilmerApi.handle_user_prompt(transformed_messages, stream)
 

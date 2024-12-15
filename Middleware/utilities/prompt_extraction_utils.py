@@ -1,5 +1,6 @@
 import logging
 import re
+from copy import deepcopy
 from typing import Dict, Tuple, List, Optional, Any
 
 logger = logging.getLogger(__name__)
@@ -34,18 +35,22 @@ def extract_last_n_turns(messages: List[Dict[str, str]], n: int, include_sysmes:
     if not messages:
         return []
 
+    filtered_messages = [message for message in messages if message["role"] != "images"]
+
     # If remove_all_systems_override is True, filter out all system messages
     if remove_all_systems_override:
-        filtered_messages = [message for message in messages if message["role"] != "system"]
+        filtered_messages = [message for message in filtered_messages if message["role"] != "system"]
         return filtered_messages[-n:]  # Return the last n non-system messages
 
     # If include_sysmes is False, filter out all system messages
     if not include_sysmes:
-        filtered_messages = [message for message in messages if message["role"] != "system"]
+        filtered_messages = [message for message in filtered_messages if message["role"] != "system"]
     else:
         # Find the first non-system message and slice from that point to exclude leading system messages
-        first_non_system_index = next((i for i, message in enumerate(messages) if message["role"] != "system"), 0)
-        filtered_messages = messages[first_non_system_index:]  # Slice from the first non-system message onwards
+        first_non_system_index = next((i for i, message in enumerate(filtered_messages) if message["role"] != "system"),
+                                      0)
+        filtered_messages = filtered_messages[
+                            first_non_system_index:]  # Slice from the first non-system message onwards
 
     # Return only the last n messages from the filtered list
     return filtered_messages[-n:]
@@ -63,20 +68,24 @@ def extract_last_n_turns_as_string(messages: List[Dict[str, Any]], n: int, inclu
     Returns:
     str: The last n messages as a single string.
     """
+    message_copy = deepcopy(messages)
+    message_copy = [message for message in message_copy if message["role"] != "images"]
+
     if remove_all_systems_override:
-        filtered_messages = [message for message in messages if message["role"] != "system"]
+        filtered_messages = [message for message in message_copy if message["role"] != "system"]
         return '\n'.join(message["content"] for message in filtered_messages)
 
-    index_of_first_non_system_message = next((i for i, message in enumerate(messages) if message["role"] != "system"),
-                                             None)
+    index_of_first_non_system_message = next(
+        (i for i, message in enumerate(message_copy) if message["role"] != "system"),
+        None)
 
     if include_sysmes and index_of_first_non_system_message is not None:
-        messages = messages[index_of_first_non_system_message:]
+        message_copy = message_copy[index_of_first_non_system_message:]
 
     if not include_sysmes:
-        messages = [message for message in messages if message["role"] != "system"]
+        message_copy = [message for message in message_copy if message["role"] not in {"system", "sysmes"}]
 
-    return '\n'.join(message["content"] for message in messages[-n:])
+    return '\n'.join(message["content"] for message in message_copy[-n:])
 
 
 def extract_discussion_id(messages: List[Dict[str, str]]) -> Optional[str]:

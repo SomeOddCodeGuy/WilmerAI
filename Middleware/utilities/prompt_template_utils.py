@@ -25,9 +25,10 @@ def format_system_prompts(messages: List[Dict[str, str]], llm_handler, chat_prom
     templates_user_prompt = format_messages_with_template(other_messages, llm_handler.prompt_template_file_name
                                                           , llm_handler.takes_message_collection)
 
-    chat_user_prompt_content = [message["content"] for message in chat_user_prompt if message["role"] != "system"]
+    chat_user_prompt_content = [message["content"] for message in chat_user_prompt if
+                                message["role"] not in {"images", "system"}]
     template_user_prompt_content = [message["content"] for message in templates_user_prompt if
-                                    message["role"] != "system"]
+                                    message["role"] not in {"images", "system"}]
 
     return {
         "chat_system_prompt": format_templated_system_prompt(system_prompt, llm_handler, chat_prompt_template_name),
@@ -69,6 +70,7 @@ def format_messages_with_template(messages: List[Dict[str, str]], template_file_
     """
     prompt_template = load_template_from_json(template_file_name)
     message_copy = deepcopy(messages)
+    message_copy = [message for message in message_copy if message["role"] != "images"]
     formatted_messages = []
 
     for i, message in enumerate(message_copy):
@@ -243,7 +245,7 @@ def get_formatted_last_n_turns_as_string(messages: List[Dict[str, str]], n: int,
     - str: A single string with the last n user turns concatenated and formatted.
     """
 
-    filtered_messages = [message for message in messages if message["role"] != "system"]
+    filtered_messages = [message for message in messages if message["role"] not in {"images", "system"}]
     trimmed_messages = deepcopy(filtered_messages[-n:])
     return_message = format_messages_with_template(trimmed_messages, template_file_name, isChatCompletion)
     return ''.join([message["content"] for message in return_message])
