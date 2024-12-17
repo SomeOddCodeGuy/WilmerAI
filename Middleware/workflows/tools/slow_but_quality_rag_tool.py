@@ -194,11 +194,6 @@ class SlowButQualityRAGTool:
         logger.debug("Skipping most recent messages. Number of most recent messages to skip: %s", str(
             messages_from_most_recent_to_skip))
 
-        if len(messages_copy) > messages_from_most_recent_to_skip:
-            messages_copy = messages_copy[:-messages_from_most_recent_to_skip]
-        else:
-            logger.debug("Not enough messages to process for memories. Skipping memory creation")
-
         chunk_size = discussion_id_workflow_config.get('chunkEstimatedTokenSize', 1000)
         max_messages_between_chunks = discussion_id_workflow_config.get('maxMessagesBetweenChunks', 0)
 
@@ -211,11 +206,16 @@ class SlowButQualityRAGTool:
                                               discussion_id_workflow_config, discussionId)
         else:
             number_of_messages_to_pull = find_last_matching_hash_message(messages_copy, discussion_chunks,
-                                                                         turns_to_skip_looking_back=0)
+                                                                         turns_to_skip_looking_back=messages_from_most_recent_to_skip)
+            if (number_of_messages_to_pull > messages_from_most_recent_to_skip):
+                number_of_messages_to_pull = number_of_messages_to_pull - messages_from_most_recent_to_skip
+            else:
+                number_of_messages_to_pull = 0
 
             logger.info("Number of messages since last memory chunk update: %s", number_of_messages_to_pull)
 
-            messages_to_process = messages_copy[:-messages_from_most_recent_to_skip]
+            messages_to_process = messages_copy[:-messages_from_most_recent_to_skip] if len(
+                messages_copy) > messages_from_most_recent_to_skip else messages_copy
             logger.debug("Messages to process: %s", messages_to_process)
             if len(messages_to_process) == 0:
                 return
