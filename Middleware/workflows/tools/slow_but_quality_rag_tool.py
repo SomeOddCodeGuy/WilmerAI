@@ -404,7 +404,8 @@ class SlowButQualityRAGTool:
 
         if not llm_handler.takes_message_collection:
             result = llm_handler.llm.get_response_from_llm(system_prompt=formatted_system_prompt,
-                                                           prompt=formatted_prompt)
+                                                           prompt=formatted_prompt,
+                                                           llm_takes_images=llm_handler.takes_image_collection)
         else:
             collection = []
             if formatted_system_prompt:
@@ -412,7 +413,8 @@ class SlowButQualityRAGTool:
             if formatted_prompt:
                 collection.append({"role": "user", "content": formatted_prompt})
 
-            result = llm_handler.llm.get_response_from_llm(collection)
+            result = llm_handler.llm.get_response_from_llm(collection,
+                                                           llm_takes_images=llm_handler.takes_image_collection)
 
         if result:
             return result

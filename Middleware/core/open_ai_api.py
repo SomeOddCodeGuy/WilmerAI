@@ -225,6 +225,7 @@ class GenerateAPI(MethodView):
                 "object": "text_completion",
                 "created": current_time,
                 "model": model,
+                "response": f"{return_response}",
                 "choices": [
                     {
                         "text": f"{return_response}",
@@ -281,6 +282,12 @@ class ApiChatAPI(MethodView):
                         "role": "images",
                         "content": image_base64
                     })
+
+            if add_user_assistant:
+                if role == "user":
+                    content = "User: " + content
+                elif role == "assistant":
+                    content = "Assistant: " + content
 
             # Add the original message to the collection
             transformed_message = {"role": role, "content": content}

@@ -408,6 +408,13 @@ class WorkflowManager:
             file = load_custom_file(filepath=filepath, delimiter=delimiter, custom_delimiter=custom_return_delimiter)
             logger.debug("Custom file result: %s", file)
             return file
+        if config.get("type") == "ImageProcessor":
+            logger.debug("Image Processor node")
+            if not any(item.get("role") == "images" for item in messages):
+                logger.debug("No images were present in the conversation collection. Returning hardcoded response.")
+                return "There were no images attached to the message"
+            prompt_processor_service = PromptProcessor(self.workflow_variable_service, self.llm_handler)
+            return prompt_processor_service.handle_image_processor_node(config, messages, agent_outputs)
 
     def handle_custom_workflow(self, config, messages, agent_outputs, stream, request_id, discussion_id):
         logger.info("Custom Workflow initiated")
