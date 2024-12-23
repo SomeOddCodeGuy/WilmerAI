@@ -210,7 +210,8 @@ class PromptProcessor:
                 isChatCompletion=self.llm_handler.takes_message_collection
             )
 
-            return self.llm_handler.llm.get_response_from_llm(system_prompt=system_prompt, prompt=prompt)
+            return self.llm_handler.llm.get_response_from_llm(system_prompt=system_prompt, prompt=prompt,
+                                                              llm_takes_images=self.llm_handler.takes_image_collection)
         else:
             # New workflow for takes_message_collection = True
             collection = []
@@ -242,7 +243,8 @@ class PromptProcessor:
                                                     self.llm_handler.takes_message_collection)
                 collection.extend(last_n_turns)
 
-            return self.llm_handler.llm.get_response_from_llm(collection)
+            return self.llm_handler.llm.get_response_from_llm(collection,
+                                                              llm_takes_images=self.llm_handler.takes_image_collection)
 
     def handle_process_chat_summary(self, config: Dict, messages: List[Dict[str, str]],
                                     agent_outputs: Dict[str, str], discussion_id: str) -> Any:
@@ -527,3 +529,58 @@ class PromptProcessor:
         update_chunks_with_hashes(chunks, filepath, "overwrite")
 
         return summary
+
+    def handle_image_processor_node(
+            self,
+            config: Dict,
+            messages: List[Dict[str, str]],
+            agent_outputs: Optional[Dict] = None
+    ) -> str:
+        """
+        Handles an `image_processor` node by extracting all base64-encoded images (role="images")
+        and sending each one (plus systemPrompt, prompt) to the LLM for processing.
+
+        :param config: The workflow node config (should include 'systemPrompt', 'prompt', etc.).
+        :param messages: A list of message dicts; images will have role="images".
+        :param agent_outputs: A dictionary of any prior outputs from the workflow.
+        :return: The concatenated result of the LLM outputs for each image.
+        """
+
+        image_messages = [msg for msg in messages if msg.get("role") == "images"]
+        if not image_messages:
+            return "No images found in the conversation."
+
+        system_prompt = self.workflow_variable_service.apply_variables(
+            prompt=config.get("systemPrompt", ""),
+            llm_handler=self.llm_handler,
+            messages=messages,
+            agent_outputs=agent_outputs,
+            config=config
+        )
+        prompt = self.workflow_variable_service.apply_variables(
+            prompt=config.get("prompt", ""),
+            llm_handler=self.llm_handler,
+            messages=messages,
+            agent_outputs=agent_outputs,
+            config=config
+        )
+
+        llm_responses = []
+        for img_msg in image_messages:
+            collection = []
+            if system_prompt:
+                collection.append({"role": "system", "content": system_prompt})
+            if prompt:
+                collection.append({"role": "user", "content": prompt})
+
+            collection.append({"role": "images", "content": img_msg["content"]})
+
+            logger.debug(
+                f"Sending image to LLM. Prompt length: {len(prompt)}. Image size: {len(img_msg['content'])} chars.")
+            response = self.llm_handler.llm.get_response_from_llm(collection,
+                                                                  llm_takes_images=self.llm_handler.takes_image_collection)
+            llm_responses.append(response)
+
+        final_response = "\n-------------\n".join(llm_responses)
+
+        return final_response

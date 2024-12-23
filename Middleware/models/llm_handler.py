@@ -10,3 +10,8 @@ class LlmHandler:
             self.takes_message_collection = False
         else:
             self.takes_message_collection = True
+
+        if llm_type == "ollamaApiChatImageSpecific":
+            self.takes_image_collection = True
+        else:
+            self.takes_image_collection = False

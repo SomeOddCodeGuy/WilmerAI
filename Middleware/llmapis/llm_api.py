@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import traceback
+from copy import deepcopy
 from typing import Dict, Generator, List, Optional, Union
 
 from Middleware.utilities.config_utils import (
@@ -157,7 +158,8 @@ class LlmApiService:
             self,
             conversation: Optional[List[Dict[str, str]]] = None,
             system_prompt: Optional[str] = None,
-            prompt: Optional[str] = None
+            prompt: Optional[str] = None,
+            llm_takes_images: bool = False,
     ) -> Union[Generator[str, None, None], str]:
         """
         Sends a prompt or conversation to the LLM and returns the response.
@@ -171,19 +173,32 @@ class LlmApiService:
             Union[Generator[str, None, None], str]: A generator yielding chunks of the response if streaming, otherwise the complete response.
         """
         try:
+            conversation_copy = deepcopy(conversation) if conversation else None
+
             self.is_busy_flag = True
-            logger.debug("llm_api- Stream is: %s", self.stream)
-            logger.debug("llm_api- System prompt: %s", system_prompt)
-            logger.debug("llm_api- Prompt: %s", prompt)
+            logger.debug("llm_api - Stream is: %s", self.stream)
+            logger.debug("llm_api - System prompt: %s", system_prompt)
+            logger.debug("llm_api - Prompt: %s", prompt)
+
+            # Handle the presence of images in the conversation based on LLM capability
+            if not llm_takes_images:
+                logger.debug("llm_api does not take images. Removing images from the collection.")
+                if conversation_copy:
+                    conversation_copy = [
+                        message for message in conversation_copy if message.get("role") != "images"
+                    ]
+            else:
+                logger.debug("llm_api takes images. Leaving images in place.")
+
             if self.stream:
                 return self._api_handler.handle_streaming(
-                    conversation=conversation,
+                    conversation=conversation_copy,
                     system_prompt=system_prompt,
                     prompt=prompt
                 )
             else:
                 return self._api_handler.handle_non_streaming(
-                    conversation=conversation,
+                    conversation=conversation_copy,
                     system_prompt=system_prompt,
                     prompt=prompt
                 )

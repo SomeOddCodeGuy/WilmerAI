@@ -93,6 +93,12 @@ WilmerAI stands for **"What If Language Models Expertly Routed All Inference?"**
   template for connections from a front end via `v1/Completions`. The template can be found in the "Docs" folder and is
   ready for upload to SillyTavern.
 
+- **Vision Multi-Modal Support Via Ollama:** Experimental support of image processing when using
+  Ollama as the front end API, and having an Ollama backend API to send it to. Functionality is available
+  to make use of this feature, which can be read about in the ImageProcessor section, but this is still being
+  tested in-depth so workflow updates will come at a later date. Support for KoboldCpp vision will be coming soon
+  as well.
+
 ## Some (Not So Pretty) Pictures to Help People Visualize What It Can Do
 
 #### Single Assistant Routing to Multiple LLMs
@@ -1127,6 +1133,45 @@ the same User, you can use the same workflow id in as many workflows as you want
 in other workflows, if that's what you desire.
 
 Workflow locks work best in multi-computer setups.
+
+### Image Processor
+
+The image processor node allows you to utilize Ollama to get information about any images sent to the backend via the
+standard Ollama images API request for either the Wilmer exposed api/chat or api/generate endpoints.
+
+So, essentially- if you connect Open WebUI to Wilmer, it will connect to an endpoint Wilmer exposes that is compatible
+with Ollama's api/chat api endpoint. If you send a picture in Open WebUI, that will be sent to Wilmer as if it were
+going to Ollama. Wilmer will see the image, and if you have an ImageProcessor node, that node will caption the image so
+that you can send it to your main text LLMs later in the workflow. The ImageProcessor node currently requires that the
+endpoint be of the `ollamaApiChatImageSpecific` ApiType, but support for KoboldCpp should be coming soon as well.
+
+In the event that no image is sent into a workflow with the ImageProcessor node, the node will return a hardcoded
+string of "There were no images attached to the message".
+
+```json
+  {
+  "title": "Image Processor",
+  "agentName": "Image Processing Agent One",
+  "type": "ImageProcessor",
+  "systemPrompt": "There is currently a conversation underway between a user and an AI Assistant in an online chat program. The AI Assistant has no ability to see images, and must rely on a written description of an image to understand what image was sent.\nWhen given an image from the user, please describe the image in vivid detail so that the AI assistant can know what image was sent and respond appropriately.",
+  "prompt": "The user has sent a new image in a chat. Please describe every aspect of the image in vivid detail. If the image appears to be a screenshot of a website or desktop application, describe not only the contents of the programs but also the general layout and UX. If it is a photo or artwork, please describe in detail the contents and any styling that can be identified. If it is a screenshot of a game that has menu options or a HUD or any sort of interactive UX, please be sure to summarize not only what is currently occurring in the screenshot but also what options appear to be available in the various UI elements. Spare no detail.",
+  "endpointName": "Socg-OpenWebUI-Image-Endpoint",
+  "preset": "_Socg_OpenWebUI_Image_Preset",
+  "maxResponseSizeInTokens": 2000,
+  "addUserTurnTemplate": true,
+  "addDiscussionIdTimestampsForLLM": true
+}
+```
+
+**IMPORTANT**: The ImageProcessor node currently does not support streaming; this only responds as non-streaming, and
+is meant to be used in the middle of a workflow as a captioner, not as the responder for a workflow.
+
+**IMPORTANT**: If you use this with Open WebUI it's fine out of the box, but if you use this in SillyTavern while
+connected to Wilmer as Text Completion -> Ollama, simply be sure to go to the 3 squares icon at the top right
+(Extensions) -> Click "Image Captioning" section, and put the Wilmer prompt template user tag in front of whatever
+caption prompt you have. So instead of the default `"What’s in this image?"` it needs to be `"[Beg_User]What’s in this
+image?"` Captioning seems to work fine with this change. I will be adding screenshots and/or a quickguide
+for this once I'm done with my testing.
 
 ## Understanding Memories
 
