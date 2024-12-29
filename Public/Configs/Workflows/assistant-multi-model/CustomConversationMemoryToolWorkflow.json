@@ -5,7 +5,7 @@
     "systemPrompt": "Please respond with search keywords for the request below.",
     "prompt": "Q: For each message, identify and extract key terms and phrases related to the topics discussed to help recall relevant prior discussions from a text database. The response should not only select keywords for key topics that are most important from the sentences but also format them to enable complex searches using logical and proximity operators.\nConversation messages:\n[\nGerald: I really enjoy flying. It makes me happy I've always wanted to get a pilot's license. I think we talked about that before. I'd love to fly around in my own personal plane. Having it would be really helpful. Wonder if there's an app for getting more information about it? You wrote one didn't you?\nGerald: Or should I get a boat? Ugh I have no idea.\nRalf:\n]\nInstructions:\nAnalyze the message to pinpoint the main subjects. Select keywords and format them in a structured way that represents the specific topics discussed, focusing on proper nouns, technical terms, and specific products or tools mentioned. Format the keywords to potentially include logical connectors like AND, OR, and NOT, or grouping parentheses for complex queries. This will aid in both proximity and logical searches. For example, if the user discusses multiple topics, consider formatting like \"(Flying OR Pilot License) AND (Plane OR Aircraft) AND (App OR Application OR Software)\".\nResponse:\nProvide keywords based on the core topics or subjects discussed in the user's message, ensuring relevance to the actual entities or concepts mentioned, formatted to aid in complex search queries. Please do not include the names of any speakers.\nA: (Flying OR Pilot License) AND (Plane OR Aircraft) AND (App OR Application OR Software) AND (Boat OR Ship OR Seacraft)Q: For each message, identify and extract key terms and phrases related to the topics discussed to help recall relevant prior discussions from a text database. The response should not only select keywords for key topics that are most important from the sentences but also format them to enable complex searches using logical and proximity operators.\nConversation messages:\n[\n{chat_user_prompt_last_five}\n]\nInstructions:\nAnalyze the message to pinpoint the main subjects. Select keywords and format them in a structured way that represents the specific topics discussed, focusing on proper nouns, technical terms, and specific products or tools mentioned. Format the keywords to potentially include logical connectors like AND, OR, and NOT, or grouping parentheses for complex queries. This will aid in both proximity and logical searches. For example, if the user discusses multiple topics, consider formatting like \"(Flying OR Pilot License) AND (Plane OR Aircraft) AND (App OR Application OR Software)\".\nResponse:\nProvide keywords based on the core topics or subjects discussed in the user's message, ensuring relevance to the actual entities or concepts mentioned, formatted to aid in complex search queries. Please do not include the names of any speakers.\nA: ",
     "endpointName": "Assistant-Multi-Model-Worker-Endpoint",
-    "preset": "_Assistant_Multi_Model_Worker_Preset",
+    "preset": "Worker_Preset",
     "maxResponseSizeInTokens": 100,
     "addUserTurnTemplate": true
   },
@@ -27,7 +27,7 @@
         "endpointName": "Assistant-Multi-Model-Worker-Endpoint"
       }
     ],
-    "preset": "_Assistant_Multi_Model_Worker_Preset",
+    "preset": "Worker_Preset",
     "maxResponseSizeInTokens": 400,
     "type": "SlowButQualityRAG",
     "ragTarget": "{agent2Output}",
@@ -40,7 +40,7 @@
     "systemPrompt": "This task involves summarizing an input text. Misplaced prompt template tags, odd parentheses, or other formatting issues should not affect the summary. Ensure that the summaries are clear and detailed.",
     "prompt": "A user has sent a message in an ongoing online conversation, and time has been taken to look through the chat logs of the conversation for anything related to that message. Summaries of relevant excerpts from the logs can be found here:\n[\n{agent3Output}\n]\nThe latest messages in the conversation are found in brackets below:\n[\n{chat_user_prompt_last_five}\n]\nReview the distant memories and the recent conversation, then answer the following questions with complete sentences:\nA) What context do these chat logs from earlier in the conversation provide towards the current conversation?\nB) Based on these chat logs from earlier in the conversation, what sort of response should be given?\nC) Based on thesechat logs from earlier in the conversation, what sort of relationship do the speakers seem to have with one another?\nNOTE: If there are no logs available, please specify that.",
     "endpointName": "Assistant-Multi-Model-MemoryChatSummary-Endpoint",
-    "preset": "_Assistant_Multi_Model_MemoryChatSummary_Preset",
+    "preset": "MemoryChatSummary_Preset",
     "maxResponseSizeInTokens": 800,
     "addUserTurnTemplate": true
   }

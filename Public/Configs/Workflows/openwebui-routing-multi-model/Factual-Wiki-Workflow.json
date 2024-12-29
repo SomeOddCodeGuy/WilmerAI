@@ -6,7 +6,7 @@
     "prompt": "Please consider the below messages:\n[\n{chat_user_prompt_last_ten}\n]\nIn order to appropriately search for information to help respond to the user, it is important to first identify what to look up. Considering the full context of the messages provided, please specify exactly what topic the last message is speaking about. Do not simply assume that it is discussing the most recent messages; consider the entire context that has been provided and think deeply about what the user might really be saying.",
     "lastMessagesToSendInsteadOfPrompt": 5,
     "endpointName": "OpenWebUI-Routing-Multi-Model-Worker-Endpoint",
-    "preset": "_OpenWebUI_Routing_Multi_Model_Worker_Preset",
+    "preset": "Worker_Preset",
     "maxResponseSizeInTokens": 300,
     "addUserTurnTemplate": true
   },
@@ -17,7 +17,7 @@
     "prompt": "A new message has arrived in an ongoing online conversation. After review, the topic of the conversation as been identified, and is listed below:\n[\n{agent1Output}\n]\nPlease respond with the appropriate query to search wikipedia for. Do not respond with any other text than the query, as this verbatim response will be plugged into the search engine.",
     "lastMessagesToSendInsteadOfPrompt": 5,
     "endpointName": "OpenWebUI-Routing-Multi-Model-Worker-Endpoint",
-    "preset": "_OpenWebUI_Routing_Multi_Model_Worker_Preset",
+    "preset": "Worker_Preset",
     "maxResponseSizeInTokens": 300,
     "addUserTurnTemplate": true
   },
@@ -34,7 +34,7 @@
     "prompt": "",
     "lastMessagesToSendInsteadOfPrompt": 5,
     "endpointName": "OpenWebUI-Routing-Multi-Model-Factual-Endpoint",
-    "preset": "_OpenWebUI_Routing_Multi_Model_Factual_Preset",
+    "preset": "Factual_Preset",
     "maxResponseSizeInTokens": 2000,
     "addUserTurnTemplate": false,
     "forceGenerationPromptIfEndpointAllows": false,

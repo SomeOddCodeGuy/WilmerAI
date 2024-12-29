@@ -11,7 +11,7 @@
     "prompt": "",
     "lastMessagesToSendInsteadOfPrompt": 20,
     "endpointName": "OpenWebUI-NoRouting-Dual-Model-ResponderEndpoint",
-    "preset": "_OpenWebUI_NoRouting_Dual_Model_Responder_Preset",
+    "preset": "Responder_Preset",
     "maxResponseSizeInTokens": 800,
     "addUserTurnTemplate": false,
     "returnToUser": true,

@@ -12,7 +12,7 @@
     "prompt": "",
     "lastMessagesToSendInsteadOfPrompt": 20,
     "endpointName": "OpenWebUI-Routing-Multi-Model-Conversational-Endpoint",
-    "preset": "_OpenWebUI_Routing_Multi_Model_Conversational_Preset",
+    "preset": "Conversational_Preset",
     "maxResponseSizeInTokens": 800,
     "addUserTurnTemplate": false,
     "forceGenerationPromptIfEndpointAllows": false,

@@ -1,26 +1,34 @@
 {
   "CODING": {
-    "description": "An appropriate response would fall within the category of writing, editing or answering questions about code or other software development related topics (such as SQL queries).",
+    "description": "The user has specifically requested that the LLM produce code, and the next response is best handled by a code-completion LLM that is skilled only in writing code or scripts. This model is not equipped to discuss technical topics or software design/ideas. It is only skilled at writing code",
     "workflow": "CodingWorkflow-LargeModel-Centric"
   },
-  "TECHNICAL": {
-    "description": "An appropriate response would involve IT or technical related discussion that does not fall within the definition of 'CODING'",
-    "workflow": "Technical-Workflow"
-  },
   "FACTUAL": {
-    "description": "An appropriate response would require encyclopedic knowledge of a topic, and would benefit from direct access to wikipedia articles",
+    "description": "The user has asked a question that the answer would be factual in nature, meaning that the next response is best handled by an LLM that specialized in RAG and has access to wikipedia (This can mean the response is related to specific animals, insects, locations, history, famous people, or any other topic that would exist on Wikipedia)",
     "workflow": "Factual-Wiki-Workflow"
   },
   "REASONING": {
-    "description": "An appropriate response would require a high level of reasoning, such as solving puzzles, drawing conclusions or making predictions",
+    "description": "An appropriate response would require a high level of reasoning, such as solving puzzles, drawing conclusions or making predictions, and is best suited to be handled by an LLM that has a lengthy response time and thinks through the problem completely",
     "workflow": "ReasoningWorkflow-LargeModel-Centric"
   },
   "MATH": {
-    "description": "An appropriate response would specifically require mathematical problem solving, and would not fit within the CODING or REASONING categories",
+    "description": "The user is specifically discussing a math related topic that requires advanced knowledge of math to respond, and the next response is best handled by an LLM that specializes in solving math problems",
     "workflow": "MathWorkflow-LargeModel-Centric"
   },
-  "CONVERSATIONAL": {
-    "description": "An appropriate response does not fit into any of the other categories; this would include banter, playing, and general social conversation that does not specifically fit into any problem solving category",
+  "TAGS": {
+    "description": "The user's request appears to not be a request to continue the conversation, but instead is a request to generate 1-3 tags categorizing the conversation, and requires the LLM to respond in json format with the three tags.",
+    "workflow": "Application-Task-Workflow"
+  },
+  "TITLE": {
+    "description": "A request not to continue to not be a request to continue the conversation, but instead is a request to generate a 3-5 word title for the conversation, and requires the LLM to respond only with the title text.",
+    "workflow": "Application-Task-Workflow"
+  },
+  "AUTOCOMPLETE": {
+    "description": "The incoming request includes the text 'You are an autocompletion system. Continue the text...', wraps the chat history in '<chat_history>' tags, and appears to ask the LLM to provide auto completion suggestions.",
+    "workflow": "Application-Task-Workflow"
+  },
+  "OTHER": {
+    "description": "An appropriate response does not fit into any of the other categories. This LLM is skilled in a wide range of topics, including technical discussion, software design, UX, general conversation and banter.",
     "workflow": "ConversationalWorkflow-New"
   }
 }

@@ -5,7 +5,7 @@
     "systemPrompt": "When given a series of messages from an online group chat and a list of available speakers from that group chat, please categorize with a single word who the next appropriate speaker would be. If there is only one message, and that is simply a name with a colon after it, that name is the next speaker.",
     "prompt": "Q: Please consider the last user message in the following collection of messages from an online group chat below:\n[\n{chat_user_prompt_last_one}\n]\nPlease categorize the last message in the above text, using the other text as context into its message's meaning, into one of the following categories: {category_colon_descriptions}.\n\nPlease categorize the text as instructed. If the last or only message is simply a name followed by a colon, that is a starting prompt for the next speaker.\n\nIMPORTANT: Respond with a single word: {categoriesSeparatedByOr}\n\nA:",
     "endpointName": "Group-Chat-Example-Categorization-Endpoint",
-    "preset": "_Group_Chat_Example_Categorization_Preset",
+    "preset": "Categorization_Preset",
     "maxResponseSizeInTokens": 100,
     "addUserTurnTemplate": true,
     "addDiscussionIdTimestampsForLLM": false

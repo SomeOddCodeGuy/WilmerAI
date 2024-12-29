@@ -42,10 +42,14 @@ class LlmApiService:
         self.api_type_config = get_api_type_config(self.endpoint_file.get("apiTypeConfigFileName", ""))
         llm_type = self.api_type_config["type"]
         preset_type = self.api_type_config.get("presetType", "")
-        preset_file = get_openai_preset_path(presetname, preset_type)
+        preset_file = get_openai_preset_path(presetname, preset_type, True)
+        logger.info("Loading preset at {}".format(preset_file))
 
         if not os.path.exists(preset_file):
-            raise FileNotFoundError(f"The preset file {preset_file} does not exist.")
+            logger.debug("No preset file found at {}. Pulling preset file without username".format(preset_file))
+            preset_file = get_openai_preset_path(presetname, preset_type)
+            if not os.path.exists(preset_file):
+                raise FileNotFoundError(f"The preset file {preset_file} does not exist.")
 
         with open(preset_file) as file:
             preset = json.load(file)

@@ -1,0 +1,11 @@
+{
+  "promptTemplateAssistantPrefix": "<|im_start|>assistant<|im_sep|>\n",
+  "promptTemplateAssistantSuffix": "",
+  "promptTemplateEndToken": "\n",
+  "promptTemplateSystemPrefix": "<|im_start|>system<|im_sep|>\n",
+  "promptTemplateSystemSuffix": "<|im_end|>\n",
+  "promptTemplateUserPrefix": "<|im_start|>user<|im_sep|>\n",
+  "promptTemplateUserSuffix": "<|im_end|>\n",
+  "promptTemplateSystemmesPrefix": "<|im_start|>system<|im_sep|>\n",
+  "promptTemplateSystemmesSuffix": "<|im_end|>\n"
+}

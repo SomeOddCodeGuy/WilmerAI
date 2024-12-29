@@ -6,7 +6,7 @@
     "prompt": "",
     "lastMessagesToSendInsteadOfPrompt": 10,
     "endpointName": "Assistant-Multi-Model-Reasoning-Endpoint",
-    "preset": "_Assistant_Multi_Model_Reasoning_Preset",
+    "preset": "Reasoning_Preset",
     "maxResponseSizeInTokens": 2000,
     "addUserTurnTemplate": false,
     "forceGenerationPromptIfEndpointAllows": false,

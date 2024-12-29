@@ -6,7 +6,7 @@
     "prompt": "",
     "lastMessagesToSendInsteadOfPrompt": 10,
     "endpointName": "Assistant-Multi-Model-Technical-Endpoint",
-    "preset": "_Assistant_Multi_Model_Technical_Preset",
+    "preset": "Technical_Preset",
     "maxResponseSizeInTokens": 3000,
     "addUserTurnTemplate": false,
     "forceGenerationPromptIfEndpointAllows": false,

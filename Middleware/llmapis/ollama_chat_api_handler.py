@@ -138,7 +138,7 @@ class OllamaChatHandler(LlmApiHandler):
                     )
                     yield api_utils.sse_format(final_completion_json, output_format)
 
-                    if output_format != 'ollama':
+                    if output_format not in ('ollamagenerate', 'ollamaapichat'):
                         logger.info("End of stream reached, sending [DONE] signal.")
                         yield api_utils.sse_format("[DONE]", output_format)
 

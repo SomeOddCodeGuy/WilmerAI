@@ -6,7 +6,7 @@
     "prompt": "",
     "lastMessagesToSendInsteadOfPrompt": 10,
     "endpointName": "Group-Chat-Example-MusicalMinstral-Endpoint",
-    "preset": "_Group_Chat_Example_MusicalMinstral_Preset",
+    "preset": "MusicalMinstral_Preset",
     "maxResponseSizeInTokens": 2000,
     "addUserTurnTemplate": false,
     "addDiscussionIdTimestampsForLLM": false

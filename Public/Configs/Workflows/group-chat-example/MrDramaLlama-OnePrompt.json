@@ -6,7 +6,7 @@
     "prompt": "",
     "lastMessagesToSendInsteadOfPrompt": 10,
     "endpointName": "Group-Chat-Example-MrDramaLlama-Endpoint",
-    "preset": "_Group_Chat_Example_MrDramaLlama_Preset",
+    "preset": "MrDramaLlama_Preset",
     "maxResponseSizeInTokens": 2000,
     "addUserTurnTemplate": false,
     "addDiscussionIdTimestampsForLLM": false

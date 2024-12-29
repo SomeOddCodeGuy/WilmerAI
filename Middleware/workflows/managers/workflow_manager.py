@@ -414,7 +414,27 @@ class WorkflowManager:
                 logger.debug("No images were present in the conversation collection. Returning hardcoded response.")
                 return "There were no images attached to the message"
             prompt_processor_service = PromptProcessor(self.workflow_variable_service, self.llm_handler)
-            return prompt_processor_service.handle_image_processor_node(config, messages, agent_outputs)
+            images = prompt_processor_service.handle_image_processor_node(config, messages, agent_outputs)
+            add_as_user_message = config.get("addAsUserMessage", False)
+            if (add_as_user_message):
+                message = config.get("message",
+                                     f"[SYSTEM: The user recently added images to the conversation. "
+                                     f"The images have been analyzed by an advanced vision AI, which has described them"
+                                     f" in detail. The descriptions of the images can be found below:```\n[IMAGE_BLOCK]]\n```]")
+                message = self.workflow_variable_service.apply_variables(
+                    message,
+                    self.llm_handler,
+                    messages,
+                    agent_outputs,
+                    config=config
+                )
+                message = message.replace("[IMAGE_BLOCK]", images)
+                if (len(messages) >= 2):
+                    messages.insert(-1, {"role": "user", "content": message})
+                else:
+                    messages.append({"role": "user", "content": message})
+
+            return images
 
     def handle_custom_workflow(self, config, messages, agent_outputs, stream, request_id, discussion_id):
         logger.info("Custom Workflow initiated")
