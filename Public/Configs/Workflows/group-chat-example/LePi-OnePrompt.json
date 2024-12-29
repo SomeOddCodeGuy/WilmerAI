@@ -6,7 +6,7 @@
     "prompt": "",
     "lastMessagesToSendInsteadOfPrompt": 10,
     "endpointName": "Group-Chat-Example-LePi-Endpoint",
-    "preset": "_Group_Chat_Example_LePi_Preset",
+    "preset": "LePi_Preset",
     "maxResponseSizeInTokens": 2000,
     "addUserTurnTemplate": false,
     "addDiscussionIdTimestampsForLLM": false

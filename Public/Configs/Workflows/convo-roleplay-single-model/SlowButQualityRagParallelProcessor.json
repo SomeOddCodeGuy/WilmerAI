@@ -8,7 +8,7 @@
       "endpointName": "Convo-Roleplay-Single-Model-Endpoint"
     }
   ],
-  "preset": "_Convo_Roleplay_Single_Model_Worker_Preset",
+  "preset": "Worker_Preset",
   "type": "SlowButQualityRAG",
   "ragTarget": "",
   "ragType": "RecentMemory",

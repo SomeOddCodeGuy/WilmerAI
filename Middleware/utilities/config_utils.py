@@ -117,27 +117,20 @@ def get_endpoint_config_path(sub_directory, file_name):
     return get_config_with_subdirectory("Endpoints", sub_directory, file_name)
 
 
-def get_preset_config_path(sub_directory, file_name):
-    """
-    Constructs the file path for a given preset configuration file.
-
-    :param sub_directory: The subdirectory within the 'Public/Configs/Presets' directory.
-    :param file_name: The name of the configuration file.
-    :return: The full path to the configuration file.
-    """
-    return get_config_with_subdirectory("Presets", sub_directory, file_name)
-
-
-def get_config_with_subdirectory(directory, sub_directory, file_name):
+def get_config_with_subdirectory(directory, sub_directory, file_name, secondary_subdirectory=None):
     """
     Constructs the file path for a given configuration file when there is a subdirectory.
     :param directory: The subdirectory within the 'Public/Configs/' directory.
     :param sub_directory: Subdirectory within the directory.
+    :param secondary_subdirectory: Optional secondary subdirectory to come after sub_directory
     :param file_name: The name of the configuration file.
     :return: The full path to the configuration file.
     """
     config_dir = str(get_root_config_directory())
-    config_file = os.path.join(config_dir, directory, sub_directory, f'{file_name}.json')
+    if (not secondary_subdirectory):
+        config_file = os.path.join(config_dir, directory, sub_directory, f'{file_name}.json')
+    else:
+        config_file = os.path.join(config_dir, directory, sub_directory, secondary_subdirectory, f'{file_name}.json')
     return config_file
 
 
@@ -252,7 +245,7 @@ def get_active_conversational_memory_tool_name():
 
 def get_endpoint_subdirectory():
     """
-    Retrieves the name of the active chat prompt template.
+    Retrieves the subdirectory that the endpoints for this user are at
 
     :return: The name of the active chat prompt template.
     """
@@ -261,6 +254,19 @@ def get_endpoint_subdirectory():
         return sub_directory
     else:
         return ""
+
+
+def get_preset_subdirectory_override():
+    """
+    Retrieves the name of the active chat prompt template.
+
+    :return: The name of the active chat prompt template.
+    """
+    sub_directory = get_config_value('presetConfigsSubDirectoryOverride')
+    if sub_directory:
+        return sub_directory
+    else:
+        return get_current_username()
 
 
 def get_active_recent_memory_tool_name():
@@ -301,14 +307,20 @@ def get_categories_config():
     return load_config(config_path)
 
 
-def get_openai_preset_path(config_name, type="OpenAiCompatibleApis"):
+def get_openai_preset_path(config_name, type="OpenAiCompatibleApis", use_subdirectory=False):
     """
     Retrieves the file path to a preset configuration file.
 
     :param config_name: The name of the preset configuration.
+    :param type: The subdirectory within presets, generally named by the ApiType
+    :param use_subdirectory: Specifies whether to include one more sublevel of username after
     :return: The full path to the preset configuration file.
     """
-    return get_preset_config_path(type, config_name)
+    if (use_subdirectory):
+        subdirectory = get_preset_subdirectory_override()
+        return get_config_with_subdirectory("Presets", type, config_name, subdirectory)
+    else:
+        return get_config_with_subdirectory("Presets", type, config_name)
 
 
 def get_endpoint_config(endpoint):

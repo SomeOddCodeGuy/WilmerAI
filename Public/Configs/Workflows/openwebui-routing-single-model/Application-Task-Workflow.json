@@ -1,0 +1,15 @@
+[
+  {
+    "title": "Responding to User Request",
+    "agentName": "Response Agent One",
+    "systemPrompt": "Below is an excerpt from an online discussion being conducted in a chat program between a user and an AI.\nDetailed instructions about the discussion can be found in brackets below:\n[\n{chat_system_prompt}\n]\nA new message has come in, either from the user or from the front end itself requesting a task such as autocompletion, generating a title or generating tags. Please respond below, adhering to whatever output format is requested.",
+    "prompt": "",
+    "lastMessagesToSendInsteadOfPrompt": 20,
+    "endpointName": "OpenWebUI-Routing-Single-Model-Endpoint",
+    "preset": "Worker_Preset",
+    "maxResponseSizeInTokens": 800,
+    "addUserTurnTemplate": false,
+    "forceGenerationPromptIfEndpointAllows": false,
+    "addDiscussionIdTimestampsForLLM": false
+  }
+]

@@ -12,7 +12,7 @@
     "prompt": "",
     "lastMessagesToSendInsteadOfPrompt": 20,
     "endpointName": "OpenWebUI-NoRouting-Single-Model-Endpoint",
-    "preset": "_OpenWebUI_NoRouting_Single_Model_Responder_Preset",
+    "preset": "Responder_Preset",
     "maxResponseSizeInTokens": 800,
     "addUserTurnTemplate": false
   }

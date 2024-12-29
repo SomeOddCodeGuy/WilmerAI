@@ -6,7 +6,7 @@
     "prompt": "",
     "lastMessagesToSendInsteadOfPrompt": 20,
     "endpointName": "Group-Chat-Example-Lex-Endpoint",
-    "preset": "_Group_Chat_Example_Lex_Preset",
+    "preset": "Lex_Preset",
     "maxResponseSizeInTokens": 1000,
     "addUserTurnTemplate": false
   },
@@ -17,7 +17,7 @@
     "prompt": "Please review the below text:\n[\n{agent1Output}\n]\nPlease rewrite the lines as if written by a man who is a cool, confident and seasoned CEO of a major corporation. His messages are written in a professional tone, with a commanding air of power and prestige.\nIMPORTANT: Always begin the messages with 'LEX:' in all caps. Do not surround in brackets or add any other form of markdown that does not exist in the original text. The result of this should be a direct one to one translation.",
     "lastMessagesToSendInsteadOfPrompt": 5,
     "endpointName": "Group-Chat-Example-BusinessGroup-Speaker-Endpoint",
-    "preset": "_Group_Chat_Example_BusinessGroup_Speaker_Preset",
+    "preset": "BusinessGroup_Speaker_Preset",
     "maxResponseSizeInTokens": 2000,
     "addUserTurnTemplate": true,
     "addDiscussionIdTimestampsForLLM": false

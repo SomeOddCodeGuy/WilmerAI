@@ -6,7 +6,7 @@
     "prompt": "",
     "lastMessagesToSendInsteadOfPrompt": 10,
     "endpointName": "Assistant-Multi-Model-Coding-Endpoint",
-    "preset": "_Assistant_Multi_Model_Coder_Preset",
+    "preset": "Coder_Preset",
     "maxResponseSizeInTokens": 3000,
     "addUserTurnTemplate": false,
     "addDiscussionIdTimestampsForLLM": false

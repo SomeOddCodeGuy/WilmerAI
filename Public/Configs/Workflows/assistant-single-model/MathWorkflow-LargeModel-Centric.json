@@ -6,7 +6,7 @@
     "prompt": "",
     "lastMessagesToSendInsteadOfPrompt": 10,
     "endpointName": "Assistant-Single-Model-Endpoint",
-    "preset": "_Assistant_Single_Model_Math_Preset",
+    "preset": "Math_Preset",
     "maxResponseSizeInTokens": 2000,
     "addUserTurnTemplate": false,
     "forceGenerationPromptIfEndpointAllows": false,

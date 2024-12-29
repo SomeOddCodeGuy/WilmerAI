@@ -553,6 +553,7 @@ user JSON file, paste it as a duplicate, and then rename it. Here is an example 
   "offlineWikiApiHost": "127.0.0.1",
   "offlineWikiApiPort": 5728,
   "endpointConfigsSubDirectory": "assistant-single-model",
+  "presetConfigsSubDirectoryOverride": "preset-folder-that-is-not-username",
   "useFileLogging": false
 }
 ```
@@ -598,6 +599,11 @@ user JSON file, paste it as a duplicate, and then rename it. Here is an example 
 - **offlineWikiApiPort**: Port for your wiki API. Unless you specifically change this, it's already good in all the
   example user configs.
 - **endpointConfigsSubDirectory**: Name of the subfolder in Endpoints where your endpoint jsons will live.
+- **presetConfigsSubDirectoryOverride**: This is an optional field to specify a different preset sub-directory folder
+  name
+  than default. The default preset subdirectory folder name will be your username. For backwards compatibility, if it
+  cannot find the preset in your username or whatever custom foldername you give, it will look in the root of the api
+  type you are using, as that's where presets use to live.
 - **useFileLogging**: Specifies whether to log the outputs from Wilmer to a file. By default this is false, and if the
   value does not exist in the config it is false. When false, the logs will be printed to the console. NOTE: The
   optional argument --LoggingDirectory for the .bat, .sh or .py files allow you to override where the logs are written.
@@ -1159,9 +1165,26 @@ string of "There were no images attached to the message".
   "preset": "_Socg_OpenWebUI_Image_Preset",
   "maxResponseSizeInTokens": 2000,
   "addUserTurnTemplate": true,
-  "addDiscussionIdTimestampsForLLM": true
+  "addDiscussionIdTimestampsForLLM": true,
+  "addAsUserMessage": true,
+  "message": "[SYSTEM: The user recently added images to the conversation. The images have been analyzed by an advanced vision AI, which has described them in detail. The descriptions of the images can be found below:```\n[IMAGE_BLOCK]]\n```]"
 }
 ```
+
+- `addAsUserMessage`: If this is set to true, not only will the node put the output from the image model into an
+  agentOutput to be used later, but it will also add a new message to the conversation collection being processed
+  containing that as well. So essentially- every LLM that is called after this node will see 1 more message added
+  to the conversation history- a message with a role of 'user' that will contain the output of the LLM in a particular
+  format specified in the next field, message. If this is false, the node will act like a normal node and only generate
+  an agentOutput
+- `message`: This is used together with 'addAsUserMessage' being true. This is the message that will be added to the
+  chat history. There is a special variable for this called **`[IMAGE_BLOCK]`** that will be replaced with whatever
+  the image llm output from this node; ie `[IMAGE_BLOCK]` will be replaced with whatever the agentOutput value of this
+  node will be. This node is optional; there is a hardcoded message that will be used as default if you do not specify
+  one. The example message I put above is the hardcoded message it would use.
+
+**NOTE**- If addAsUserMessage is true, it will not affect the agentOutput. The node will still produce one as normal,
+and that output will be whatever the LLM responded with. The agentOutput will not contain the value of `message`.
 
 **IMPORTANT**: The ImageProcessor node currently does not support streaming; this only responds as non-streaming, and
 is meant to be used in the middle of a workflow as a captioner, not as the responder for a workflow.

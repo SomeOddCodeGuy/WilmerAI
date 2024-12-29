@@ -6,7 +6,7 @@
     "prompt": "Please consider the below messages:\n[\n{chat_user_prompt_last_ten}\n]\nIn order to appropriately respond to the user, it is important to first identify exactly what they are saying. Considering the full context of the messages provided, please specify exactly what the user's message is about or what the user's request is. Do not simply assume that it is discussing the most recent messages; consider the entire context that has been provided and think deeply about what the user might really be saying.",
     "lastMessagesToSendInsteadOfPrompt": 5,
     "endpointName": "Assistant-Multi-Model-Worker-Endpoint",
-    "preset": "_Assistant_Multi_Model_Worker_Preset",
+    "preset": "Worker_Preset",
     "maxResponseSizeInTokens": 300,
     "addUserTurnTemplate": true
   },
@@ -17,7 +17,7 @@
     "prompt": "Please consider the most recent messages in an online chat:\n[\n{chat_user_prompt_last_ten}\n]\nWithout writing any code, please architect a response for these messages. If an appropriate response would require writing or modifying code, please give a software architecture description of what code needs to be written or modified, and in what ways they should. If an appropriate response does not involve code, then please break down what the appropriate response should be.",
     "lastMessagesToSendInsteadOfPrompt": 8,
     "endpointName": "Assistant-Multi-Model-Coding-Tertiary-Endpoint",
-    "preset": "_Assistant_Multi_Model_Coder_Preset",
+    "preset": "Coder_Preset",
     "maxResponseSizeInTokens": 2000,
     "addUserTurnTemplate": true
   },
@@ -28,7 +28,7 @@
     "prompt": "Please consider the below conversation:\n[\n{chat_user_prompt_last_five}\n]\nA proposal of what an appropriate response to these messages should be can be found here:\n[\n{agent2Output}\n]\nAfter carefully reviewing all of the information and facts, included the proposal of how such a response should be crafted, please implement the response to the user fully and completely, and continue the conversation below.",
     "lastMessagesToSendInsteadOfPrompt": 10,
     "endpointName": "Assistant-Multi-Model-Coding-Secondary-Endpoint",
-    "preset": "_Assistant_Multi_Model_Coder_Preset",
+    "preset": "Coder_Preset",
     "maxResponseSizeInTokens": 2000,
     "addUserTurnTemplate": true
   },
@@ -39,7 +39,7 @@
     "prompt": "",
     "lastMessagesToSendInsteadOfPrompt": 10,
     "endpointName": "Assistant-Multi-Model-Coding-Endpoint",
-    "preset": "_Assistant_Multi_Model_Coder_Preset",
+    "preset": "Coder_Preset",
     "maxResponseSizeInTokens": 2000,
     "addUserTurnTemplate": false,
     "addDiscussionIdTimestampsForLLM": false

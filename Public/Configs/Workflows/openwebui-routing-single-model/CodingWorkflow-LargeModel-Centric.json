@@ -6,7 +6,7 @@
     "prompt": "",
     "lastMessagesToSendInsteadOfPrompt": 10,
     "endpointName": "OpenWebUI-Routing-Single-Model-Endpoint",
-    "preset": "_OpenWebUI_Routing_Single_Model_Coder_Preset",
+    "preset": "Coder_Preset",
     "maxResponseSizeInTokens": 3000,
     "addUserTurnTemplate": false,
     "addDiscussionIdTimestampsForLLM": false

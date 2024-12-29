@@ -8,7 +8,7 @@
       "endpointName": "OpenWebUI-Routing-Multi-Model-Worker-Endpoint"
     }
   ],
-  "preset": "_OpenWebUI_Routing_Multi_Model_Worker_Preset",
+  "preset": "Worker_Preset",
   "maxResponseSizeInTokens": 400,
   "type": "SlowButQualityRAG",
   "ragTarget": "",

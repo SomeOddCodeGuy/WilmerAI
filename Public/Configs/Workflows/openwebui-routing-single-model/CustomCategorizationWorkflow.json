@@ -2,21 +2,21 @@
   {
     "title": "Analyzing the conversation context",
     "agentName": "Conversation Analyzer Agent One",
-    "systemPrompt": "When given an ongoing conversation, review the most recent messages and expertly outline exactly what the most recent speaker is asking for or saying. Please make use of previous messages in the conversation to confirm the context of the most recent speaker's message. Make sure to specify whether the speaker is seeking a specific answer, making a specific request, playing around, or just engaging in idle conversation.",
-    "prompt": "Please consider the below messages:\n[\n{chat_user_prompt_last_ten}\n]\nConsidering the full context of the messages given, please analyze and report the exact context of the last speaker's messages. Do not simply assume that it is discussing the most recent messages; consider the entire context that has been provided and think deeply about what the speaker might really be saying.\n\nIf the final message is a prompt for the most recent speaker to speak again, this is a 'Continue' situation where the next message continue where the previous message left off. This is a very important piece of information that should be noted\n\nIMPORTANT: Please be sure to consider if the last speaker is simply responding with appreciation, is changing the subject or is concluding a topic. The result of this request will decide what tools will be utilized to generate a response, and failure to appropriately not the end of a conversation topic could result in the wrong tool being used.",
+    "systemPrompt": "There is currently a conversation going between a user and an AI assistant powered by a routing software called WilmerAI. Wilmer's speciality is taking each new message from a user and routing it to an LLM that specializes in giving the best response for a particular topic or query.\nWhen given a series of recent messages from a conversation, please carefully consider exactly what the intent of the user's next message is, and which of the specialized LLMs would be best suited to respond to the user.",
+    "prompt": "Please consider the below messages:\n[\n{chat_user_prompt_last_ten}\n]\nConsider the full context of the messages given.\n After analyzing this information, please consider the below domains:\n[\n{category_colon_descriptions_newline_bulletpoint}\n]\nPlease answer the following 4 questions in complete sentences:\n1) What sort of content does the user expect in the next response? Are they expecting idle banter, technical discussion, philosophical discussion, code, math, medical topics, or some other similar subject domain?\n2) Which of the domains would be the best fit based on the answer for the first question?\n3) Please carefully reconsider the last messages in the conversation- does the original assessment of exactly what the user is asking for and what domain fits best still seem appropriate?\n4) Please either re-affirm the domain chosen, or determine a more appropriate domain.\nPlease remember that all answers must fall within one of the following: {categoryNameBulletpoints}.",
     "lastMessagesToSendInsteadOfPrompt": 5,
     "endpointName": "OpenWebUI-Routing-Single-Model-Endpoint",
-    "preset": "_OpenWebUI_Routing_Single_Model_Categorizer_Preset",
+    "preset": "Categorizer_Preset",
     "maxResponseSizeInTokens": 300,
     "addUserTurnTemplate": true
   },
   {
     "title": "Determining category of prompt",
     "agentName": "Categorization Agent Two",
-    "systemPrompt": "When given a message and a series of categories to choose from, always respond with only a single word: the expected category. Do not include any other words than the single appropriate category that was chosen.\nIMPORTANT: When categorizing, always consider whether a topic has concluded or the subject has been changed, and adjust the category accordingly.",
-    "prompt": "A user is currently in an online conversation, and has sent a new message. The intent and context of the message has been described below:\n[\n{agent1Output}\n]\nPlease categorize the user's message into one of the following categories: {category_colon_descriptions}. Return only one word for the response.\n\nPlease respond with one of the following: {categoriesSeparatedByOr}.",
+    "systemPrompt": "When given a message and a series of domains to choose from, always respond with only a single word: the expected domain that the next response fits into. Do not include any other words than the single appropriate domain that was chosen.\nIMPORTANT: When categorizing, always consider whether a topic has concluded or the subject has been changed, and adjust the domain accordingly.",
+    "prompt": "A user is currently in an online conversation, and has sent a new message. The most likely domain that the next response falls within has been carefully determined here:\n[\n{agent1Output}\n]\nPlease categorize the user's message into one of the following domains: {category_colon_descriptions_newline_bulletpoint}. Return only one word for your response.\n\nPlease respond with one of the following: {categoryNameBulletpoints}.",
     "endpointName": "OpenWebUI-Routing-Single-Model-Endpoint",
-    "preset": "_OpenWebUI_Routing_Single_Model_Categorizer_Preset",
+    "preset": "Categorizer_Preset",
     "maxResponseSizeInTokens": 300,
     "addUserTurnTemplate": true
   }

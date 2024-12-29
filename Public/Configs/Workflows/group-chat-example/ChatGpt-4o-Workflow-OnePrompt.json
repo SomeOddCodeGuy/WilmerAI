@@ -6,7 +6,7 @@
     "prompt": "",
     "lastMessagesToSendInsteadOfPrompt": 10,
     "endpointName": "Group-Chat-Example-ChatGPT4o-Endpoint",
-    "preset": "_Group_Chat_Example_ChatGPT4o_Preset",
+    "preset": "ChatGPT4o_Preset",
     "maxResponseSizeInTokens": 3000,
     "addUserTurnTemplate": false,
     "addDiscussionIdTimestampsForLLM": false

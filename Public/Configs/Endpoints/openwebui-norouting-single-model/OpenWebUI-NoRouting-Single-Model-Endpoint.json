@@ -1,9 +1,9 @@
 {
   "modelNameForDisplayOnly": "Single Model No Routing",
-  "endpoint": "http://192.168.50.180:5003",
-  "apiTypeConfigFileName": "KoboldCpp",
-  "maxContextTokenSize": 16384,
+  "endpoint": "http://127.0.0.1:5001",
+  "apiTypeConfigFileName": "Open-AI-API",
+  "maxContextTokenSize": 8192,
   "modelNameToSendToAPI": "",
-  "promptTemplate": "command-r",
+  "promptTemplate": "_chatOnly",
   "addGenerationPrompt": true
 }
