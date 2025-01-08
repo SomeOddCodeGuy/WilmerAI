@@ -360,6 +360,14 @@ class WorkflowManager:
             logger.debug("Offline Wikipedia Api Best Full Article")
             return prompt_processor_service.handle_offline_wiki_node(messages, config["promptToSearch"], agent_outputs,
                                                                      use_new_best_article_endpoint=True)
+        if config["type"] == "OfflineWikiApiTopNFullArticles":
+            logger.debug("Offline Wikipedia Api TopN Full Articles")
+            return prompt_processor_service.handle_offline_wiki_node(messages, config["promptToSearch"], agent_outputs,
+                                                                use_new_best_article_endpoint=False, use_top_n_articles_endpoint=True,
+                                                                percentile=config["percentile"],
+                                                                num_results=config["num_results"],
+                                                                top_n_articles=config["top_n_articles"]
+                                                                )
         if config["type"] == "OfflineWikiApiPartialArticle":
             logger.debug("Offline Wikipedia Api Summary Only")
             return prompt_processor_service.handle_offline_wiki_node(messages, config["promptToSearch"], agent_outputs,
