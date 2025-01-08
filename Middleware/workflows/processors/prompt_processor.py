@@ -453,7 +453,7 @@ class PromptProcessor:
                                  use_new_best_article_endpoint: bool = False, use_top_n_articles_endpoint: bool = False,
                                  percentile: float = 0.5,
                                  num_results: int = 10,
-                                 top_n_articles: int = 5) -> Any:
+                                 top_n_articles: int = 3) -> Any:
 
         message_copy = deepcopy(messages)
 

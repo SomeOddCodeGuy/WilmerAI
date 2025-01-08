@@ -150,7 +150,7 @@ class OfflineWikiApiClient:
         else:
             raise Exception(f"Error: {response.status_code}, {response.text}")
 
-    def get_top_n_full_wiki_articles_by_prompt(self, prompt, percentile=0.5, num_results=10, top_n_articles=5):
+    def get_top_n_full_wiki_articles_by_prompt(self, prompt, percentile=0.5, num_results=10, top_n_articles=3):
         """
         Get top N full text of Wikipedia articles based on a prompt.
 
