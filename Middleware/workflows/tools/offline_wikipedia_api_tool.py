@@ -158,7 +158,7 @@ class OfflineWikiApiClient:
             prompt (str): The prompt to generate the articles.
             percentile (float): The relevance percentile to match articles. Default is 0.5.
             num_results (int): The number of results to return. Default is 10.
-            top_n_articles (int): The number of top articles to return. Default is 8.
+            top_n_articles (int): The number of top articles to return. Default is 3.
 
         Returns:
             list: A list containing the article text.
