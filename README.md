@@ -969,6 +969,20 @@ If you are using an older version, you will not have the required "top_article" 
 }
 ```
 
+In addition, there is a similar node that will take top N full articles where the user can specify the number of total results to take and then the top N of these.  If percentile, num_results, and top_n_articles are not specified then defaults of 0.5, 10, and 3 will be used respectively.  NOTE: since the output from the wikipedia articles for this can be quite long, you may need to pay attention to the Model Endpoint that this is output to and possibly increase the "maxContextTokenSize" to handle the larger output size.  
+```json  
+  {
+    "title": "Querying the offline wikipedia api",
+    "agentName": "Wikipedia Search Api Agent Three",
+    "promptToSearch": "{agent1Output}",
+    "type": "OfflineWikiApiTopNFullArticles",
+    "percentile": 0.4,
+    "num_results": 40,
+    "top_n_articles": 4
+}
+```
+
+
 The configuration for these nodes can be found in the user json.
 
 ```json
