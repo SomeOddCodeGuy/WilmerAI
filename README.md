@@ -969,7 +969,8 @@ If you are using an older version, you will not have the required "top_article" 
 }
 ```
 
-In addition, there is a similar node that will take top N full articles where the user can specify the number of total results to take and then the top N of these.  If percentile, num_results, and top_n_articles are not specified then defaults of 0.5, 10, and 3 will be used respectively.  NOTE: since the output from the wikipedia articles for this can be quite long, you may need to pay attention to the Model Endpoint that this is output to and possibly increase the "maxContextTokenSize" to handle the larger output size.  
+In addition, there is a similar node that will take top N full articles where the user can specify the number of total results to take and then the top N of these.  If percentile, num_results, and top_n_articles are not specified then defaults of 0.5, 10, and 3 will be used respectively.  The output articles are given in order of score, where largest scored article is first by default (descending). top_n_articles can also be negative, where a negative number will give the results as ascending score rather then descending - this is useful when context is truncated by LLM.
+NOTE: since the output from the wikipedia articles for this can be quite long, you may need to pay attention to the Model Endpoint that this is output to and possibly increase the "maxContextTokenSize" to handle the larger output size.  Using ascending results might help with this.
 ```json  
   {
     "title": "Querying the offline wikipedia api",
