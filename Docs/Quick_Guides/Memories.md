@@ -67,10 +67,10 @@ something like this:
 ```
 
 A memory is basically a summary of a chunk of messages. So if there are 10 messages, a memory might be made up of 5 of
-those. The LLM
-is given the messages, as well as the prompt specified in the "_DiscussionId-MemoryFile-Workflow-Settings" json file in
-your workflow folder, and it summarizes those messages. Wilmer then writes the memory to the text_block file, and will
-then hash message #5 and put that hash alongside the memory.
+those. The LLM is given the messages, as well as the prompt specified in the
+"_DiscussionId-MemoryFile-Workflow-Settings" json file in your workflow folder, and it summarizes those messages.
+Wilmer then writes the memory to the text_block file, and will then hash message #5 and put that hash alongside
+the memory.
 
 What this does is tell Wilmer where the memory ends, so that it knows where the next memory begins. Wilmer can also use
 this to figure out how many messages ago you last made a memory.
