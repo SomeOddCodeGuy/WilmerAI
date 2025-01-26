@@ -34,7 +34,7 @@ Consider the below workflow:
     "prompt": "",
     "lastMessagesToSendInsteadOfPrompt": 20,
     "endpointName": "OpenWebUI-NoRouting-Single-Model-Endpoint",
-    "preset": "_OpenWebUI_NoRouting_Single_Model_Conversational_Preset",
+    "preset": "Conversational_Preset",
     "maxResponseSizeInTokens": 800,
     "addUserTurnTemplate": false,
     "forceGenerationPromptIfEndpointAllows": false,

@@ -363,17 +363,21 @@ class WorkflowManager:
         if config["type"] == "OfflineWikiApiTopNFullArticles":
             if ("percentile" in config) and ("num_results" in config) and ("top_n_articles" in config):
                 logger.debug("Offline Wikipedia Api TopN Full Articles")
-                return prompt_processor_service.handle_offline_wiki_node(messages, config["promptToSearch"], agent_outputs,
-                                                                    use_new_best_article_endpoint=False, use_top_n_articles_endpoint=True,
-                                                                    percentile=config["percentile"],
-                                                                    num_results=config["num_results"],
-                                                                    top_n_articles=config["top_n_articles"]
-                                                                    )
+                return prompt_processor_service.handle_offline_wiki_node(messages, config["promptToSearch"],
+                                                                         agent_outputs,
+                                                                         use_new_best_article_endpoint=False,
+                                                                         use_top_n_articles_endpoint=True,
+                                                                         percentile=config["percentile"],
+                                                                         num_results=config["num_results"],
+                                                                         top_n_articles=config["top_n_articles"]
+                                                                         )
             else:
                 logger.debug("Offline Wikipedia Api TopN Full Articles")
-                return prompt_processor_service.handle_offline_wiki_node(messages, config["promptToSearch"], agent_outputs,
-                                                                    use_new_best_article_endpoint=False, use_top_n_articles_endpoint=True
-                                                                    )
+                return prompt_processor_service.handle_offline_wiki_node(messages, config["promptToSearch"],
+                                                                         agent_outputs,
+                                                                         use_new_best_article_endpoint=False,
+                                                                         use_top_n_articles_endpoint=True
+                                                                         )
 
         if config["type"] == "OfflineWikiApiPartialArticle":
             logger.debug("Offline Wikipedia Api Summary Only")
@@ -402,6 +406,9 @@ class WorkflowManager:
 
         if config["type"] == "CustomWorkflow":
             return self.handle_custom_workflow(config, messages, agent_outputs, stream, request_id, discussion_id)
+        if config["type"] == "ConditionalCustomWorkflow":
+            return self.handle_conditional_custom_workflow(
+                config, messages, agent_outputs, stream, request_id, discussion_id)
         if config["type"] == "GetCustomFile":
             logger.debug("Get custom file")
             delimiter = config.get("delimiter")
@@ -451,49 +458,137 @@ class WorkflowManager:
 
             return images
 
+    def _prepare_workflow_overrides(self, config, messages, agent_outputs, stream):
+        """
+        Prepares overrides and determines responder and streaming settings for a workflow node.
+
+        :param config: The configuration dictionary for the workflow node.
+        :param messages: List of message dictionaries exchanged during the workflow.
+        :param agent_outputs: A dictionary containing outputs from previous agents in the workflow.
+        :param stream: Boolean indicating whether streaming is enabled.
+        :return: A tuple containing:
+                 - system_prompt: Overridden system prompt (if any).
+                 - prompt: Overridden user prompt (if any).
+                 - non_responder: Boolean indicating if the node is not the final responder.
+                 - allow_streaming: Boolean indicating if streaming is allowed.
+        """
+        is_responder = config.get("isResponder", False) or config.get("is_responder", False)
+        non_responder = None if is_responder else True
+        allow_streaming = stream if is_responder else False
+
+        # Apply system prompt override if present
+        system_override_raw = config.get("firstNodeSystemPromptOverride", None)
+        if system_override_raw not in [None, ""]:
+            system_prompt = self.workflow_variable_service.apply_variables(
+                system_override_raw, self.llm_handler, messages, agent_outputs, config=config
+            )
+        else:
+            system_prompt = None
+
+        # Apply prompt override if present
+        prompt_override_raw = config.get("firstNodePromptOverride", None)
+        if prompt_override_raw not in [None, ""]:
+            prompt = self.workflow_variable_service.apply_variables(
+                prompt_override_raw, self.llm_handler, messages, agent_outputs, config=config
+            )
+        else:
+            prompt = None
+
+        return system_prompt, prompt, non_responder, allow_streaming
+
     def handle_custom_workflow(self, config, messages, agent_outputs, stream, request_id, discussion_id):
+        """
+        Handles the execution of a standard custom workflow.
+
+        :param config: The configuration dictionary for the workflow node.
+        :param messages: List of message dictionaries exchanged during the workflow.
+        :param agent_outputs: A dictionary containing outputs from previous agents in the workflow.
+        :param stream: Boolean indicating whether streaming is enabled.
+        :param request_id: Unique identifier for the request.
+        :param discussion_id: Unique identifier for the discussion.
+        :return: The result of executing the custom workflow.
+        """
         logger.info("Custom Workflow initiated")
         workflow_name = config.get("workflowName", "No_Workflow_Name_Supplied")
         logger.info("Running custom workflow with name: %s", workflow_name)
-        is_responder = config.get("isResponder", False)
 
-        firstNodeSystemPromptOverride = config.get("firstNodeSystemPromptOverride", None)
-        firstNodePromptOverride = config.get("firstNodePromptOverride", None)
+        # Common overrides & streaming logic
+        system_prompt, prompt, non_responder, allow_streaming = \
+            self._prepare_workflow_overrides(config, messages, agent_outputs, stream)
 
-        if (firstNodeSystemPromptOverride not in [None, ""]):
-            systemPrompt = self.workflow_variable_service.apply_variables(
-                firstNodeSystemPromptOverride,
-                self.llm_handler,
-                messages,
-                agent_outputs,
-                config=config
-            )
-        else:
-            systemPrompt = firstNodeSystemPromptOverride
+        return self.run_custom_workflow(
+            workflow_name=workflow_name,
+            request_id=request_id,
+            discussion_id=discussion_id,
+            messages=messages,
+            non_responder=non_responder,
+            is_streaming=allow_streaming,
+            first_node_system_prompt_override=system_prompt,
+            first_node_prompt_override=prompt
+        )
 
-        if (firstNodePromptOverride not in [None, ""]):
-            prompt = self.workflow_variable_service.apply_variables(
-                firstNodePromptOverride,
-                self.llm_handler,
-                messages,
-                agent_outputs,
-                config=config
-            )
-        else:
-            prompt = firstNodePromptOverride
+    def handle_conditional_custom_workflow(self, config, messages, agent_outputs, stream, request_id, discussion_id):
+        """
+        Handles the execution of a conditional custom workflow, selecting the workflow based on a conditional key,
+        and optionally applying per-route overrides to the first node of the selected workflow.
 
-        if (is_responder):
-            non_responder = None
-            allow_streaming = stream
-        else:
-            non_responder = True
-            allow_streaming = False
+        :param config: The configuration dictionary for the workflow node, including `conditionalKey` and `conditionalWorkflows`.
+        :param messages: List of message dictionaries exchanged during the workflow.
+        :param agent_outputs: A dictionary containing outputs from previous agents in the workflow.
+        :param stream: Boolean indicating whether streaming is enabled.
+        :param request_id: Unique identifier for the request.
+        :param discussion_id: Unique identifier for the discussion.
+        :return: The result of executing the selected workflow.
+        """
+        logger.info("Conditional Custom Workflow initiated")
 
-        return self.run_custom_workflow(workflow_name=workflow_name, request_id=request_id,
-                                        discussion_id=discussion_id, messages=messages, non_responder=non_responder,
-                                        is_streaming=allow_streaming,
-                                        first_node_system_prompt_override=systemPrompt,
-                                        first_node_prompt_override=prompt)
+        # Extract the conditional key and evaluate its value
+        conditional_key = config.get("conditionalKey", None)
+        if not conditional_key:
+            logger.warning("No 'conditionalKey' provided; cannot branch. Falling back to default workflow.")
+
+        raw_key_value = self.workflow_variable_service.apply_variables(
+            conditional_key, self.llm_handler, messages, agent_outputs, config=config
+        ) if conditional_key else ""
+
+        # Normalize the key value (strip whitespace, convert to lowercase, etc.)
+        key_value = raw_key_value.strip().lower()
+
+        # Determine the workflow to execute based on the normalized key's value
+        workflow_map = {k.lower(): v for k, v in config.get("conditionalWorkflows", {}).items()}  # Normalize keys
+        workflow_name = workflow_map.get(key_value, workflow_map.get("default", "No_Workflow_Name_Supplied"))
+        logger.info("Resolved conditionalKey='%s' => workflow_name='%s'", raw_key_value, workflow_name)
+
+        # Fetch route-specific overrides, if any
+        route_overrides = config.get("routeOverrides", {}).get(key_value.capitalize(), {})
+        system_prompt_override = route_overrides.get("systemPromptOverride", None)
+        prompt_override = route_overrides.get("promptOverride", None)
+
+        # Common streaming and responder logic
+        is_responder = config.get("isResponder", False) or config.get("is_responder", False)
+        non_responder = None if is_responder else True
+        allow_streaming = stream if is_responder else False
+
+        # Expand route-specific overrides, if provided
+        expanded_system_prompt = self.workflow_variable_service.apply_variables(
+            system_prompt_override, self.llm_handler, messages, agent_outputs, config=config
+        ) if system_prompt_override else None
+
+        expanded_prompt = self.workflow_variable_service.apply_variables(
+            prompt_override, self.llm_handler, messages, agent_outputs, config=config
+        ) if prompt_override else None
+
+        # Pass the resolved workflow and expanded overrides to the custom workflow executor
+        return self.run_custom_workflow(
+            workflow_name=workflow_name,
+            request_id=request_id,
+            discussion_id=discussion_id,
+            messages=messages,
+            non_responder=non_responder,
+            is_streaming=allow_streaming,
+            first_node_system_prompt_override=expanded_system_prompt,
+            first_node_prompt_override=expanded_prompt
+        )
 
     def handle_python_module(self, config, prompt_processor_service, messages, agent_outputs):
         """
