@@ -52,7 +52,7 @@ If we then take a look at the categorization workflow for this user, we see this
     "prompt": "Please consider the below messages:\n[\n{chat_user_prompt_last_ten}\n]\nConsidering the full context of the messages given, please analyze and report the exact context of the last speaker's messages. Do not simply assume that it is discussing the most recent messages; consider the entire context that has been provided and think deeply about what the speaker might really be saying.\n\nIf the final message is a prompt for the most recent speaker to speak again, this is a 'Continue' situation where the next message continue where the previous message left off. This is a very important piece of information that should be noted\n\nIMPORTANT: Please be sure to consider if the last speaker is simply responding with appreciation, is changing the subject or is concluding a topic. The result of this request will decide what tools will be utilized to generate a response, and failure to appropriately not the end of a conversation topic could result in the wrong tool being used.",
     "lastMessagesToSendInsteadOfPrompt": 5,
     "endpointName": "Assistant-Multi-Model-Categorizer-Endpoint",
-    "preset": "_Assistant_Multi_Model_Categorizer_Preset",
+    "preset": "Categorizer_Preset",
     "maxResponseSizeInTokens": 300,
     "addUserTurnTemplate": true
   },
@@ -62,7 +62,7 @@ If we then take a look at the categorization workflow for this user, we see this
     "systemPrompt": "When given a message and a series of categories to choose from, always respond with only a single word: the expected category. Do not include any other words than the single appropriate category that was chosen.\nIMPORTANT: When categorizing, always consider whether a topic has concluded or the subject has been changed, and adjust the category accordingly.",
     "prompt": "A user is currently in an online conversation, and has sent a new message. The intent and context of the message has been described below:\n[\n{agent1Output}\n]\nPlease categorize the user's message into one of the following categories: {category_colon_descriptions}. Return only one word for the response.\n\nPlease respond with one of the following: {categoriesSeparatedByOr}.",
     "endpointName": "Assistant-Multi-Model-Categorizer-Endpoint",
-    "preset": "_Assistant_Multi_Model_Categorizer_Preset",
+    "preset": "Categorizer_Preset",
     "maxResponseSizeInTokens": 300,
     "addUserTurnTemplate": true
   }

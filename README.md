@@ -5,22 +5,8 @@
 > This is a personal project that is under heavy development. It could, and likely does, contain bugs, incomplete code,
 > or other unintended issues. As such, the software is provided as-is, without warranty of any kind.
 >
-> WilmerAI reflects the work of a single developer and the efforts of his personal time and resources; any views,
-> methodologies, etc. found within are his own and should not reflect upon his employer.
-
-## Author's Note:
-
-> This is a passion project that is being supported in my free time. I do not have the ability to contribute to this
-> during standard business hours on
-> weekdays due to work, so my only times to make code updates are weekends, and some weekday late nights.
->
-> If you find a bug or other issue, a fix may take a week or two to go out. I apologize in
-> advance
-> if that ends up being the case, but please don't take it as meaning I am not taking the issue seriously. In reality,
-> I likely
-> won't have the ability to even look at the issue until the following Friday or Saturday.
->
-> -Socg
+> This project and any expressed views, methodologies, etc found within are the result of contributions by the
+> maintainer and any contributors in their free time, and should not reflect upon any of their employers.
 
 ## What is WilmerAI?
 
@@ -99,6 +85,25 @@ WilmerAI stands for **"What If Language Models Expertly Routed All Inference?"**
   tested in-depth so workflow updates will come at a later date. Support for KoboldCpp vision will be coming soon
   as well.
 
+- **Mid-Workflow Conditional Routing:** Similar to the domain categorization routing, you can now
+  conditionally trigger workflows from within another. For example- you send in a prompt that involves
+  the AI writing code for you: coding route is triggered, and you go into the coding workflow. Once inside
+  that coding workflow, you may have another conditional workflow route for what programming language it is
+  (like Python, C#, React, etc), each sending you down another workflow specific to that language.
+
+## Maintainer's Note:
+
+> This is a passion project that is being supported in my free time. I do not have the ability to contribute to this
+> during standard business hours on
+> weekdays due to work, so my only times to make code updates are weekends, and some weekday late nights.
+>
+> If you find a bug or other issue, a fix may take a week or two to go out. I apologize in
+> advance if that ends up being the case, but please don't take it as meaning I am not taking the
+> issue seriously. In reality, I likely
+> won't have the ability to even look at the issue until the following Friday or Saturday.
+>
+> -Socg
+
 ## Some (Not So Pretty) Pictures to Help People Visualize What It Can Do
 
 #### Single Assistant Routing to Multiple LLMs
@@ -135,11 +140,6 @@ WilmerAI stands for **"What If Language Models Expertly Routed All Inference?"**
 > entirely dependent on the connected LLMs and their responses. If you connect Wilmer to a model that produces lower
 > quality outputs, or if your presets or prompt template have flaws, then Wilmer's overall quality will be much lower
 > quality as well. It's not much different than agentic workflows in that way.
->
->While the author is doing his best to make something useful and high quality, this is an ambitious solo project and is
-> bound to have its problems (especially since the author is not natively a Python developer, and relied heavily on AI
-> to
-> help him get this far). He is slowly figuring it out, though.
 
 ## Connecting to Wilmer
 
@@ -969,20 +969,26 @@ If you are using an older version, you will not have the required "top_article" 
 }
 ```
 
-In addition, there is a similar node that will take top N full articles where the user can specify the number of total results to take and then the top N of these.  If percentile, num_results, and top_n_articles are not specified then defaults of 0.5, 10, and 3 will be used respectively.  The output articles are given in order of score, where largest scored article is first by default (descending). top_n_articles can also be negative, where a negative number will give the results as ascending score rather then descending - this is useful when context is truncated by LLM.
-NOTE: since the output from the wikipedia articles for this can be quite long, you may need to pay attention to the Model Endpoint that this is output to and possibly increase the "maxContextTokenSize" to handle the larger output size.  Using ascending results might help with this.
+In addition, there is a similar node that will take top N full articles where the user can specify the number of total
+results to take and then the top N of these. If percentile, num_results, and top_n_articles are not specified then
+defaults of 0.5, 10, and 3 will be used respectively. The output articles are given in order of score, where largest
+scored article is first by default (descending). top_n_articles can also be negative, where a negative number will give
+the results as ascending score rather then descending - this is useful when context is truncated by LLM.
+NOTE: since the output from the wikipedia articles for this can be quite long, you may need to pay attention to the
+Model Endpoint that this is output to and possibly increase the "maxContextTokenSize" to handle the larger output size.
+Using ascending results might help with this.
+
 ```json  
   {
-    "title": "Querying the offline wikipedia api",
-    "agentName": "Wikipedia Search Api Agent Three",
-    "promptToSearch": "{agent1Output}",
-    "type": "OfflineWikiApiTopNFullArticles",
-    "percentile": 0.4,
-    "num_results": 40,
-    "top_n_articles": 4
+  "title": "Querying the offline wikipedia api",
+  "agentName": "Wikipedia Search Api Agent Three",
+  "promptToSearch": "{agent1Output}",
+  "type": "OfflineWikiApiTopNFullArticles",
+  "percentile": 0.4,
+  "num_results": 40,
+  "top_n_articles": 4
 }
 ```
-
 
 The configuration for these nodes can be found in the user json.
 
@@ -1210,6 +1216,154 @@ connected to Wilmer as Text Completion -> Ollama, simply be sure to go to the 3 
 caption prompt you have. So instead of the default `"What’s in this image?"` it needs to be `"[Beg_User]What’s in this
 image?"` Captioning seems to work fine with this change. I will be adding screenshots and/or a quickguide
 for this once I'm done with my testing.
+
+---
+
+### Custom Workflow Node
+
+The **Custom Workflow Node** allows you to execute a specific workflow in the middle of another workflow. This
+node is particularly useful when you need to perform a predefined series of steps that are isolated from the main
+workflow. The outputs from the custom workflow can be referenced by subsequent nodes using `{agent#Output}`, where `#`
+is the node number.
+
+- **`workflowName`**: The name of the custom workflow to execute.
+- **`is_responder`**: Determines if this node provides the final response for the user. If set to `true`, streaming is
+  becomes enabled based on the user's selection, and the output of this workflow is returned to the user.
+- **`firstNodeSystemPromptOverride`** *(optional)*: Overrides the system prompt for the first node in the custom
+  workflow.
+- **`firstNodePromptOverride`** *(optional)*: Overrides the user prompt for the first node in the custom workflow.
+
+This node can be added with the following syntax:
+
+```json
+{
+  "title": "Custom Workflow Example",
+  "type": "CustomWorkflow",
+  "workflowName": "ExampleCustomWorkflow",
+  "is_responder": true,
+  "firstNodeSystemPromptOverride": "This is the custom system prompt override.",
+  "firstNodePromptOverride": "This is the custom user prompt override."
+}
+```
+
+**NOTE**: On the system and prompt override- the very first node of whatever workflow you call will have their system
+and prompt replaced with whatever you put here, if applicable. The reason for this is that the child workflow will not
+have access to the agent outputs of the parent workflow. Say you have workflow `Workflow-1.json`. Node 4 is a custom
+workflow node, which called `Workflow-2.json`. `Workflow-2.json` will run like any other workflow, meaning that the
+first node's output will be stored in agent1Output for that `Workflow-2`. This means agent's 1, 2 and 3 of
+`Workflow-1` are completely inaccessible within `Workflow-2`. To get around this, you can pass in a prompt/system prompt
+from `Workflow-1` into the first node of `Workflow-2` using the overrides, and those prompts can reference the agent
+outputs for 1, 2 and 3 of `Workflow-1`. This allows you to make use of those values in the first node of the child
+workflow.
+
+The output of the custom workflow that is called will be stored in a standard agent output like any other node. So
+if `Workflow-1` calls `Workflow-2` in its 4th node, then agent4Output of `Workflow-1` would be the final output of
+`Workflow-2`.
+
+---
+
+Here’s the updated README section for the **Conditional Custom Workflow Node** that incorporates the changes to support
+route-specific overrides:
+
+---
+
+### Conditional Custom Workflow Node
+
+The **Conditional Custom Workflow Node** extends the capabilities of the Custom Workflow Node by adding branching logic.
+It allows the workflow to dynamically select a specific sub-workflow to execute based on the value of a conditional
+key (e.g., agent output from a previous node). If no match is found for the key's value, a default workflow can be
+specified as a fallback.
+
+In addition, each route can have optional **system prompt** and **user prompt** overrides, providing fine-grained
+control over the first node in the selected sub-workflow.
+
+#### Properties
+
+- **`conditionalKey`**: A variable or placeholder (e.g., `{agent1Output}`) whose value determines which workflow to
+  execute.
+- **`conditionalWorkflows`**: A dictionary mapping possible values of `conditionalKey` to workflow names.
+    - **`Default`** *(optional)*: Specifies the fallback workflow if no match is found for the key's value.
+- **`is_responder`**: Determines if this node provides the final response for the user. If set to `true`, streaming is
+  enabled, and the workflow concludes after this node.
+- **`routeOverrides`** *(optional)*: A dictionary specifying prompt overrides for each route. Each route can define:
+    - **`systemPromptOverride`** *(optional)*: Overrides the system prompt for the first node in the selected workflow.
+    - **`promptOverride`** *(optional)*: Overrides the user prompt for the first node in the selected workflow.
+
+#### Syntax
+
+This node can be added with the following syntax:
+
+```json
+{
+  "title": "Conditional Workflow Example",
+  "type": "ConditionalCustomWorkflow",
+  "conditionalKey": "{agent1Output}",
+  "conditionalWorkflows": {
+    "Yes": "WorkflowWhenYes",
+    "No": "WorkflowWhenNo",
+    "Default": "DefaultFallbackWorkflow"
+  },
+  "is_responder": true,
+  "routeOverrides": {
+    "Yes": {
+      "systemPromptOverride": "Yes-specific system prompt override.",
+      "promptOverride": "Yes-specific user prompt override."
+    }
+  }
+}
+```
+
+#### Behavior
+
+1. **Conditional Execution**:  
+   The node evaluates the value of `conditionalKey` (e.g., `{agent1Output}`) and selects a workflow based on
+   the `conditionalWorkflows` mapping. If no match is found, the workflow specified in the `Default` key (if provided)
+   is executed.
+
+2. **Route-Specific Overrides**:  
+   Each route in `routeOverrides` can specify:
+    - A **system prompt override** that replaces the system prompt of the first node in the selected workflow.
+    - A **user prompt override** that replaces the user prompt of the first node in the selected workflow.  
+      If no overrides are provided for a route, the first node uses its original prompts.
+
+3. **Fallback Behavior**:  
+   If `routeOverrides` or a specific route's overrides are missing, the workflow will run without applying any overrides
+   to the first node.
+
+#### Example for `conditionalWorkflows`
+
+If `{agent1Output}` evaluates to `"Yes"`, the node executes `"WorkflowWhenYes"`. If `{agent1Output}` evaluates
+to `"No"`, the node executes `"WorkflowWhenNo"`. If `{agent1Output}` evaluates to any other value or is empty,
+the `"DefaultFallbackWorkflow"` is executed.
+
+#### Example for `routeOverrides`
+
+Suppose `{agent1Output}` evaluates to `"Yes"`. The node:
+
+- Selects `"WorkflowWhenYes"`.
+- Replaces the first node's system prompt with `"Yes-specific system prompt override."`.
+- Replaces the first node's user prompt with `"Yes-specific user prompt override."`.
+
+If `{agent1Output}` evaluates to `"No"`, the node:
+
+- Selects `"WorkflowWhenNo"`.
+- Leaves the Prompt and System Prompt of `"WorkflowWhenNo"`'s first node unchanged, as no
+  override was provided.
+
+If `{agent1Output}` does not fit any of the above conditionals, the node:
+
+- Selects `"DefaultFallbackWorkflow"`.
+- Leaves the Prompt and System Prompt of `"DefaultFallbackWorkflow"`'s first node unchanged, as no
+  override was provided.
+
+**NOTE**: The conditions are string literals that are normalized by stripping white space and capitalization
+in the code. So you are not limited to 'Yes' and 'No', those were only examples. It could be 'Cat' and
+'Dog' and 'Bird' and 'Iguana'.
+
+An example I intend to use personally is choosing which programming language a coding request is, so that I can
+route to whatever model handles that request best.
+
+---
 
 ## Understanding Memories
 
