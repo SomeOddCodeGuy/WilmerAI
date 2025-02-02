@@ -1,0 +1,11 @@
+{
+  "promptTemplateSystemPrefix": "<s>[SYSTEM_PROMPT]",
+  "promptTemplateSystemSuffix": "[/SYSTEM_PROMPT]",
+  "promptTemplateUserPrefix": "[INST]",
+  "promptTemplateUserSuffix": "[/INST]",
+  "promptTemplateAssistantPrefix": "",
+  "promptTemplateAssistantSuffix": "</s>",
+  "promptTemplateEndToken": "",
+  "promptTemplateSystemmesPrefix": "<s>[SYSTEM_PROMPT]",
+  "promptTemplateSystemmesSuffix": "[/SYSTEM_PROMPT]"
+}
