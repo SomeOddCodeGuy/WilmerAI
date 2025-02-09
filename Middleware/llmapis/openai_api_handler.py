@@ -138,6 +138,7 @@ class OpenAiApiHandler(LlmApiHandler):
                         finish_reason="stop",
                         current_username=get_current_username(),
                     )
+                    logger.debug("Total duration: {}", total_duration)
                     yield api_utils.sse_format(final_completion_json, output_format)
 
                     if output_format not in ('ollamagenerate', 'ollamaapichat'):

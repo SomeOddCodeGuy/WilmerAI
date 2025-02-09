@@ -176,10 +176,10 @@ def parse_conversation(input_string: str) -> List[Dict[str, str]]:
     Parses a conversation string into a list of messages with roles and content.
 
     Parameters:
-    input_string (str): The input string containing the conversation.
+        input_string (str): The input string containing the conversation.
 
     Returns:
-    List[Dict[str, str]]: The parsed list of messages.
+        List[Dict[str, str]]: The parsed list of messages.
     """
     tags = {
         "Sys": "system",
@@ -187,21 +187,25 @@ def parse_conversation(input_string: str) -> List[Dict[str, str]]:
         "User": "user",
         "Assistant": "assistant"
     }
+
+    # Regex pattern to extract role and content
+    pattern = r'\[Beg_(\w+)\](.*?)(?=\[Beg_\w+\]|$)'
+    matches = re.findall(pattern, input_string, flags=re.DOTALL)
+
     conversation = []
-    beg_sys_message = None
-    parts = input_string.split('[Beg_')
-    for part in parts[1:]:
-        if ']' in part:
-            role_key, content = part.split(']', 1)
+    sys_count = 0
+
+    for role_key, content in matches:
+        content = content.strip()
+
+        if role_key == "Sys":
+            sys_count += 1
+            role = "system" if sys_count == 1 else "systemMes"
+        else:
             role = tags.get(role_key)
-            if role:
-                message = {"role": role, "content": content.strip()}
-                if role_key == "Sys":
-                    beg_sys_message = message
-                else:
-                    conversation.append(message)
-    if beg_sys_message:
-        conversation.insert(0, beg_sys_message)
+
+        if role:
+            conversation.append({"role": role, "content": content})
     logger.debug("Parse conversation result: %s", conversation)
     return conversation
 

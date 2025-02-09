@@ -147,6 +147,7 @@ class KoboldCppApiHandler(LlmApiHandler):
                         finish_reason="stop",
                         current_username=get_current_username(),
                     )
+                    logger.debug("Total duration: {}", total_duration)
                     yield api_utils.sse_format(final_completion_json, output_format)
 
                     if output_format not in ('ollamagenerate', 'ollamaapichat'):
@@ -241,7 +242,7 @@ def prep_full_prompt(system_prompt, prompt):
         prompt = ""
     full_prompt = (system_prompt + prompt).strip()
     full_prompt = return_brackets_in_string(full_prompt)
-    full_prompt = full_prompt.strip() + " "
+    full_prompt = full_prompt.strip()
 
     logger.info("\n\n*****************************************************************************\n")
     logger.info("\n\nFormatted_Prompt: %s", full_prompt)
