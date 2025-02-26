@@ -51,6 +51,12 @@ WilmerAI stands for **"What If Language Models Expertly Routed All Inference?"**
   powerful
   model to handle that task so that you have higher quality memories. (See example user `convo-role-dual-model`)
 
+- **Hotswap Models to Maximize VRAM Usage:** Leveraging Ollama's hotswapping, run workflows with multiple different
+  models, even if the combined VRAM is larger than you have available. For example- a 24GB RTX 4090 can comfortably
+  load a single q8 14b model. Using hotswapping, you can have a workflow of as many 14b models as you have the hard
+  drive space to store, as each call to Ollama can specify the model name, causing it to unload the old model and load
+  the new in its place.
+
 - **Multi-LLM Group Chats In SillyTavern:** It is possible to use Wilmer to have a group chat in ST where every
   character is a different LLM, if you do desire (author personally does this.)  There are example characters available
   in `Docs\SillyTavern`, split into two groups. These example characters/groups are subsets of larger groups that the
@@ -165,6 +171,19 @@ currently is capable of connecting to the following API types:
 
 Wilmer supports both streaming and non-streaming connections, and has been tested using both Sillytavern
 and Open WebUI.
+
+### Youtube Videos
+
+https://www.youtube.com/playlist?list=PLjIfeYFu5Pl7J7KGJqVmHM4HU56nByb4X
+
+This video series shows:
+
+- A walkthrough of Wilmer and what it is
+- An explanation of some of the workflows, as well as the custom python script module
+- Explaining Socg's personal setup
+- Setting up and running an example user
+- Showing a run of a workflow on an RTX 4090 that utilizes Ollama's ability to hotswap multiple 14b models,
+  allowing a 24GB video card to run as if it has close to 100GB+ of VRAM.
 
 ### Connecting in SillyTavern
 
