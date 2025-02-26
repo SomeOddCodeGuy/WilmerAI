@@ -21,6 +21,20 @@ models.
 
 WilmerAI stands for **"What If Language Models Expertly Routed All Inference?"**
 
+### Youtube Videos
+
+[WilmerAI Tutorial Youtube PlayList](https://www.youtube.com/playlist?list=PLjIfeYFu5Pl7J7KGJqVmHM4HU56nByb4X)
+
+This video series shows:
+
+- A walkthrough of Wilmer and what it is
+- An explanation of some of the workflows, as well as the custom python script module
+- Explaining Socg's personal setup
+- Setting up and running an example user
+- Showing a run of a workflow on an RTX 4090 that utilizes Ollama's ability to hotswap multiple 14b models,
+  allowing a 24GB video card to run as many models that would fit individually on the card as you have hard
+  drive space for.
+
 ## Key Features
 
 - **Assistants Powered by Multiple LLMs in Tandem**: Incoming prompts can be routed to "categories", with each category
@@ -171,20 +185,6 @@ currently is capable of connecting to the following API types:
 
 Wilmer supports both streaming and non-streaming connections, and has been tested using both Sillytavern
 and Open WebUI.
-
-### Youtube Videos
-
-[WilmerAI Tutorial Youtube PlayList](https://www.youtube.com/playlist?list=PLjIfeYFu5Pl7J7KGJqVmHM4HU56nByb4X)
-
-This video series shows:
-
-- A walkthrough of Wilmer and what it is
-- An explanation of some of the workflows, as well as the custom python script module
-- Explaining Socg's personal setup
-- Setting up and running an example user
-- Showing a run of a workflow on an RTX 4090 that utilizes Ollama's ability to hotswap multiple 14b models,
-  allowing a 24GB video card to run as many models that would fit individually on the card as you have hard 
-  drive space for.
 
 ### Connecting in SillyTavern
 
