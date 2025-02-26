@@ -183,7 +183,8 @@ This video series shows:
 - Explaining Socg's personal setup
 - Setting up and running an example user
 - Showing a run of a workflow on an RTX 4090 that utilizes Ollama's ability to hotswap multiple 14b models,
-  allowing a 24GB video card to run as if it has close to 100GB+ of VRAM.
+  allowing a 24GB video card to run as many models that would fit individually on the card as you have hard 
+  drive space for.
 
 ### Connecting in SillyTavern
 
