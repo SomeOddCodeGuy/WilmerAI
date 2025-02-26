@@ -3,7 +3,7 @@
     "title": "Checking AI's recent memory about this topic",
     "agentName": "Chat Summary",
     "type": "FullChatSummary",
-    "isManualConfig": true
+    "isManualConfig": false
   },
   {
     "title": "Recent memory gathering",
