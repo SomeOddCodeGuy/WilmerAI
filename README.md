@@ -174,7 +174,7 @@ and Open WebUI.
 
 ### Youtube Videos
 
-https://www.youtube.com/playlist?list=PLjIfeYFu5Pl7J7KGJqVmHM4HU56nByb4X
+[WilmerAI Tutorial Youtube PlayList](https://www.youtube.com/playlist?list=PLjIfeYFu5Pl7J7KGJqVmHM4HU56nByb4X)
 
 This video series shows:
 
