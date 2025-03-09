@@ -1,0 +1,9 @@
+{
+  "modelNameForDisplayOnly": "Main Vision Model - Llama 3.2 11b Vision - (Socg 24GB VRAM Development Machine Model)",
+  "endpoint": "http://127.0.0.1:11434",
+  "apiTypeConfigFileName": "OllamaApiChatImageSpecific",
+  "maxContextTokenSize": 8192,
+  "modelNameToSendToAPI": "x/llama3.2-vision:11b-instruct-q8_0",
+  "promptTemplate": "_chatonly",
+  "addGenerationPrompt": true
+}

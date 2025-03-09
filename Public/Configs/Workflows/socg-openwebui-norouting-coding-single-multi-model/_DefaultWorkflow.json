@@ -1,0 +1,26 @@
+[
+  {
+    "title": "Image Agent",
+    "agentName": "Image Agent One",
+    "type": "ImageProcessor",
+    "systemPrompt": "There is currently a conversation underway between a user and an AI Assistant in an online chat program. The AI Assistant has no ability to see images, and must rely on a written description of an image to understand what image was sent.\nWhen given an image from the user, please describe the image in vivid detail so that the AI assistant can know what image was sent and respond appropriately. This image will be used by a software developer, so if the picture is a screenshot, please pay careful attention to accurately describe any UX, designs or imagery, and attempt to capture ALL text as carefully as possible. Spare no detail.",
+    "prompt": "The user has sent a new image in a chat. Please respond in two parts:\nFirst: Please describe every aspect of the image in vivid detail. If the image appears to be a screenshot of a website or desktop application, describe not only the contents of the programs but also the general layout and UX. If it is a photo or artwork, please describe in detail the contents and any styling that can be identified. If it is a screenshot of a game that has menu options or a HUD or any sort of interactive UX, please be sure to summarize not only what is currently occurring in the screenshot but also what options appear to be available in the various UI elements. Spare no detail and be as verbose as possible about every possible detail.\nSecond: Please describe any text that exists in the image, as accurately and completely as possible. Please take special care if there appears to be any code, to ensure as much of that is captured as possible.",
+    "endpointName": "Image-Endpoint",
+    "preset": "Coder_Preset",
+    "maxResponseSizeInTokens": 2000,
+    "addUserTurnTemplate": true,
+    "addAsUserMessage": true
+  },
+  {
+    "title": "Responding Agent",
+    "agentName": "Responding Agent Five",
+    "systemPrompt": "There is currently a conversation going on between a user and an AI assistant that requires an AI that specializes in coding and technical writing to analyze the conversation and respond accurately and intelligently.\nAdditional instructions for the chat, if any exist, may be found in brackets below:\n[\n{chat_system_prompt}\n]\nPlease carefully read over what the latest messages are saying, analyze all available context and consider the best possible response, and then respond to the user appropriately.",
+    "prompt": "",
+    "lastMessagesToSendInsteadOfPrompt": 25,
+    "endpointName": "Coder-Endpoint",
+    "preset": "Coder_Preset",
+    "maxResponseSizeInTokens": 3000,
+    "addUserTurnTemplate": false,
+    "addDiscussionIdTimestampsForLLM": false
+  }
+]

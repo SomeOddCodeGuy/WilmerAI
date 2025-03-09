@@ -1,0 +1,9 @@
+{
+  "modelNameForDisplayOnly": "Main Coder Model - Qwen2.5 Coder 14b - (Socg 24GB VRAM Development Machine Model)",
+  "endpoint": "http://127.0.0.1:11434",
+  "apiTypeConfigFileName": "OllamaApiChat",
+  "maxContextTokenSize": 16384,
+  "modelNameToSendToAPI": "qwen2.5-coder:14b-instruct-q8_0",
+  "promptTemplate": "_chatOnly",
+  "addGenerationPrompt": true
+}

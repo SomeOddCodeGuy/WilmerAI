@@ -1,0 +1,9 @@
+{
+  "modelNameForDisplayOnly": "Summarizer Model - Phi-4 14b - (Socg 24GB VRAM Development Machine Model)",
+  "endpoint": "http://127.0.0.1:11434",
+  "apiTypeConfigFileName": "OllamaApiChat",
+  "maxContextTokenSize": 16384,
+  "modelNameToSendToAPI": "phi4:14b-q8_0",
+  "promptTemplate": "_chatOnly",
+  "addGenerationPrompt": true
+}

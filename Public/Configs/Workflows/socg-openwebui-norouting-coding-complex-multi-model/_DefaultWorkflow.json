@@ -1,0 +1,114 @@
+[
+  {
+    "title": "Image Agent",
+    "agentName": "Image Agent One",
+    "type": "ImageProcessor",
+    "systemPrompt": "There is currently a conversation underway between a user and an AI Assistant in an online chat program. The AI Assistant has no ability to see images, and must rely on a written description of an image to understand what image was sent.\nWhen given an image from the user, please describe the image in vivid detail so that the AI assistant can know what image was sent and respond appropriately. This image will be used by a software developer, so if the picture is a screenshot, please pay careful attention to accurately describe any UX, designs or imagery, and attempt to capture ALL text as carefully as possible. Spare no detail.",
+    "prompt": "The user has sent a new image in a chat. Please respond in two parts:\nFirst: Please describe every aspect of the image in vivid detail. If the image appears to be a screenshot of a website or desktop application, describe not only the contents of the programs but also the general layout and UX. If it is a photo or artwork, please describe in detail the contents and any styling that can be identified. If it is a screenshot of a game that has menu options or a HUD or any sort of interactive UX, please be sure to summarize not only what is currently occurring in the screenshot but also what options appear to be available in the various UI elements. Spare no detail and be as verbose as possible about every possible detail.\nSecond: Please describe any text that exists in the image, as accurately and completely as possible. Please take special care if there appears to be any code, to ensure as much of that is captured as possible.",
+    "endpointName": "Image-Endpoint",
+    "preset": "Coder_Preset",
+    "maxResponseSizeInTokens": 2000,
+    "addUserTurnTemplate": true,
+    "addAsUserMessage": true
+  },
+  {
+    "title": "Analyzing the conversation context",
+    "agentName": "Conversation Analyzer Agent Two",
+    "systemPrompt": "There is currently a conversation going on between a user and an AI assistant that is made up of multiple LLMs which iterate through the user's request step by step before responding. This step involves an AI that specializes in contextual understanding and user requirements determining and breaking down the full context of what the user is asking or saying.\nWhen given an excerpt of the ongoing conversation, take the last messages sent and use the other messages in the conversation to expertly outline exactly what the user is asking for or saying. If the user is posing a request for code, break down their requirements exactly. These requirements will be sent to an advanced coding AI that lacks contextual understanding of human speech, and will rely heavily on these requirements to craft a response to the user.\nNote: If the last message appears to be an incomplete response from the AI Assistant, then something may have cut the response off prematurely, in which case the current task is to finish that response",
+    "prompt": "Please consider the below messages:\n[\n{chat_user_prompt_last_ten}\n]\nConsidering the full context of the messages provided, please first specify in a single paragraph exactly what the user's most recent message is about or what the user's request is.\nAfter writing that paragraph, please rewrite or interpret the user's most recent request in the form of a very specific bullet-point requirements list. Include any constraints (performance, environment) and define expected inputs/outputs in plain detail. Write nothing else besides the bullet points.\nOnce the summary of what the user is asking for is complete, please elaborate on any specific details regarding the user's request that a code specific AI may not know, such as cultural references (for example: describing what a specific existing app looks like if the requirement includes 'please make an app like...'). Please elaborate using whatever knowledge with detail about what the cultural reference is, what it involves, what it looks like, or any other helpful information to a coding AI that may not have such information needed to fulfill the requirements.",
+    "lastMessagesToSendInsteadOfPrompt": 5,
+    "endpointName": "Requirements-Endpoint",
+    "preset": "Coder_Preset",
+    "maxResponseSizeInTokens": 2000,
+    "addUserTurnTemplate": true
+  },
+  {
+    "title": "Coding Agent",
+    "agentName": "Coder Agent Three",
+    "systemPrompt": "There is currently a conversation going on between a user and an AI assistant that is made up of multiple LLMs which iterate through the user's request step by step before responding. This step involves an AI that specializes in code writing and technical knowledge writing the first draft response to the user, which will be carefully reviewed and corrected in future steps.",
+    "prompt": "Please consider the below conversation:\n[\n{chat_user_prompt_last_ten}\n]\nAn outline of what the user is requesting can be found here:\n[\n{agent2Output}\n]\nFirst: carefully consider, step by step, all of the requirements and constraints set forth by the user, and how a response could adequately satisfy all of them. Focus carefully on ensuring that the response will meet the user's expectation. Be sure to carefully consider details of the request, and what they may mean or how the user might expect them to affect the response.\n\nSecond: under the heading of ###Response to the user, please write a first draft response to the user.\n\nIf the response includes code, and includes multiple files, please be sure to separate each file into its own markdown code block, and to include a file structure diagram at the top.\n\nReturn the complete first-draft response now.",
+    "lastMessagesToSendInsteadOfPrompt": 8,
+    "endpointName": "Coder-First-Draft",
+    "preset": "Reasoning_Preset",
+    "maxResponseSizeInTokens": 6000,
+    "addUserTurnTemplate": true
+  },
+  {
+    "title": "Reviewing Agent",
+    "agentName": "Reviewing Agent Four",
+    "systemPrompt": "There is currently a conversation going on between a user and an AI assistant that is made up of multiple LLMs which iterate through the user's request step by step before responding. This step involves an AI that specializes in code writing and technical knowledge carefully reviewing the first-draft response that has been crafted by a series of advanced AI, and documenting any issues that are found.\nPlease carefully review the response and document necessary corrections to it.",
+    "prompt": "Please consider the below conversation:\n[\n{chat_user_prompt_last_five}\n]\nA response was generated by an advanced coding and technical AI to adhere to the requirements of the user's latest request. That response can found below:\n[\n{agent3Output}\n]\nPlease review the response carefully to ensure that it correctly and completely implements a good response to the user.\n\nIf the response involves code, please check it for correctness against these checklists:\n\n1) Breaking Bugs\n\n- Are all variables declared before use?\n- Are there any obvious typos or name mismatches?\n- Are all imports or libraries accounted for, used, or installed (assume typical environment)?\n- Check logic for referencing undefined properties.\n2) Edge Cases\n- Do we handle typical and boundary conditions implied by the requirements or plan?\n- (List any discovered edge cases that are missing coverage in the code, but do not invent new features.)\n3) Requirement Coverage\n- Which requirements or constraints from the user are not addressed, or partially addressed?\n4) Proposed Corrections\n- Without rewriting the entire code, summarize the corrections needed. Do not provide the entire corrected code in this step— only point-by-point changes needed.\n\nThe context of what the user is requesting has been analyzed, and should be carefully considered when reviewing this response. The analysis can be found here:\n[\n{agent2Output}\n]\nPlease respond with the review of the response now.",
+    "lastMessagesToSendInsteadOfPrompt": 10,
+    "endpointName": "Reviewer-Endpoint",
+    "preset": "Coder_Preset",
+    "maxResponseSizeInTokens": 3000,
+    "addUserTurnTemplate": true
+  },
+  {
+    "title": "Review Fixing Agent",
+    "agentName": "Review Fixing Agent Five",
+    "systemPrompt": "There is currently a conversation going on between a user and an AI assistant that is made up of multiple LLMs which iterate through the user's request step by step before responding. This step involves an AI that specializes in code writing and technical knowledge correcting issues in the response that were identified by a reviewing agent in a previous step.\nThe context of what the user is requesting has been analyzed, and can be found here:\n[\n{agent2Output}\n]\nPlease carefully review the response and feedback, and make the needed corrections to the response.",
+    "prompt": "A response to the user's latest message was generated by an advanced coding and technical AI. That response can found below:\n[\n{agent3Output}\n]\nA thorough review of the response was performed, and can be found here:\n[\n{agent4Output}\n]\nPlease incorporate all necessary fixes with minimal changes.\n\nIf the response involves code, please be sure the final code is correct and will run.\n\nDo not add or remove anything that was not requested in the review. Keep the existing structure unless a change was explicitly recommended.\nPlease respond with the revised response now.",
+    "lastMessagesToSendInsteadOfPrompt": 10,
+    "endpointName": "Coder-Endpoint",
+    "preset": "Coder_Preset",
+    "maxResponseSizeInTokens": 3000,
+    "addUserTurnTemplate": true
+  },
+  {
+    "title": "Reviewing the Review Agent",
+    "agentName": "Review Reviewing Agent Six",
+    "systemPrompt": "There is currently a conversation going on between a user and an AI assistant that is made up of multiple LLMs which iterate through the user's request step by step before responding. This step involves an AI that specializes in code writing and technical knowledge carefully reviewing a previously conducted review of first-draft response that has been crafted by a series of advanced AI, and documenting any issues that are found. This documentation will be used to correct the response by another LLM.\nPlease carefully review the response and document necessary corrections to it.",
+    "prompt": "Please consider the below conversation:\n[\n{chat_user_prompt_last_five}\n]\nA response was generated by an advanced coding and technical AI to adhere to the requirements of the user's latest request. That response can found below:\n[\n{agent5Output}\n]\nThe context of what the user is requesting has been analyzed, and can be found here:\n[\n{agent2Output}\n]\nPlease carefully look over the response, and determine if any part of the response does not adhere to the user's request, exceeds the user's constraints, or simply does not truly appear to meet what the user is looking for. If the context analysis of the user's request is in bullet point form, please consider each bullet point one at a time to verify each is handled.\nFollowing this, please look over the user's most recent message to ensure no other requirements or expectations were missed.\nPlease document corrections that are needed to ensure that the response is updated to meet all of the user's expectations, and return a useful and productive response to the user.\nPlease respond with a list of the needed changes now.",
+    "lastMessagesToSendInsteadOfPrompt": 10,
+    "endpointName": "Requirements-Endpoint",
+    "preset": "Coder_Preset",
+    "maxResponseSizeInTokens": 3000,
+    "addUserTurnTemplate": true
+  },
+  {
+    "title": "Review Fixing Agent",
+    "agentName": "Review Fixing Agent Seven",
+    "systemPrompt": "There is currently a conversation going on between a user and an AI assistant that is made up of multiple LLMs which iterate through the user's request step by step before responding. This step involves an AI that specializes in code writing and technical knowledge correcting issues in the response that were identified by a reviewing agent in a previous step.\nThe context of what the user is requesting has been analyzed, and can be found here:\n[\n{agent2Output}\n]\nPlease carefully review the response and feedback, and make the needed corrections to the response.",
+    "prompt": "A response to the user's latest message was generated by an advanced coding and technical AI. That response can found below:\n[\n{agent5Output}\n]\nA thorough review of the response was performed, and can be found here:\n[\n{agent6Output}\n]\nPlease incorporate all necessary fixes with minimal changes.\n\nIf the response involves code, please be sure the final code is correct and will run.\n\nDo not add or remove anything that was not requested in the review. Keep the existing structure unless a change was explicitly recommended.\nPlease respond with the revised response now.",
+    "lastMessagesToSendInsteadOfPrompt": 10,
+    "endpointName": "Coder-Endpoint",
+    "preset": "Coder_Preset",
+    "maxResponseSizeInTokens": 3000,
+    "addUserTurnTemplate": true
+  },
+  {
+    "title": "Final Review Agent",
+    "agentName": "Final Review Eight",
+    "systemPrompt": "There is currently a conversation going on between a user and an AI assistant that is made up of multiple LLMs which iterate through the user's request step by step before responding. This step involves an AI that specializes in code writing and technical knowledge looking and correcting issues in the final response.\nThe context of what the user is requesting has been analyzed, and can be found here:\n[\n{agent2Output}\n]\nPlease carefully review the response and feedback, and document the needed corrections to the response.",
+    "prompt": "A proposed response to the user's most recent messages was generated by a specialized coding and technical AI agent, and can be found below:\n[\n{agent7Output}\n]\nPlease carefully review the response for any minor errors, typos, or missing items.\n\nIf the response contains code, please review the code from beginning to end, checking each individual method, function or scoped chunk of code to ensure that there are no bugs or other issues that would cause it not to run or cause it to crash at runtime. Please challenge each section of code, as if mentally running through it, to ensure maximum correctness.\nPlease respond with the challenges, assertions and reviews about the code, including any issues that are found.\n\nPlease respond now with the documented review of the response now.",
+    "lastMessagesToSendInsteadOfPrompt": 10,
+    "endpointName": "Reviewer-Endpoint",
+    "preset": "Coder_Preset",
+    "maxResponseSizeInTokens": 6000,
+    "addUserTurnTemplate": true
+  },
+  {
+    "title": "Final Review Fixing Agent",
+    "agentName": "Final Review Agent Nine",
+    "systemPrompt": "There is currently a conversation going on between a user and an AI assistant that is made up of multiple LLMs which iterate through the user's request step by step before responding. This step involves an AI that specializes in code writing and technical knowledge looking and correcting issues in the final response.\nThe context of what the user is requesting has been analyzed, and can be found here:\n[\n{agent2Output}\n]\nPlease carefully review the response and feedback, and make the needed corrections to the response.",
+    "prompt": "A proposed response to the user's most recent messages was generated by a specialized coding and technical AI agent, which excels at writing software but may lack of other soft skills, and can be found below:\n[\n{agent7Output}\n]\nAnother AI has carefully reviewed the response and made the following notes about any issues that may exist:\n[\n{agent8Output}\n]\nMaking only the changes necessary to do so, please correct the issues that have been found.\nPlease respond with the complete and corrected response.",
+    "lastMessagesToSendInsteadOfPrompt": 10,
+    "endpointName": "Coder-Endpoint",
+    "preset": "Coder_Preset",
+    "maxResponseSizeInTokens": 3000,
+    "addUserTurnTemplate": true
+  },
+  {
+    "title": "Responding Agent",
+    "agentName": "Responding Agent Ten",
+    "systemPrompt": "There is currently a conversation going on between a user and an AI assistant that is made up of multiple LLMs which iterate through the user's request step by step before responding. This is the final step of the process, which involves an AI that specializes in written conversation taking the proposed response and continuing the conversation with the user.\nAdditional instructions for the chat, if any exist, may be found in brackets below:\n[\n{chat_system_prompt}\n]\nA response to the user has been carefully formulated through a multi-step, multi-LLM, process and can be found in brackets below:\n[\n{agent9Output}\n]\nPlease continue the conversation, utilizing the response provided. Please remove any lingering mentions from the response of feedback or reviews that do not make sense in the context of the conversation, as these are likely artifacts from the multiple LLMs working together to generate the response. The final response should look to the user as if it is continuing the below conversation naturally.",
+    "prompt": "",
+    "lastMessagesToSendInsteadOfPrompt": 10,
+    "endpointName": "Responder-Endpoint",
+    "preset": "Coder_Preset",
+    "maxResponseSizeInTokens": 3000,
+    "addUserTurnTemplate": false,
+    "addDiscussionIdTimestampsForLLM": false
+  }
+]
