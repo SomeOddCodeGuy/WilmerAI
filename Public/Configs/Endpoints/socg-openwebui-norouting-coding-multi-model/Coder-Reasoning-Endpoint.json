@@ -1,0 +1,9 @@
+{
+  "modelNameForDisplayOnly": "Main Reasoning Model - Deepseek R1 14b Distill - (Socg 24GB VRAM Development Machine Model)",
+  "endpoint": "http://127.0.0.1:11434",
+  "apiTypeConfigFileName": "OllamaApiChat",
+  "maxContextTokenSize": 16384,
+  "modelNameToSendToAPI": "deepseek-r1:14b-qwen-distill-q8_0",
+  "promptTemplate": "_chatOnly",
+  "addGenerationPrompt": true
+}

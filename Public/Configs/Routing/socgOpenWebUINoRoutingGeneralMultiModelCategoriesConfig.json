@@ -1,0 +1,14 @@
+{
+  "TAGS": {
+    "description": "This is not a request to continue the conversation with a user, but instead is a request to generate a series of tags categorizing the conversation, and requires the LLM to respond in json format with the three tags.",
+    "workflow": "Application-Task-Workflow"
+  },
+  "TITLE": {
+    "description": "This is not a request to continue the conversation with a user, but instead is a request to generate a title for the conversation, and requires the LLM to respond only with the title text.",
+    "workflow": "Application-Task-Workflow"
+  },
+  "OTHER": {
+    "description": "An appropriate response does not fit into any of the other categories. This LLM is skilled in a wide range of topics, including technical discussion, software design, UX, general conversation and banter.",
+    "workflow": "GeneralWorkflow"
+  }
+}

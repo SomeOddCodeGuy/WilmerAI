@@ -1,0 +1,9 @@
+{
+  "modelNameForDisplayOnly": "Reviewer Model - Mistral Small 24b - (Socg 24GB VRAM Development Machine Model)",
+  "endpoint": "http://127.0.0.1:11434",
+  "apiTypeConfigFileName": "OllamaApiChat",
+  "maxContextTokenSize": 16384,
+  "modelNameToSendToAPI": "mistral-small:24b",
+  "promptTemplate": "_chatOnly",
+  "addGenerationPrompt": true
+}

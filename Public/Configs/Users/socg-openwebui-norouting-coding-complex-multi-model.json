@@ -1,0 +1,22 @@
+{
+  "port": 5016,
+  "stream": true,
+  "customWorkflowOverride": false,
+  "customWorkflow": "CodingWorkflow",
+  "routingConfig": "socgOpenWebUINoRoutingCodingMultiModelCategoriesConfig",
+  "categorizationWorkflow": "CustomCategorizationWorkflow",
+  "defaultParallelProcessWorkflow": "SlowButQualityRagParallelProcessor",
+  "fileMemoryToolWorkflow": "MemoryFileToolWorkflow",
+  "chatSummaryToolWorkflow": "GetChatSummaryToolWorkflow",
+  "conversationMemoryToolWorkflow": "CustomConversationMemoryToolWorkflow",
+  "recentMemoryToolWorkflow": "RecentMemoryToolWorkflow",
+  "discussionIdMemoryFileWorkflowSettings": "_DiscussionId-MemoryFile-Workflow-Settings",
+  "discussionDirectory": "D:\\Temp",
+  "sqlLiteDirectory": "D:\\Temp",
+  "chatPromptTemplateName": "_chatonly",
+  "verboseLogging": true,
+  "chatCompleteAddUserAssistant": true,
+  "chatCompletionAddMissingAssistantGenerator": true,
+  "endpointConfigsSubDirectory": "socg-openwebui-norouting-coding-multi-model",
+  "presetConfigsSubDirectoryOverride": "socg-openwebui-norouting-coding-multi-model"
+}

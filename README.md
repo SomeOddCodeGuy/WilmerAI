@@ -35,6 +35,32 @@ This video series shows:
   allowing a 24GB video card to run as many models that would fit individually on the card as you have hard
   drive space for.
 
+
+## Connecting to Wilmer
+
+Wilmer exposes several different APIs on the front end, allowing you to connect most applications in the LLM space
+to it.
+
+Wilmer exposes the following APIs that other apps can connect to it with:
+
+- OpenAI Compatible v1/completions
+- OpenAI Compatible chat/completions
+- Ollama Compatible api/generate
+- Ollama Compatible api/chat
+
+On the backend, Wilmer is capable to connecting to various APIs, where it will send its prompts to LLMs. Wilmer
+currently is capable of connecting to the following API types:
+
+- OpenAI Compatible v1/completions
+- OpenAI Compatible chat/completions
+- Ollama Compatible api/generate
+- Ollama Compatible api/chat
+- KoboldCpp Compatible api/v1/generate (non-streaming generate)
+- KoboldCpp Compatible /api/extra/generate/stream (streaming generate)
+
+Wilmer supports both streaming and non-streaming connections, and has been tested using both Sillytavern
+and Open WebUI.
+
 ## Key Features
 
 - **Assistants Powered by Multiple LLMs in Tandem**: Incoming prompts can be routed to "categories", with each category
@@ -161,44 +187,6 @@ This video series shows:
 > quality outputs, or if your presets or prompt template have flaws, then Wilmer's overall quality will be much lower
 > quality as well. It's not much different than agentic workflows in that way.
 
-## Connecting to Wilmer
-
-Wilmer exposes several different APIs on the front end, allowing you to connect most applications in the LLM space
-to it.
-
-Wilmer exposes the following APIs that other apps can connect to it with:
-
-- OpenAI Compatible v1/completions
-- OpenAI Compatible chat/completions
-- Ollama Compatible api/generate
-- Ollama Compatible api/chat
-
-On the backend, Wilmer is capable to connecting to various APIs, where it will send its prompts to LLMs. Wilmer
-currently is capable of connecting to the following API types:
-
-- OpenAI Compatible v1/completions
-- OpenAI Compatible chat/completions
-- Ollama Compatible api/generate
-- Ollama Compatible api/chat
-- KoboldCpp Compatible api/v1/generate (non-streaming generate)
-- KoboldCpp Compatible /api/extra/generate/stream (streaming generate)
-
-Wilmer supports both streaming and non-streaming connections, and has been tested using both Sillytavern
-and Open WebUI.
-
-### Youtube Videos
-
-[WilmerAI Tutorial Youtube PlayList](https://www.youtube.com/playlist?list=PLjIfeYFu5Pl7J7KGJqVmHM4HU56nByb4X)
-
-This video series shows:
-
-- A walkthrough of Wilmer and what it is
-- An explanation of some of the workflows, as well as the custom python script module
-- Explaining Socg's personal setup
-- Setting up and running an example user
-- Showing a run of a workflow on an RTX 4090 that utilizes Ollama's ability to hotswap multiple 14b models,
-  allowing a 24GB video card to run as many models that would fit individually on the card as you have hard 
-  drive space for.
 
 ### Connecting in SillyTavern
 
@@ -435,6 +423,53 @@ First, choose which template user you'd like to use:
 * **openwebui-routing-single-model**: This user is essentially the assistant-single-model, but the prompts are
   more tailored for openwebui, which has no concept of a persona.
 
+> NOTE: The below "socg" workflows are (as of 2025-03-09) copies of personal workflows that Socg uses as part of
+  his personal development toolkit, though with some minor modifications. For example- these are configured with 
+  endpoints suitable for a 24GB
+  video card, like the RTX 3090. If you have more VRAM, please replace with what is available to you. In general,
+  socg uses a different model lineup. This workflow supports images if you use Ollama for the image endpoint.
+  Additionally, QwQ 32b just came out and Socg made some last minute updates to these before deploying them to make
+  full use of that new model for his own workflows, so if you see any typos or errors, that's why. Finally, socg
+  loads models at 32768 context, and doubles all of the maxResponseSizeInTokens in the workflows. They are reduced
+  here because the 24GB card would struggle with some models at that context size. If you can use 32k, that will work
+  out better, as will doubling all of the maxResponseSizeInTokens within the coding workflows especially.
+
+> IMPORTANT: The below users will be updated semi-often. Pull your configurations out of the main folder if you want
+ to use them, or copy them and rename them. As Socg improves his own workflows, those updates will be propagated to
+ these users.
+
+* **socg-openwebui-norouting-coding-complex-multi-model**: This user is a coding workflow tends to
+  run, with the models that Socg uses on an M2 Ultra Mac Studio, around 20-30 minutes. Generally this is used
+  to kick off a request before starting a feature or project, just to get a starting point; this workflow is rarely
+  used in the middle of development, unless he'll be going afk for a while and it wouldn't be bothersome, or
+  unless some bug is being really aggravating.
+
+
+* **socg-openwebui-norouting-coding-dual-multi-model**: This user is a coding workflow that relies on 2 models
+  working in tandem to try to solve the issue. Much faster than the complex workflow, but still slower than asking
+  single LLM.
+
+
+* **socg-openwebui-norouting-coding-reasoning-multi-model**: Similar to the dual model coding workflow, but this
+  expects a reasoning endpoint halfway through. Not a huge difference other than bigger max response sizes and a
+  summary node before the responder.
+
+
+* **socg-openwebui-norouting-coding-single-multi-model**: This calls a single coding model directly. Fastest response;
+  not much different than just connecting directly to the LLM API, other than the support for the image endpoints.
+
+
+* **socg-openwebui-norouting-general-multi-model**: Calls a single general endpoint. This is good for things like RAG.
+  Socg runs 3 variants of this: General, Large and Large-Rag (basically just copy/pasted the same user 3 times and
+  changed the endpoints). General might be something mid-ranged like Mistral Small 24b or Qwen2.5 32b. Large might be a
+  good factual model like Qwen2.5 72b, and Large-Rag would be something with a high IF score like Llama 3.3 70b.
+
+
+* **socg-openwebui-norouting-general-offline-wikipedia**: This is similar to general-multi-model, but also makes a call
+  to the  [OfflineWikipediaTextApi](https://github.com/SomeOddCodeGuy/OfflineWikipediaTextApi) to first pull an article. 
+  There's still work to do on the efficacy of this, as
+  the wiki api can sometimes pull the wrong article. For now, continue to take answers with caution and validate them.
+
 Once you have selected the user that you want to use, there are a couple of steps to perform:
 
 1) Update the endpoints for your user under Public/Configs/Endpoints. The example characters are sorted into folders
@@ -512,8 +547,8 @@ These configuration files represent the different API types that you might be hi
 }
 ```
 
-- **type**: Can be either: `koboldCppGenerate`, `ollamaApiChat`, `ollamaApiGenerate`, `openAIChatCompletion` or
-  `openAIV1Completion`.
+- **type**: Can be either: `KoboldCpp`, `OllamaApiChat`, `OllamaApiChatImageSpecific`, `OllamaApiGenerate`, 
+  `Open-AI-API`, `OpenAI-Compatible-Completions`, or `Text-Generation-WebUI`.
 - **presetType**: This specifies the name of the folder that houses the presets you want to use. If you peek in the
   Presets
   folder, you'll see what I mean. Kobold has the best support. I plan to add more support for others later. With that
@@ -1204,7 +1239,7 @@ So, essentially- if you connect Open WebUI to Wilmer, it will connect to an endp
 with Ollama's api/chat api endpoint. If you send a picture in Open WebUI, that will be sent to Wilmer as if it were
 going to Ollama. Wilmer will see the image, and if you have an ImageProcessor node, that node will caption the image so
 that you can send it to your main text LLMs later in the workflow. The ImageProcessor node currently requires that the
-endpoint be of the `ollamaApiChatImageSpecific` ApiType, but support for KoboldCpp should be coming soon as well.
+endpoint be of the `OllamaApiChatImageSpecific` ApiType, but support for KoboldCpp should be coming soon as well.
 
 In the event that no image is sent into a workflow with the ImageProcessor node, the node will return a hardcoded
 string of "There were no images attached to the message".

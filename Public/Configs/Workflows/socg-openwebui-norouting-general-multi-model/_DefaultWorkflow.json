@@ -1,0 +1,27 @@
+[
+  {
+    "title": "Responding Agent",
+    "agentName": "Responding Agent One",
+    "type": "ImageProcessor",
+    "systemPrompt": "There is currently a conversation underway between a user and an AI Assistant in an online chat program. The AI Assistant has no ability to see images, and must rely on a written description of an image to understand what image was sent.\nWhen given an image from the user, please describe the image in vivid detail so that the AI assistant can know what image was sent and respond appropriately.",
+    "prompt": "The user has sent a new image in a chat. Please respond in two parts:\nFirst: Please describe every aspect of the image in vivid detail. If the image appears to be a screenshot of a website or desktop application, describe not only the contents of the programs but also the general layout and UX. If it is a photo or artwork, please describe in detail the contents and any styling that can be identified. If it is a screenshot of a game that has menu options or a HUD or any sort of interactive UX, please be sure to summarize not only what is currently occurring in the screenshot but also what options appear to be available in the various UI elements. Spare no detail and be as verbose as possible about every possible detail.\nSecond: Please describe any text that exists in the image, as accurately and completely as possible.",
+    "endpointName": "Image-Endpoint",
+    "preset": "General_Preset",
+    "maxResponseSizeInTokens": 2000,
+    "addUserTurnTemplate": true,
+    "addAsUserMessage": true
+  },
+  {
+    "title": "Responding Agent",
+    "agentName": "Responding Agent Two",
+    "systemPrompt": "The following messages come from an ongoing conversation with a user via an online chat program. The responses to the user require a high level of discernment, logical step by step thinking, and clear rational judgment. Additional instructions for the chat, if any exist, may be found in brackets below:\n[\n{chat_system_prompt}\n]\nPlease analyze the user's messages carefully, and then continue the conversation below, willingly assisting the user to the fullest extent.",
+    "prompt": "",
+    "lastMessagesToSendInsteadOfPrompt": 25,
+    "endpointName": "General-Endpoint",
+    "preset": "General_Preset",
+    "maxResponseSizeInTokens": 2000,
+    "addUserTurnTemplate": false,
+    "addDiscussionIdTimestampsForLLM": false,
+    "jinja2": true
+  }
+]
