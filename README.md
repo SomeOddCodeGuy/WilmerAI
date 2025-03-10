@@ -1,5 +1,3 @@
-# WilmerAI
-
 ## DISCLAIMER:
 
 > This is a personal project that is under heavy development. It could, and likely does, contain bugs, incomplete code,
@@ -10,12 +8,13 @@
 
 ## What is WilmerAI?
 
-WilmerAI is a sophisticated middleware system designed to take incoming prompts and perform various tasks on them before
-sending them to LLM APIs.
-This work includes utilizing a Large Language Model (LLM) to categorize the prompt and route it to the appropriate
-workflow
-or processing a large context (200,000+ tokens) to generate a smaller, more manageable prompt suitable for most local
-models.
+WilmerAI sits between between your LLM APIs and whatever app is calling them, whether it be a front end like
+Open WebUI or SillyTavern, or a python app or an agent. Wilmer can use a prompt router and workflows to allow
+you to send a single prompt, conversation, etc through as many LLMs across as many computers as you have access
+to, and get back a single response. It can be extended with custom python scripts, meaning you can add whatever
+functionality you need to it, even if it isn't currently supported.
+
+Wilmer exposes OpenAI and Ollama compatible endpoints, so it should be connectible to most tools and front ends.
 
 ### What Does WilmerAI Stand For?
 
@@ -23,11 +22,20 @@ WilmerAI stands for **"What If Language Models Expertly Routed All Inference?"**
 
 ### Youtube Videos
 
+[WilmerAI Setup Tutorial](https://www.youtube.com/watch?v=v2xYQCHZwJM)
+
+This 40 minute video shows:
+
+- A walkthrough of downloading setting up Wilmer
+- Running Wilmer and sending a cURL command to it
+- A walkthrough of the wikipedia workflow
+- A brief talk of the new socg users
+
 [WilmerAI Tutorial Youtube PlayList](https://www.youtube.com/playlist?list=PLjIfeYFu5Pl7J7KGJqVmHM4HU56nByb4X)
 
-This video series shows:
+This 3 hour video series shows:
 
-- A walkthrough of Wilmer and what it is
+- A more in-depth walkthrough of Wilmer and what it is
 - An explanation of some of the workflows, as well as the custom python script module
 - Explaining Socg's personal setup
 - Setting up and running an example user
@@ -35,8 +43,48 @@ This video series shows:
   allowing a 24GB video card to run as many models that would fit individually on the card as you have hard
   drive space for.
 
+## The Power of Workflows
 
-## Connecting to Wilmer
+### RAG injection wherever you need it
+
+The below shows Open WebUI connected to 2 instances of Wilmer. The first instance just hits Mistral Small 3 24b
+directly, and then the second instance makes a call to
+the [Offline Wikipedia API](https://github.com/SomeOddCodeGuy/OfflineWikipediaTextApi) before making the call to the
+same
+model.
+
+![No-RAG vs RAG](Docs/Gifs/Search-Gif.gif)
+
+### Iterative LLM Calls To Improve Performance
+
+A zero-shot to an LLM may not give great results, but followup questions will often improve your results. If you
+regularly
+perform [the same followup questions when doing tasks like software development](https://www.reddit.com/r/LocalLLaMA/comments/1cvw3s5/my_personal_guide_for_developing_software_with_ai/),
+creating a workflow to
+automate those steps can have great results.
+
+The below is the result of running a single zero-shot workflow that has QwQ-32b, Mistral Small 3, and Qwen2.5 32b coder
+working together on a result.
+
+`Can you give me a pygame script that shows a ball bouncing inside a spinning hexagon. The ball should be affected by
+gravity and friction, and it must bounce off the rotating walls realistically. The ball should be confined inside the
+hexagon.`
+
+![Ball With Physics](Docs/Gifs/Wilmer-Coding-Workflow-Zero-Shot.gif)
+
+### Distributed LLMs
+
+With workflows, you can have as many LLMs available to work together in a single call as you have computers to support.
+If you have old machines laying around that can run 3-8b models? You can put them to use as worker LLMs in various
+nodes.
+
+This can allow
+for [somewhat unorthodox layouts](https://www.reddit.com/r/LocalLLaMA/comments/1i1kz1c/sharing_my_unorthodox_home_setup_and_how_i_use/)
+when it comes to LLM setups.
+
+## Wilmer API Endpoints
+
+### What Wilmer Exposes
 
 Wilmer exposes several different APIs on the front end, allowing you to connect most applications in the LLM space
 to it.
@@ -47,6 +95,8 @@ Wilmer exposes the following APIs that other apps can connect to it with:
 - OpenAI Compatible chat/completions
 - Ollama Compatible api/generate
 - Ollama Compatible api/chat
+
+### What Wilmer Can Connect To
 
 On the backend, Wilmer is capable to connecting to various APIs, where it will send its prompts to LLMs. Wilmer
 currently is capable of connecting to the following API types:
@@ -63,79 +113,52 @@ and Open WebUI.
 
 ## Key Features
 
-- **Assistants Powered by Multiple LLMs in Tandem**: Incoming prompts can be routed to "categories", with each category
-  powered by a workflow. Each workflow can have as many nodes as you want, each node powered by a different LLM. For
-  example- if you ask your assistant "Can you write me a Snake game in python?", that might be categorized as CODING
-  and goes to your coding workflow. The first node of that workflow might ask Codestral-22b (or ChatGPT 4o if you want)
-  to answer the question. The second node might ask Deepseek V2 or Claude Sonnet to code review it. The next node might
-  ask Codestral to give a final once over and then respond to you. Whether your
-  workflow is just a single model responding because it's your best coder, or whether its many nodes of different LLMs
-  working together to generate a response- the choice is yours.
+- **Prompt Routing**: Prompts sent into Wilmer can be routed to any custom category, whether that be a domain (like
+  coding, math, medical, etc) or a persona name (for groups chats with a different LLM for each persona).
+
+
+- **Custom Workflows**: Routing isn't required; you can also override the routing so that every prompt goes to a single
+  workflow every time.
+
+
+- **Single Prompts Responded To By Multiple LLMs in tandem**: Every node in a workflow can hit a different LLM if you
+  want, so a single prompt could be worked on by 10+ LLMs if that was what you wanted. This means one AI assistant can
+  be powered by several workflows, and many LLMs, all working together to generate the best answer.
+
 
 - **Support For The Offline Wikipedia API**: WilmerAI has a node that can make calls to the
-  [OfflineWikipediaTextApi](https://github.com/SomeOddCodeGuy/OfflineWikipediaTextApi). This means that you can have a
-  category, for example "FACTUAL", that looks at your
-  incoming message, generates a query from it, queries the wikipedia API for a related article, and uses that article
-  as RAG context injection to respond.
+  [OfflineWikipediaTextApi](https://github.com/SomeOddCodeGuy/OfflineWikipediaTextApi), to allow for RAG setups to
+  improve factual responses.
+
 
 - **Continually Generated Chat Summaries to Simulate a "Memory"**: The Chat Summary node will generate "memories",
   by chunking your messages and then summarizing them and saving them to a file. It will then take those summarized
-  chunks and generate an ongoing, constantly updating, summary of the entire conversation, that can be pulled and
-  used within the prompt to the LLM. The results allow you to take 200k+ context conversations and keep relative track
-  of what has been said even when limiting the prompts to the LLM to 5k context or less.
+  chunks and generate an ongoing, constantly updating, summary of the entire conversation. This allows conversations
+  that far exceed the LLM's context to continue to maintain some level of consistency.
 
-- **Use Multiple Computers To Parallel Process Memories and Responses**: If you have 2 computers that can run LLMs,
-  you can designate one to be the "responder" and one to be responsible for generating memories/summaries. This kind
-  of workflow lets you keep talking to your LLM while the memories/summary are being updated, while still using the
-  existing memories. This means not needing to ever wait for the summary to update, even if you task a large and
-  powerful
-  model to handle that task so that you have higher quality memories. (See example user `convo-role-dual-model`)
 
-- **Hotswap Models to Maximize VRAM Usage:** Leveraging Ollama's hotswapping, run workflows with multiple different
-  models, even if the combined VRAM is larger than you have available. For example- a 24GB RTX 4090 can comfortably
-  load a single q8 14b model. Using hotswapping, you can have a workflow of as many 14b models as you have the hard
-  drive space to store, as each call to Ollama can specify the model name, causing it to unload the old model and load
-  the new in its place.
+- **Hotswap Models to Maximize VRAM Usage:** Leveraging Ollama's hotswapping, you can run complex workflows even on
+  systems with smaller amounts of VRAM. For example, if a 24GB RTX 3090 can load a 14b model, then using endpoints
+  pointed towards Ollama, you can have workflows with as many 14b models as your computer has storage to hold, and
+  each node that uses a different model will cause Ollama to unload the previous model, and load the new one.
 
-- **Multi-LLM Group Chats In SillyTavern:** It is possible to use Wilmer to have a group chat in ST where every
-  character is a different LLM, if you do desire (author personally does this.)  There are example characters available
-  in `Docs\SillyTavern`, split into two groups. These example characters/groups are subsets of larger groups that the
-  author uses.
 
-- **Middleware Functionality:** WilmerAI sits between the interface you use to communicate with an LLM (such as
-  SillyTavern, OpenWebUI, or even a Python program's terminal) and the backend API serving the LLMs. It can handle
-  multiple backend LLMs simultaneously.
+- **Customizable Presets**: Presets are saved in a json file that you can readily customize. Presets are configured in
+  json files and sent as-is to the API, so if a new sampler comes out that isn't included in Wilmer, you can just
+  pop into the json file for the preset and update it. Each LLM type that Wilmer hits gets its own preset folder.
 
-- **Using Multiple LLMs at Once:** Example setup: SillyTavern -> WilmerAI -> several instances of KoboldCpp. For
-  example, Wilmer could be connected to Command-R 35b, Codestral 22b, Gemma-2-27b, and use all of those in its
-  responses back to the user. As long as your LLM of choice is exposed via a v1/Completion or chat/Completion endpoint,
-  or KoboldCpp's Generate endpoint, you can use it.
-
-- **Customizable Presets**: Presets are saved in a json file that you can readily customize. Almost every about presets
-  can be managed via the json, including the parameter names. This means that you don't have to wait for a Wilmer update
-  to make use of something new. For example, DRY came out recently on KoboldCpp. If that wasn't in the preset json for
-  Wilmer, you should be able to simply add it and start using it.
-
-- **API Endpoints:** It provides OpenAI API compatible `chat/Completions` and `v1/Completions` endpoints to connect to
-  via your front end, and can connect to either type on the back end. This allows for complex configurations, such
-  as connecting to Wilmer as a v1/Completion API, and then having Wilmer connected to chat/Completion, v1/Completion
-  KoboldCpp Generate endpoints all at the same time.
-
-- **Prompt Templates:** Supports prompt templates for `v1/Completions` API endpoints. WilmerAI also has its own prompt
-  template for connections from a front end via `v1/Completions`. The template can be found in the "Docs" folder and is
-  ready for upload to SillyTavern.
 
 - **Vision Multi-Modal Support Via Ollama:** Experimental support of image processing when using
-  Ollama as the front end API, and having an Ollama backend API to send it to. Functionality is available
-  to make use of this feature, which can be read about in the ImageProcessor section, but this is still being
-  tested in-depth so workflow updates will come at a later date. Support for KoboldCpp vision will be coming soon
-  as well.
+  Ollama as the front end API, and having an Ollama backend API to send it to. Send multiple images in a single
+  message, even if the LLM itself does not support that; Wilmer will iterate through them and query the LLM
+  one at a time. The images can either be utilized as variables for prompts in other workflows, or can be added
+  to the conversation as messages.
 
-- **Mid-Workflow Conditional Routing:** Similar to the domain categorization routing, you can now
-  conditionally trigger workflows from within another. For example- you send in a prompt that involves
-  the AI writing code for you: coding route is triggered, and you go into the coding workflow. Once inside
-  that coding workflow, you may have another conditional workflow route for what programming language it is
-  (like Python, C#, React, etc), each sending you down another workflow specific to that language.
+
+- **Mid-Workflow Conditional Workflows:** Similar to the main domain routing, you can kick off new workflows inside
+  of other workflows, either directly or based on a condition. So you can ask the LLM "Would a Wikipedia article help
+  here?", and if the answer is 'yes' then kick off a wikipedia workflow, or if 'no' then kick off a workflow that just
+  hits LLMs.
 
 ## Maintainer's Note:
 
@@ -186,7 +209,6 @@ and Open WebUI.
 > entirely dependent on the connected LLMs and their responses. If you connect Wilmer to a model that produces lower
 > quality outputs, or if your presets or prompt template have flaws, then Wilmer's overall quality will be much lower
 > quality as well. It's not much different than agentic workflows in that way.
-
 
 ### Connecting in SillyTavern
 
@@ -424,19 +446,19 @@ First, choose which template user you'd like to use:
   more tailored for openwebui, which has no concept of a persona.
 
 > NOTE: The below "socg" workflows are (as of 2025-03-09) copies of personal workflows that Socg uses as part of
-  his personal development toolkit, though with some minor modifications. For example- these are configured with 
-  endpoints suitable for a 24GB
-  video card, like the RTX 3090. If you have more VRAM, please replace with what is available to you. In general,
-  socg uses a different model lineup. This workflow supports images if you use Ollama for the image endpoint.
-  Additionally, QwQ 32b just came out and Socg made some last minute updates to these before deploying them to make
-  full use of that new model for his own workflows, so if you see any typos or errors, that's why. Finally, socg
-  loads models at 32768 context, and doubles all of the maxResponseSizeInTokens in the workflows. They are reduced
-  here because the 24GB card would struggle with some models at that context size. If you can use 32k, that will work
-  out better, as will doubling all of the maxResponseSizeInTokens within the coding workflows especially.
+> his personal development toolkit, though with some minor modifications. For example- these are configured with
+> endpoints suitable for a 24GB
+> video card, like the RTX 3090. If you have more VRAM, please replace with what is available to you. In general,
+> socg uses a different model lineup. This workflow supports images if you use Ollama for the image endpoint.
+> Additionally, QwQ 32b just came out and Socg made some last minute updates to these before deploying them to make
+> full use of that new model for his own workflows, so if you see any typos or errors, that's why. Finally, socg
+> loads models at 32768 context, and doubles all of the maxResponseSizeInTokens in the workflows. They are reduced
+> here because the 24GB card would struggle with some models at that context size. If you can use 32k, that will work
+> out better, as will doubling all of the maxResponseSizeInTokens within the coding workflows especially.
 
 > IMPORTANT: The below users will be updated semi-often. Pull your configurations out of the main folder if you want
- to use them, or copy them and rename them. As Socg improves his own workflows, those updates will be propagated to
- these users.
+> to use them, or copy them and rename them. As Socg improves his own workflows, those updates will be propagated to
+> these users.
 
 * **socg-openwebui-norouting-coding-complex-multi-model**: This user is a coding workflow tends to
   run, with the models that Socg uses on an M2 Ultra Mac Studio, around 20-30 minutes. Generally this is used
@@ -466,7 +488,7 @@ First, choose which template user you'd like to use:
 
 
 * **socg-openwebui-norouting-general-offline-wikipedia**: This is similar to general-multi-model, but also makes a call
-  to the  [OfflineWikipediaTextApi](https://github.com/SomeOddCodeGuy/OfflineWikipediaTextApi) to first pull an article. 
+  to the  [OfflineWikipediaTextApi](https://github.com/SomeOddCodeGuy/OfflineWikipediaTextApi) to first pull an article.
   There's still work to do on the efficacy of this, as
   the wiki api can sometimes pull the wrong article. For now, continue to take answers with caution and validate them.
 
@@ -547,7 +569,7 @@ These configuration files represent the different API types that you might be hi
 }
 ```
 
-- **type**: Can be either: `KoboldCpp`, `OllamaApiChat`, `OllamaApiChatImageSpecific`, `OllamaApiGenerate`, 
+- **type**: Can be either: `KoboldCpp`, `OllamaApiChat`, `OllamaApiChatImageSpecific`, `OllamaApiGenerate`,
   `Open-AI-API`, `OpenAI-Compatible-Completions`, or `Text-Generation-WebUI`.
 - **presetType**: This specifies the name of the folder that houses the presets you want to use. If you peek in the
   Presets
