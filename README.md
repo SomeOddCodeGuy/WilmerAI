@@ -8,7 +8,7 @@
 
 ## What is WilmerAI?
 
-WilmerAI sits between between your LLM APIs and whatever app is calling them, whether it be a front end like
+WilmerAI sits between your LLM APIs and whatever app is calling them, whether it be a front end like
 Open WebUI or SillyTavern, or a python app or an agent. Wilmer can use a prompt router and workflows to allow
 you to send a single prompt, conversation, etc through as many LLMs across as many computers as you have access
 to, and get back a single response. It can be extended with custom python scripts, meaning you can add whatever
@@ -26,10 +26,10 @@ WilmerAI stands for **"What If Language Models Expertly Routed All Inference?"**
 
 This 40 minute video shows:
 
-- A walkthrough of downloading setting up Wilmer
+- A walkthrough of downloading and setting up Wilmer
 - Running Wilmer and sending a cURL command to it
 - A walkthrough of the wikipedia workflow
-- A brief talk of the new socg users
+- A brief talk of the new Socg users
 
 [WilmerAI Tutorial Youtube PlayList](https://www.youtube.com/playlist?list=PLjIfeYFu5Pl7J7KGJqVmHM4HU56nByb4X)
 
@@ -54,12 +54,13 @@ same
 model.
 
 ![No-RAG vs RAG](Docs/Gifs/Search-Gif.gif)
+*Click the image to play gif if it doesn't start automatically*
 
 ### Iterative LLM Calls To Improve Performance
 
-A zero-shot to an LLM may not give great results, but followup questions will often improve your results. If you
+A zero-shot to an LLM may not give great results, but follow-up questions will often improve them. If you
 regularly
-perform [the same followup questions when doing tasks like software development](https://www.reddit.com/r/LocalLLaMA/comments/1cvw3s5/my_personal_guide_for_developing_software_with_ai/),
+perform [the same follow-up questions when doing tasks like software development](https://www.reddit.com/r/LocalLLaMA/comments/1cvw3s5/my_personal_guide_for_developing_software_with_ai/),
 creating a workflow to
 automate those steps can have great results.
 
@@ -70,30 +71,31 @@ working together on a result.
 gravity and friction, and it must bounce off the rotating walls realistically. The ball should be confined inside the
 hexagon.`
 
+
 ![Ball With Physics](Docs/Gifs/Wilmer-Coding-Workflow-Zero-Shot.gif)
+*Click the image to play gif if it doesn't start automatically*
 
 ### Distributed LLMs
 
 With workflows, you can have as many LLMs available to work together in a single call as you have computers to support.
-If you have old machines laying around that can run 3-8b models? You can put them to use as worker LLMs in various
-nodes.
+For example, if you have old machines lying around that can run 3-8b models? You can put them to use as worker LLMs in 
+various nodes. The more LLM APIs that you have available to you, either on your own home hardware or via proprietary 
+APIs, the more powerful you can make your workflow network.
 
-This can allow
-for [somewhat unorthodox layouts](https://www.reddit.com/r/LocalLLaMA/comments/1i1kz1c/sharing_my_unorthodox_home_setup_and_how_i_use/)
-when it comes to LLM setups.
+This can allow for [somewhat unorthodox layouts](https://www.reddit.com/r/LocalLLaMA/comments/1i1kz1c/sharing_my_unorthodox_home_setup_and_how_i_use/) when it comes to LLM setups.
 
 ## Wilmer API Endpoints
 
-### What Wilmer Exposes
+### How Do You Connect To Wilmer?
 
 Wilmer exposes several different APIs on the front end, allowing you to connect most applications in the LLM space
 to it.
 
 Wilmer exposes the following APIs that other apps can connect to it with:
 
-- OpenAI Compatible v1/completions
+- OpenAI Compatible v1/completions (*requires [Wilmer Prompt Template](Public/Configs/PromptTemplates/wilmerai.json)*)
 - OpenAI Compatible chat/completions
-- Ollama Compatible api/generate
+- Ollama Compatible api/generate (*requires [Wilmer Prompt Template](Public/Configs/PromptTemplates/wilmerai.json)*)
 - Ollama Compatible api/chat
 
 ### What Wilmer Can Connect To
@@ -105,8 +107,8 @@ currently is capable of connecting to the following API types:
 - OpenAI Compatible chat/completions
 - Ollama Compatible api/generate
 - Ollama Compatible api/chat
-- KoboldCpp Compatible api/v1/generate (non-streaming generate)
-- KoboldCpp Compatible /api/extra/generate/stream (streaming generate)
+- KoboldCpp Compatible api/v1/generate (*non-streaming generate*)
+- KoboldCpp Compatible /api/extra/generate/stream (*streaming generate*)
 
 Wilmer supports both streaming and non-streaming connections, and has been tested using both Sillytavern
 and Open WebUI.
