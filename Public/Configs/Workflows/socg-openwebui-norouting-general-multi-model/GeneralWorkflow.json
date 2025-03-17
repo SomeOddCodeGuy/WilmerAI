@@ -22,6 +22,6 @@
     "maxResponseSizeInTokens": 2000,
     "addUserTurnTemplate": false,
     "addDiscussionIdTimestampsForLLM": false,
-    "jinja2": true
+    "jinja2": false
   }
 ]
