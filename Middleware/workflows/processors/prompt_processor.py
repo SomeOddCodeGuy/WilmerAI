@@ -465,24 +465,30 @@ class PromptProcessor:
         )
 
         offline_wiki_api_client = OfflineWikiApiClient()
-        if get_full_article and use_new_best_article_endpoint:
-            result = offline_wiki_api_client.get_top_full_wiki_article_by_prompt(variabled_prompt)
-            return result
-        if get_full_article and use_top_n_articles_endpoint:
-            result = offline_wiki_api_client.get_top_n_full_wiki_articles_by_prompt(variabled_prompt,
-                        percentile=percentile, num_results=num_results, top_n_articles=top_n_articles)
-            return result
-        elif get_full_article:
-            results = offline_wiki_api_client.get_full_wiki_article_by_prompt(variabled_prompt)
-        else:
-            results = offline_wiki_api_client.get_wiki_summary_by_prompt(variabled_prompt)
+        try:
+            if get_full_article and use_new_best_article_endpoint:
+                result = offline_wiki_api_client.get_top_full_wiki_article_by_prompt(variabled_prompt)
+                return result
+            if get_full_article and use_top_n_articles_endpoint:
+                result = offline_wiki_api_client.get_top_n_full_wiki_articles_by_prompt(variabled_prompt,
+                            percentile=percentile, num_results=num_results, top_n_articles=top_n_articles)
+                return result
+            elif get_full_article:
+                results = offline_wiki_api_client.get_full_wiki_article_by_prompt(variabled_prompt)
+            else:
+                results = offline_wiki_api_client.get_wiki_summary_by_prompt(variabled_prompt)
 
-        result = "No additional information provided"
-        if results is not None:
-            if len(results) > 0:
-                result = results[0]
+            result = "No additional information provided"
+            if results is not None:
+                if len(results) > 0:
+                    result = results[0]
 
-        return result
+            return result
+        except Exception as e:
+            logger.error(f"Error accessing Wikipedia information: {str(e)}")
+            search_term = variabled_prompt
+            # Return a friendly message that includes what was searched for
+            return f"I'm sorry, but I couldn't find any Wikipedia information about '{search_term}'. The information may not be available in the offline database, or there might have been an issue with the search query."
 
     def save_summary_to_file(self, config: Dict, messages: List[Dict[str, str]], discussion_id: str,
                              agent_outputs: Optional[Dict] = None, summaryOverride: str = None,

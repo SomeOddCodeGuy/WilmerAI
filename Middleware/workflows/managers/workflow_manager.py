@@ -277,7 +277,18 @@ class WorkflowManager:
             self.llm_handler = LlmHandler(None, get_chat_template_name(), 0, 0, True)
 
         logger.debug("Prompt processor Checkpoint")
-        logger.info("Config Type: %s", config.get("type", "No Type Found"))
+        if "type" not in config:
+            section_name = config.get("title", "Unknown")
+            valid_types = ["Standard", "ConversationMemory", "FullChatSummary", "RecentMemory", 
+                          "ConversationalKeywordSearchPerformerTool", "MemoryKeywordSearchPerformerTool", 
+                          "RecentMemorySummarizerTool", "ChatSummaryMemoryGatheringTool", "GetCurrentSummaryFromFile", 
+                          "chatSummarySummarizer", "GetCurrentMemoryFromFile", "WriteCurrentSummaryToFileAndReturnIt", 
+                          "SlowButQualityRAG", "QualityMemory", "PythonModule", "OfflineWikiApiFullArticle", 
+                          "OfflineWikiApiBestFullArticle", "OfflineWikiApiTopNFullArticles", "OfflineWikiApiPartialArticle", 
+                          "WorkflowLock", "CustomWorkflow", "ConditionalCustomWorkflow", "GetCustomFile", "ImageProcessor"]
+            logger.warning(f"Config Type: No Type Found for section '{section_name}'. Expected one of: {valid_types}")
+        else:
+            logger.info("Config Type: %s", config.get("type"))
         prompt_processor_service = PromptProcessor(self.workflow_variable_service, self.llm_handler)
 
         if "type" not in config or config["type"] == "Standard":

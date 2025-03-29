@@ -36,7 +36,7 @@ class OfflineWikiApiClient:
             str: The text of the Wikipedia article if found, or a message if not.
 
         Raises:
-            Exception: If the API request fails.
+            Exception: If the API request fails (except for 404s which return a not found message).
         """
         if not self.use_offline_wiki_api:
             return "No additional information provided"
@@ -47,6 +47,9 @@ class OfflineWikiApiClient:
         logger.info(f"Response Text: {response.text}")
         if response.status_code == 200:
             return response.json().get('text', "No text element found")
+        elif response.status_code == 404:
+            # For 404 errors, return a message about article not being found
+            return f"No article found with title '{title}'. The information may not be available in the offline database."
         else:
             raise Exception(f"Error: {response.status_code}, {response.text}")
 
@@ -63,7 +66,7 @@ class OfflineWikiApiClient:
             list: A list of summary texts.
 
         Raises:
-            Exception: If the API request fails.
+            Exception: If the API request fails (except for 404s which return a not found message).
         """
         if not self.use_offline_wiki_api:
             return ["No additional information provided"]
@@ -80,6 +83,9 @@ class OfflineWikiApiClient:
         if response.status_code == 200:
             results = response.json()
             return [result.get('text', "No text element found") for result in results]
+        elif response.status_code == 404:
+            # For 404 errors, return a message about article not being found
+            return [f"No summaries found for '{prompt}'. The information may not be available in the offline database."]
         else:
             raise Exception(f"Error: {response.status_code}, {response.text}")
 
@@ -97,7 +103,7 @@ class OfflineWikiApiClient:
             list: A list of article texts.
 
         Raises:
-            Exception: If the API request fails.
+            Exception: If the API request fails (except for 404s which return a not found message).
         """
         if not self.use_offline_wiki_api:
             return ["No additional information provided"]
@@ -114,6 +120,9 @@ class OfflineWikiApiClient:
         if response.status_code == 200:
             results = response.json()
             return [result.get('text', "No text element found") for result in results]
+        elif response.status_code == 404:
+            # For 404 errors, return a message about article not being found
+            return [f"No articles found for '{prompt}'. The information may not be available in the offline database."]
         else:
             raise Exception(f"Error: {response.status_code}, {response.text}")
 
@@ -130,7 +139,7 @@ class OfflineWikiApiClient:
             list: A list containing the article text.
 
         Raises:
-            Exception: If the API request fails.
+            Exception: If the API request fails (except for 404s which return a not found message).
         """
         if not self.use_offline_wiki_api:
             return ["No additional information provided"]
@@ -144,9 +153,13 @@ class OfflineWikiApiClient:
         response = requests.get(url, params=params)
         logger.info(f"Response Status Code: {response.status_code}")
         logger.info(f"Response Text: {response.text}")
+        
         if response.status_code == 200:
             result = response.json()
             return [result.get('text', "No text element found")]  # Wrap the single text in a list
+        elif response.status_code == 404:
+            # For 404 errors, return a message about article not being found
+            return [f"No article found for '{prompt}'. The information may not be available in the offline database."]
         else:
             raise Exception(f"Error: {response.status_code}, {response.text}")
 
@@ -164,7 +177,7 @@ class OfflineWikiApiClient:
             list: A list containing the article text.
 
         Raises:
-            Exception: If the API request fails.
+            Exception: If the API request fails (except for 404s which return a not found message).
         """
         if not self.use_offline_wiki_api:
             return ["No additional information provided"]
@@ -182,5 +195,8 @@ class OfflineWikiApiClient:
         if response.status_code == 200:
             results = response.json()
             return [result.get('text', "No text element found") for result in results]
+        elif response.status_code == 404:
+            # For 404 errors, return a message about article not being found
+            return [f"No articles found for '{prompt}'. The information may not be available in the offline database."]
         else:
             raise Exception(f"Error: {response.status_code}, {response.text}")
