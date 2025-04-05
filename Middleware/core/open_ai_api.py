@@ -257,8 +257,6 @@ class ApiChatAPI(MethodView):
             logger.error(f"Failed to parse JSON: {e}")
             return jsonify({"error": "Invalid JSON data"}), 400
 
-        logger.info(f"ApiChatAPI request received: {json.dumps(request_data)}")
-
         # Validate 'model' and 'messages' fields
         if 'model' not in request_data or 'messages' not in request_data:
             return jsonify({"error": "Both 'model' and 'messages' fields are required."}), 400
@@ -311,9 +309,10 @@ class ApiChatAPI(MethodView):
         if stream:
             return Response(response_data, mimetype='text/event-stream')
         else:
+            response_json = None  # Initialize
             try:
                 current_time = datetime.utcnow().isoformat() + 'Z'
-                response = {
+                response_json = {
                     "model": request_data.get("model", "llama3.2"),
                     "created_at": current_time,
                     "message": {
@@ -329,10 +328,18 @@ class ApiChatAPI(MethodView):
                     "eval_count": 392,  # TODO: Replace with calculated or real values
                     "eval_duration": 4476000000  # TODO: Replace with calculated or real values
                 }
-                return jsonify(response)
-            except Exception as e:
-                logger.error(f"Failed to process non-streaming response: {e}")
-                return jsonify({"error": "Invalid response from model"}), 500
+            except Exception as construct_e:
+                logger.error(f"FAILED to construct response_json dictionary: {construct_e} ---", exc_info=True)
+                # Return generic error for now
+                return jsonify({"error": "Failed to construct final response content"}), 500
+
+            try:
+                # Attempt to jsonify
+                flask_response = jsonify(response_json)
+                return flask_response
+            except Exception as jsonify_e:
+                # Return generic error for now
+                return jsonify({"error": "Failed to finalize response format"}), 500
 
 
 class TagsAPI(MethodView):
