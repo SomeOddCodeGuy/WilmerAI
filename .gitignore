@@ -3,3 +3,4 @@
 /venv
 logs/**/wilmerai.log*
 *.sqlite
+*.pyc
