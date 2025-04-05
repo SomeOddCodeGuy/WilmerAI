@@ -148,7 +148,6 @@ class WorkflowVariableManager:
         include_sysmes = llm_handler.takes_message_collection
 
         messages = deepcopy(originalMessages)
-
         return {
             "templated_user_prompt_last_twenty": get_formatted_last_n_turns_as_string(
                 messages, 20, template_file_name=llm_handler.prompt_template_file_name,
@@ -183,7 +182,8 @@ class WorkflowVariableManager:
             "templated_user_prompt_last_one": get_formatted_last_n_turns_as_string(
                 messages, 1, template_file_name=llm_handler.prompt_template_file_name,
                 isChatCompletion=llm_handler.takes_message_collection),
-            "chat_user_prompt_last_one": last_user_message_content
+            "chat_user_prompt_last_one": extract_last_n_turns_as_string(messages, 1,
+                                                                        include_sysmes, remove_all_system_override)
         }
 
     @staticmethod
