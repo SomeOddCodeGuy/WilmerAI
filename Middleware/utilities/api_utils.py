@@ -109,49 +109,36 @@ def extract_text_from_chunk(chunk) -> str:
     Returns:
         str: The extracted text content or empty string if no valid content found
     """
-    extracted = ""
     try:
         # If chunk is None, return empty string
         if chunk is None:
-            extracted = ""
+            return ""
             
-        # If chunk is a string, handle SSE data format or regular JSON
-        elif isinstance(chunk, str):
-            # Handle SSE data format
+        # If chunk is a string, handle SSE data format
+        if isinstance(chunk, str):
             if chunk.startswith('data:'):
                 try:
                     chunk_json = json.loads(chunk.replace('data:', '').strip())
                     if isinstance(chunk_json, dict):
-                        extracted = chunk_json.get('message', {}).get('content', '')
+                        return chunk_json.get('message', {}).get('content', '')
                 except json.JSONDecodeError as e:
                     logger.warning("Failed to parse JSON: %s", str(e))
-                    extracted = ""
-            # Try to parse as regular JSON string
-            else:
-                try:
-                    chunk_json = json.loads(chunk)
-                    if isinstance(chunk_json, dict):
-                        message = chunk_json.get('message')
-                        if isinstance(message, dict):
-                            extracted = message.get('content', '')
-                except json.JSONDecodeError as e:
-                    logger.warning(f"Failed to parse regular JSON: {str(e)}")
-                    extracted = ""
+                    return ""
+            return ""  # Return empty string for plain strings
             
         # If chunk is a dict, extract content from message
-        elif isinstance(chunk, dict):
+        if isinstance(chunk, dict):
             message = chunk.get('message')
             if isinstance(message, dict):
-                extracted = message.get('content', '')
+                return message.get('content', '')
+            return ""
             
-        # For numbers or other types, ensure default empty string is kept
-        # (No specific action needed as 'extracted' defaults to "")
+        # For numbers or other types, return empty string
+        return ""
             
     except Exception as e:
         logger.warning("Error extracting text from chunk: %s", str(e))
-        extracted = ""
-    
-    return extracted
+        return ""
 
 
 def get_model_name():

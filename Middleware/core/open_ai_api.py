@@ -338,6 +338,8 @@ class ApiChatAPI(MethodView):
                 flask_response = jsonify(response_json)
                 return flask_response
             except Exception as jsonify_e:
+                logger.error(f"--- ApiChatAPI: FAILED during jsonify: {jsonify_e} ---", exc_info=True)
+                logger.error(f"--- ApiChatAPI: response_json content that failed jsonify (truncated): {str(response_json)[:1000]}...")
                 # Return generic error for now
                 return jsonify({"error": "Failed to finalize response format"}), 500
 
