@@ -1,0 +1,24 @@
+[
+    {
+        "title": "Determining request intent",
+        "agentName": "Intent Determining Agent One",
+        "systemPrompt": "When given a user's message, please outline exactly what the user is asking for or saying, without classifying it in any way.",
+        "prompt": "A user is currently in a conversation, and has sent a new message. The full message can be found below:\n[\n{chat_user_prompt_last_one}\n]\nPlease outline exactly what the user is asking for or saying",
+        "lastMessagesToSendInsteadOfPrompt": 5,
+        "endpointName": "Worker-Endpoint",
+        "preset": "Worker_Preset",
+        "maxResponseSizeInTokens": 500,
+        "addUserTurnTemplate": true
+    },
+    {
+        "title": "Classifying request",
+        "agentName": "Request Classifying Agent Two",
+        "systemPrompt": "When given a message and a series of domains to choose from, always respond with only a single word: the expected domain that the next response fits into. Do not include any other words than the single appropriate category from the list provided. You must choose from and only from the following list. Important: be sure to use not just the uppercase but the exact capitalization of the categories described.",
+        "prompt": "A user is currently in an online conversation, and has sent a new message. The most likely domain that the next response falls within has been carefully determined here:\n[\n{agent1Output}\n]\n\nThe categories to choose from are: {categoriesSeparatedByOr}\n\nPlease pick exactly one of the categories listed, using that exact capitalization. Respond with only the category name, no other text.",
+        "lastMessagesToSendInsteadOfPrompt": 5,
+        "endpointName": "Worker-Endpoint",
+        "preset": "Worker_Preset",
+        "maxResponseSizeInTokens": 100,
+        "addUserTurnTemplate": true
+    }
+]
