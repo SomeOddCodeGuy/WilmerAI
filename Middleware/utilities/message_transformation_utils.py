@@ -118,12 +118,13 @@ def _apply_openwebui_workaround(messages: List[Dict[str, Any]]) -> List[Dict[str
     Applies workaround for OpenWebUI sending history embedded in the last message.
     
     If the last user message contains an embedded conversation history in the format:
-    "Query: History:\n USER: ... ASSISTANT: ... Query: final_query"
+    "Query: History:\\n USER: ... ASSISTANT: ... Query: final_query"
     
     This function will:
     1. Extract the conversation history and final query
     2. Preserve all non-last messages from the original list
-    3. Insert the extracted history messages before the final query
+    3. Insert the extracted history messages
+    4. Append the final extracted query as a new user message at the end
     """
     if not messages:
         return messages
@@ -142,7 +143,9 @@ def _apply_openwebui_workaround(messages: List[Dict[str, Any]]) -> List[Dict[str
         if extracted_query and history_messages:
             # Add all extracted history messages
             result_messages.extend(history_messages)
-            logger.debug(f"Applied OpenWebUI workaround, extracted query: '{extracted_query}' and {len(history_messages)} history messages")
+            # Add the final query as the last user message
+            result_messages.append({"role": "user", "content": extracted_query})
+            logger.debug(f"Applied OpenWebUI workaround, extracted query: '{extracted_query}' and {len(history_messages)} history messages. Final query added.")
             return result_messages
     
     # If no extraction happened or extraction failed, just add the last message as is
