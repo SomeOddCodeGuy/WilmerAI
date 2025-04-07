@@ -135,55 +135,65 @@ class WorkflowVariableManager:
             self.category_list = kwargs['category_list']
 
     @staticmethod
-    def generate_conversation_turn_variables(originalMessages: List[Dict[str, str]], llm_handler: Any,
-                                             remove_all_system_override) -> Dict[
-        str, str]:
+    def generate_conversation_turn_variables(messages, llm_handler, remove_all_system_override=None) -> Dict[str, str]:
         """
         Generates a dictionary of variables based on the conversation turns in the unaltered prompt.
 
-        :param originalMessages: The conversation turns.
+        :param messages: The conversation turns.
         :param llm_handler: The LLM handler.
+        :param remove_all_system_override: Whether to override and remove all system messages.
         :return: A dictionary of variables for user prompts at different turn lengths.
         """
         include_sysmes = llm_handler.takes_message_collection
 
-        messages = deepcopy(originalMessages)
+        messages_copy = deepcopy(messages)
+
+        # Find the last user message content reliably by iterating backward
+        # Skip non-user messages (like empty assistant placeholders)
+        last_user_message_content = ""
+        if messages_copy:
+            for message in reversed(messages_copy):
+                if message.get("role") == "user":
+                    last_user_message_content = message.get("content", "")
+                    break # Found the chronologically last user message
+                # else: continue loop to check previous message
+
         return {
             "templated_user_prompt_last_twenty": get_formatted_last_n_turns_as_string(
-                messages, 20, template_file_name=llm_handler.prompt_template_file_name,
+                messages_copy, 20, template_file_name=llm_handler.prompt_template_file_name,
                 isChatCompletion=llm_handler.takes_message_collection),
-            "chat_user_prompt_last_twenty": extract_last_n_turns_as_string(messages, 20,
+            "chat_user_prompt_last_twenty": extract_last_n_turns_as_string(messages_copy, 20,
                                                                            include_sysmes, remove_all_system_override),
             "templated_user_prompt_last_ten": get_formatted_last_n_turns_as_string(
-                messages, 10, template_file_name=llm_handler.prompt_template_file_name,
+                messages_copy, 10, template_file_name=llm_handler.prompt_template_file_name,
                 isChatCompletion=llm_handler.takes_message_collection),
-            "chat_user_prompt_last_ten": extract_last_n_turns_as_string(messages, 10,
+            "chat_user_prompt_last_ten": extract_last_n_turns_as_string(messages_copy, 10,
                                                                         include_sysmes, remove_all_system_override),
             "templated_user_prompt_last_five": get_formatted_last_n_turns_as_string(
-                messages, 5, template_file_name=llm_handler.prompt_template_file_name,
+                messages_copy, 5, template_file_name=llm_handler.prompt_template_file_name,
                 isChatCompletion=llm_handler.takes_message_collection),
-            "chat_user_prompt_last_five": extract_last_n_turns_as_string(messages, 5,
+            "chat_user_prompt_last_five": extract_last_n_turns_as_string(messages_copy, 5,
                                                                          include_sysmes, remove_all_system_override),
             "templated_user_prompt_last_four": get_formatted_last_n_turns_as_string(
-                messages, 4, template_file_name=llm_handler.prompt_template_file_name,
+                messages_copy, 4, template_file_name=llm_handler.prompt_template_file_name,
                 isChatCompletion=llm_handler.takes_message_collection),
-            "chat_user_prompt_last_four": extract_last_n_turns_as_string(messages, 4,
+            "chat_user_prompt_last_four": extract_last_n_turns_as_string(messages_copy, 4,
                                                                          include_sysmes, remove_all_system_override),
             "templated_user_prompt_last_three": get_formatted_last_n_turns_as_string(
-                messages, 3, template_file_name=llm_handler.prompt_template_file_name,
+                messages_copy, 3, template_file_name=llm_handler.prompt_template_file_name,
                 isChatCompletion=llm_handler.takes_message_collection),
-            "chat_user_prompt_last_three": extract_last_n_turns_as_string(messages, 3,
+            "chat_user_prompt_last_three": extract_last_n_turns_as_string(messages_copy, 3,
                                                                           include_sysmes, remove_all_system_override),
             "templated_user_prompt_last_two": get_formatted_last_n_turns_as_string(
-                messages, 2, template_file_name=llm_handler.prompt_template_file_name,
+                messages_copy, 2, template_file_name=llm_handler.prompt_template_file_name,
                 isChatCompletion=llm_handler.takes_message_collection),
-            "chat_user_prompt_last_two": extract_last_n_turns_as_string(messages, 2,
+            "chat_user_prompt_last_two": extract_last_n_turns_as_string(messages_copy, 2,
                                                                         include_sysmes, remove_all_system_override),
             "templated_user_prompt_last_one": get_formatted_last_n_turns_as_string(
-                messages, 1, template_file_name=llm_handler.prompt_template_file_name,
+                messages_copy, 1, template_file_name=llm_handler.prompt_template_file_name,
                 isChatCompletion=llm_handler.takes_message_collection),
-            "chat_user_prompt_last_one": extract_last_n_turns_as_string(messages, 1,
-                                                                        include_sysmes, remove_all_system_override)
+            # Use the specific logic for last user message, not the generic extract function
+            "chat_user_prompt_last_one": last_user_message_content
         }
 
     @staticmethod
