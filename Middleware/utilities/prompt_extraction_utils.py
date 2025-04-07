@@ -59,33 +59,38 @@ def extract_last_n_turns(messages: List[Dict[str, str]], n: int, include_sysmes:
 def extract_last_n_turns_as_string(messages: List[Dict[str, Any]], n: int, include_sysmes: bool = True,
                                    remove_all_systems_override=False) -> str:
     """
-    Extract the last n messages as a single string, including system messages if include_sysmes is True.
-    If include_sysmes is False, all system messages are excluded.
+    Extracts and formats the last n messages as a single conversational string.
+    Excludes initial system messages unless remove_all_systems_override is True.
+    Formats output as "Role: Content\n".
+
     Parameters:
     messages (List[Dict[str, Any]]): The list of messages.
-    n (int): The number of messages to extract.
-    include_sysmes (bool, optional): Whether to include system messages in the output. Defaults to True.
+    n (int): The number of messages (turns) to extract.
+    include_sysmes (bool, optional): Whether to include non-initial system messages. Defaults to True.
+    remove_all_systems_override (bool, optional): If True, ignore include_sysmes and remove all system messages.
+
     Returns:
-    str: The last n messages as a single string.
+    str: The last n messages formatted as a single string.
     """
-    message_copy = deepcopy(messages)
-    message_copy = [message for message in message_copy if message["role"] != "images"]
+    if not messages:
+        return ""
 
-    if remove_all_systems_override:
-        filtered_messages = [message for message in message_copy if message["role"] != "system"]
-        return '\n'.join(message["content"] for message in filtered_messages)
+    # Use the existing helper to get the correct list subset based on system message handling
+    last_n_messages = extract_last_n_turns(
+        messages, n, include_sysmes, remove_all_systems_override
+    )
 
-    index_of_first_non_system_message = next(
-        (i for i, message in enumerate(message_copy) if message["role"] != "system"),
-        None)
+    # Format the extracted messages
+    formatted_lines = []
+    for message in last_n_messages:
+        role = message.get("role", "unknown").capitalize()
+        content = message.get("content", "")
+        # Handle potential existing prefixes from previous steps if needed, 
+        # though ideally the content should be clean here.
+        # For simplicity now, just format Role: Content
+        formatted_lines.append(f"{role}: {content}")
 
-    if include_sysmes and index_of_first_non_system_message is not None:
-        message_copy = message_copy[index_of_first_non_system_message:]
-
-    if not include_sysmes:
-        message_copy = [message for message in message_copy if message["role"] not in {"system", "sysmes"}]
-
-    return '\n'.join(message["content"] for message in message_copy[-n:])
+    return '\n'.join(formatted_lines)
 
 
 def extract_discussion_id(messages: List[Dict[str, str]]) -> Optional[str]:

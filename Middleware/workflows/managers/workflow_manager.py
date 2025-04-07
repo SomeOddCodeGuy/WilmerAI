@@ -3,7 +3,7 @@ import logging
 import time
 import uuid
 from copy import deepcopy
-from typing import Dict, List
+from typing import Dict, List, Any
 
 from Middleware.exceptions.early_termination_exception import EarlyTerminationException
 from Middleware.models.llm_handler import LlmHandler
@@ -108,6 +108,16 @@ class WorkflowManager:
         if 'lookbackStartTurn' in kwargs:
             self.lookbackStartTurn = kwargs['lookbackStartTurn']
 
+    def _maybe_update_message_state(self, step_result: Any, current_messages: List[Dict[str, Any]], step_index: int) -> List[Dict[str, Any]]:
+        """Checks step result and updates message list if applicable."""
+        if isinstance(step_result, dict) and 'messages' in step_result and isinstance(step_result['messages'], list):
+            updated_messages = step_result['messages']
+            logger.debug(f"Workflow step {step_index} returned updated messages list (length {len(updated_messages)}). Updating state for next step.")
+            return updated_messages # Return the new list
+        else:
+            logger.debug(f"Workflow step {step_index} did not return an updated message list in standard format.")
+            return current_messages # Return the original list unchanged
+
     def run_workflow(self, messages, request_id, discussionId: str = None, stream: bool = False, nonResponder=None,
                      first_node_system_prompt_override=None, first_node_prompt_override=None):
         """
@@ -119,16 +129,18 @@ class WorkflowManager:
         :return: The result of the workflow execution.
         """
         workflow_id = str(uuid.uuid4())
-        if (discussionId is None):
+        if discussionId is None:
             discussion_id = extract_discussion_id(messages)
         else:
             discussion_id = discussionId
 
-        remove_discussion_id_tag(messages)
+        # Make a copy early to avoid modifying the original caller's list via remove_discussion_id_tag
+        initial_messages_copy = deepcopy(messages)
+        if discussion_id:
+             remove_discussion_id_tag(initial_messages_copy) # Modify the copy
 
         self.override_first_available_prompts = False
-
-        if (first_node_system_prompt_override is not None and first_node_prompt_override is not None):
+        if first_node_system_prompt_override is not None and first_node_prompt_override is not None:
             self.override_first_available_prompts = True
 
         try:
@@ -141,6 +153,8 @@ class WorkflowManager:
             def gen():
                 returned_to_user = False
                 agent_outputs = {}
+                # Use a variable that can be updated within the loop scope
+                current_messages = initial_messages_copy # Start with the processed initial copy
                 try:
                     for idx, config in enumerate(configs):
                         logger.info(f'------Workflow {self.workflowConfigName}; ' +
@@ -159,61 +173,65 @@ class WorkflowManager:
                             config.get('forceGenerationPromptIfEndpointAllows', False))
                         block_generation_prompt = (
                             config.get('blockGenerationPrompt', False))
-                        if not returned_to_user and (config.get('returnToUser', False) or idx == len(configs) - 1):
-                            returned_to_user = True
-                            logger.debug("Returned to user flow")
-                            if (
-                                    nonResponder is None and not force_generation_prompt_if_endpoint_allows and not add_user_prompt) or block_generation_prompt:
-                                add_generation_prompt = False
-                            else:
-                                add_generation_prompt = None
+                        if (
+                                not force_generation_prompt_if_endpoint_allows and not add_user_prompt) or block_generation_prompt:
+                            add_generation_prompt = False
+                        else:
+                            add_generation_prompt = None
 
+                        # --- Determine messages to use for THIS step (handles final step timestamps) ---
+                        messages_for_this_step = current_messages 
+                        is_final_step = not returned_to_user and (config.get('returnToUser', False) or idx == len(configs) - 1)
+                        if is_final_step:
+                            returned_to_user = True # Mark final step processing started
                             add_timestamps = config.get("addDiscussionIdTimestampsForLLM", False)
+                            if nonResponder is None and discussion_id is not None and add_timestamps:
+                                messages_for_this_step = track_message_timestamps(messages=deepcopy(current_messages),
+                                                                                  discussion_id=discussion_id)
+                        
+                        # --- Process the current section --- 
+                        logger.debug(f"Processing step {idx} with {len(messages_for_this_step)} messages.")
+                        result = self._process_section(config, request_id, workflow_id, discussion_id,
+                                                       messages_for_this_step, 
+                                                       agent_outputs,
+                                                       stream=(stream and is_final_step), 
+                                                       addGenerationPrompt=add_generation_prompt)
+                        
+                        # Store raw result for access by subsequent steps via Jinja
+                        agent_outputs[f'agent{idx + 1}Output'] = result
 
-                            if (nonResponder is None and discussion_id is not None and add_timestamps):
-                                logger.debug("Timestamp is true")
-                                messageCopy = deepcopy(messages)
-                                messagesToSend = track_message_timestamps(messages=messageCopy,
-                                                                          discussion_id=discussion_id)
-                            else:
-                                logger.debug("Timestamp is false")
-                                messagesToSend = messages
-
-                            result = self._process_section(config, request_id, workflow_id, discussion_id,
-                                                           messagesToSend,
-                                                           agent_outputs,
-                                                           stream=stream, addGenerationPrompt=add_generation_prompt)
+                        # --- Update message state using the helper method --- 
+                        current_messages = self._maybe_update_message_state(result, current_messages, idx)
+                        
+                        # --- Handle final step output --- 
+                        if is_final_step:
                             if stream:
+                                logger.debug("Yielding chunks for final streaming step")
                                 text_chunks = []
-                                for chunk in result:
-                                    # Extract text using the helper function
-                                    extracted_text = api_utils.extract_text_from_chunk(chunk)
-                                    if extracted_text:
-                                        text_chunks.append(extracted_text)
-                                    yield chunk
-                                result = ''.join(text_chunks)
+                                # Ensure result is iterable (handle non-generator case if _process_section doesn't always yield)
+                                if hasattr(result, '__iter__') and not isinstance(result, (str, bytes, dict)):
+                                    for chunk in result:
+                                        extracted_text = api_utils.extract_text_from_chunk(chunk)
+                                        if extracted_text:
+                                            text_chunks.append(extracted_text)
+                                        yield chunk # Yield original chunk
+                                    final_streamed_result = ''.join(text_chunks)
+                                else: # Handle case where non-streaming result was returned unexpectedly
+                                     logger.warning(f"Expected iterable for streaming step {idx}, but got {type(result)}. Yielding as single chunk.")
+                                     yield api_utils.format_stream_chunk(str(result)) # Format as a chunk
+                                     final_streamed_result = str(result)
+                                
                                 logger.info(
                                     "\n\n*****************************************************************************\n")
-                                logger.info("\n\nOutput from the LLM: %s", result)
+                                logger.info("\n\nFinal Streamed Output: %s", final_streamed_result)
                                 logger.info(
                                     "\n*****************************************************************************\n\n")
-                            else:
-                                yield result
-
-                            # Assign the final result to the agent's output field
-                            agent_outputs[f'agent{idx + 1}Output'] = result
-                        else:
-                            if (
-                                    not force_generation_prompt_if_endpoint_allows and not add_user_prompt) or block_generation_prompt:
-                                add_generation_prompt = False
-                            else:
-                                add_generation_prompt = None
-                            agent_outputs[f'agent{idx + 1}Output'] = self._process_section(config, request_id,
-                                                                                           workflow_id,
-                                                                                           discussion_id,
-                                                                                           messages,
-                                                                                           agent_outputs,
-                                                                                           addGenerationPrompt=add_generation_prompt)
+                            else: # Not streaming, final step
+                                 logger.debug("Yielding final non-streaming result")
+                                 yield result # Yield the single final result
+                            # After yielding final result (stream or not), break the loop? Or let it finish?
+                            # Current logic lets it finish. If we break, cleanup might be missed. Let it finish.
+                    
                 except EarlyTerminationException:
                     logger.info(f"Unlocking locks for InstanceID: '{INSTANCE_ID}' and workflow ID: '{workflow_id}'")
                     SqlLiteUtils.delete_node_locks(instance_utils.INSTANCE_ID, workflow_id)

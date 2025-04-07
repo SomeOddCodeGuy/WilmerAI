@@ -141,14 +141,19 @@ def _apply_openwebui_workaround(messages: List[Dict[str, Any]]) -> List[Dict[str
     if last_message.get("role") == "user" and isinstance(last_message.get("content"), str):
         extracted_query, history_messages = _extract_final_query(last_message["content"])
         if extracted_query and history_messages:
+            logger.debug(f"_apply_openwebui_workaround: SUCCESS - Extracted query='{extracted_query}', history_len={len(history_messages)}")
             # Add all extracted history messages
             result_messages.extend(history_messages)
             # Add the final query as the last user message
             result_messages.append({"role": "user", "content": extracted_query})
-            logger.debug(f"Applied OpenWebUI workaround, extracted query: '{extracted_query}' and {len(history_messages)} history messages. Final query added.")
             return result_messages
-    
+        else:
+            logger.debug(f"_apply_openwebui_workaround: FAILED extraction. Query='{extracted_query}', History='{history_messages is not None}'")
+    else:
+        logger.debug(f"_apply_openwebui_workaround: SKIPPED - Last message not user/string. Role='{last_message.get('role')}'")
+
     # If no extraction happened or extraction failed, just add the last message as is
+    logger.debug("_apply_openwebui_workaround: Returning UNMODIFIED (or failed extraction) list.")
     result_messages.append(deepcopy(last_message))
     return result_messages
 
@@ -211,9 +216,9 @@ def transform_messages(
 ) -> List[Dict[str, Any]]:
     """
     Applies a sequence of standard transformations to a message list:
-    1. Apply OpenWebUI embedded history workaround.
-    2. Expand messages with images.
-    3. Apply role prefixes (User:/Assistant:).
+    1. Expand messages with images.
+    2. Apply role prefixes (User:/Assistant:).
+    3. Apply OpenWebUI embedded history workaround.
     4. Add a placeholder assistant turn if needed.
 
     Args:
@@ -231,9 +236,10 @@ def transform_messages(
     # Use deepcopy initially to prevent modifying the original input list
     processed_messages = deepcopy(messages)
 
-    processed_messages = _apply_openwebui_workaround(processed_messages)
+    # Corrected Order:
     processed_messages = _process_images(processed_messages)
     processed_messages = _apply_role_prefixes(processed_messages, add_user_assistant)
+    processed_messages = _apply_openwebui_workaround(processed_messages) # Run workaround BEFORE placeholder
     processed_messages = _add_placeholder_assistant(processed_messages, add_user_assistant, add_missing_assistant)
 
     return processed_messages 
