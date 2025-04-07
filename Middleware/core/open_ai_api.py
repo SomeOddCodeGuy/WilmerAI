@@ -15,6 +15,7 @@ from Middleware.utilities.config_utils import get_custom_workflow_is_active, \
     get_is_chat_complete_add_missing_assistant
 from Middleware.utilities.prompt_extraction_utils import parse_conversation, extract_discussion_id
 from Middleware.utilities.text_utils import replace_brackets_in_list
+from Middleware.utilities.message_transformation_utils import transform_messages
 from Middleware.workflows.categorization.prompt_categorizer import PromptCategorizer
 from Middleware.workflows.managers.workflow_manager import WorkflowManager
 
@@ -117,26 +118,10 @@ class ChatCompletionsAPI(MethodView):
             if "role" not in message or "content" not in message:
                 raise ValueError("Each message must have 'role' and 'content' fields.")
 
-        # Transform the messages while preserving their order
-        transformed_messages: List[Dict[str, str]] = []
-        for message in messages:
-            role = message["role"]
-            content = message["content"]
-
-            if add_user_assistant:
-                if role == "user":
-                    content = "User: " + content
-                elif role == "assistant":
-                    content = "Assistant: " + content
-
-            transformed_messages.append({"role": role, "content": content})
-
-        # Check if the last message is not from assistant and add an assistant message if needed
-        if add_missing_assistant:
-            if add_user_assistant and messages and messages[-1]["role"] != "assistant":
-                transformed_messages.append({"role": "assistant", "content": "Assistant: "})
-            elif messages and messages[-1]["role"] != "assistant":
-                transformed_messages.append({"role": "assistant", "content": ""})
+        # Use centralized message transformation utility
+        transformed_messages = transform_messages(
+            messages, add_user_assistant, add_missing_assistant
+        )
 
         if stream:
             return Response(
@@ -262,43 +247,12 @@ class ApiChatAPI(MethodView):
             return jsonify({"error": "Both 'model' and 'messages' fields are required."}), 400
 
         messages: List[Dict[str, Any]] = request_data["messages"]
-        transformed_messages: List[Dict[str, Any]] = []
-
-        for message in messages:
-            # Validate that each message has 'role' and 'content'
-            if "role" not in message or "content" not in message:
-                return jsonify({"error": "Each message must have 'role' and 'content' fields."}), 400
-
-            role = message["role"]
-            content = message["content"]
-
-            # Process the 'images' field if it exists
-            if "images" in message and isinstance(message["images"], list):
-                for image_base64 in message["images"]:
-                    # Add each image as its own message with the role "images"
-                    transformed_messages.append({
-                        "role": "images",
-                        "content": image_base64
-                    })
-
-            if add_user_assistant:
-                if role == "user":
-                    content = "User: " + content
-                elif role == "assistant":
-                    content = "Assistant: " + content
-
-            # Add the original message to the collection
-            transformed_message = {"role": role, "content": content}
-            transformed_messages.append(transformed_message)
-
-        # Add assistant response if necessary
-        if add_user_assistant:
-            if transformed_messages and transformed_messages[-1]["role"] != "assistant":
-                transformed_messages.append({"role": "assistant", "content": "Assistant: "})
-        elif add_missing_assistant:
-            if transformed_messages and transformed_messages[-1]["role"] != "assistant":
-                transformed_messages.append({"role": "assistant", "content": ""})
-
+        
+        # Use centralized message transformation utility to process the messages while preserving order
+        transformed_messages = transform_messages(
+            messages, add_user_assistant, add_missing_assistant
+        )
+        
         # Process the response
         stream = request_data.get("stream", True)
         if isinstance(stream, str):
