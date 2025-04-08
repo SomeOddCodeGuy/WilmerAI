@@ -6,156 +6,147 @@ This helps centralize logic for message formatting, prefixing, and special handl
 import logging
 import re # Import regex module
 from copy import deepcopy
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple, Optional
 
 logger = logging.getLogger(__name__)
 
-# Removed complex regex - we will use string searching instead
-# FINAL_QUERY_REGEX = re.compile(r"^.*History:.*Query:\s*(.*)$", re.DOTALL | re.MULTILINE)
+# Markers for the history block
+HISTORY_START_MARKER = "History:\n"
+QUERY_MARKER = "\nQuery: "
 
-# --- Private Helper Functions for Individual Transformations ---
 
-def _extract_final_query(content: str) -> tuple[str | None, list | None]:
+def _parse_history_block(history_block: str) -> List[Dict[str, str]]:
     """
-    Extracts final query and conversation history if content matches 'History:...Query:...' format.
-    
-    Returns:
-        A tuple containing (final_query, history_messages) where:
-        - final_query is the extracted query or None if not found
-        - history_messages is a list of message dictionaries or None if not found
+    Parses the raw history block string into a list of message dictionaries.
+    The input block is expected to be in reverse chronological order.
     """
-    history_marker = "History:"
-    query_marker = "Query:"
-    
-    # Check for the format markers
-    last_query_index = content.rfind(query_marker)
-    if last_query_index == -1:
-        return None, None
-        
-    content_before_last_query = content[:last_query_index]
-    history_marker_index = content_before_last_query.find(history_marker)
-    if history_marker_index == -1:
-        return None, None
-    
-    # Extract the final query
-    start_extraction_index = last_query_index + len(query_marker)
-    final_query = content[start_extraction_index:].strip()
-    
-    # Extract the history section
-    history_content = content_before_last_query[history_marker_index + len(history_marker):].strip()
-    
-    # Parse the history into messages
-    history_messages = []
-    
-    # Split the history by message markers
-    user_markers = ["USER:", "USER: \"\"\""]
-    assistant_markers = ["ASSISTANT:", "ASSISTANT: \"\"\""]
-    
-    # Find all user and assistant segments
-    current_index = 0
-    while current_index < len(history_content):
-        # Find the next user marker
-        user_start = -1
-        user_marker_used = None
-        for marker in user_markers:
-            pos = history_content.find(marker, current_index)
-            if pos != -1 and (user_start == -1 or pos < user_start):
-                user_start = pos
-                user_marker_used = marker
-        
-        if user_start == -1:
-            break  # No more user messages
-            
-        current_index = user_start + len(user_marker_used)
-        
-        # Find the next assistant marker
-        assistant_start = -1
-        for marker in assistant_markers:
-            pos = history_content.find(marker, current_index)
-            if pos != -1 and (assistant_start == -1 or pos < assistant_start):
-                assistant_start = pos
-                
-        # Find the next user marker to determine the end of this user's message
-        next_user_start = -1
-        for marker in user_markers:
-            pos = history_content.find(marker, current_index)
-            if pos != -1 and (next_user_start == -1 or pos < next_user_start):
-                next_user_start = pos
-        
-        # Extract user message content
-        user_end = assistant_start if assistant_start != -1 else next_user_start
-        if user_end == -1:
-            user_end = len(history_content)
-            
-        user_content = history_content[current_index:user_end].strip()
-        # Remove triple quotes if present
-        if user_content.startswith('"""') and user_content.endswith('"""'):
-            user_content = user_content[3:-3]
-        history_messages.append({"role": "user", "content": user_content})
-        
-        if assistant_start == -1:
-            break  # No assistant response after this user message
-            
-        current_index = assistant_start + len(assistant_markers[0])  # Use the shorter marker for extraction
-        
-        # Find the end of assistant message (next user message or end of history)
-        assistant_end = next_user_start if next_user_start != -1 else len(history_content)
-        
-        assistant_content = history_content[current_index:assistant_end].strip()
-        # Remove triple quotes if present
-        if assistant_content.startswith('"""') and assistant_content.endswith('"""'):
-            assistant_content = assistant_content[3:-3]
-        history_messages.append({"role": "assistant", "content": assistant_content})
-        
-        current_index = assistant_end
-    
-    if final_query and history_messages:
-        return final_query, history_messages
+    messages = []
+    # Split by USER: and ASSISTANT:, keeping delimiters
+    parts = re.split(r'(USER:|ASSISTANT:)', history_block)
+    # Filter out empty strings resulting from split
+    parts = [p.strip() for p in parts if p and p.strip()]
+
+    role = None
+    content = ""
+    for part in parts:
+        if part == "USER:":
+            if role: # Save previous message
+                # Clean up triple quotes and surrounding whitespace/newlines
+                cleaned_content = re.sub(r'^"""|"""$', '', content).strip()
+                messages.append({"role": role.lower(), "content": cleaned_content})
+            role = "user"
+            content = ""
+        elif part == "ASSISTANT:":
+            if role: # Save previous message
+                cleaned_content = re.sub(r'^"""|"""$', '', content).strip()
+                messages.append({"role": role.lower(), "content": cleaned_content})
+            role = "assistant"
+            content = ""
+        else:
+            # Append content, preserving internal structure
+            content += part + "\n" # Correctly add newline
+
+    # Add the last message
+    if role and content:
+        cleaned_content = re.sub(r'^"""|"""$', '', content).strip()
+        messages.append({"role": role.lower(), "content": cleaned_content})
+
+    # The parsed messages are naturally in reverse chronological order based on the block
+    return messages
+
+
+def _format_history_for_prompt(history_messages: List[Dict[str, str]]) -> str:
+    """
+    Formats the parsed history messages into a string suitable for the system prompt,
+    maintaining the original order (newest first).
+    """
+    formatted_lines = []
+    # Process directly in the existing order (newest first)
+    for message in history_messages:
+        role = message.get("role", "unknown").upper()
+        content = message.get("content", "")
+        # Use triple quotes for content, escaping internal ones if needed
+        formatted_lines.append(f'{role}:\n"""{content}"""')
+
+    # Join with newlines and prepend header
+    return "" + "\n".join(formatted_lines)
+
+
+def _find_and_extract_history(content: str) -> Tuple[Optional[str], Optional[str]]:
+    """Extracts history block and final query from content string."""
+    history_start_index = content.find(HISTORY_START_MARKER)
+    query_start_index = content.rfind(QUERY_MARKER)
+
+    if history_start_index != -1 and query_start_index != -1 and query_start_index > history_start_index:
+        history_block_start = history_start_index + len(HISTORY_START_MARKER)
+        history_block = content[history_block_start:query_start_index]
+        final_query = content[query_start_index + len(QUERY_MARKER):]
+        # Remove the initial 'User: Query: ' part if present
+        if final_query.startswith("User: Query: "):
+             final_query = final_query[len("User: Query: "):]
+        elif content.startswith("User: Query: "): # Handle case where it might only be at the start
+             prefix_len = len("User: Query: ")
+             history_block_start = content.find(HISTORY_START_MARKER, prefix_len) + len(HISTORY_START_MARKER)
+             query_start_index = content.rfind(QUERY_MARKER, prefix_len)
+             if history_start_index != -1 and query_start_index != -1 and query_start_index > history_start_index:
+                 history_block = content[history_block_start:query_start_index]
+                 final_query = content[query_start_index + len(QUERY_MARKER):]
+
+
+        return history_block.strip(), final_query.strip()
     return None, None
+
 
 def _apply_openwebui_workaround(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Applies workaround for OpenWebUI sending history embedded in the last message.
-    
-    If the last user message contains an embedded conversation history in the format:
-    "Query: History:\\n USER: ... ASSISTANT: ... Query: final_query"
-    
-    This function will:
-    1. Extract the conversation history and final query
-    2. Preserve all non-last messages from the original list
-    3. Insert the extracted history messages
-    4. Append the final extracted query as a new user message at the end
+    Applies the OpenWebUI workaround:
+    Finds a user message with embedded 'History:' and 'Query:', extracts them,
+    parses the history, formats it into a system message, and replaces the
+    original user message with the history system message and a final query user message.
     """
-    if not messages:
-        return messages
+    processed_messages = []
+    history_applied = False
 
-    result_messages = []
-    
-    # Copy all messages except the last one
-    for i in range(len(messages) - 1):
-        result_messages.append(deepcopy(messages[i]))
-    
-    # Process the last message
-    last_message = messages[-1]
-    
-    if last_message.get("role") == "user" and isinstance(last_message.get("content"), str):
-        extracted_query, history_messages = _extract_final_query(last_message["content"])
-        if extracted_query and history_messages:
-            logger.debug(f"_apply_openwebui_workaround: SUCCESS - Extracted query='{extracted_query}', history_len={len(history_messages)}")
-            # Add all extracted history messages
-            result_messages.extend(history_messages)
-            # Add the final query as the last user message
-            result_messages.append({"role": "user", "content": extracted_query})
-            return result_messages
+    for i, message in enumerate(messages):
+        if not history_applied and message.get("role") == "user":
+            content = message.get("content", "")
+            history_block, final_query = _find_and_extract_history(content)
+
+            if history_block is not None and final_query is not None:
+                logger.debug("Applying OpenWebUI history workaround.")
+                history_messages = _parse_history_block(history_block)
+                if not history_messages:
+                     logger.warning("Could not parse history block, skipping workaround.")
+                     processed_messages.append(deepcopy(message)) # Add original if parse fails
+                     continue
+
+                formatted_history = _format_history_for_prompt(history_messages)
+
+                # Add the new system message with history
+                processed_messages.append({
+                    "role": "system",
+                    "content": formatted_history
+                })
+                # Add the new user message with the final query
+                processed_messages.append({
+                    "role": "user",
+                    "content": final_query
+                })
+                history_applied = True
+                # Skip adding the original message as it's been replaced
+            else:
+                # Not the target message or format doesn't match, add as is
+                processed_messages.append(deepcopy(message))
         else:
-            logger.debug(f"_apply_openwebui_workaround: FAILED extraction. Query='{extracted_query}', History='{history_messages is not None}'")
-    else:
-        logger.debug(f"_apply_openwebui_workaround: SKIPPED - Last message not user/string. Role='{last_message.get('role')}'")
+            # Add other messages (system, assistant, or user messages after the target)
+             processed_messages.append(deepcopy(message))
 
-    # If no extraction happened or extraction failed, just add the last message as is
-    logger.debug("_apply_openwebui_workaround: Returning UNMODIFIED (or failed extraction) list.")
-    result_messages.append(deepcopy(last_message))
-    return result_messages
+
+    if not history_applied:
+         logger.debug("OpenWebUI history markers not found or format mismatch, returning original messages.")
+
+
+    return processed_messages
 
 def _process_images(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Expands messages containing images into separate user and image messages."""
@@ -236,10 +227,10 @@ def transform_messages(
     # Use deepcopy initially to prevent modifying the original input list
     processed_messages = deepcopy(messages)
 
-    # Corrected Order:
+    # Corrected Order: Apply workaround *after* potential prefixing but *before* placeholder
     processed_messages = _process_images(processed_messages)
-    processed_messages = _apply_role_prefixes(processed_messages, add_user_assistant)
-    processed_messages = _apply_openwebui_workaround(processed_messages) # Run workaround BEFORE placeholder
+    processed_messages = _apply_role_prefixes(processed_messages, add_user_assistant) # Prefixes might exist in history block input, handle this? - current parse cleans them
+    processed_messages = _apply_openwebui_workaround(processed_messages) # Handles history extraction
     processed_messages = _add_placeholder_assistant(processed_messages, add_user_assistant, add_missing_assistant)
 
     return processed_messages 
