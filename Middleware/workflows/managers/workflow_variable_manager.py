@@ -69,6 +69,9 @@ class WorkflowVariableManager:
             variables['messages'] = messages
             return template.render(**variables)
         else:
+            # Add messages to the variables dictionary for standard .format()
+            variables['messages'] = messages
+            # agent_outputs are already merged by generate_variables
             return prompt.format(**variables)
 
     def generate_variables(self, llm_handler: Any, messages: List[Dict[str, str]],
