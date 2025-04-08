@@ -219,6 +219,7 @@ class WorkflowManager:
                                 else: # Handle case where non-streaming result was returned unexpectedly
                                      logger.warning(f"Expected iterable for streaming step {idx}, but got {type(result)}. Yielding as single chunk.")
                                      yield api_utils.format_stream_chunk(str(result)) # Format as a chunk
+                                     yield f"data: {json.dumps({'response': str(result)})}\n\n"
                                      final_streamed_result = str(result)
                                 
                                 logger.info(

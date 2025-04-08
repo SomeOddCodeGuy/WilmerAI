@@ -4,7 +4,7 @@ import logging
 import time
 import uuid
 from datetime import datetime
-from typing import Any, Dict, Union, List, Generator
+from typing import Any, Dict, Union, List, Generator, Optional
 
 from flask import Flask, jsonify, request, Response
 from flask.views import MethodView
@@ -22,6 +22,66 @@ from Middleware.workflows.managers.workflow_manager import WorkflowManager
 app = Flask(__name__)
 
 logger = logging.getLogger(__name__)
+
+
+# --- Helper Function for OpenWebUI Tool Detection ---
+# We don't support OpenWebUI tool calls yet, so we return an early response if we detect one
+def _check_and_handle_openwebui_tool_request(request_data: Dict[str, Any], api_type: str) -> Optional[Response]:
+    """
+    Checks if the request is an OpenWebUI tool selection request and returns an early response if it is.
+
+    :param request_data: The incoming request JSON data.
+    :param api_type: The type of API endpoint ('openaichatcompletion' or 'ollamaapichat').
+    :return: A Flask Response object if it's an OpenWebUI request, otherwise None.
+    """
+    openwebui_tool_pattern = "Your task is to choose and return the correct tool(s) from the list of available tools based on the query"
+    if 'messages' in request_data:
+        for message in request_data['messages']:
+            if message.get('role') == 'system' and openwebui_tool_pattern in message.get('content', ''):
+                logger.info(f"Detected OpenWebUI tool selection request via {api_type}. Returning early.")
+                if api_type == 'openaichatcompletion':
+                    # Return OpenAI chat compatible format for no tool calls
+                    response = {
+                        "id": f"chatcmpl-opnwui-tool-{int(time.time())}",
+                        "object": "chat.completion",
+                        "created": int(time.time()),
+                        "model": api_utils.get_model_name(),
+                        "system_fingerprint": "wmr_123456789",
+                        "choices": [
+                            {
+                                "index": 0,
+                                "message": {
+                                    "role": "assistant",
+                                    "content": None,
+                                    "tool_calls": []
+                                },
+                                "logprobs": None,
+                                "finish_reason": "tool_calls"
+                            }
+                        ],
+                        "usage": {}
+                    }
+                    return jsonify(response)
+                elif api_type == 'ollamaapichat':
+                    # Return Ollama /api/chat compatible format for no tool calls
+                    current_time = datetime.utcnow().isoformat() + 'Z'
+                    response_json = {
+                        "model": request_data.get("model", api_utils.get_model_name()), # Use requested model or default
+                        "created_at": current_time,
+                        "message": {
+                            "role": "assistant",
+                            "content": "" # Empty content for Ollama
+                        },
+                        "done_reason": "stop",
+                        "done": True,
+                        "total_duration": 0, "load_duration": 0, "prompt_eval_count": 0,
+                        "prompt_eval_duration": 0, "eval_count": 0, "eval_duration": 0
+                    }
+                    return jsonify(response_json)
+                else:
+                    logger.warning(f"Unknown api_type '{api_type}' for OpenWebUI tool request handling.")
+                    return None # Or handle error appropriately
+    return None # Not an OpenWebUI tool request
 
 
 class ModelsAPI(MethodView):
@@ -105,6 +165,11 @@ class ChatCompletionsAPI(MethodView):
         add_missing_assistant = get_is_chat_complete_add_missing_assistant()
         request_data: Dict[str, Any] = request.get_json()
         logger.info(f"ChatCompletionsAPI request received: {json.dumps(request_data)}")
+
+        # Check for OpenWebUI tool request first
+        early_response = _check_and_handle_openwebui_tool_request(request_data, instance_utils.API_TYPE)
+        if early_response:
+            return early_response
 
         stream: bool = request_data.get("stream", False)
 
@@ -241,6 +306,11 @@ class ApiChatAPI(MethodView):
         except Exception as e:
             logger.error(f"Failed to parse JSON: {e}")
             return jsonify({"error": "Invalid JSON data"}), 400
+
+        # Check for OpenWebUI tool request first
+        early_response = _check_and_handle_openwebui_tool_request(request_data, instance_utils.API_TYPE)
+        if early_response:
+            return early_response
 
         # Validate 'model' and 'messages' fields
         if 'model' not in request_data or 'messages' not in request_data:
