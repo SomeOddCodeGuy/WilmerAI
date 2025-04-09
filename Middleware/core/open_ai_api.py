@@ -5,6 +5,7 @@ import time
 import uuid
 from datetime import datetime
 from typing import Any, Dict, Union, List, Generator, Optional
+from functools import wraps
 
 from flask import Flask, jsonify, request, Response
 from flask.views import MethodView
@@ -83,6 +84,28 @@ def _check_and_handle_openwebui_tool_request(request_data: Dict[str, Any], api_t
                     return None # Or handle error appropriately
     return None # Not an OpenWebUI tool request
 
+# --- Decorator for OpenWebUI Tool Check ---
+def handle_openwebui_tool_check(api_type: str):
+    """Decorator to check for and handle OpenWebUI tool selection requests."""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            # Use force=True to handle potential non-JSON content types
+            request_data = request.get_json(force=True, silent=True)
+            if request_data is None:
+                # Handle cases where request data is not valid JSON
+                logger.warning(f"Request to {func.__name__} did not contain valid JSON.")
+                # Decide how to handle this - maybe return an error or let the original function handle it
+                # For now, let the original function proceed, it might handle non-JSON requests or raise its own error
+                return func(*args, **kwargs)
+
+            early_response = _check_and_handle_openwebui_tool_request(request_data, api_type)
+            if early_response:
+                return early_response
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
+
 
 class ModelsAPI(MethodView):
     @staticmethod
@@ -153,6 +176,7 @@ class CompletionsAPI(MethodView):
 
 class ChatCompletionsAPI(MethodView):
     @staticmethod
+    @handle_openwebui_tool_check('openaichatcompletion') # Apply decorator
     def post() -> Union[Response, Dict[str, Any]]:
         """
         Handles POST requests for OpenAI Compatible chat/completions. It processes the incoming data and returns a response.
@@ -163,13 +187,8 @@ class ChatCompletionsAPI(MethodView):
         instance_utils.API_TYPE = "openaichatcompletion"
         add_user_assistant = get_is_chat_complete_add_user_assistant()
         add_missing_assistant = get_is_chat_complete_add_missing_assistant()
-        request_data: Dict[str, Any] = request.get_json()
+        request_data: Dict[str, Any] = request.get_json() # get_json is safe here due to decorator check
         logger.info(f"ChatCompletionsAPI request received: {json.dumps(request_data)}")
-
-        # Check for OpenWebUI tool request first
-        early_response = _check_and_handle_openwebui_tool_request(request_data, instance_utils.API_TYPE)
-        if early_response:
-            return early_response
 
         stream: bool = request_data.get("stream", False)
 
@@ -291,6 +310,7 @@ class GenerateAPI(MethodView):
 
 class ApiChatAPI(MethodView):
     @staticmethod
+    @handle_openwebui_tool_check('ollamaapichat') # Apply decorator
     def post() -> Response:
         """
         Handles POST requests for Ollama's /api/chat endpoint.
@@ -302,15 +322,13 @@ class ApiChatAPI(MethodView):
 
         # Try to parse JSON even if Content-Type is not 'application/json'
         try:
+            # Use force=True as decorator also uses it, ensures consistency
             request_data: Dict[str, Any] = request.get_json(force=True)
+            if request_data is None: # Add check for None if force=True fails silently
+                 raise ValueError("Request data is not valid JSON")
         except Exception as e:
-            logger.error(f"Failed to parse JSON: {e}")
+            logger.error(f"Failed to parse JSON in ApiChatAPI: {e}")
             return jsonify({"error": "Invalid JSON data"}), 400
-
-        # Check for OpenWebUI tool request first
-        early_response = _check_and_handle_openwebui_tool_request(request_data, instance_utils.API_TYPE)
-        if early_response:
-            return early_response
 
         # Validate 'model' and 'messages' fields
         if 'model' not in request_data or 'messages' not in request_data:
