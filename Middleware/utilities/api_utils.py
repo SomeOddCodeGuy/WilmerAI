@@ -97,7 +97,7 @@ def build_response_json(
     if additional_fields:
         response.update(additional_fields)
 
-    return json.dumps(response)
+    return json.dumps(response, ensure_ascii=False)
 
 
 def extract_text_from_chunk(chunk) -> str:
