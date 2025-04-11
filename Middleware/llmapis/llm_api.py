@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import traceback
+import requests
 from copy import deepcopy
 from typing import Dict, Generator, List, Optional, Union
 
@@ -16,6 +17,7 @@ from .ollama_chat_api_handler import OllamaChatHandler
 from .ollama_chat_api_image_specific_handler import OllamaApiChatImageSpecificHandler
 from .ollama_generate_api_handler import OllamaGenerateHandler
 from .openai_api_handler import OpenAiApiHandler
+from .openai_chat_api_image_specific_handler import OpenAIApiChatImageSpecificHandler
 from .openai_completions_api_handler import OpenAiCompletionsApiHandler
 
 logger = logging.getLogger(__name__)
@@ -155,6 +157,19 @@ class LlmApiService:
                 endpoint_config=self.endpoint_file,
                 max_tokens=self.max_tokens
             )
+        elif self.llm_type == "openAIApiChatImageSpecific":
+            return OpenAIApiChatImageSpecificHandler(
+                base_url=self.endpoint_url,
+                api_key=self.api_key,
+                gen_input=self._gen_input,
+                model_name=self.model_name,
+                headers=self.headers,
+                strip_start_stop_line_breaks=self.strip_start_stop_line_breaks,
+                stream=self.stream,
+                api_type_config=self.api_type_config,
+                endpoint_config=self.endpoint_file,
+                max_tokens=self.max_tokens
+            )
         else:
             raise ValueError(f"Unsupported LLM type: {self.llm_type}")
 
@@ -208,6 +223,14 @@ class LlmApiService:
                 )
         except Exception as e:
             logger.error("Exception in get_response_from_llm: %s", e)
+            # Add more detailed error information
+            logger.error(f"LLM Type: {self.llm_type}")
+            logger.error(f"Endpoint URL: {self.endpoint_url}")
+            logger.error(f"Model: {self.model_name}")
+            logger.error(f"Connection Parameters: Base URL = {self.endpoint_url}, API Type = {self.llm_type}")
+            if isinstance(e, requests.exceptions.HTTPError):
+                logger.error(f"HTTP Status Code: {e.response.status_code}")
+                logger.error(f"Response Text: {e.response.text if hasattr(e.response, 'text') else 'No response text'}")
             traceback.print_exc()
             raise
         finally:

@@ -1,0 +1,23 @@
+{
+    "port": 5022,
+    "stream": true,
+    "customWorkflowOverride": true,
+    "customWorkflow": "MCPToolsWorkflow",
+    "routingConfig": "socgOpenWebUINoRoutingGeneralMultiModelCategoriesConfig",
+    "categorizationWorkflow": "CustomCategorizationWorkflow",
+    "defaultParallelProcessWorkflow": "SlowButQualityRagParallelProcessor",
+    "fileMemoryToolWorkflow": "MemoryFileToolWorkflow",
+    "chatSummaryToolWorkflow": "GetChatSummaryToolWorkflow",
+    "conversationMemoryToolWorkflow": "CustomConversationMemoryToolWorkflow",
+    "recentMemoryToolWorkflow": "RecentMemoryToolWorkflow",
+    "discussionIdMemoryFileWorkflowSettings": "_DiscussionId-MemoryFile-Workflow-Settings",
+    "discussionDirectory": "/root/projects/Wilmer/WilmerData/DiscussionIdThings",
+    "sqlLiteDirectory": "/root/projects/Wilmer/WilmerData/SqlLiteThings",
+    "chatPromptTemplateName": "_chatonly",
+    "verboseLogging": true,
+    "chatCompleteAddUserAssistant": true,
+    "chatCompletionAddMissingAssistantGenerator": true,
+    "endpointConfigsSubDirectory": "socg-openwebui-norouting-general-offline-mcp",
+    "presetConfigsSubDirectoryOverride": "socg-openwebui-norouting-general-offline-mcp",
+    "description": "OpenWebUI with MCP tools integration"
+}

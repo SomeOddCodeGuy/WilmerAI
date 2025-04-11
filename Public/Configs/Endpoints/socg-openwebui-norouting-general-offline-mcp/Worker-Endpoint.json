@@ -1,0 +1,9 @@
+{
+    "modelNameForDisplayOnly": "Worker Model - Mistral Small 24b - (Socg 24GB VRAM Development Machine Model)",
+    "endpoint": "http://llm:8080",
+    "apiTypeConfigFileName": "Open-AI-API",
+    "maxContextTokenSize": 16384,
+    "modelNameToSendToAPI": "mistral-small-24b-instruct",
+    "promptTemplate": "mistral-small-2501",
+    "addGenerationPrompt": true
+}

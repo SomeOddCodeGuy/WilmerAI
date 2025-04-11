@@ -130,7 +130,8 @@ class OpenAiApiHandler(LlmApiHandler):
                                 logger.warning(f"Failed to parse JSON: {e}")
                                 continue
 
-                    total_duration = int((time.time() - start_time) * 1e9)
+                    total_duration = time.time() - start_time
+                    logger.debug(f"Total duration: {total_duration}")
 
                     # Send the final payload with "done" and "stop"
                     final_completion_json = api_utils.build_response_json(
@@ -138,7 +139,6 @@ class OpenAiApiHandler(LlmApiHandler):
                         finish_reason="stop",
                         current_username=get_current_username(),
                     )
-                    logger.debug("Total duration: {}", total_duration)
                     yield api_utils.sse_format(final_completion_json, output_format)
 
                     if output_format not in ('ollamagenerate', 'ollamaapichat'):
@@ -176,6 +176,7 @@ class OpenAiApiHandler(LlmApiHandler):
         data = {"model": self.model_name, "stream": False, "messages": corrected_conversation, **(self.gen_input or {})}
 
         retries: int = 3
+        delay: int = 1  # Initial delay in seconds
         for attempt in range(retries):
             try:
                 logger.info(f"OpenAI Chat Completions Non-Streaming flow! Attempt: {attempt + 1}")
@@ -210,6 +211,9 @@ class OpenAiApiHandler(LlmApiHandler):
                 logger.error(f"Attempt {attempt + 1} failed with error: {e}")
                 if attempt == retries - 1:
                     raise
+                logger.info(f"Waiting {delay} seconds before next attempt...")
+                time.sleep(delay)  # Wait before the next retry attempt
+                delay *= 2  # Exponential backoff
             except Exception as e:
                 logger.error("Unexpected error: %s", e)
                 traceback.print_exc()
