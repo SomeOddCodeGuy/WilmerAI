@@ -21,7 +21,7 @@ from Middleware.workflows.categorization.prompt_categorizer import PromptCategor
 from Middleware.workflows.managers.workflow_manager import WorkflowManager
 
 app = Flask(__name__)
-app.config['JSON_AS_ASCII'] = False # Ensure jsonify handles unicode correctly without escaping them unncessarily
+app.config['JSON_AS_ASCII'] = False # Ensure jsonify handles unicode correctly without escaping them unnecessarily
 
 logger = logging.getLogger(__name__)
 
