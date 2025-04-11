@@ -88,6 +88,10 @@ For example, to run a time service:
 mcpo --port 8889 -- mcp-server-time --local-timezone=America/New_York
 ```
 
+3. Run unit tests
+(change PYTHONPATH to your Python path and adjust unit test folder accordingly e.g. WilmerAI instead of WilmerData)
+export PYTHONPATH=/root/projects/Wilmer/WilmerAI:${PYTHONPATH} && WilmerAI/venv/bin/python -m unittest discover -s WilmerData/Public/modules/tests -p 'test_*.py' | cat
+
 This will start a proxy server at http://localhost:8889 that exposes your MCP service's capabilities as REST APIs with auto-generated OpenAPI documentation.
 
 ### Benefits of Using MCPO

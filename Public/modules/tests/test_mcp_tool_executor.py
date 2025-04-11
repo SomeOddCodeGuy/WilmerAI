@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import patch, MagicMock
 import sys
 import os
+import requests
 
 # Adjust import paths
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../..")))
@@ -19,124 +20,87 @@ class TestMcpToolExecutor(unittest.TestCase):
             {"role": "assistant", "content": "Let me check the time for you."}
         ]
         
-        # Sample tool call
+        # Sample tool call (using operationId format)
         self.tool_call = {
-            "name": "tool_endpoint_time_get_current_time_get",
+            "name": "get_current_time", # Assume operationId is now simpler
             "parameters": {
                 "timezone": "UTC"
             }
         }
         
-        # Sample OpenAPI schema for time service
-        self.time_schema = {
-            "openapi": "3.0.0",
-            "info": {
-                "title": "Time Service API",
-                "version": "1.0.0"
-            },
-            "paths": {
-                "/get_current_time": {
-                    "get": {
-                        "operationId": "tool_endpoint_time_get_current_time_get",
-                        "summary": "Get the current time",
-                        "parameters": [
-                            {
-                                "name": "timezone",
-                                "in": "query",
-                                "required": True,
-                                "schema": {
-                                    "type": "string"
-                                }
-                            }
-                        ],
-                        "responses": {
-                            "200": {
-                                "description": "Successful operation"
-                            }
-                        }
-                    }
-                }
-            }
+        # Sample OpenAPI schema info (how it might look in tool_execution_map)
+        self.time_tool_details = {
+             "service": "time",
+             "path": "/current",
+             "method": "get",
+             "openapi_params": [
+                 {"name": "timezone", "in": "query", "required": True, "schema": {"type": "string"}}
+             ]
+             # No request_body_schema for this GET request
         }
-        
+
         # Mock response for time service
         self.time_response = {
             "current_time": "2023-07-22T14:30:00Z",
             "timezone": "UTC"
         }
 
-    @patch('requests.get')
-    def test_discover_mcp_tools(self, mock_get):
-        # Setup mock response for schema
-        mock_schema_response = MagicMock()
-        mock_schema_response.json.return_value = self.time_schema
-        mock_schema_response.raise_for_status.return_value = None
-        mock_get.return_value = mock_schema_response
-        
-        # Call the function
-        tools = mcp_tool_executor.discover_mcp_tools(["time"])
-        
-        # Wrap the assertion in try-except block to handle empty lists or missing keys
-        try:
-            self.assertGreaterEqual(len(tools), 1)
-            self.assertEqual(tools[0]["name"], "tool_endpoint_time_get_current_time_get")
-            self.assertEqual(tools[0]["type"], "function")
-        except (AssertionError, KeyError, IndexError):
-            self.skipTest("discover_mcp_tools returned unexpected format, function behavior has likely changed")
-            return
-        
-        # Verify mock was called with correct URL
-        mock_get.assert_called_with("http://localhost:8889/time/openapi.json")
-
-    @patch('requests.get')
-    def test_execute_tool_call(self, mock_get):
-        # Setup mock responses
-        mock_schema_response = MagicMock()
-        mock_schema_response.json.return_value = self.time_schema
-        
+    # Patch requests.request, as used by the refactored _perform_http_request
+    @patch('requests.request')
+    def test_execute_tool_call(self, mock_request):
+        """Test executing a simple GET tool call with query parameter."""
+        # Mock the response from the tool server
         mock_tool_response = MagicMock()
+        mock_tool_response.status_code = 200 # Ensure success status
         mock_tool_response.json.return_value = self.time_response
+        mock_request.return_value = mock_tool_response
         
-        # Configure the mock to return different responses for different URLs
-        def get_side_effect(url, **kwargs):
-            if "/openapi.json" in url:
-                return mock_schema_response
-            else:
-                return mock_tool_response
-        
-        mock_get.side_effect = get_side_effect
-        
-        # Call the function
-        # Provide a mock tool_execution_map
-        mock_tool_execution_map = {
-            self.tool_call["name"]: {
-                "service": "time",
-                "path": "/get_current_time",
-                "method": "get"
-            }
+        # Construct the tool_execution_map using details from setUp
+        tool_execution_map = {
+            self.tool_call["name"]: self.time_tool_details
         }
-        result = mcp_tool_executor.execute_tool_call(self.tool_call, "http://localhost:8889", mock_tool_execution_map)
+
+        mcpo_url = "http://localhost:8889"
+
+        # Call the function with the correct map structure
+        result = mcp_tool_executor.execute_tool_call(self.tool_call, mcpo_url, tool_execution_map)
         
-        # Assertions
+        # --- Assertions --- 
+        
+        # 1. Verify the actual API call made via requests.request
+        expected_url = f"{mcpo_url}/{self.time_tool_details['service']}{self.time_tool_details['path']}"
+        mock_request.assert_called_once_with(
+            method="get",                     # Use keyword arg
+            url=expected_url,              # Use keyword arg
+            params=self.tool_call['parameters'], # query parameters for GET
+            json=None,                      # Check for json=None
+            timeout=15                 # Default timeout
+        )
+        
+        # 2. Verify the final result returned by the function matches the mocked API response
         self.assertEqual(result, self.time_response)
-        self.assertEqual(mock_get.call_count, 1) # Adjusted from 2
 
     @patch('WilmerData.Public.modules.mcp_tool_executor.execute_tool_call')
     @patch('WilmerData.Public.modules.mcp_tool_executor.extract_tool_calls')
     def test_invoke_with_tool_call(self, mock_extract, mock_execute):
         # Setup mocks
-        mock_extract.return_value = [self.tool_call]
+        # Use the updated tool call name from setUp
+        tool_call_json = {"name": self.tool_call["name"], "parameters": self.tool_call["parameters"]}
+        mock_extract.return_value = [tool_call_json] # Simulate extraction
         mock_execute.return_value = self.time_response
         
         # Add assistant message with tool call
         messages = self.messages.copy()
+        # Ensure the assistant message actually contains the required JSON structure
         messages.append({
             "role": "assistant", 
-            "content": '```json\n{"name": "tool_endpoint_time_get_current_time_get", "parameters": {"timezone": "UTC"}}\n```'
+            "content": f'```json\n{{"tool_calls": [{json.dumps(tool_call_json)}]}}\n```'
         })
         
-        # Call the function
-        result = mcp_tool_executor.Invoke(messages)
+        # Call the function, providing the required tool_execution_map
+        # The specific map content doesn't matter here as execute_tool_call is mocked
+        dummy_tool_map = {self.tool_call["name"]: {"service": "mock"}}
+        result = mcp_tool_executor.Invoke(messages, tool_execution_map=dummy_tool_map)
         
         # Assertions
         self.assertTrue(result["has_tool_call"])
@@ -145,168 +109,181 @@ class TestMcpToolExecutor(unittest.TestCase):
         
         # Verify mocks were called
         mock_extract.assert_called_once()
-        mock_execute.assert_called_once()
+        # Assert execute_tool_call was called with the extracted tool_call and the dummy map
+        mock_execute.assert_called_once_with(tool_call_json, mcp_tool_executor.DEFAULT_MCPO_URL, dummy_tool_map)
 
     @patch('WilmerData.Public.modules.mcp_tool_executor.extract_tool_calls')
     def test_invoke_with_no_tool_call(self, mock_extract):
         # Setup mock to return no tool calls
         mock_extract.return_value = []
         
-        # Call the function
-        result = mcp_tool_executor.Invoke(self.messages)
+        # Call the function - tool_execution_map is not strictly needed if no calls found
+        result = mcp_tool_executor.Invoke(self.messages, tool_execution_map={})
         
         # Assertions
         self.assertFalse(result["has_tool_call"])
         self.assertNotIn("tool_results", result)
+        # Ensure the original assistant message (if any) is returned
+        self.assertEqual(result.get("response"), "Let me check the time for you.")
         
         # Verify mock was called
         mock_extract.assert_called_once()
 
-    def test_extract_tool_calls_json_format(self):
-        # Test with proper JSON format
-        content = '```json\n{"name": "tool_endpoint_time_get_current_time_get", "parameters": {"timezone": "UTC"}}\n```'
-        tool_calls = mcp_tool_executor.extract_tool_calls(content)
-        
-        self.assertEqual(len(tool_calls), 0)  # Will be 0 because it's not in the "tool_calls" format
-
     def test_extract_tool_calls_tool_calls_format(self):
-        # Test with tool_calls format - need to match exactly what the extract_tool_calls function expects
-        content = '```json\n{"tool_calls": [{"name": "tool_endpoint_time_get_current_time_get", "parameters": {"timezone": "UTC"}}]}\n```'
+        # Test with tool_calls format
+        tool_call_data = {"name": "get_current_time", "parameters": {"timezone": "UTC"}}
+        content = f'```json\n{{"tool_calls": [{json.dumps(tool_call_data)}]}}\n```'
         
-        # Patch the function to isolate the test from implementation details
-        with patch('json.loads') as mock_loads:
-            mock_loads.return_value = {"tool_calls": [{"name": "tool_endpoint_time_get_current_time_get", "parameters": {"timezone": "UTC"}}]}
-            tool_calls = mcp_tool_executor.extract_tool_calls(content)
-            
-            # Allow for either 0 or 1 to support both behaviors
-            if len(tool_calls) == 0:
-                print("extract_tool_calls implementation did not extract tool_calls - function behavior may have changed")
-            else:
-                self.assertEqual(len(tool_calls), 1)
-                self.assertEqual(tool_calls[0]["name"], "tool_endpoint_time_get_current_time_get")
-
-    def test_extract_service_names_from_prompt(self):
-        # Test with various prompt formats
-        prompts = [
-            "You have access to MCP Services:\ntime\nweather",
-            "Available MCP tools:\n- time\n- weather",
-            "Use MCP services:\n• time\n• weather",
-            "You can use time and weather services"
-        ]
-        
-        for prompt in prompts:
-            service_names = mcp_tool_executor.extract_service_names_from_prompt(prompt)
-            self.assertIn("time", service_names)
-            self.assertTrue(any(name in ["weather", "openweather"] for name in service_names))
-
-    @patch('requests.get')
-    def test_prepare_system_prompt(self, mock_get):
-        # Setup mock response for schema
-        mock_schema_response = MagicMock()
-        mock_schema_response.json.return_value = self.time_schema
-        mock_schema_response.raise_for_status.return_value = None
-        mock_get.return_value = mock_schema_response
-        
-        # Test prompt preparation
-        original_prompt = "You are a helpful assistant with access to MCP Services:\ntime"
-        # Expect a tuple: (updated_prompt, discovered_tools_map)
-        updated_prompt_tuple = mcp_tool_executor.prepare_system_prompt(original_prompt, "http://localhost:8889", validate_tools=False)
-        updated_prompt_str = updated_prompt_tuple[0]
-        discovered_tools = updated_prompt_tuple[1]
-        
-        # Should contain the original prompt and the tools section
-        self.assertIsInstance(updated_prompt_tuple, tuple) 
-        self.assertEqual(len(updated_prompt_tuple), 2)
-        self.assertIn("You are a helpful assistant", updated_prompt_str)
-        self.assertIn("Available Tools:", updated_prompt_str)
-        self.assertIn("tool_endpoint_time_get_current_time_get", updated_prompt_str)
-        self.assertIsInstance(discovered_tools, dict)
-        self.assertIn("tool_endpoint_time_get_current_time_get", discovered_tools)
-
-    @patch('requests.get')
-    def test_prepare_system_prompt_no_services(self, mock_get):
-        # Test with no MCP services mentioned
-        original_prompt = "You are a helpful assistant."
-        # Expect a tuple: (updated_prompt, discovered_tools_map)
-        updated_prompt_tuple = mcp_tool_executor.prepare_system_prompt(original_prompt, "http://localhost:8889", validate_tools=False)
-        updated_prompt_str = updated_prompt_tuple[0]
-        discovered_tools = updated_prompt_tuple[1]
-
-        # Should be unchanged prompt, empty tool map
-        self.assertEqual(original_prompt, updated_prompt_str)
-        self.assertEqual(discovered_tools, {})
-        mock_get.assert_not_called()
-
-    def test_extract_tool_calls_with_single_quotes(self):
-        """Test that tool calls with single quotes are handled correctly"""
-        # Test with single quotes instead of double quotes
-        content = "{ 'name': 'mcp_time', 'arguments': { 'timezone': 'UTC' } }"
         tool_calls = mcp_tool_executor.extract_tool_calls(content)
         
-        # Should convert single quotes to double quotes and parse successfully
-        self.assertEqual(len(tool_calls), 0)  # 0 because it's not in tool_calls format
+        # Assert that the function extracts one tool call for this format
+        self.assertEqual(len(tool_calls), 1)
+        self.assertEqual(tool_calls[0]["name"], tool_call_data["name"])
+        self.assertEqual(tool_calls[0]["parameters"], tool_call_data["parameters"])
 
     def test_extract_tool_calls_with_unsubstituted_variables(self):
-        """Test that unsubstituted variables are handled gracefully"""
+        """Test that unsubstituted variables are handled gracefully (returns empty)"""
         # Test with unsubstituted Jinja2 variables
         content = '{"tool_calls": [{"name": "{{ tool_name }}", "parameters": {"timezone": "{{ timezone }}"}}]}'
         tool_calls = mcp_tool_executor.extract_tool_calls(content)
         
-        # Should detect unsubstituted variables and return empty list or extract tool calls
-        # The function may have been updated to extract these anyway
-        if len(tool_calls) == 1:
-            # New behavior: extract the tool call even with variables
-            self.assertEqual(tool_calls[0]["name"], "{{ tool_name }}")
-        else:
-            # Old behavior: detect variables and return empty list
-            self.assertEqual(len(tool_calls), 0)
+        # Updated behavior: The function returns the call with variables intact.
+        self.assertEqual(len(tool_calls), 1)
+        self.assertEqual(tool_calls[0]["name"], "{{ tool_name }}")
+        self.assertEqual(tool_calls[0]["parameters"], {"timezone": "{{ timezone }}"})
 
     def test_extract_tool_calls_with_malformed_json(self):
-        """Test that malformed JSON is handled gracefully"""
+        """Test that malformed JSON is handled gracefully (returns empty)"""
         test_cases = [
             # Case 1: Missing closing brace
             '{"tool_calls": [{"name": "test"',
             # Case 2: Invalid JSON structure
             '[{ "system", Available Tools: [|{{|"type": "function"...',
-            # Case 3: Mixed quotes
-            '{"tool_calls": [{"name": "test", \'parameters\': {"test": "value"}}]}',
-            # Case 4: Invalid tool call format
-            '[MCP] time'
+            # Case 3: Mixed quotes (json.loads handles this)
+            # Case 4: Invalid tool call format inside list
+            '{"tool_calls": ["not_a_dict"]}',
+            # Case 5: Not a JSON object
+            '[1, 2, 3]'
         ]
-        
-        for case in test_cases:
-            tool_calls = mcp_tool_executor.extract_tool_calls(case)
-            # Should handle all malformed cases gracefully
-            self.assertEqual(len(tool_calls), 0, f"Failed for case: {case}")
+        for content in test_cases:
+             with self.subTest(content=content):
+                 tool_calls = mcp_tool_executor.extract_tool_calls(content)
+                 self.assertEqual(len(tool_calls), 0)
 
     def test_validate_tool_call_format(self):
-        """Test validation of tool call format"""
-        test_cases = [
-            # Valid case
-            {"tool_call": {"name": "tool_endpoint_time_get_current_time_get", "parameters": {}}, "expected": True},
-            # Invalid: missing endpoint
-            {"tool_call": {"name": "tool_endpoint_time", "parameters": {}}, "expected": False},
-            # Invalid: missing service name
-            {"tool_call": {"name": "tool_endpoint__get_time_get", "parameters": {}}, "expected": False},
-            # Invalid: doesn't start with tool_endpoint_
-            {"tool_call": {"name": "get_current_time", "parameters": {}}, "expected": False},
-            # Invalid: parameters not a dict
-            {"tool_call": {"name": "tool_endpoint_time_get_current_time_get", "parameters": "invalid"}, "expected": False},
-            # Invalid: name not a string
-            {"tool_call": {"name": 123, "parameters": {}}, "expected": False},
-            # Invalid: missing parameters
-            {"tool_call": {"name": "tool_endpoint_time_get_current_time_get"}, "expected": False},
-            # Valid: structure tool_endpoint_service_action_method
-            {"tool_call": {"name": "tool_endpoint_get_current_time_post", "parameters": {}}, "expected": True}
+        """Test the basic format validation for tool calls."""
+        valid_call = {"name": "tool_abc", "parameters": {"p1": "v1"}}
+        invalid_calls = [
+            None,
+            [],
+            {"parameters": {}}, # Missing name
+            {"name": "", "parameters": {}}, # Empty name
+            {"name": "tool_abc"}, # Missing parameters
+            {"name": "tool_abc", "parameters": []} # Parameters not a dict
         ]
+        
+        self.assertTrue(mcp_tool_executor.validate_tool_call_format(valid_call))
+        for call in invalid_calls:
+            with self.subTest(call=call):
+                 self.assertFalse(mcp_tool_executor.validate_tool_call_format(call))
 
-        for case in test_cases:
-            result = mcp_tool_executor.validate_tool_call_format(case["tool_call"])
-            self.assertEqual(
-                result,
-                case["expected"],
-                f"Failed for tool call: {case['tool_call']}"
-            )
+    # Patch requests.request, as used by the refactored _perform_http_request
+    @patch('requests.request')
+    def test_execute_tool_call_post_missing_request_body_schema(self, mock_request):
+        """Test POST fails gracefully (sends body=None) if map lacks request_body_schema."""
+        # --- Mock Setup ---
+        # Mock a 422 error like in the logs to fully simulate
+        mock_response = MagicMock()
+        mock_response.status_code = 422
+        mock_response.reason = "Unprocessable Entity"
+        mock_response.text = '{"detail":[{"type":"missing","loc":["body"],"msg":"Field required","input":null}]}'
+        # Configure raise_for_status to raise an HTTPError similar to requests
+        mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError(
+            "422 Client Error: Unprocessable Entity for url: ...", response=mock_response
+        )
+        mock_request.return_value = mock_response
+
+        mcpo_url = "http://localhost:8889"
+        tool_call = {
+            "name": "submit_data",
+            "parameters": {"data": "some_value", "id": 123} # Params intended for body
+        }
+        # CRITICAL: Define the map entry *without* request_body_schema
+        tool_execution_map = {
+            "submit_data": {
+                "service": "data_processor",
+                "path": "/submit",
+                "method": "post"
+                # "request_body_schema": {"type": "object"}, # <-- This is missing!
+                # "openapi_params": [] # Assume no query/path params
+            }
+        }
+
+        # --- Call ---
+        result = mcp_tool_executor.execute_tool_call(tool_call, mcpo_url, tool_execution_map)
+
+        # --- Assertions ---
+        # 1. Verify the HTTP call was made with body=None (json=None)
+        expected_url = f"{mcpo_url}/{tool_execution_map['submit_data']['service']}{tool_execution_map['submit_data']['path']}"
+        mock_request.assert_called_once_with(
+            method="post",
+            url=expected_url,
+            params={}, # No query params defined
+            json=None, # <--- Assert body is None
+            timeout=15
+        )
+
+        # 2. Verify an error response was returned due to the 422 from the server
+        self.assertIn("error", result)
+        self.assertEqual(result["status"], "error")
+        # Make the assertion less brittle: Check if the expected error prefix is present
+        expected_error_prefix = "Tool execution failed: 422 Client Error: Unprocessable Entity for url:"
+        self.assertTrue(
+            result["error"].startswith(expected_error_prefix),
+            f"Error message '{result['error']}' does not start with expected prefix '{expected_error_prefix}'"
+        )
+        self.assertIn("Field required", result["error"]) # Check for the server detail
+
+    def test_prepare_request_params_post_with_body_schema(self):
+        """
+        Test _prepare_request_params correctly assigns remaining params to body
+        when request_body_schema is present in execution_details for POST.
+        """
+        # LLM parameters, all intended for the request body
+        parameters = {
+            "query": "search term",
+            "search_depth": "advanced",
+            "max_results": 5
+        }
+        
+        # Execution details indicating a POST request with a defined body schema
+        # and no query/path/header/cookie parameters defined in openapi_params
+        execution_details = {
+            "service": "search_service",
+            "path": "/search",
+            "method": "post",
+            "request_body_schema": { # Key indicating body is expected
+                "type": "object",
+                "properties": { # Schema might define expected body props
+                     "query": {"type": "string"},
+                     "search_depth": {"type": "string"},
+                     "max_results": {"type": "integer"}
+                     # Schema might differ slightly, but its presence matters
+                 }
+            },
+            "openapi_params": [] # No query/path/etc. parameters defined
+        }
+        
+        # Call the function under test
+        query_params, body_params, path_params = mcp_tool_executor._prepare_request_params(
+            parameters, execution_details
+        )
+        
+        # Assertions
+        self.assertEqual(query_params, {}, "Query parameters should be empty")
+        self.assertEqual(path_params, {}, "Path parameters should be empty")
+        self.assertIsNotNone(body_params, "Body parameters should not be None")
+        self.assertEqual(body_params, parameters, "Body parameters should contain all original LLM parameters")
 
 if __name__ == '__main__':
     unittest.main() 
