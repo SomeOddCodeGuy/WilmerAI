@@ -120,11 +120,24 @@ def extract_text_from_chunk(chunk) -> str:
             # Handle SSE data format
             if chunk.startswith('data:'):
                 try:
-                    chunk_json = json.loads(chunk.replace('data:', '').strip())
-                    if isinstance(chunk_json, dict):
-                        extracted = chunk_json.get('message', {}).get('content', '')
+                    json_content = chunk.replace('data:', '').strip()
+                    # Handle the [DONE] signal explicitly
+                    if json_content == '[DONE]':
+                        extracted = ""
+                    else:
+                        chunk_json = json.loads(json_content)
+                        if isinstance(chunk_json, dict):
+                            # Extract from choices[0].delta.content for streaming chunks
+                            choices = chunk_json.get('choices', [])
+                            if choices and isinstance(choices, list) and len(choices) > 0:
+                                delta = choices[0].get('delta', {})
+                                if isinstance(delta, dict):
+                                    extracted = delta.get('content', '')
+                            # Fallback for potential non-streaming format within SSE? (Keeping original logic as fallback)
+                            if not extracted:
+                                extracted = chunk_json.get('message', {}).get('content', '')
                 except json.JSONDecodeError as e:
-                    logger.warning("Failed to parse JSON: %s", str(e))
+                    logger.warning("Failed to parse JSON content '%s': %s", json_content, str(e))
                     extracted = ""
             # Try to parse as regular JSON string
             else:
