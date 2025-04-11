@@ -11,8 +11,14 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../WilmerAI")))
 
 import WilmerData.Public.modules.mcp_workflow_integration as mcp_workflow_integration
+from WilmerData.Public.modules.mcp_workflow_integration import (
+    MCPIntegrationError,
+    MCPMessageParsingError,
+    MCPConfigurationError,
+    MCPToolExecutionError,
+    parse_string_messages
+)
 from WilmerData.Public.modules.mcp_tool_executor import DEFAULT_MCPO_URL
-from Middleware.utilities import api_utils
 
 # Mock the weather service requests
 def mock_mcp_service_response(*args, **kwargs):
@@ -52,7 +58,12 @@ class TestMcpWorkflowIntegration(unittest.TestCase):
             {"role": "user", "content": "What time is it?"}
         ]
         
-        # Sample tool call response
+        self.tool_execution_map = {
+            "tool_endpoint_time_get_current_time_get": {"service": "time", "path": "/time/current", "method": "get"},
+            "tool_endpoint_weather_get_current_weather_get": {"service": "weather", "path": "/weather/current", "method": "get"}
+        }
+        
+        # Sample tool call
         self.tool_call = {
             "name": "tool_endpoint_time_get_current_time_get",
             "parameters": {
@@ -66,60 +77,49 @@ class TestMcpWorkflowIntegration(unittest.TestCase):
             "timezone": "UTC"
         }
         
-        # Sample LLM response with tool call
-        self.response_with_tool_call = '```json\n{"name": "tool_endpoint_time_get_current_time_get", "parameters": {"timezone": "UTC"}}\n```'
+        # Sample LLM response content that triggers a tool call
+        self.llm_response_content_with_tool_call = '```json\n{"tool_calls": [{"name": "tool_endpoint_time_get_current_time_get", "parameters": {"timezone": "UTC"}}]}\n```'
         
-        # Sample LLM response without tool call
-        self.response_without_tool_call = "The current time is 2:30 PM UTC."
-
-        # Mock tools for both services
-        self.time_tools = [{
-            "type": "function",
-            "name": "tool_endpoint_time_get_current_time_get",
-            "description": "Get the current time",
-            "parameters": {"type": "object", "properties": {}, "required": []}
-        }]
+        # Sample LLM response content without tool call
+        self.response_content_without_tool_call = "The current time is 2:30 PM UTC."
         
-        self.weather_tools = [{
-            "type": "function",
-            "name": "tool_endpoint_weather_get_current_weather_get",
-            "description": "Get the current weather",
-            "parameters": {"type": "object", "properties": {}, "required": []}
-        }]
-        
-        # Start request mocking
-        self.requests_patcher = patch('requests.get', side_effect=mock_mcp_service_response)
-        self.mock_requests = self.requests_patcher.start()
+        # No need for requests patching in current tests
 
     def tearDown(self):
-        self.requests_patcher.stop()
+        pass # Nothing needed currently
 
     @patch('WilmerData.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
-    def test_invoke_with_no_tool_call(self, mock_invoke):
+    def test_invoke_with_no_tool_call(self, mock_executor_invoke):
         # Setup mock to return no tool call
-        mock_invoke.return_value = {
-            "response": self.response_without_tool_call,
+        mock_executor_invoke.return_value = {
+            "response": self.response_content_without_tool_call,
             "has_tool_call": False,
             "tool_results": []
         }
         
-        # Test with positional arguments
         result = mcp_workflow_integration.Invoke(
             self.messages, 
-            self.response_without_tool_call,
-            tool_execution_map={"tool_endpoint_time_get_current_time_get": {"service": "time", "path": "/get_current_time", "method": "get"}}
+            self.response_content_without_tool_call, # Arg 2 is original_response
+            tool_execution_map=self.tool_execution_map
         )
         
-        # Since mock_invoke.assert_called_once() is failing, verify that
-        # the return value matches instead. This implies the mock was used.
-        self.assertEqual(result, self.response_without_tool_call)
+        # Verify the executor was called correctly
+        expected_messages_to_executor = self.messages + [{"role": "assistant", "content": self.response_content_without_tool_call}]
+        mock_executor_invoke.assert_called_once_with(
+            messages=expected_messages_to_executor, 
+            mcpo_url=DEFAULT_MCPO_URL, 
+            tool_execution_map=self.tool_execution_map
+        )
+        
+        # Verify the final result is the original response
+        self.assertEqual(result, self.response_content_without_tool_call)
 
     @patch('WilmerData.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
-    def test_invoke_with_tool_call(self, mock_invoke):
+    def test_invoke_with_tool_call(self, mock_executor_invoke):
         """Test that the Invoke function handles tool calls correctly"""
         # Setup mock to return a tool call result
-        mock_invoke.return_value = {
-            "response": self.response_with_tool_call,
+        mock_executor_invoke.return_value = {
+            "response": self.llm_response_content_with_tool_call, # Executor got this response
             "has_tool_call": True,
             "tool_results": [
                 {
@@ -129,15 +129,22 @@ class TestMcpWorkflowIntegration(unittest.TestCase):
             ]
         }
         
-        # Test with positional arguments
+        # Test invocation, passing the response that contains the tool call trigger
         result = mcp_workflow_integration.Invoke(
             self.messages, 
-            self.response_with_tool_call,
-            tool_execution_map={"tool_endpoint_time_get_current_time_get": {"service": "time", "path": "/get_current_time", "method": "get"}}
+            self.llm_response_content_with_tool_call, 
+            tool_execution_map=self.tool_execution_map
         )
         
-        # Since mock_invoke.assert_called_once() is failing, verify that
-        # the return value matches the expected formatted result instead
+        # Verify the executor was called correctly
+        expected_messages_to_executor = self.messages + [{"role": "assistant", "content": self.llm_response_content_with_tool_call}]
+        mock_executor_invoke.assert_called_once_with(
+            messages=expected_messages_to_executor, 
+            mcpo_url=DEFAULT_MCPO_URL, 
+            tool_execution_map=self.tool_execution_map
+        )
+        
+        # Verify the final result is the formatted tool result
         expected_formatted_result = mcp_workflow_integration.format_results_only([
             {
                 "tool_call": self.tool_call,
@@ -146,443 +153,369 @@ class TestMcpWorkflowIntegration(unittest.TestCase):
         ])
         self.assertEqual(result, expected_formatted_result)
 
-    def test_format_tool_results_response_no_results(self):
-        # Test with no tool results
-        result = mcp_workflow_integration.format_tool_results_response(self.response_without_tool_call, [])
+    # --- Tests for format_results_only --- 
+    def test_format_results_only_no_results(self):
+        result = mcp_workflow_integration.format_results_only([])
+        self.assertEqual(result, "")
         
-        # Should return original response unchanged
-        self.assertEqual(result, self.response_without_tool_call)
-
-    def test_format_tool_results_response_with_json(self):
-        # Test with response containing JSON
+    def test_format_results_only_single_result(self):
         tool_results = [
             {
                 "tool_call": self.tool_call,
                 "result": self.tool_result
             }
         ]
-        
-        result = mcp_workflow_integration.format_tool_results_response(self.response_with_tool_call, tool_results)
-        
-        # Should include original response and formatted results
-        self.assertIn(self.response_with_tool_call, result)
-        self.assertIn("Tool Call:", result)
-        self.assertIn("tool_endpoint_time_get_current_time_get", result)
-        self.assertIn("UTC", result)
-
-    def test_format_tool_results_response_without_json(self):
-        # Test with response not containing JSON
-        tool_results = [
-            {
-                "tool_call": self.tool_call,
-                "result": self.tool_result
-            }
-        ]
-        
-        result = mcp_workflow_integration.format_tool_results_response(self.response_without_tool_call, tool_results)
-        
-        # Should append results to the end
-        self.assertTrue(result.startswith(self.response_without_tool_call))
-        self.assertIn("Tool Results:", result)
-
-    def test_format_results_only(self):
-        # Test formatting just the tool results
-        tool_results = [
-            {
-                "tool_call": self.tool_call,
-                "result": self.tool_result
-            }
-        ]
-        
         result = mcp_workflow_integration.format_results_only(tool_results)
-        
-        # Should include tool name, parameters, and result
+        self.assertIn("Tool Results:", result)
         self.assertIn("Tool:", result)
-        self.assertIn("tool_endpoint_time_get_current_time_get", result)
+        self.assertIn(f"Name: {self.tool_call['name']}", result)
         self.assertIn("Parameters:", result)
-        self.assertIn("UTC", result)
+        self.assertIn("UTC", result) # Check parameter value
         self.assertIn("Result:", result)
-        self.assertIn("2023-07-22T14:30:00Z", result)
+        self.assertIn(self.tool_result['current_time'], result)
 
-    def test_invoke_with_messages_kwarg(self):
-        """Test that the Invoke function accepts messages as a kwarg"""
-        # Call Invoke with messages as a kwarg
+    def test_format_results_only_multiple_results(self):
+        tool_results = [
+            {
+                "tool_call": self.tool_call,
+                "result": self.tool_result
+            },
+            {
+                "tool_call": {"name": "tool_endpoint_weather_get_current_weather_get", "parameters": {"location": "London"}},
+                "result": {"temp": "15C", "condition": "Cloudy"}
+            }
+        ]
+        result = mcp_workflow_integration.format_results_only(tool_results)
+        self.assertIn("Tool Results:", result)
+        self.assertEqual(result.count("Tool:"), 2)
+        self.assertIn(self.tool_call['name'], result)
+        self.assertIn("tool_endpoint_weather_get_current_weather_get", result)
+        self.assertIn("London", result)
+        self.assertIn("15C", result)
+
+    def test_format_results_only_with_error(self):
+        error_result = {"error": "Service unavailable", "status": "error"}
+        tool_results = [
+            {
+                "tool_call": self.tool_call,
+                "result": error_result
+            }
+        ]
+        result = mcp_workflow_integration.format_results_only(tool_results)
+        self.assertIn("Tool Results:", result)
+        self.assertIn("Tool:", result)
+        self.assertIn(f"Name: {self.tool_call['name']}", result)
+        self.assertNotIn("Result:", result) # Should show Error instead
+        self.assertIn("Error: Service unavailable", result)
+        self.assertIn("Status: error", result)
+
+    # --- Tests for Invoke Argument Handling --- 
+    @patch('WilmerData.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
+    def test_invoke_with_messages_kwarg(self, mock_executor_invoke):
+        """Test Invoke accepts messages as a kwarg (no original_response)."""
+        mock_executor_invoke.return_value = {"response": "", "has_tool_call": False}
+        
         result = mcp_workflow_integration.Invoke(
-            messages=self.messages,
-            tool_execution_map={"tool_endpoint_time_get_current_time_get": {}} # Add tool map
+            messages=self.messages, # Use kwarg
+            tool_execution_map=self.tool_execution_map
         )
         
-        # Since there's no original_response, it should return empty string
+        mock_executor_invoke.assert_called_once_with(
+            messages=self.messages, 
+            mcpo_url=DEFAULT_MCPO_URL, 
+            tool_execution_map=self.tool_execution_map
+        )
         self.assertEqual(result, "")
         
-    def test_invoke_with_messages_arg(self):
-        """Test that the Invoke function accepts messages as first positional arg"""
-        # Call Invoke with messages as first arg
+    @patch('WilmerData.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
+    def test_invoke_with_messages_arg(self, mock_executor_invoke):
+        """Test Invoke accepts messages as first positional arg (no original_response)."""
+        mock_executor_invoke.return_value = {"response": "", "has_tool_call": False}
+
         result = mcp_workflow_integration.Invoke(
-            self.messages,
-            tool_execution_map={"tool_endpoint_time_get_current_time_get": {}} # Add tool map
+            self.messages, # Positional arg 1
+            tool_execution_map=self.tool_execution_map
         )
         
-        # Since there's no original_response, it should return empty string
+        mock_executor_invoke.assert_called_once_with(
+            messages=self.messages, 
+            mcpo_url=DEFAULT_MCPO_URL, 
+            tool_execution_map=self.tool_execution_map
+        )
         self.assertEqual(result, "")
         
-    def test_invoke_with_messages_and_response(self):
-        """Test that the Invoke function works with both messages and original_response"""
-        # Add an assistant message that would trigger tool processing
-        original_response = "I'll help you with that. Let me use a tool."
-        
-        # Call Invoke with both parameters
+    @patch('WilmerData.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
+    def test_invoke_with_messages_and_response_kwargs(self, mock_executor_invoke):
+        """Test Invoke works with both messages and original_response as kwargs."""
+        original_response = "I'll help you with that."
+        mock_executor_invoke.return_value = {"response": original_response, "has_tool_call": False}
+
         result = mcp_workflow_integration.Invoke(
             messages=self.messages,
             original_response=original_response,
-            tool_execution_map={"tool_endpoint_time_get_current_time_get": {}} # Add tool map
+            tool_execution_map=self.tool_execution_map
         )
-        
-        # The result should be the original response since no tool call was detected
+
+        expected_messages_to_executor = self.messages + [{"role": "assistant", "content": original_response}]
+        mock_executor_invoke.assert_called_once_with(
+            messages=expected_messages_to_executor,
+            mcpo_url=DEFAULT_MCPO_URL,
+            tool_execution_map=self.tool_execution_map
+        )
         self.assertEqual(result, original_response)
-
-    def test_invoke_with_workflow_messages(self):
-        """Test that the Invoke function works with messages passed through workflow variables"""
-        # This simulates how the workflow would pass messages
-        workflow_messages = self.messages  # Pass messages directly since we're not testing variable substitution
         
-        # Call Invoke as the workflow would
+    @patch('WilmerData.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
+    def test_invoke_with_stringified_messages_list(self, mock_executor):
+        """Test Invoke with messages provided as a stringified list."""
+        # Use json.dumps to create a valid JSON string
+        messages_str = json.dumps(self.messages)
+        mock_executor.return_value = {"response": "", "has_tool_call": False}
+
         result = mcp_workflow_integration.Invoke(
-            workflow_messages,
-            tool_execution_map={"tool_endpoint_time_get_current_time_get": {}} # Add tool map
+            messages_str, # First arg is messages
+            tool_execution_map=self.tool_execution_map
         )
-        
-        # Since there's no original_response, it should return empty string
-        self.assertEqual(result, "")
-            
-    def test_invoke_with_workflow_messages_and_response(self):
-        """Test that the Invoke function works with both workflow messages and response"""
-        # This simulates how the workflow would pass arguments
-        workflow_messages = self.messages  # Pass messages directly
-        workflow_response = self.response_with_tool_call  # Pass response directly
-        
-        with patch('WilmerData.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke') as mock_executor:
-            # Set up the mock
-            mock_executor.return_value = {
-                "response": workflow_response,
-                "has_tool_call": True,
-                "tool_results": [
-                    {
-                        "tool_call": self.tool_call,
-                        "result": self.tool_result
-                    }
-                ]
-            }
-            
-            # Call Invoke as the workflow would
-            result = mcp_workflow_integration.Invoke(
-                workflow_messages,
-                original_response=workflow_response,
-                tool_execution_map={"tool_endpoint_time_get_current_time_get": {"service": "time", "path": "/get_current_time", "method": "get"}}
-            )
-            
-            # Verify the result matches the expected formatted result
-            expected_formatted_result = mcp_workflow_integration.format_results_only([
-                {
-                    "tool_call": self.tool_call,
-                    "result": self.tool_result
-                }
-            ])
-            self.assertEqual(result, expected_formatted_result)
 
-    def test_invoke_with_messages_list(self):
-        """Test that the Invoke function works with messages passed as a list"""
-        # This simulates how the workflow manager would pass messages after variable substitution
-        result = mcp_workflow_integration.Invoke(self.messages)
-        
-        # Since there's no original_response, it should return empty string
+        # Now, the executor should be called with the PARSED messages list
+        mock_executor.assert_called_once_with(
+            messages=self.messages, 
+            mcpo_url=DEFAULT_MCPO_URL, 
+            tool_execution_map=self.tool_execution_map
+        )
         self.assertEqual(result, "")
-            
-    def test_invoke_with_messages_list_and_response(self):
-        """Test that the Invoke function works with both messages list and response"""
-        with patch('WilmerData.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke') as mock_executor:
-            # Set up the mock
-            mock_executor.return_value = {
-                "response": self.response_with_tool_call,
-                "has_tool_call": True,
-                "tool_results": [
-                    {
-                        "tool_call": self.tool_call,
-                        "result": self.tool_result
-                    }
-                ]
-            }
-            
-            # Call Invoke as the workflow manager would after variable substitution
-            result = mcp_workflow_integration.Invoke(
-                self.messages,
-                original_response=self.response_with_tool_call,
-                tool_execution_map={"tool_endpoint_time_get_current_time_get": {"service": "time", "path": "/get_current_time", "method": "get"}}
-            )
-            
-            # Verify the result includes tool execution formatted results only
-            expected_formatted_result = mcp_workflow_integration.format_results_only([
-                {
-                    "tool_call": self.tool_call,
-                    "result": self.tool_result
-                }
-            ])
-            self.assertEqual(result, expected_formatted_result)
-            
-            # Verify the mock was called correctly
-            mock_executor.assert_called_once()
-            call_args, call_kwargs = mock_executor.call_args
-            self.assertEqual(call_args[0], self.messages + [{"role": "assistant", "content": self.response_with_tool_call}])
-            self.assertEqual(call_args[1], DEFAULT_MCPO_URL)
-            self.assertIn('tool_execution_map', call_kwargs)
-            self.assertIsInstance(call_kwargs['tool_execution_map'], dict)
 
     @patch('WilmerData.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
-    def test_invoke_with_string_message(self, mock_executor):
-        """Test that the Invoke function handles string messages by converting them to proper format"""
-        # Test with a string message (like what we get from the LLM)
-        string_message = "User: hi"
-        original_response = "Let me help you with that."
+    def test_invoke_with_stringified_messages_list_and_response(self, mock_executor):
+        """Test Invoke with stringified messages list and original_response."""
+        # Use json.dumps to create a valid JSON string
+        messages_str = json.dumps(self.messages)
+        original_response = "Okay, checking..."
+        mock_executor.return_value = {"response": original_response, "has_tool_call": False}
+
+        result = mcp_workflow_integration.Invoke(
+            messages_str, 
+            original_response,
+            tool_execution_map=self.tool_execution_map
+        )
+
+        # Executor should be called with the PARSED messages list + the original response
+        expected_messages_to_executor = self.messages + [{"role": "assistant", "content": original_response}]
+        mock_executor.assert_called_once_with(
+            messages=expected_messages_to_executor, 
+            mcpo_url=DEFAULT_MCPO_URL, 
+            tool_execution_map=self.tool_execution_map
+        )
+        self.assertEqual(result, original_response)
+            
+    @patch('WilmerData.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
+    def test_invoke_with_simple_string_message(self, mock_executor):
+        """Test Invoke with a simple user message string (with prefix)."""
+        message_str = "user: Hello there"
+        expected_parsed = [{"role": "user", "content": "Hello there"}] # Result of parse_string_messages
+        mock_executor.return_value = {"response": "", "has_tool_call": False}
         
-        # Set up the mock
+        result = mcp_workflow_integration.Invoke(message_str, tool_execution_map=self.tool_execution_map)
+        
+        mock_executor.assert_called_once_with(
+            messages=expected_parsed,
+            mcpo_url=DEFAULT_MCPO_URL,
+            tool_execution_map=self.tool_execution_map
+        )
+        self.assertEqual(result, "")
+
+    @patch('WilmerData.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
+    def test_invoke_with_simple_string_message_no_prefix(self, mock_executor):
+        """Test Invoke with a simple user message string (no prefix)."""
+        message_str = "Hello there"
+        expected_parsed = [{"role": "user", "content": "Hello there"}] # Default to user
+        mock_executor.return_value = {"response": "", "has_tool_call": False}
+        
+        result = mcp_workflow_integration.Invoke(message_str, tool_execution_map=self.tool_execution_map)
+        
+        mock_executor.assert_called_once_with(
+            messages=expected_parsed,
+            mcpo_url=DEFAULT_MCPO_URL,
+            tool_execution_map=self.tool_execution_map
+        )
+        self.assertEqual(result, "")
+
+    @patch('WilmerData.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
+    def test_invoke_with_simple_string_message_and_response(self, mock_executor):
+        """Test Invoke with a simple user message string and response, triggering tool."""
+        message_str = "user: What time is it?"
+        original_response = self.llm_response_content_with_tool_call
+        expected_parsed = [{"role": "user", "content": "What time is it?"}]
+        expected_tool_result_format = mcp_workflow_integration.format_results_only([{"tool_call": self.tool_call, "result": self.tool_result}])
+
         mock_executor.return_value = {
             "response": original_response,
-            "has_tool_call": False,
-            "tool_results": []
-        }
-        
-        # Call Invoke with the string message and response
-        result = mcp_workflow_integration.Invoke(
-            string_message, 
-            original_response,
-            tool_execution_map={"tool_endpoint_time_get_current_time_get": {"service": "time", "path": "/get_current_time", "method": "get"}}
-        )
-        
-        # Verify the mock was called with properly formatted messages
-        expected_messages = [{"role": "user", "content": "hi"}]
-        expected_messages_with_response = expected_messages + [{"role": "assistant", "content": original_response}]
-        
-        # Print debug info
-        print("\nDebug info:")
-        print(f"Input message: {string_message}")
-        print(f"Original response: {original_response}")
-        print(f"Expected messages: {expected_messages_with_response}")
-        print(f"Mock call args: {mock_executor.call_args}")
-        
-        mock_executor.assert_called_once()
-        call_args, call_kwargs = mock_executor.call_args
-        self.assertEqual(call_args[0], expected_messages_with_response)
-        self.assertEqual(call_args[1], DEFAULT_MCPO_URL)
-        self.assertIn('tool_execution_map', call_kwargs)
-        self.assertIsInstance(call_kwargs['tool_execution_map'], dict)
-        
-        # Since there's no tool call, it should return the original response
-        self.assertEqual(result, original_response)
-
-    @patch('WilmerData.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
-    def test_invoke_with_jinja2_templating(self, mock_executor):
-        """Test that the Invoke function works with Jinja2 templated messages"""
-        
-        # Mock the executor's Invoke to return tool results
-        mock_executor.return_value = {
             "has_tool_call": True,
-            "tool_results": [
-                {
-                    "tool_call": self.tool_call,
-                    "result": self.tool_result
-                }
-            ]
+            "tool_results": [{"tool_call": self.tool_call, "result": self.tool_result}]
         }
         
-        # Define Jinja2 templated messages and variables
-        templated_messages = [
-            {"role": "user", "content": "What time is it in {{ location }}?"}
-        ]
-        variables = {"location": "UTC"}
-        original_response = "Let me check the time for you."
+        result = mcp_workflow_integration.Invoke(message_str, original_response, tool_execution_map=self.tool_execution_map)
         
-        # Render Jinja2 templates (assuming a helper function or direct rendering)
-        # For simplicity, we'll manually render here
-        rendered_messages = [
-            {"role": "user", "content": "What time is it in UTC?"}
-        ]
-        
-        # Call the Invoke function with rendered messages and original response
-        result = mcp_workflow_integration.Invoke(
-            rendered_messages, 
-            original_response,
-            tool_execution_map={"tool_endpoint_time_get_current_time_get": {"service": "time", "path": "/get_current_time", "method": "get"}}
+        expected_messages_to_executor = expected_parsed + [{"role": "assistant", "content": original_response}]
+        mock_executor.assert_called_once_with(
+            messages=expected_messages_to_executor,
+            mcpo_url=DEFAULT_MCPO_URL,
+            tool_execution_map=self.tool_execution_map
         )
+        self.assertEqual(result, expected_tool_result_format)
         
-        # Assert that the final response contains formatted tool results
-        expected_formatted_result = mcp_workflow_integration.format_results_only([
-            {
-                "tool_call": self.tool_call,
-                "result": self.tool_result
-            }
-        ])
-        self.assertEqual(result, expected_formatted_result)
-
     @patch('WilmerData.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
-    def test_invoke_with_production_like_messages(self, mock_executor):
-        """Test that the Invoke function handles production-like message formats with chunks"""
-        # Test with a complex message format similar to production
-        complex_message = "user: Hello! How can I assist you today? Let's have a friendly and engaging conversation. Here are a few things we could do:\n\n1. **Trivia**: I can ask you questions on a topic of your choice, or you can quiz me.\n2. **Word association**: I say a word, and you respond with the first word that comes to your mind.\n3. **Story building**: We can take turns adding sentences to create a story.\n4. **Jokes**: I can tell you some jokes, or you can try to make me laugh.\n5. **General conversation**: We can discuss a wide range of topics."
-
-        # Set up the mock to handle chunks properly
-        mock_executor.return_value = {
-            "response": complex_message,
-            "has_tool_call": False,
-            "tool_results": [],
-            "chunks": [
-                {"message": {"content": "Hello! How can I assist you today?"}},
-                {"message": {"content": "Let's have a friendly and engaging conversation."}},
-                {"message": {"content": "Here are a few things we could do:"}}
-            ]
-        }
-        
-        # Expected messages with the prefix 'user: ' removed
-        expected_messages = [{"role": "user", "content": complex_message[6:]}]
-        
-        # Call Invoke with the complex message
-        result = mcp_workflow_integration.Invoke(
-            complex_message,
-            tool_execution_map={"tool_endpoint_time_get_current_time_get": {"service": "time", "path": "/get_current_time", "method": "get"}}
+    def test_invoke_with_production_like_string_message(self, mock_executor):
+        """Test Invoke handles production-like message formats (long string with prefix)."""
+        # Simulate a long message string potentially split across lines but passed as one string
+        message_str = (
+            "user: Hello! How can I assist you today? Let's have a friendly and engaging conversation.\n"
+            "Here are a few things we could do:\n\n"
+            "1. **Trivia**: I can ask you questions on a topic of your choice, or you can quiz me.\n"
+            "2. **Word association**: I say a word, and you respond with the first word that comes to your mind.\n"
+            "3. **Story building**: We can take turns adding sentences to create a story.\n"
+            "4. **Jokes**: I can tell you some jokes, or you can try to make me laugh.\n"
+            "5. **General conversation**: We can discuss a wide range of topics."
         )
         
-        # Print debug info
-        print("\nProduction-like test debug info:")
-        print(f"Input message: {complex_message[:100]}...")  # First 100 chars
-        print(f"Mock executor return value: {mock_executor.return_value}")
-        print(f"Result: {result}")
-        
-        # The result could be the full message or just the content part without 'user: ' prefix
-        # Accept either format to make the test more robust
-        if result == complex_message:
-            # If it returns the full message with 'user: ' prefix
-            self.assertEqual(result, complex_message)
-        else:
-            # If it returns just the content without 'user: ' prefix
-            self.assertEqual(result, complex_message[6:])
+        # Use the actual parsing logic to get the expected result
+        expected_parsed = mcp_workflow_integration.parse_string_messages(message_str) 
+        self.assertEqual(len(expected_parsed), 1)
+        self.assertEqual(expected_parsed[0]['role'], 'user')
+        self.assertTrue(expected_parsed[0]['content'].startswith("Hello! How can I assist"))
 
-    def test_chunk_processing_with_various_types(self):
-        """Test that chunk processing handles various data types correctly"""
-        # Test cases with different chunk types
-        test_cases = [
-            ({"message": {"content": "Valid chunk"}}, "Valid chunk"),  # Valid case
-            (123, ""),  # Integer case (causing the error in prod)
-            (None, ""),  # None case
-            ("plain string", ""),  # String case
-            ({"wrong_key": "value"}, ""),  # Missing message key
-            ({"message": None}, ""),  # None message
-            ({"message": {"wrong_key": "value"}}, ""),  # Missing content key
-        ]
-        
-        for chunk, expected in test_cases:
-            with self.subTest(chunk=chunk):
-                try:
-                    result = api_utils.extract_text_from_chunk(chunk)
-                    self.assertEqual(result, expected)
-                except AttributeError as e:
-                    self.fail(f"Failed to handle chunk type {type(chunk)}: {e}")
-                except Exception as e:
-                    self.fail(f"Unexpected error processing chunk {chunk}: {e}")
+        mock_executor.return_value = {"response": "", "has_tool_call": False}
 
-    def test_invoke_with_malformed_messages(self):
-        """Test that the Invoke function handles malformed messages gracefully"""
-        malformed_messages = [
-            {"role": "system", "content": "[{ 'system', Available Tools: [|{{|\"type\": \"function\"..."},
-            {"role": "user", "content": "What time is it?"}
-        ]
-        
-        # Test with malformed messages
-        result = mcp_workflow_integration.Invoke(
-            malformed_messages,
-            tool_execution_map={"tool_endpoint_time_get_current_time_get": {"service": "time", "path": "/get_current_time", "method": "get"}}
+        result = mcp_workflow_integration.Invoke(message_str, tool_execution_map=self.tool_execution_map)
+
+        # Check that the executor was called with the correctly parsed message list
+        mock_executor.assert_called_once_with(
+            messages=expected_parsed, # Should be List[Dict]
+            mcpo_url=DEFAULT_MCPO_URL,
+            tool_execution_map=self.tool_execution_map
         )
-        
-        # Should handle malformed messages gracefully
-        self.assertIsInstance(result, str)
         self.assertEqual(result, "")
 
-    def test_response_format_validation(self):
-        """Test that responses match the required format"""
-        # Test various response formats
-        test_cases = [
-            # Case 1: Correct format
-            {
-                "response": '{"tool_calls": [{"name": "tool_endpoint_get_current_time_post", "parameters": {"timezone": "UTC"}}]}',
-                "should_be_valid": True
-            },
-            # Case 2: Wrong tool name
-            {
-                "response": '{"tool_calls": [{"name": "mcp_time", "parameters": {"timezone": "UTC"}}]}',
-                "should_be_valid": False
-            },
-            # Case 3: Missing tool_calls wrapper
-            {
-                "response": '{"name": "tool_endpoint_get_current_time_post", "parameters": {"timezone": "UTC"}}',
-                "should_be_valid": False
-            },
-            # Case 4: Non-JSON format
-            {
-                "response": '[MCP] time',
-                "should_be_valid": False
-            }
+    # --- Tests for Error Handling and Validation --- 
+    def test_invoke_with_malformed_messages_list(self):
+        """Test Invoke raises error for list with invalid dicts during init."""
+        malformed_messages = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant"} # Missing 'content' key
         ]
+        with self.assertRaisesRegex(MCPMessageParsingError, "invalid message dictionaries"):
+            mcp_workflow_integration.Invoke(malformed_messages, tool_execution_map=self.tool_execution_map)
+
+    def test_invoke_with_malformed_stringified_list(self):
+        """Test Invoke raises error for stringified list with invalid dicts during init."""
+        # Use json.dumps on a malformed list to create a valid JSON string of invalid data
+        malformed_messages = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant"} # Missing 'content' key
+        ]
+        malformed_messages_str = json.dumps(malformed_messages)
+
+        with self.assertRaisesRegex(MCPMessageParsingError, "invalid message dictionaries"):
+            mcp_workflow_integration.Invoke(malformed_messages_str, tool_execution_map=self.tool_execution_map)
+
+    def test_invoke_with_invalid_messages_type(self):
+        """Test Invoke raises error for invalid messages type during init."""
+        invalid_messages = 12345
+        with self.assertRaisesRegex(MCPMessageParsingError, "must be a list or string"):
+            mcp_workflow_integration.Invoke(invalid_messages, tool_execution_map=self.tool_execution_map)
+
+    @patch('WilmerData.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
+    def test_tool_execution_with_validation_success(self, mock_executor):
+        """Test successful tool execution when validation is enabled."""
+        mock_executor.return_value = {
+            "response": self.llm_response_content_with_tool_call,
+            "has_tool_call": True,
+            "tool_results": [{"tool_call": self.tool_call, "result": self.tool_result}] # No errors
+        }
+        expected_result = mcp_workflow_integration.format_results_only([{"tool_call": self.tool_call, "result": self.tool_result}])
         
-        for case in test_cases:
-            result = mcp_workflow_integration.validate_response_format(case["response"])
-            self.assertEqual(
-                result, 
-                case["should_be_valid"], 
-                f"Failed for response: {case['response']}"
-            )
+        result = mcp_workflow_integration.Invoke(
+            self.messages, 
+            self.llm_response_content_with_tool_call,
+            tool_execution_map=self.tool_execution_map,
+            validate_execution=True
+        )
+        self.assertEqual(result, expected_result)
+        mock_executor.assert_called_once()
 
-    def test_tool_execution_with_validation(self):
-        """Test tool execution with response validation"""
-        # Mock the tool executor
+    @patch('WilmerData.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
+    def test_tool_execution_with_validation_failure(self, mock_executor):
+        """Test tool execution returns formatted error when validation fails."""
+        error_detail = {"error": "Tool failed", "status": "error", "timestamp": "now"}
+        mock_executor.return_value = {
+            "response": self.llm_response_content_with_tool_call,
+            "has_tool_call": True,
+            "tool_results": [{"tool_call": self.tool_call, "result": error_detail}]
+        }
+
+        # Expect the Invoke function to catch the MCPToolExecutionError and return a formatted string
+        expected_error_string = f"Tool execution failed: Tool execution validation failed - Details: {json.dumps([error_detail], indent=2)}"
+        
+        result = mcp_workflow_integration.Invoke(
+            self.messages, 
+            self.llm_response_content_with_tool_call,
+            tool_execution_map=self.tool_execution_map,
+            validate_execution=True
+        )
+        
+        self.assertEqual(result, expected_error_string)
+        mock_executor.assert_called_once() # Ensure executor was still called
+        
+    def test_node_type_validation_valid(self):
+        """Test Invoke proceeds with a valid node_type."""
         with patch('WilmerData.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke') as mock_executor:
-            # Setup mock to return a tool execution result
-            mock_executor.return_value = {
-                "response": '{"tool_calls": [{"name": "tool_endpoint_get_current_time_post", "parameters": {"timezone": "UTC"}}]}',
-                "has_tool_call": True,
-                "tool_results": [{
-                    "tool_call": {
-                        "name": "tool_endpoint_get_current_time_post",
-                        "parameters": {"timezone": "UTC"}
-                    },
-                    "result": {"current_time": "2024-04-03T13:10:10Z"}
-                }]
-            }
-            
-            # Test with validation enabled
+            mock_executor.return_value = {"response": "", "has_tool_call": False}
+            # Should initialize and run without raising error
             result = mcp_workflow_integration.Invoke(
-                self.messages,
-                '{"tool_calls": [{"name": "tool_endpoint_get_current_time_post", "parameters": {"timezone": "UTC"}}]}',
-                validate_execution=True,
-                tool_execution_map={"tool_endpoint_get_current_time_post": {"service": "time", "path": "/current_time", "method": "post"}}
+            self.messages, 
+            node_type='PythonModule', 
+            tool_execution_map=self.tool_execution_map
             )
-            
-            # Should include validated tool results
-            self.assertIn("current_time", result)
-            self.assertIn("2024-04-03T13:10:10Z", result)
+            self.assertEqual(result, "") # Expect normal operation (no tool calls in this setup)
+            mock_executor.assert_called_once()
 
-    def test_node_type_validation(self):
-        """Test that node types are properly validated"""
-        # Test the response generator node type validation
-        with patch('WilmerData.Public.modules.mcp_workflow_integration.validate_node_type') as mock_validate:
-            mock_validate.return_value = True
-            
-            result = mcp_workflow_integration.Invoke(
-                self.messages,
-                node_type="Standard",
-                tool_execution_map={"tool_endpoint_time_get_current_time_get": {"service": "time", "path": "/get_current_time", "method": "get"}}
+    def test_node_type_validation_invalid(self):
+        """Test Invoke raises MCPConfigurationError during init with an invalid node_type."""
+        with self.assertRaisesRegex(MCPConfigurationError, "Invalid node type: InvalidNodeType"):
+             # The error is raised during MCPWorkflowHandler initialization
+                mcp_workflow_integration.Invoke(
+                    self.messages,
+                 node_type='InvalidNodeType', 
+                 tool_execution_map=self.tool_execution_map
+             )
+
+    def test_invoke_missing_tool_map(self):
+        """Test Invoke raises MCPConfigurationError during init if tool_execution_map is missing."""
+        # The error is now raised by _parse_tool_execution_map_static
+        expected_error_message = "tool_execution_map must be a dict or string, received <class 'NoneType'>"
+        try:
+            mcp_workflow_integration.Invoke(
+                messages=self.messages, # Use a valid message list
+                tool_execution_map=None
             )
+            self.fail("MCPConfigurationError was not raised") # Fail if no exception
+        except MCPConfigurationError as e:
+            self.assertEqual(str(e), expected_error_message)
+        except Exception as e:
+            self.fail(f"Unexpected exception raised: {type(e).__name__}: {e}")
+
+    def test_invoke_invalid_tool_map_string(self):
+        """Test Invoke raises MCPConfigurationError during init for unparsable tool_map string."""
+        invalid_map_str = "{'key': 'value'" # Malformed string
+        with self.assertRaisesRegex(MCPConfigurationError, "Failed to parse tool_execution_map string"):
+             # Error raised during MCPWorkflowHandler initialization
+             mcp_workflow_integration.Invoke(self.messages, tool_execution_map=invalid_map_str)
             
-            # Should validate node type
-            mock_validate.assert_called_once_with("Standard")
-            self.assertNotIn("No Type Found", result)
+    def test_invoke_invalid_tool_map_type(self):
+        """Test Invoke raises MCPConfigurationError during init for wrong tool_map type."""
+        invalid_map_type = 123
+        with self.assertRaisesRegex(MCPConfigurationError, "must be a dict or string"):
+             # Error raised during MCPWorkflowHandler initialization
+            mcp_workflow_integration.Invoke(self.messages, tool_execution_map=invalid_map_type)
 
 if __name__ == '__main__':
     unittest.main() 

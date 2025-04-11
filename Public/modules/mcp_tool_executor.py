@@ -3,13 +3,16 @@ import logging
 import re
 import requests
 import os
-from typing import Dict, List, Any, Optional, Tuple, Union
+from typing import Dict, List, Any, Optional, Tuple, Union, Callable
 import datetime
 
-logger = logging.getLogger(__name__)
+# Import the new class using direct import
+# Use the DEFAULT_MCPO_URL directly from the discoverer module
+from mcp_service_discoverer import MCPServiceDiscoverer, DEFAULT_MCPO_URL
+# Import the moved function
+from mcp_prompt_utils import _format_mcp_tools_for_llm_prompt, _integrate_tools_into_prompt
 
-# Default MCPO server base URL
-DEFAULT_MCPO_URL = os.environ.get("MCPO_URL", "http://localhost:8889")
+logger = logging.getLogger(__name__)
 
 def Invoke(messages: List[Dict[str, str]], mcpo_url: str = DEFAULT_MCPO_URL, tool_execution_map: Dict = None) -> Dict:
     """
@@ -30,21 +33,15 @@ def Invoke(messages: List[Dict[str, str]], mcpo_url: str = DEFAULT_MCPO_URL, too
     Returns:
         Dict containing response, has_tool_call status, and tool_results if applicable.
     """
-    logger.info(f"MCP Tool Executor invoked with {len(messages)} messages")
+    logger.info(f"MCP Tool Executor invoked with {len(messages)} messages. MCPO URL: {mcpo_url}")
     
-    # Find system prompt and extract potential service names
-    system_prompt = ""
-    for msg in messages:
-        if msg.get("role") == "system":
-            system_prompt = msg.get("content", "")
-            break
-    
-    service_names = extract_service_names_from_prompt(system_prompt)
-    logger.info(f"Potential services based on system prompt: {service_names}")
-    if not service_names:
-        logger.warning("No service names could be extracted from the system prompt. Tool execution might fail if schemas are needed.")
+    # Note: Service name extraction and discovery are now part of prepare_system_prompt
+    # We rely on the tool_execution_map being provided for execution.
+    if not tool_execution_map:
+         logger.warning("Invoke called without a tool_execution_map. Execution will fail if tool calls are present.")
+         # Consider if we should *always* require a map or have a fallback discovery?
+         # For now, we proceed but execution will likely error out if a call needs the map.
 
-    # Extract the last assistant message (LLM response)
     assistant_message = None
     for message in reversed(messages):
         if message.get("role") == "assistant":
@@ -56,7 +53,6 @@ def Invoke(messages: List[Dict[str, str]], mcpo_url: str = DEFAULT_MCPO_URL, too
         logger.warning("No assistant message found in conversation")
         return {"response": "", "has_tool_call": False}
     
-    # Check for tool calls in the assistant's response
     logger.info("Checking for tool calls in assistant's response...")
     tool_calls = extract_tool_calls(assistant_message)
     
@@ -66,11 +62,23 @@ def Invoke(messages: List[Dict[str, str]], mcpo_url: str = DEFAULT_MCPO_URL, too
     
     logger.info(f"Found {len(tool_calls)} tool calls")
     
-    # Execute the tool calls and get results
+    if not tool_execution_map:
+        error_msg = "Tool calls found, but no tool_execution_map provided to execute them."
+        logger.error(error_msg)
+        # Return an error state, but acknowledge calls were *detected*
+        # Set has_tool_call to True, as calls were indeed found, but signal error clearly.
+        return {
+            "response": assistant_message,
+            "has_tool_call": True, # Calls were detected
+            "tool_results": [], # No results could be generated
+            "error": error_msg,
+            "status": "execution_error" # Add a status for clarity
+        }
+    
     tool_results = []
     for idx, tool_call in enumerate(tool_calls):
         logger.info(f"Executing tool call {idx + 1}/{len(tool_calls)}: {tool_call.get('name', 'unknown')}")
-        # Pass the tool_execution_map received by Invoke, not service_names
+        # Pass the provided mcpo_url and tool_execution_map
         result = execute_tool_call(tool_call, mcpo_url, tool_execution_map)
         tool_results.append({
             "tool_call": tool_call,
@@ -86,7 +94,8 @@ def Invoke(messages: List[Dict[str, str]], mcpo_url: str = DEFAULT_MCPO_URL, too
 
 def extract_tool_calls(text: str) -> List[Dict]:
     """
-    Extract tool calls from LLM response text.
+    Extract tool calls from LLM response text, robustly handling JSON embedded
+    within other text, even without markdown fences.
     
     Args:
         text: The text to extract tool calls from
@@ -97,31 +106,67 @@ def extract_tool_calls(text: str) -> List[Dict]:
     logger.info("Attempting to extract tool calls from text...")
     
     # Skip if text contains unsubstituted variables
-    if re.search(r'\{[a-zA-Z0-9_]+\}', text):
+    if re.search(r'\{\{[a-zA-Z0-9_]+\}\}', text):
         logger.warning("Text contains unsubstituted variables, skipping tool call extraction")
         return []
     
-    # First, clean up any malformed markers (fallback if sanitizer didn't run)
     cleaned_text = text
     if "|{{|" in text or "|}}|" in text or "|}}}|" in text:
         logger.warning("Found malformed JSON markers in text, cleaning up")
         cleaned_text = text.replace("|{{|", "{").replace("|}}}|", "}").replace("|}}|", "}")
         logger.info(f"Cleaned text: {cleaned_text[:100]}...")
-    
-    # Strip whitespace before trying to parse
-    json_str = cleaned_text.strip()
 
-    # If it doesn't look like JSON, return empty
-    if not json_str.startswith('{') or not json_str.endswith('}'):
-        logger.info("Cleaned text does not appear to be a JSON object.")
+    markdown_match = re.search(r"```json\s*({.*?})\s*```", cleaned_text, re.DOTALL)
+    json_str = None
+    if markdown_match:
+        json_str = markdown_match.group(1).strip()
+        logger.info("Extracted JSON content from markdown code fence.")
+    else:
+        # If no markdown fence, find the JSON object boundaries manually
+        # Search for the start pattern: '{' potentially followed by whitespace, then '"tool_calls":'
+        start_match = re.search(r'\{\s*"tool_calls"\s*:', cleaned_text)
+        if start_match:
+            start_index = start_match.start()
+            logger.info(f"Found potential JSON start at index {start_index}")
+            brace_level = 0
+            end_index = -1
+            for i in range(start_index, len(cleaned_text)):
+                char = cleaned_text[i]
+                if char == '{':
+                    brace_level += 1
+                elif char == '}':
+                    brace_level -= 1
+                    if brace_level == 0:
+                        end_index = i + 1
+                        break
+            
+            if end_index != -1:
+                json_str = cleaned_text[start_index:end_index].strip()
+                logger.info(f"Extracted potential JSON object by brace matching: {json_str[:200]}...")
+            else:
+                logger.warning("Found JSON start but could not find matching closing brace.")
+        else:
+            # Fallback: If start pattern not found, check if the entire cleaned text is the JSON object
+            potential_json = cleaned_text.strip()
+            if potential_json.startswith('{') and potential_json.endswith('}'):
+                 try:
+                     temp_obj = json.loads(potential_json)
+                     if isinstance(temp_obj, dict) and "tool_calls" in temp_obj:
+                         json_str = potential_json
+                         logger.info("Assuming entire cleaned text is the JSON object after validation.")
+                     else:
+                         logger.info("Entire text is JSON, but lacks 'tool_calls'.")
+                 except json.JSONDecodeError:
+                     logger.info("Entire text looked like JSON but failed to parse.")
+
+    if json_str is None:
+        logger.info("Could not find valid JSON tool call structure.")
         return []
 
     try:
-        # Assume input is clean JSON (after sanitizer/cleanup)
-        logger.info(f"Attempting direct json.loads on: {json_str[:200]}...")
+        logger.info(f"Attempting json.loads on extracted string: {json_str[:200]}...")
         json_obj = json.loads(json_str)
         
-        # Validate the structure
         if isinstance(json_obj, dict) and "tool_calls" in json_obj and isinstance(json_obj["tool_calls"], list):
             validated_calls = []
             for call in json_obj["tool_calls"]:
@@ -129,7 +174,7 @@ def extract_tool_calls(text: str) -> List[Dict]:
                     validated_calls.append(call)
                 else:
                     logger.warning(f"Invalid tool call object found in list: {call}")
-            if validated_calls: # Only return if we found valid calls
+            if validated_calls:
                  logger.info(f"Successfully parsed and validated {len(validated_calls)} tool calls.")
                  return validated_calls
             else:
@@ -140,59 +185,8 @@ def extract_tool_calls(text: str) -> List[Dict]:
             return []
             
     except json.JSONDecodeError as e:
-        logger.error(f"Direct json.loads failed even after cleaning: {e}")
-        # Could add more complex regex fallbacks here if needed, but relying on sanitizer for now.
+        logger.error(f"Final json.loads failed after extraction: {e}")
         return []
-
-def validate_tool_definition(tool: Dict) -> bool:
-    """
-    Validate that a tool definition has all required fields and correct types.
-    
-    Args:
-        tool: Tool definition dictionary
-    
-    Returns:
-        bool: True if valid, False otherwise
-    """
-    required_fields = ["type", "name", "description", "parameters"]
-    if not all(field in tool for field in required_fields):
-        logger.error(f"Tool missing required fields: {[f for f in required_fields if f not in tool]}")
-        return False
-        
-    if tool["type"] != "function":
-        logger.error(f"Invalid tool type: {tool['type']}")
-        return False
-        
-    if not isinstance(tool["parameters"], dict):
-        logger.error("Parameters must be a dictionary")
-        return False
-        
-    return True
-
-def validate_tool_schema(schema: Dict) -> bool:
-    """
-    Validate that an OpenAPI schema has required fields for tool discovery.
-    
-    Args:
-        schema: OpenAPI schema dictionary
-    
-    Returns:
-        bool: True if valid, False otherwise
-    """
-    if "paths" not in schema:
-        logger.error("Schema missing paths")
-        return False
-        
-    for path, methods in schema.get("paths", {}).items():
-        for method, details in methods.items():
-            if not details.get("operationId"):
-                logger.warning(f"Missing operationId in {path} {method}")
-                continue
-                
-            if not details.get("description") and not details.get("summary"):
-                logger.warning(f"Missing description/summary in {path} {method}")
-                
-    return True
 
 def format_error_response(error: str) -> Dict:
     """
@@ -207,23 +201,200 @@ def format_error_response(error: str) -> Dict:
     return {
         "error": error,
         "status": "error",
-        "timestamp": datetime.datetime.utcnow().isoformat()
+        "timestamp": datetime.datetime.now(datetime.UTC).isoformat()
     }
+
+def _perform_http_request(method: str, url: str, query_params: Dict, body_params: Optional[Dict], timeout: int = 15) -> Dict:
+    """
+    Performs the actual HTTP request and handles responses/errors.
+
+    Args:
+        method: HTTP method (get, post, put, delete, patch).
+        url: The target URL.
+        query_params: Dictionary of query parameters.
+        body_params: Optional dictionary of body parameters (used for POST, PUT, PATCH).
+        timeout: Request timeout in seconds.
+
+    Returns:
+        A dictionary containing the result (parsed JSON or raw text) or an error structure.
+    """
+    logger.info(f"Executing {method.upper()} request to: {url} with query_params={query_params}, body_params={body_params}")
+    
+    try:
+        supported_methods = ["get", "post", "put", "delete", "patch", "head", "options"]
+        if method.lower() not in supported_methods:
+            return format_error_response(f"Unsupported HTTP method '{method}'")
+
+        response = requests.request(
+            method=method, 
+            url=url, 
+            params=query_params, 
+            json=body_params, 
+            timeout=timeout
+        )
+
+        response.raise_for_status()
+
+        try:
+            result_json = response.json()
+            logger.info("Tool executed successfully, received JSON response.")
+            return result_json
+        except json.JSONDecodeError:
+            response_text = response.text
+            logger.warning(f"Tool executed, but response was not valid JSON. Returning raw text: {response_text[:200]}...")
+            return {"status": "success_raw_text", "response_text": response_text}
+
+    except requests.exceptions.Timeout:
+        error_msg = f"Tool execution timed out after {timeout}s for {method.upper()} {url}"
+        logger.error(error_msg)
+        return format_error_response(error_msg)
+    except requests.exceptions.HTTPError as e:
+        error_detail = str(e)
+        try:
+             error_detail += f" - Response Body: {e.response.text[:500]}"
+        except Exception:
+            pass
+        logger.error(f"Tool execution failed with HTTPError: {error_detail}")
+        return format_error_response(f"Tool execution failed: {error_detail}")
+    except requests.exceptions.RequestException as e:
+        error_detail = str(e)
+        logger.error(f"Tool execution failed with RequestException: {error_detail}")
+        return format_error_response(f"Tool execution failed: {error_detail}")
+    except Exception as e:
+        # Catch unexpected errors during the request itself
+        logger.exception(f"Unexpected error during HTTP request for {method.upper()} {url}")
+        return format_error_response(f"Unexpected error during HTTP request: {str(e)}")
+
+def _normalize_param_name(name: str) -> str:
+    """Normalize parameter name for comparison (lowercase, remove underscores)."""
+    return name.lower().replace("_", "")
+
+def _build_tool_url(base_url: str, service: str, path: str) -> str:
+    """
+    Constructs the full URL for a tool endpoint.
+
+    Args:
+        base_url: The base MCPO URL (e.g., http://localhost:8889).
+        service: The service name (e.g., time).
+        path: The endpoint path (e.g., /current or /{userId}/info).
+
+    Returns:
+        The fully constructed URL string.
+    """
+    # Ensure no double slashes between mcpo_url and service name if mcpo_url ends with /
+    clean_base_url = base_url.rstrip('/')
+    # Ensure service name doesn't start with /
+    clean_service = service.lstrip('/')
+    # Ensure endpoint path starts with / if it's not empty
+    clean_path = path if not path or path.startswith('/') else f'/{path}'
+    
+    # Handle case where service might be empty (e.g., root endpoint)
+    if clean_service:
+        return f"{clean_base_url}/{clean_service}{clean_path}"
+    else:
+        return f"{clean_base_url}{clean_path}"
+
+def _prepare_request_params(parameters: Dict, execution_details: Dict) -> Tuple[Dict, Optional[Dict], Dict]:
+    """
+    Separates parameters into query, body, and path dictionaries based on execution_details
+    derived from the OpenAPI schema. Prioritizes explicitly defined path/query parameters.
+    Uses normalization (lowercase, no underscores) to match LLM parameter names against
+    schema-defined names, but uses the original schema-defined name for the final request.
+
+    Args:
+        parameters: The raw parameters dictionary from the tool call.
+        execution_details: Dictionary containing OpenAPI schema info like
+                           'openapi_params' (list of parameter objects) and
+                           'request_body_schema' (schema object).
+
+    Returns:
+        A tuple containing (query_params, body_params, path_params).
+        body_params will be None if no request body is expected or populated.
+    """
+    query_params = {}
+    body_params = None
+    path_params = {}
+    
+    # --- Normalize schema parameter names for matching ---
+    normalized_schema_params = {}
+    openapi_params = execution_details.get("openapi_params", [])
+    if openapi_params:
+        for param_info in openapi_params:
+            schema_name = param_info.get("name")
+            if schema_name:
+                normalized_name = _normalize_param_name(schema_name)
+                # Store original info keyed by normalized name
+                normalized_schema_params[normalized_name] = param_info
+
+    # --- Iterate through LLM parameters and try to match ---
+    llm_param_names = set(parameters.keys())
+    assigned_param_names = set()
+
+    for llm_name, llm_value in parameters.items():
+        normalized_llm_name = _normalize_param_name(llm_name)
+
+        if normalized_llm_name in normalized_schema_params:
+            # Found a match based on normalized names
+            param_info = normalized_schema_params[normalized_llm_name]
+            schema_name = param_info.get("name") # Get the original schema name
+            param_location = param_info.get("in")
+
+            if param_location == "query":
+                query_params[schema_name] = llm_value
+                assigned_param_names.add(llm_name)
+                logger.info(f"Mapped LLM param '{llm_name}' to query parameter '{schema_name}' via normalization.")
+            elif param_location == "path":
+                path_params[schema_name] = llm_value
+                assigned_param_names.add(llm_name)
+                logger.info(f"Mapped LLM param '{llm_name}' to path parameter '{schema_name}' via normalization.")
+            # Add handling for 'header', 'cookie' if needed here
+            # else:
+            #     logger.warning(f"LLM param '{llm_name}' matched schema param '{schema_name}' but location '{param_location}' is unhandled.")
+        # else: # Parameter not found in schema via normalization
+            # logger.debug(f"LLM param '{llm_name}' not found in schema via normalization.")
+            # Pass # Will be handled later for potential body assignment
+
+    # 2. Process request body with remaining UNASSIGNED parameters, if schema exists
+    if execution_details.get("request_body_schema"):
+        logger.info("Request body schema found. Assigning remaining UNASSIGNED parameters to body.")
+        body_candidate_names = llm_param_names - assigned_param_names
+        
+        if body_candidate_names:
+             body_params = {name: parameters[name] for name in body_candidate_names}
+             assigned_param_names.update(body_candidate_names)
+             logger.info(f"Assigned parameters {body_candidate_names} to request body.")
+        else:
+             # Body schema exists, but no unassigned parameters left.
+             # Could mean body is optional or LLM didn't provide body params.
+             # Set body_params to an empty dict if the schema implies it's required and empty?
+             # For now, leave as None if no candidates, API might accept empty body implicitly.
+             body_params = None
+             logger.info("Request body schema exists, but no unassigned parameters were found to populate it.")
+             
+    # 3. Log any parameters provided by LLM that were not assigned anywhere
+    unassigned_params = llm_param_names - assigned_param_names
+    if unassigned_params:
+        logger.warning(f"Unassigned parameters found in tool call (not in openapi_params or requestBody): {unassigned_params}.")
+
+    return query_params, body_params, path_params
 
 def execute_tool_call(tool_call: Dict, mcpo_url: str, tool_execution_map: Dict) -> Dict:
     """
     Execute a tool call by sending a request to the appropriate MCP server.
-    Uses the pre-discovered tool_execution_map to find execution details.
+    Uses the pre-discovered tool_execution_map to find execution details and parameter locations.
     
     Args:
         tool_call: The tool call dictionary with name (operationId) and parameters.
         mcpo_url: Base URL for the MCPO server (used only for constructing final URL).
-        tool_execution_map: Dictionary mapping operationId to execution details.
-                            Example: { "opId": { "service": "svc", "path": "/p", "method": "post", ... } }
+        tool_execution_map: Dictionary mapping operationId to execution details,
+                            including OpenAPI parameter information.
+                            Example: { "opId": { "service": "svc", "path": "/p/{param1}", "method": "post",
+                                                "request_body_schema": {...}, "openapi_params": [...] } }
     
     Returns:
         Dict containing the tool execution result.
     """
+    tool_name = "<unknown>"
     try:
         tool_name = tool_call.get("name", "") # This is the operationId
         parameters = tool_call.get("parameters", {})
@@ -233,7 +404,11 @@ def execute_tool_call(tool_call: Dict, mcpo_url: str, tool_execution_map: Dict) 
             
         logger.info(f"Attempting to execute tool call (operationId): {tool_name} with parameters: {parameters}")
         
-        # Look up execution details in the map
+        if not tool_execution_map:
+             error_msg = "execute_tool_call requires a tool_execution_map, but it was None or empty."
+             logger.error(error_msg)
+             return format_error_response(error_msg)
+        
         execution_details = tool_execution_map.get(tool_name)
         
         if not execution_details:
@@ -242,359 +417,96 @@ def execute_tool_call(tool_call: Dict, mcpo_url: str, tool_execution_map: Dict) 
             return format_error_response(error_msg)
             
         found_service = execution_details.get("service")
-        endpoint_path = execution_details.get("path")
+        endpoint_path_template = execution_details.get("path", "")
         http_method = execution_details.get("method")
 
-        if not all([found_service, endpoint_path, http_method]):
-             error_msg = f"Incomplete execution details found for operationId '{tool_name}': {execution_details}"
+        if not all([found_service is not None, endpoint_path_template is not None, http_method]):
+             error_msg = f"Incomplete execution details found for operationId '{tool_name}': {execution_details}. Missing service, path, or method."
              logger.error(error_msg)
              return format_error_response(error_msg)
 
-        logger.info(f"Found execution details: Service={found_service}, Path={endpoint_path}, Method={http_method.upper()}")
+        logger.info(f"Found execution details: Service={found_service}, Path Template='{endpoint_path_template}', Method={http_method.upper()}")
         
-        # Execute the tool call using the found service, path, and method
-        tool_url = f"{mcpo_url}/{found_service}{endpoint_path}"
-        logger.info(f"Executing {http_method.upper()} request to: {tool_url}")
-        
-        try:
-            req_timeout = 15 # Set timeout for actual tool call
-            if http_method.lower() == "get":
-                response = requests.get(tool_url, params=parameters, timeout=req_timeout)
-            elif http_method.lower() == "post":
-                response = requests.post(tool_url, json=parameters, timeout=req_timeout)
-            elif http_method.lower() == "put":
-                 response = requests.put(tool_url, json=parameters, timeout=req_timeout)
-            elif http_method.lower() == "delete":
-                 response = requests.delete(tool_url, params=parameters, timeout=req_timeout)
-            # Add other methods (PATCH, etc.) if needed
-            else:
-                 return format_error_response(f"Unsupported HTTP method '{http_method}' found for tool {tool_name}")
+        query_params, body_params, path_params = _prepare_request_params(parameters, execution_details)
 
-            response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
-            
-            # Handle potential non-JSON responses
+        final_endpoint_path = endpoint_path_template
+        required_placeholders = set(re.findall(r"\{(\w+)\}", endpoint_path_template))
+        
+        if required_placeholders:
             try:
-                result_json = response.json()
-                logger.info("Tool executed successfully, received JSON response.")
-                return result_json
-            except json.JSONDecodeError:
-                logger.warning("Tool executed, but response was not valid JSON. Returning raw text.")
-                return {"response_text": response.text} # Return raw text if not JSON
+                logger.debug(f"Attempting path substitution: template='{endpoint_path_template}', params={path_params}")
+                provided_keys = set(path_params.keys())
 
-        except requests.exceptions.Timeout:
-            return format_error_response(f"Tool execution timed out after {req_timeout}s for {tool_url}")
-        except requests.RequestException as e:
-            # Attempt to get more detail from response if available
-            error_detail = str(e)
-            if e.response is not None:
-                try:
-                    error_detail += f" - Response: {e.response.text[:500]}" # Limit response size
-                except Exception:
-                    pass # Ignore if response text itself causes issues
-            return format_error_response(f"Tool execution failed: {error_detail}")
+                logger.info(f"Path template: '{endpoint_path_template}'")
+                logger.info(f"Required placeholders found by regex: {required_placeholders}")
+                logger.info(f"Provided path keys: {provided_keys}")
+
+                if not required_placeholders.issubset(provided_keys):
+                    missing_keys = required_placeholders - provided_keys
+                    error_msg = f"Missing required path parameter(s) {missing_keys} for path template '{endpoint_path_template}' in tool call parameters: {parameters.keys()}"
+                    logger.error(error_msg)
+                    print(f"DEBUG: Returning error due to missing path params: {error_msg}")
+                    return format_error_response(error_msg)
+                
+                final_endpoint_path = endpoint_path_template.format(**path_params)
+                logger.info(f"Substituted path parameters: '{endpoint_path_template}' -> '{final_endpoint_path}'")
+
+            except KeyError as e:
+                 error_msg = f"Internal Error: KeyError '{e}' during path format for '{endpoint_path_template}'. Params: {path_params}"
+                 logger.error(error_msg)
+                 return format_error_response(error_msg)
+            except Exception as e:
+                 error_msg = f"Error substituting path parameters for '{endpoint_path_template}': {e}"
+                 logger.exception(error_msg)
+                 return format_error_response(error_msg)
+        tool_url = _build_tool_url(mcpo_url, found_service, final_endpoint_path)
+
+        result = _perform_http_request(
+            method=http_method,
+            url=tool_url,
+            query_params=query_params,
+            body_params=body_params
+        )
+        return result
             
     except Exception as e:
-        # General catch-all for unexpected errors
-        logger.exception(f"Unexpected error during execute_tool_call for {tool_name}") # Log full traceback
-        return format_error_response(f"Unexpected error executing tool {tool_name}: {str(e)}")
-
-def discover_mcp_tools(service_names: List[str], mcpo_url: str = DEFAULT_MCPO_URL) -> Dict:
-    """
-    Discover available tools from specified MCP servers and return execution details.
-    
-    Args:
-        service_names: List of MCP service names (e.g., ["time", "weather"])
-        mcpo_url: Base URL for the MCPO server
-    
-    Returns:
-        Dictionary mapping operationId to its execution details and LLM schema.
-        Example: { "opId": { "service": "svc", "path": "/p", "method": "post", "llm_schema": {...} }, ... }
-    """
-    tools_map = {}
-    
-    for service_name in service_names:
-        try:
-            # Get the OpenAPI schema for this service
-            schema_url = f"{mcpo_url}/{service_name}/openapi.json"
-            schema_response = requests.get(schema_url, timeout=5) # Add timeout
-            schema_response.raise_for_status()
-            schema = schema_response.json()
-            
-            # Validate schema
-            if not validate_tool_schema(schema):
-                logger.error(f"Invalid schema for service {service_name}")
-                continue
-            
-            # Extract tools from the schema
-            for path, methods in schema.get("paths", {}).items():
-                for method, details in methods.items():
-                    operation_id = details.get("operationId")
-                    # Skip if no operationId (required for tool calls)
-                    if not operation_id:
-                        continue
-                    
-                    # Build the LLM schema part
-                    llm_schema = {
-                        "type": "function",
-                        "name": operation_id,
-                        "description": details.get("description") or details.get("summary") or "",
-                    }
-                    
-                    # Extract parameters from the requestBody schema
-                    parameters = {"type": "object", "properties": {}, "required": []}
-                    request_body = details.get("requestBody", {})
-                    if request_body:
-                        content = request_body.get("content", {}).get("application/json", {})
-                        schema_ref = content.get("schema", {}).get("$ref")
-                        
-                        if schema_ref:
-                            # Extract the schema name from the reference
-                            schema_name = schema_ref.split("/")[-1]
-                            schema_def = schema.get("components", {}).get("schemas", {}).get(schema_name, {})
-                            
-                            # Get properties
-                            for prop_name, prop_details in schema_def.get("properties", {}).items():
-                                parameters["properties"][prop_name] = {
-                                    "type": prop_details.get("type", "string"),
-                                    "description": prop_details.get("description", "")
-                                }
-                            
-                            # Get required fields
-                            parameters["required"] = schema_def.get("required", [])
-                    
-                    llm_schema["parameters"] = parameters
-                    
-                    # Validate LLM schema before adding
-                    if validate_tool_definition(llm_schema):
-                         # Store execution details along with LLM schema
-                         tools_map[operation_id] = {
-                             "service": service_name,
-                             "path": path,
-                             "method": method,
-                             "llm_schema": llm_schema
-                         }
-                    else:
-                        logger.error(f"Invalid tool definition for {operation_id}")
-            
-        except requests.exceptions.Timeout:
-            logger.warning(f"Timeout fetching schema for service {service_name}")
-            continue
-        except requests.RequestException as e:
-            logger.error(f"Failed to discover tools for service {service_name}: {e}")
-            continue
-        except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON schema for service {service_name}: {e}")
-            continue
-        except Exception as e:
-            logger.error(f"Unexpected error discovering tools for service {service_name}: {e}")
-            continue
-    
-    return tools_map
-
-def format_tools_for_llm(tools_map: Dict) -> str:
-    """
-    Format discovered tools (from map) as a system prompt section for LLMs.
-    
-    Args:
-        tools_map: Dictionary mapping operationId to details including llm_schema.
-    
-    Returns:
-        Formatted system prompt section with tool definitions.
-    """
-    if not tools_map:
-        return ""
-    
-    # Extract just the llm_schema part for formatting
-    llm_schemas = [details["llm_schema"] for details in tools_map.values()]
-    if not llm_schemas:
-        return "" # Should not happen if tools_map is not empty, but safeguard
-        
-    tools_json = json.dumps(llm_schemas, indent=2)
-    
-    # Use pre-formatted strings for examples to avoid complex escapes
-    empty_example = '''{\n     "tool_calls": []\n   }'''
-    tool_call_example = '''{\n  "tool_calls": [\n    {"name": "toolName1", "parameters": {"key1": "value1"}},\n    {"name": "toolName2", "parameters": {"key2": "value2"}}\n  ]\n}'''
-
-    system_prompt = f"""Available Tools: {tools_json}
-
-Your task is to decide if any tools from the list are needed to answer the user's query. Follow these instructions precisely:
-
-<required_format>
-- If no tools are needed, you MUST output ONLY the following JSON object:
-{empty_example}
-
-- If one or more tools are needed, you MUST output ONLY a JSON object containing a single "tool_calls" array. Each object in the array must have:
-  - "name": The exact tool's name (operationId) from the Available Tools list.
-  - "parameters": A dictionary of required parameters and their corresponding values based on the user query.
-
-- The format MUST be exactly:
-{tool_call_example}
-</required_format>
-
-CRITICAL: Respond ONLY with the JSON object described above. Do not include any other text, explanations, apologies, or conversational filler before or after the JSON object.
-"""
-    return system_prompt
-
-def extract_service_names_from_prompt(system_prompt: str) -> List[str]:
-    """
-    Extract MCP service names from a system prompt.
-    
-    Args:
-        system_prompt: The system prompt to extract service names from
-    
-    Returns:
-        List of MCP service names
-    """
-    # Look for specific MCP service definitions
-    # This is a simple implementation - you may need to enhance based on your prompt format
-    service_names = []
-    
-    # Pattern for service names in various formats
-    patterns = [
-        r'MCP\s+Services:\s*\n([\s\S]*?)(?:\n\n|\Z)',  # MCP Services: list format
-        r'MCP\s+Servers:\s*\n([\s\S]*?)(?:\n\n|\Z)',   # MCP Servers: list format
-        r'Use\s+MCP\s+services:\s*\n([\s\S]*?)(?:\n\n|\Z)',  # Use MCP services: format
-        r'Available\s+MCP\s+tools:\s*\n([\s\S]*?)(?:\n\n|\Z)'  # Available MCP tools: format
-    ]
-    
-    for pattern in patterns:
-        matches = re.search(pattern, system_prompt, re.IGNORECASE)
-        if matches:
-            services_text = matches.group(1)
-            # Extract service names (one per line)
-            for line in services_text.split('\n'):
-                service = line.strip().strip('-*•').strip()
-                if service and not service.startswith('http'):
-                    service_names.append(service)
-    
-    # If no structured format is found, look for individual mentions
-    if not service_names:
-        # Look for common service names mentioned directly
-        common_services = ["time", "weather", "search", "memory", "knowledge", "wikipedia"]
-        for service in common_services:
-            if re.search(rf'\b{service}\b', system_prompt, re.IGNORECASE):
-                service_names.append(service)
-    
-    return service_names
-
-def prepare_system_prompt(original_prompt: str, mcpo_url: str = DEFAULT_MCPO_URL, validate_tools: bool = False) -> Tuple[str, Dict]:
-    """
-    Prepare a system prompt by discovering tools for mentioned MCP services and adding definitions.
-    
-    Args:
-        original_prompt: The original system prompt.
-        mcpo_url: Base URL for the MCPO server.
-        validate_tools: Whether to validate discovered tool definitions using validate_tool_definition.
-    
-    Returns:
-        Tuple containing:
-            - Updated system prompt string with tool definitions.
-            - Dictionary mapping operationId to discovered tool details (tools_map).
-    """
-    logger.info(f"Preparing system prompt. validate_tools={validate_tools}")
-    # Extract service names from the prompt
-    service_names = extract_service_names_from_prompt(original_prompt)
-    logger.info(f"Extracted service names: {service_names}")
-    
-    if not service_names:
-        # No MCP services mentioned
-        logger.info("No MCP services mentioned in prompt.")
-        return original_prompt, {} # Return original prompt and empty map
-    
-    # Discover tools for the mentioned services
-    tools_map = discover_mcp_tools(service_names, mcpo_url)
-    logger.info(f"Discovered {len(tools_map)} potential tools initially.")
-    
-    if not tools_map:
-        # No tools discovered
-        logger.warning("No tools discovered for mentioned services.")
-        return original_prompt, {} # Return original prompt and empty map
-        
-    # Validate tools if enabled
-    if validate_tools:
-        validated_tools_map = {}
-        for op_id, details in tools_map.items():
-            # Assuming llm_schema exists and is the part to validate
-            if "llm_schema" in details and validate_tool_definition(details["llm_schema"]):
-                 validated_tools_map[op_id] = details
-            else:
-                 logger.warning(f"Tool definition validation failed for {op_id}, excluding.")
-        
-        if not validated_tools_map:
-             logger.error("No valid tools found after validation.")
-             return original_prompt, {} # Return original prompt and empty map
-        
-        logger.info(f"{len(validated_tools_map)} tools remain after validation.")
-        tools_map = validated_tools_map # Use the validated map
-    
-    # Format the tools for LLM (using the potentially filtered tools_map)
-    tools_prompt_section = format_tools_for_llm(tools_map)
-    
-    # Replace existing tools section or append
-    tools_section_pattern = r'Available\\s+Tools:[\\s\\S]*?(?=\\n\\n<required_format>|\\Z)' # Match until format instructions or end
-    if re.search(tools_section_pattern, original_prompt, re.IGNORECASE):
-        # Replace existing tools section
-        logger.info("Replacing existing 'Available Tools' section.")
-        updated_prompt = re.sub(
-            tools_section_pattern,
-            tools_prompt_section.strip(), # Use strip to avoid extra newlines if section is empty
-            original_prompt,
-            count=1, # Replace only the first instance
-            flags=re.IGNORECASE
-        )
-    else:
-        # Append tools section
-        logger.info("Appending 'Available Tools' section.")
-        # Add extra newline if original prompt doesn't end with one
-        separator = "\n\n" if original_prompt.strip() else "" 
-        if original_prompt.strip() and not original_prompt.endswith('\n'):
-             separator = "\n\n"
-        elif original_prompt.strip() and original_prompt.endswith('\n') and not original_prompt.endswith('\n\n'):
-             separator = "\n" # Only need one more newline
-             
-        updated_prompt = original_prompt.rstrip() + separator + tools_prompt_section
-
-    logger.debug(f"Updated prompt generated: {updated_prompt[:300]}...")
-    return updated_prompt, tools_map
+        logger.exception(f"Unexpected error during execute_tool_call setup for operationId '{tool_name}'")
+        return format_error_response(f"Unexpected error preparing tool call '{tool_name}': {str(e)}")
 
 def validate_tool_call_format(tool_call: Dict) -> bool:
     """
-    Validate that a tool call matches the required format.
+    Validate that a tool call dictionary has the basic required structure.
+    (Checks for 'name' and 'parameters' keys).
+    Note: This is a basic structural check, not validation against a specific schema.
     
     Args:
-        tool_call: The tool call to validate
+        tool_call: The tool call dictionary to validate.
         
     Returns:
-        bool: True if valid, False otherwise
+        bool: True if the basic structure is valid, False otherwise.
     """
-    # Check that tool_call is a dictionary
     if not isinstance(tool_call, dict):
+        logger.warning(f"Invalid tool call format: Expected dict, got {type(tool_call)}.")
         return False
         
-    # Check required fields
-    if "name" not in tool_call or "parameters" not in tool_call:
+    if "name" not in tool_call:
+        logger.warning("Invalid tool call format: Missing 'name' key.")
         return False
         
-    # Check field types
-    if not isinstance(tool_call["name"], str):
+    if not isinstance(tool_call["name"], str) or not tool_call["name"]:
+        logger.warning("Invalid tool call format: 'name' key must be a non-empty string.")
         return False
+        
+    if "parameters" not in tool_call:
+        logger.warning(f"Invalid tool call format for tool '{tool_call['name']}': Missing 'parameters' key.")
+        return False
+        
     if not isinstance(tool_call["parameters"], dict):
+        logger.warning(f"Invalid tool call format for tool '{tool_call['name']}': 'parameters' key must be a dict, got {type(tool_call['parameters'])}.")
         return False
         
-    # Check that name starts with tool_endpoint_
-    name = tool_call["name"]
-    prefix = "tool_endpoint_"
-    if not name.startswith(prefix):
-        return False
-        
-    # Check for at least two underscores after the prefix (service_action_method)
-    remaining_name = name[len(prefix):]
-    if remaining_name.count('_') < 2:
-        return False
-        
-    # Check that parts are not empty
-    parts = remaining_name.split('_')
-    if len(parts) < 3 or any(not part for part in parts):
-        return False
+    # Previous checks for tool_endpoint_ prefix and underscores are removed
+    # as operationId is now used directly.
 
+    logger.debug(f"Tool call format validation passed for '{tool_call['name']}'.")
     return True 
