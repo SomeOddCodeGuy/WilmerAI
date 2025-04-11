@@ -87,9 +87,8 @@ def transform_messages(
     # Use deepcopy initially to prevent modifying the original input list
     processed_messages = deepcopy(messages)
 
-    # Corrected Order: Apply workaround *after* potential prefixing but *before* placeholder
     processed_messages = _process_images(processed_messages)
-    processed_messages = _apply_role_prefixes(processed_messages, add_user_assistant) # Prefixes might exist in history block input, handle this? - current parse cleans them
+    processed_messages = _apply_role_prefixes(processed_messages, add_user_assistant)
     processed_messages = _add_placeholder_assistant(processed_messages, add_user_assistant, add_missing_assistant)
 
     return processed_messages 
