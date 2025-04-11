@@ -1,0 +1,76 @@
+[
+    {
+        "title": "Tool Service Extractor",
+        "agentName": "Tool Service Extractor",
+        "type": "Standard",
+        "systemPrompt": "You are a specialized AI designed to identify tool and service references needed to answer the user's latest query. Analyze the conversation history, paying close attention to the last user message. Extract any tools, services, or APIs explicitly mentioned or implicitly required to fulfill the user's request. Consider if the last message is a follow-up that might require tools used previously. Respond with ONLY a comma-separated list of tool/service names (e.g., 'tavily', 'time', 'search'). If no tools are needed, respond with 'none'.",
+        "prompt": "Review the conversation history below, focusing on the final user message. Identify any tools or services (like 'tavily', 'time', 'search') that are either explicitly mentioned or implicitly needed to answer the *last user question*. Take into account whether the question is a follow-up that might reuse a previous tool.\\n\\nConversation History (Oldest to Newest):\\n{chat_user_prompt_last_ten}\\n\\nBased on the analysis, list the required service names. Respond with ONLY a comma-separated list, or 'none'.",
+        "endpointName": "Worker-Endpoint",
+        "preset": "Responder_Preset",
+        "maxResponseSizeInTokens": 100,
+        "addUserTurnTemplate": false
+    },
+    {
+        "title": "System Prompt Initialization & Tool Discovery",
+        "agentName": "System Prompt Handler",
+        "type": "PythonModule",
+        "module_path": "/root/projects/Wilmer/WilmerData/Public/modules/ensure_system_prompt.py",
+        "args": [
+            "{messages}"
+        ],
+        "kwargs": {
+            "default_prompt_path": "/root/projects/Wilmer/WilmerData/Public/Configs/default_tool_prompt.txt",
+            "user_identified_services": "{agent1Output}"
+        }
+    },
+    {
+        "title": "Main Response Generator",
+        "agentName": "MCP Response Agent",
+        "type": "Standard",
+        "systemPrompt": "{{ agent2Output.chat_system_prompt }}",
+        "prompt": "",
+        "lastMessagesToSendInsteadOfPrompt": 10,
+        "endpointName": "Worker-Endpoint",
+        "preset": "Responder_Preset",
+        "maxResponseSizeInTokens": 2000,
+        "addUserTurnTemplate": false,
+        "jinja2": true
+    },
+    {
+        "title": "Response Sanitizer",
+        "agentName": "MCP Response Sanitizer",
+        "type": "PythonModule",
+        "module_path": "/root/projects/Wilmer/WilmerData/Public/modules/sanitize_llm_response.py",
+        "args": [
+            "{{ agent3Output }}"
+        ],
+        "kwargs": {},
+        "jinja2": true
+    },
+    {
+        "title": "Tool Execution and Response Formatting",
+        "agentName": "MCP Tool Executor",
+        "type": "PythonModule",
+        "module_path": "/root/projects/Wilmer/WilmerData/Public/modules/mcp_workflow_integration.py",
+        "args": [
+            "{{ agent2Output['messages'] | tojson }}"
+        ],
+        "kwargs": {
+            "original_response": "{{ agent4Output }}",
+            "tool_execution_map": "{{ agent2Output.discovered_tools_map | tojson }}"
+        },
+        "jinja2": true
+    },
+    {
+        "title": "Final Response Generator",
+        "agentName": "Final Responder Agent",
+        "type": "Standard",
+        "systemPrompt": "You are a helpful AI assistant. Use the provided conversation history and tool results (if any) to formulate the best response to the *final user message* in the history. Tool Results:\n```\n{agent5Output}\n```",
+        "prompt": "",
+        "lastMessagesToSendInsteadOfPrompt": 10,
+        "endpointName": "Worker-Endpoint",
+        "preset": "Responder_Preset",
+        "maxResponseSizeInTokens": 500,
+        "returnToUser": true
+    }
+]

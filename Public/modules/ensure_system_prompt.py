@@ -17,6 +17,7 @@ try:
         _format_mcp_tools_for_llm_prompt, 
         _integrate_tools_into_prompt
     )
+    from Middleware.utilities.config_utils import get_default_tool_prompt_path
 except ImportError:
     # Fallback if running from a different directory
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -30,6 +31,7 @@ except ImportError:
         _format_mcp_tools_for_llm_prompt, 
         _integrate_tools_into_prompt
     )
+    from Middleware.utilities.config_utils import get_default_tool_prompt_path
 
 def load_default_prompt(default_prompt_path):
     """
@@ -81,7 +83,7 @@ def Invoke(messages, **kwargs):
     """
     logger.info("System prompt handler invoked")
     
-    default_prompt_path = kwargs.get("default_prompt_path", "/root/projects/Wilmer/WilmerData/Public/Configs/default_tool_prompt.txt")
+    default_prompt_path = kwargs.get("default_prompt_path", get_default_tool_prompt_path())
     mcpo_url = kwargs.get("mcpo_url", "http://localhost:8889")
     user_identified_services = kwargs.get("user_identified_services", "")
 
