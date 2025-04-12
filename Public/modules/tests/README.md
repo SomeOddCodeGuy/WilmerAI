@@ -1,26 +1,40 @@
-# MCP Tool Integration Tests
+# MCP Tool and Module Integration Tests
 
-This directory contains unit tests for the MCP tool integration modules.
+This directory contains unit tests for various modules, including MCP tool integration.
 
 ## Test Files
 
-- `test_mcp_tool_executor.py` - Tests for the MCP tool executor module
-- `test_mcp_workflow_integration.py` - Tests for the MCP workflow integration module
-- `run_tests.py` - Script to run all tests
+- `test_mcp_tool_executor.py`: Tests for the MCP tool executor module.
+- `test_mcp_workflow_integration.py`: Tests for the MCP workflow integration module.
+- `test_chat_user_prompt_last_one.py`: Tests related to chat user prompt handling.
+- `test_open_ai_api.py`: Tests for interactions with the OpenAI API wrapper/module.
+- `run_tests.py`: Script to discover and run all tests in this directory.
 
 ## Running the Tests
 
-To run all tests:
+To run all tests, follow these steps:
 
-```bash
-python run_tests.py
-```
+1.  **Navigate to the project root:**
+    ```bash
+    cd /root/projects/Wilmer/WilmerAI
+    ```
 
-To run a specific test file:
+2.  **Activate the virtual environment:**
+    ```bash
+    source venv/bin/activate
+    ```
 
-```bash
-python test_mcp_tool_executor.py
-```
+3.  **Navigate to the tests directory:**
+    ```bash
+    cd ../WilmerData/Public/modules/tests
+    ```
+
+4.  **Run the test discovery script:**
+    ```bash
+    python run_tests.py
+    ```
+
+The script will automatically discover and execute all files matching the `test_*.py` pattern within this directory.
 
 ## Test Coverage
 

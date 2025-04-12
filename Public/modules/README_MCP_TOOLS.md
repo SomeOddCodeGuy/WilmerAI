@@ -1,6 +1,6 @@
 # MCP Tool Integration
 
-This module provides integration with MCP (Multi-Capability Provider) services for Wilmer's AI system. It allows LLMs to automatically discover and invoke tools from MCP servers mentioned in the system prompt.
+This module provides integration with MCP (Model Context Protocol) services for Wilmer's AI system. It allows LLMs to automatically discover and invoke tools from MCP servers mentioned in the system prompt.
 
 ## Overview
 
