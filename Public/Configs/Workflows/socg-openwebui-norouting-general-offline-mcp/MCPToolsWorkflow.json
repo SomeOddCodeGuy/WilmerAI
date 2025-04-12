@@ -65,12 +65,14 @@
         "title": "Final Response Generator",
         "agentName": "Final Responder Agent",
         "type": "Standard",
-        "systemPrompt": "You are a helpful AI assistant. Use the provided conversation history and tool results (if any) to formulate the best response to the *final user message* in the history. Tool Results:\n```\n{agent5Output}\n```",
-        "prompt": "",
+        "messages": "{messages}",
+        "systemPrompt": "You are a helpful AI assistant.",
+        "prompt": "Tool Results:\n{{ agent5Output }}\n\nBased on the conversation history and the tool results above, please formulate the best response to the *final user message*.",
         "lastMessagesToSendInsteadOfPrompt": 10,
         "endpointName": "Worker-Endpoint",
         "preset": "Responder_Preset",
         "maxResponseSizeInTokens": 500,
-        "returnToUser": true
+        "returnToUser": true,
+        "jinja2": true
     }
 ]
