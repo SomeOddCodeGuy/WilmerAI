@@ -51,8 +51,9 @@ class OllamaGenerateHandler(LlmApiHandler):
         add_user_assistant = get_is_chat_complete_add_user_assistant()
         add_missing_assistant = get_is_chat_complete_add_missing_assistant()
 
-        request_api_type = instance_utils.API_TYPE
-        logger.info(f"Ollama Generate Streaming flow! API Type: {request_api_type}")
+        # This handler always produces Ollama Generate format
+        output_api_type = "ollamagenerate"
+        logger.info(f"Ollama Generate Streaming flow! Formatting as: {output_api_type}")
         logger.info(f"URL: {url}")
         logger.debug(f"Headers: {self.headers}")
         logger.debug(f"Sending request with data: {json.dumps(data, indent=2)}")
@@ -73,7 +74,7 @@ class OllamaGenerateHandler(LlmApiHandler):
                 yield from handle_sse_and_json_stream(
                     response=r,
                     extract_content_callback=extract_ollama_generate_content,
-                    intended_api_type=request_api_type,
+                    intended_api_type=output_api_type,
                     strip_start_stop_line_breaks=self.strip_start_stop_line_breaks,
                     add_user_assistant=add_user_assistant,
                     add_missing_assistant=add_missing_assistant
@@ -83,26 +84,26 @@ class OllamaGenerateHandler(LlmApiHandler):
             logger.warning(f"Request failed: {e}")
             error_json = api_utils.build_response_json(
                 token=f"Error communicating with API: {e}",
-                api_type=request_api_type,
+                api_type=output_api_type,
                 finish_reason="stop",
                 current_username=get_current_username()
             )
-            yield api_utils.sse_format(error_json, request_api_type)
-            if request_api_type not in ('ollamagenerate', 'ollamaapichat'):
-                yield api_utils.sse_format("[DONE]", request_api_type)
+            yield api_utils.sse_format(error_json, output_api_type)
+            if output_api_type not in ('ollamagenerate', 'ollamaapichat'):
+                yield api_utils.sse_format("[DONE]", output_api_type)
 
         except Exception as e:
             logger.error("Unexpected error: %s", e)
             traceback.print_exc()
             error_json = api_utils.build_response_json(
                 token=f"An unexpected error occurred: {e}",
-                api_type=request_api_type,
+                api_type=output_api_type,
                 finish_reason="stop",
                 current_username=get_current_username()
             )
-            yield api_utils.sse_format(error_json, request_api_type)
-            if request_api_type not in ('ollamagenerate', 'ollamaapichat'):
-                yield api_utils.sse_format("[DONE]", request_api_type)
+            yield api_utils.sse_format(error_json, output_api_type)
+            if output_api_type not in ('ollamagenerate', 'ollamaapichat'):
+                yield api_utils.sse_format("[DONE]", output_api_type)
 
     def handle_non_streaming(
             self,

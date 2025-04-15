@@ -55,8 +55,9 @@ class OllamaChatHandler(LlmApiHandler):
         add_missing_assistant = get_is_chat_complete_add_missing_assistant()
 
         # Capture the intended API type for this request context
-        request_api_type = instance_utils.API_TYPE
-        logger.info(f"Ollama Chat Streaming flow! API Type: {request_api_type}")
+        # This handler always produces Ollama Chat format
+        output_api_type = "ollamaapichat"
+        logger.info(f"Ollama Chat Streaming flow! Formatting as: {output_api_type}")
         logger.debug(f"Sending request to {url} with data: {json.dumps(data, indent=2)}")
 
         # Define the specific content extractor for Ollama Chat API
@@ -81,7 +82,7 @@ class OllamaChatHandler(LlmApiHandler):
                 yield from handle_sse_and_json_stream(
                     response=r,
                     extract_content_callback=extract_ollama_chat_content,
-                    intended_api_type=request_api_type,
+                    intended_api_type=output_api_type,
                     strip_start_stop_line_breaks=self.strip_start_stop_line_breaks,
                     add_user_assistant=add_user_assistant,
                     add_missing_assistant=add_missing_assistant
@@ -92,22 +93,22 @@ class OllamaChatHandler(LlmApiHandler):
             logger.error(traceback.format_exc())
             error_json = api_utils.build_response_json(
                 token=f"Error communicating with API: {e}",
-                api_type=request_api_type,
+                api_type=output_api_type,
                 finish_reason="stop",
                 current_username=get_current_username()
             )
-            yield api_utils.sse_format(error_json, request_api_type)
+            yield api_utils.sse_format(error_json, output_api_type)
 
         except Exception as e:
             logger.error(f"An unexpected error occurred during Ollama Chat streaming: {e}")
             logger.error(traceback.format_exc())
             error_json = api_utils.build_response_json(
                 token=f"An unexpected error occurred: {e}",
-                api_type=request_api_type,
+                api_type=output_api_type,
                 finish_reason="stop",
                 current_username=get_current_username()
             )
-            yield api_utils.sse_format(error_json, request_api_type)
+            yield api_utils.sse_format(error_json, output_api_type)
 
     def handle_non_streaming(
             self,
