@@ -52,12 +52,12 @@ class OpenAiCompletionsApiHandler(LlmApiHandler):
         add_user_assistant = get_is_chat_complete_add_user_assistant()
         add_missing_assistant = get_is_chat_complete_add_missing_assistant()
 
-        logger.info(f"OpenAI Completions Streaming flow!")
+        # Capture the intended API type for this request context
+        request_api_type = instance_utils.API_TYPE # Should be 'openaicompletion'
+        logger.info(f"OpenAI Completions Streaming flow! API Type: {request_api_type}")
         logger.info(f"URL: {url}")
         logger.debug(f"Headers: {self.headers}")
         logger.debug(f"Sending request with data: {repr(data)}")
-
-        output_format = instance_utils.API_TYPE
 
         # Define the specific content extractor for OpenAI Completions API
         def extract_openai_completions_content(chunk_data: dict) -> Tuple[str, Optional[str]]:
@@ -79,7 +79,7 @@ class OpenAiCompletionsApiHandler(LlmApiHandler):
                 yield from handle_sse_and_json_stream(
                     response=r,
                     extract_content_callback=extract_openai_completions_content,
-                    output_format=output_format,
+                    intended_api_type=request_api_type, # Pass the captured type
                     strip_start_stop_line_breaks=self.strip_start_stop_line_breaks,
                     add_user_assistant=add_user_assistant,
                     add_missing_assistant=add_missing_assistant
@@ -92,13 +92,14 @@ class OpenAiCompletionsApiHandler(LlmApiHandler):
             # Yield an error message in SSE format
             error_json = api_utils.build_response_json(
                 token=f"Error communicating with API: {e}",
+                api_type=request_api_type, # Pass captured type
                 finish_reason="stop",
                 current_username=get_current_username()
             )
-            yield api_utils.sse_format(error_json, output_format)
+            yield api_utils.sse_format(error_json, request_api_type)
             # Also send DONE signal after error if necessary
-            if output_format not in ('ollamagenerate', 'ollamaapichat'):
-                yield api_utils.sse_format("[DONE]", output_format)
+            if request_api_type not in ('ollamagenerate', 'ollamaapichat'):
+                yield api_utils.sse_format("[DONE]", request_api_type)
 
         except Exception as e:
             logger.error(f"An unexpected error occurred during OpenAI Completions streaming: {e}")
@@ -106,13 +107,14 @@ class OpenAiCompletionsApiHandler(LlmApiHandler):
             # Yield an error message in SSE format
             error_json = api_utils.build_response_json(
                 token=f"An unexpected error occurred: {e}",
+                api_type=request_api_type, # Pass captured type
                 finish_reason="stop",
                 current_username=get_current_username()
             )
-            yield api_utils.sse_format(error_json, output_format)
+            yield api_utils.sse_format(error_json, request_api_type)
             # Also send DONE signal after error
-            if output_format not in ('ollamagenerate', 'ollamaapichat'):
-                yield api_utils.sse_format("[DONE]", output_format)
+            if request_api_type not in ('ollamagenerate', 'ollamaapichat'):
+                yield api_utils.sse_format("[DONE]", request_api_type)
 
     def handle_non_streaming(
             self,

@@ -249,32 +249,24 @@ class WorkflowManager:
                 chunk_count = 0
                 for chunk in final_yield_source: # chunk here is likely SSE string from handler
                     chunk_count += 1
-                    
-                    # Check if the chunk from the handler is ALREADY formatted correctly for Ollama
-                    # (i.e., it's a JSON string NOT starting with 'data:')
-                    is_plain_json_string = isinstance(chunk, str) and not chunk.startswith('data:')
-                    
-                    extracted_text = api_utils.extract_text_from_chunk(chunk)
-                    
-                    if extracted_text:
-                        # If the original chunk was plain JSON (Ollama), yield similar format
-                        if is_plain_json_string:
-                            # Yield just the JSON expected by Ollama client (needs verification)
-                            # Assuming client expects {"response": "text"}
-                            yield f"{json.dumps({'response': extracted_text})}\n"
-                        # Otherwise, yield standard SSE format for OpenAI/others
-                        else:
-                            yield f"data: {json.dumps({'response': extracted_text})}\n\n"
+                    # Directly yield the chunk received from the handler's generator
+                    # The handler (e.g., handle_sse_and_json_stream) is responsible
+                    # for ensuring the correct SSE format based on intended_api_type.
+                    if chunk: # Avoid yielding empty chunks if any slip through
+                        yield chunk
 
                 logger.debug(f"Finished yielding {chunk_count} chunks for streaming step {idx}.")
             else:
                  # Final step was supposed to stream but didn't return a generator.
-                 logger.warning(f"Expected generator/iterable for final streaming step {idx} ('{step_title}'), but got {type(final_yield_source)}. Yielding as single SSE chunk.")
-                 yield f"data: {json.dumps({'response': str(final_yield_source)})}\n\n"
+                 # Log a warning and yield the stored value (likely aggregated text) as a single SSE chunk.
+                 # Ensure output_value_stored is converted to string for safety.
+                 logger.warning(f"Expected generator/iterable for final streaming step {idx} ('{step_title}'), but got {type(final_yield_source)}. Yielding stored value as single SSE chunk.")
+                 yield f"data: {json.dumps({'response': str(output_value_stored)})}\\n\\n"
         else:
              # Stream=False: Yield the single, potentially aggregated value stored earlier.
              logger.debug(f"Yielding single result for non-streaming final step {idx} ('{step_title}'). Type: {type(output_value_stored)}")
-             yield output_value_stored
+             # Ensure the output is a string for the generator
+             yield str(output_value_stored)
 
     def _prepare_step_inputs(self, idx: int, config: Dict, returned_to_user: bool, workflow_steps: List[Dict],
                              current_messages: List[Dict], discussion_id: str | None, nonResponder: bool | None) -> tuple[bool, List[Dict]]:
@@ -520,7 +512,7 @@ class WorkflowManager:
                     logger.warning(f"Workflow '{self.workflowConfigName}' (ID: {workflow_id}, non-streaming) yielded multiple results ({len(results_list)}) unexpectedly. Returning the first.")
 
                 final_result = results_list[0]
-                logger.debug(f"Returning single result for non-streaming workflow '{self.workflowConfigName}' (ID: {workflow_id}). Type: {type(final_result)}")
+                logger.debug(f"Returning single result for non-streaming workflow '{self.workflowConfigName}' (ID: {workflow_id}). final_result: {final_result}, type: {type(final_result)}")
                 return final_result
                 
         except FileNotFoundError as fnfe:

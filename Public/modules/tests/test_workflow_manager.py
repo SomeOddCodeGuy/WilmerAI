@@ -814,136 +814,105 @@ class TestWorkflowManagerFinalStreamingFormat(unittest.TestCase):
     def tearDown(self):
         patch.stopall()
 
-    @patch('builtins.open', new_callable=unittest.mock.mock_open)
-    def test_final_yield_preserves_plain_json_format(self, mock_open_func):
+    # Removed patch for extract_text_from_chunk
+    def test_final_yield_preserves_plain_json_format(self):
         """
         Test that _yield_final_output yields plain JSON lines if the input chunk lacks 'data:'.
         Simulates the scenario with ollamagenerate API type.
         """
-        # --- GIVEN --- 
+        # --- GIVEN ---
         workflow_name = "test-plain-json-yield"
         self.mock_get_path.return_value = f"/fake/{workflow_name}.json"
-        
+
         # Mock workflow config with one final step
         workflow_config = {
             "workflow": [
                 {"title": "Final Step", "type": "Standard", "endpointName": "fake", "returnToUser": True}
             ]
         }
-        mock_open_func.return_value.read.return_value = json.dumps(workflow_config)
+        with patch('builtins.open', new_callable=unittest.mock.mock_open) as mock_open_func:
+            mock_open_func.return_value.read.return_value = json.dumps(workflow_config)
 
-        # Mock generator simulating ollamagenerate output (plain JSON lines)
-        plain_json_chunk1 = '{"response": "Hello"}' # NO newline here
-        plain_json_chunk2 = '{"response": " World"}' # NO newline here
-        # Note: The actual handler might yield the full built response, 
-        # but for testing _yield_final_output, we just need strings without "data:"
-        def mock_handler_generator():
-            yield plain_json_chunk1
-            yield plain_json_chunk2
+            # Mock generator simulating ollamagenerate output (plain JSON lines)
+            plain_json_chunk1 = '{"response": "Hello"}\n'
+            plain_json_chunk2 = '{"response": " World"}\n'
+            plain_json_chunk_done = '{"response": "", "done": true}\n'
+            expected_chunks = [plain_json_chunk1, plain_json_chunk2, plain_json_chunk_done]
 
-        # Mock _process_section to return the plain JSON generator for the final step
-        mock_process_result = mock_handler_generator()
-        manager = WorkflowManager(workflow_config_name=workflow_name)
-        manager._process_section = MagicMock(return_value=mock_process_result)
+            def mock_handler_generator():
+                # Yield the raw chunks directly
+                yield plain_json_chunk1
+                yield plain_json_chunk2
+                yield plain_json_chunk_done
 
-        # Mock extract_text_from_chunk to parse the plain JSON string correctly
-        def mock_extract_side_effect(chunk_str):
-            print(f"DEBUG [Test Mock]: mock_extract_side_effect received: {type(chunk_str)} {repr(chunk_str)}")
-            extracted = ""
-            if isinstance(chunk_str, str) and not chunk_str.startswith('data:'):
-                try:
-                    # Use strip() just in case, though not strictly needed now
-                    data = json.loads(chunk_str.strip()) 
-                    extracted = data.get('response', '')
-                except json.JSONDecodeError as e:
-                    print(f"DEBUG [Test Mock]: JSONDecodeError: {e}")
-                    extracted = ""
-            elif isinstance(chunk_str, str) and chunk_str.startswith('data:'):
-                 try:
-                    data = json.loads(chunk_str[len('data:'):].strip())
-                    extracted = data.get('response', '') # simplified for test
-                 except Exception as e: 
-                     print(f"DEBUG [Test Mock]: Error in SSE path: {e}")
-                     extracted = ""
-            print(f"DEBUG [Test Mock]: mock_extract_side_effect returning: {repr(extracted)}")
-            return extracted 
-        self.mock_extract_chunk.side_effect = mock_extract_side_effect
-        
-        initial_messages = [{"role": "user", "content": "Hi"}]
+            # Mock _process_section to return the plain JSON generator for the final step
+            mock_process_result = mock_handler_generator()
+            manager = WorkflowManager(workflow_config_name=workflow_name)
+            manager._process_section = MagicMock(return_value=mock_process_result)
 
-        # --- WHEN --- 
-        # Call run_workflow in streaming mode
-        result_generator = manager.run_workflow(initial_messages, "req-1", "disc-1", stream=True)
-        
-        # Consume the generator returned by run_workflow
-        yielded_chunks = list(result_generator)
+            initial_messages = [{"role": "user", "content": "Hi"}]
 
-        # --- THEN --- 
-        # Verify _process_section was called for the final step
-        manager._process_section.assert_called_once()
-        
-        # Verify extract_text_from_chunk was called for each input chunk
-        self.mock_extract_chunk.assert_has_calls([
-            call(plain_json_chunk1), 
-            call(plain_json_chunk2)
-        ])
+            # --- WHEN ---
+            # Call run_workflow in streaming mode
+            result_generator = manager.run_workflow(initial_messages, "req-1", "disc-1", stream=True)
 
-        # Assert that the final yielded chunks are formatted as plain JSON + newline
-        self.assertEqual(len(yielded_chunks), 2)
-        # Construct expected output safely
-        json_part1 = json.dumps({"response": "Hello"})
-        expected_yield1 = f"{json_part1}\n"
-        json_part2 = json.dumps({"response": " World"})
-        expected_yield2 = f"{json_part2}\n"
-        
-        self.assertEqual(yielded_chunks[0], expected_yield1)
-        self.assertEqual(yielded_chunks[1], expected_yield2)
+            # Consume the generator returned by run_workflow
+            yielded_chunks = list(result_generator)
+
+            # --- THEN ---
+            # Verify _process_section was called for the final step
+            manager._process_section.assert_called_once()
+
+            # Assert that the final yielded chunks match the source chunks exactly
+            self.assertEqual(len(yielded_chunks), 3)
+            self.assertEqual(yielded_chunks, expected_chunks)
 
 # ============================================================
 # NEW Test Class for _yield_final_output Formatting
 # ============================================================
 class TestWorkflowManagerFinalYieldFormat(unittest.TestCase):
-    """Tests the specific formatting logic within _yield_final_output."""
+    """Tests focused specifically on the _yield_final_output helper method."""
 
     def setUp(self):
         # Basic setup needed if WorkflowManager instance is created, 
         # otherwise we can test _yield_final_output more directly if possible.
         # For simplicity, let's mock dependencies needed for basic init.
-        self.patcher_var_manager = patch('Middleware.workflows.managers.workflow_manager.WorkflowVariableManager')
-        self.mock_var_manager = self.patcher_var_manager.start()
-        self.patcher_llm_service = patch('Middleware.workflows.managers.workflow_manager.LlmHandlerService')
-        self.mock_llm_service = self.patcher_llm_service.start()
-        self.patcher_sqlite = patch('Middleware.workflows.managers.workflow_manager.SqlLiteUtils')
-        self.mock_sqlite = self.patcher_sqlite.start()
-        # Mock config loading used by __init__ indirectly
-        self.patcher_get_user_config = patch('Middleware.utilities.config_utils.get_user_config', return_value={'chatPromptTemplateName': 'mock_template', 'currentUser': 'testuser'})
-        self.mock_get_user_config = self.patcher_get_user_config.start()
+        self.mock_user_config = patch('Middleware.utilities.config_utils.get_user_config', return_value={'chatPromptTemplateName': 'mock_template'})
+        self.mock_instance_user = patch('Middleware.utilities.instance_utils.USER', 'test_user')
+        self.mock_makedirs = patch('os.makedirs')
+        self.mock_sqlite = patch('Middleware.utilities.sql_lite_utils.SqlLiteUtils') # Patch the whole class
+
+        # Start mocks
+        self.mock_user_config.start()
+        self.mock_instance_user.start()
+        self.mock_makedirs.start()
+        self.mock_sqlite.start()
         
-        # Create a WorkflowManager instance to call the method on
-        self.manager = WorkflowManager(workflow_config_name="DummyWorkflow")
+        # Instantiate the manager (needed to call the protected method)
+        # Requires a workflow name, even if we don't load it.
+        self.manager = WorkflowManager(workflow_config_name="DummyWorkflowForInit")
 
     def tearDown(self):
-        patch.stopall()
+        # Stop mocks
+        self.mock_user_config.stop()
+        self.mock_instance_user.stop()
+        self.mock_makedirs.stop()
+        self.mock_sqlite.stop()
 
-    @patch('Middleware.workflows.managers.workflow_manager.api_utils.extract_text_from_chunk')
-    def test_yield_final_output_standard_sse_format(self, mock_extract_text):
+    # Removed patch for extract_text_from_chunk
+    def test_yield_final_output_standard_sse_format(self):
         """Verify standard SSE format is yielded when input chunk starts with 'data:'."""
         # GIVEN: Mock source generator yielding SSE strings
-        def mock_source_generator():
-            yield 'data: { "choices": [{ "delta": { "content": "Hello" } }] }'
-            yield 'data: { "choices": [{ "delta": { "content": " World" } }] }'
-            yield 'data: [DONE]' # This should be ignored by extract_text
+        sse_chunk_1 = 'data: { "choices": [{ "delta": { "content": "Hello" } }] }\n\n'
+        sse_chunk_2 = 'data: { "choices": [{ "delta": { "content": " World" } }] }\n\n'
+        sse_chunk_done = 'data: [DONE]\n\n'
+        expected_chunks = [sse_chunk_1, sse_chunk_2, sse_chunk_done]
         
-        # GIVEN: Mock extract_text behavior
-        def extract_side_effect(chunk):
-            if chunk.startswith('data: { "choices"'):
-                try:
-                    data = json.loads(chunk.split('data: ', 1)[1])
-                    return data['choices'][0]['delta']['content']
-                except: return ""
-            return "" # Ignore [DONE]
-        mock_extract_text.side_effect = extract_side_effect
-
+        def mock_source_generator():
+            yield sse_chunk_1
+            yield sse_chunk_2
+            yield sse_chunk_done
+        
         # WHEN: Call _yield_final_output with the mock generator
         result_generator = self.manager._yield_final_output(
             result=mock_source_generator(), 
@@ -956,34 +925,24 @@ class TestWorkflowManagerFinalYieldFormat(unittest.TestCase):
         # THEN: Consume the generator and check output format
         output_list = list(result_generator)
         
-        self.assertEqual(len(output_list), 2) # Hello, World
-        self.assertEqual(output_list[0], 'data: {"response": "Hello"}\n\n')
-        self.assertEqual(output_list[1], 'data: {"response": " World"}\n\n')
-        mock_extract_text.assert_has_calls([
-            call('data: { "choices": [{ "delta": { "content": "Hello" } }] }'),
-            call('data: { "choices": [{ "delta": { "content": " World" } }] }'),
-            call('data: [DONE]')
-        ])
+        # Assert that the yielded chunks match the source chunks exactly
+        self.assertEqual(output_list, expected_chunks)
+        self.assertEqual(len(output_list), 3) # Check length matches source
 
-    @patch('Middleware.workflows.managers.workflow_manager.api_utils.extract_text_from_chunk')
-    def test_yield_final_output_plain_json_format(self, mock_extract_text):
+    # Removed patch for extract_text_from_chunk
+    def test_yield_final_output_plain_json_format(self):
         """Verify plain JSON format is yielded when input chunk does NOT start with 'data:'."""
         # GIVEN: Mock source generator yielding plain JSON strings (like Ollama)
-        def mock_source_generator():
-            yield '{"response": "Ollama says"}\n'
-            yield '{"response": " hi"}\n'
-            yield '{"response": "", "done": true}\n' # Done signal
-        
-        # GIVEN: Mock extract_text behavior
-        def extract_side_effect(chunk):
-            if chunk.startswith('{'):
-                 try:
-                    data = json.loads(chunk.strip()) # Strip newline for parsing
-                    return data.get('response', '')
-                 except: return ""
-            return ""
-        mock_extract_text.side_effect = extract_side_effect
+        json_chunk_1 = '{"response": "Ollama says"}\n'
+        json_chunk_2 = '{"response": " hi"}\n'
+        json_chunk_done = '{"response": "", "done": true}\n' # Done signal
+        expected_chunks = [json_chunk_1, json_chunk_2, json_chunk_done]
 
+        def mock_source_generator():
+            yield json_chunk_1
+            yield json_chunk_2
+            yield json_chunk_done
+        
         # WHEN: Call _yield_final_output
         result_generator = self.manager._yield_final_output(
             result=mock_source_generator(), 
@@ -996,15 +955,9 @@ class TestWorkflowManagerFinalYieldFormat(unittest.TestCase):
         # THEN: Consume and check output format
         output_list = list(result_generator)
         
-        self.assertEqual(len(output_list), 2) # Ollama says, hi
-        # Should yield JSON string + newline, matching Ollama format
-        self.assertEqual(output_list[0], '{"response": "Ollama says"}\n')
-        self.assertEqual(output_list[1], '{"response": " hi"}\n')
-        mock_extract_text.assert_has_calls([
-             call('{"response": "Ollama says"}\n'),
-             call('{"response": " hi"}\n'),
-             call('{"response": "", "done": true}\n')
-        ])
+        # Assert that the yielded chunks match the source chunks exactly
+        self.assertEqual(output_list, expected_chunks)
+        self.assertEqual(len(output_list), 3) # Check length matches source
 
 if __name__ == '__main__':
     unittest.main()

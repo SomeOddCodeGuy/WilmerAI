@@ -152,7 +152,7 @@ class CompletionsAPI(MethodView):
         messages = parse_conversation(prompt)
 
         if stream:
-            return Response(WilmerApi.handle_user_prompt(messages, True), content_type='application/json')
+            return Response(WilmerApi.handle_user_prompt(messages, True), mimetype='text/event-stream')
         else:
             return_response: str = WilmerApi.handle_user_prompt(messages, False)
             current_time: int = int(time.time())
@@ -286,7 +286,8 @@ class GenerateAPI(MethodView):
 
         # Generate and return the appropriate response
         if stream:
-            return Response(WilmerApi.handle_user_prompt(messages, stream=True), content_type='application/json')
+            # Use mimetype='text/event-stream' for SSE
+            return Response(WilmerApi.handle_user_prompt(messages, stream=True), mimetype='text/event-stream')
         else:
             return_response: str = WilmerApi.handle_user_prompt(messages, stream=False)
             current_time: int = int(time.time())

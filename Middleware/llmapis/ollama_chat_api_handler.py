@@ -2,7 +2,7 @@ import json
 import logging
 import time
 import traceback
-from typing import Dict, Generator, List, Optional
+from typing import Dict, Generator, List, Optional, Tuple
 
 import requests
 
@@ -11,6 +11,7 @@ from Middleware.utilities.config_utils import (
     get_is_chat_complete_add_user_assistant,
     get_is_chat_complete_add_missing_assistant, get_current_username
 )
+from Middleware.utilities.api_utils import handle_sse_and_json_stream
 from .llm_api_handler import LlmApiHandler
 
 logger = logging.getLogger(__name__)
@@ -28,15 +29,15 @@ class OllamaChatHandler(LlmApiHandler):
             prompt: Optional[str] = None
     ) -> Generator[str, None, None]:
         """
-        Handle streaming response for Ollama API.
+        Handle streaming response for Ollama API using the common utility.
 
         Args:
             conversation (Optional[List[Dict[str, str]]]): A list of messages in the conversation.
             system_prompt (Optional[str]): The system prompt to use.
             prompt (Optional[str]): The user prompt to use.
 
-        Returns:
-            Generator[str, None, None]: A generator yielding chunks of the response.
+        Yields:
+            str: Server-Sent Event formatted strings.
         """
         self.set_gen_input()
 
@@ -46,108 +47,67 @@ class OllamaChatHandler(LlmApiHandler):
         data = {
             "model": self.model_name,
             "messages": corrected_conversation,
+            "stream": True,
             "options": self.gen_input or {}
         }
 
         add_user_assistant = get_is_chat_complete_add_user_assistant()
         add_missing_assistant = get_is_chat_complete_add_missing_assistant()
-        logger.info(f"Streaming flow!")
+
+        # Capture the intended API type for this request context
+        request_api_type = instance_utils.API_TYPE
+        logger.info(f"Ollama Chat Streaming flow! API Type: {request_api_type}")
         logger.debug(f"Sending request to {url} with data: {json.dumps(data, indent=2)}")
 
-        output_format = instance_utils.API_TYPE
+        # Define the specific content extractor for Ollama Chat API
+        def extract_ollama_chat_content(chunk_data: dict) -> Tuple[str, Optional[str]]:
+            token = ""
+            finish_reason = None
+            if 'message' in chunk_data and isinstance(chunk_data['message'], dict):
+                token = chunk_data['message'].get("content", "")
+            if chunk_data.get("done") == True:
+                # Although 'done' signifies the end, we let the main loop handle the final payload
+                # We don't return 'stop' here as finish_reason, handle_sse_and_json_stream checks for it
+                pass
+            return token, None
 
-        def generate_sse_stream():
-            try:
-                logger.info(f"Streaming flow!")
-                logger.info(f"URL: {url}")
-                logger.debug("Headers: ")
-                logger.debug(json.dumps(self.headers, indent=2))
-                logger.debug("Data: ")
-                logger.debug(data)
-                with self.session.post(url, headers=self.headers, json=data, stream=True) as r:
-                    logger.info(f"Response status code: {r.status_code}")
-                    buffer = ""
-                    first_chunk_buffer = ""
-                    first_chunk_processed = False
-                    max_buffer_length = 20
-                    start_time = time.time()
-                    total_tokens = 0
+        try:
+            logger.info(f"Initiating streaming request to {url}")
+            with self.session.post(url, headers=self.headers, json=data, stream=True) as r:
+                logger.info(f"Response status code: {r.status_code}")
+                r.raise_for_status()
 
-                    for line in r.iter_lines(decode_unicode=True):
-                        if line.strip():  # Ensure it's not an empty line
-                            try:
-                                chunk_data = json.loads(line.strip())
-                                if "message" in chunk_data and "content" in chunk_data["message"]:
-                                    content = chunk_data["message"]["content"]
-                                    finish_reason = chunk_data.get("done", False)
+                # Use the utility function with the specific extractor
+                yield from handle_sse_and_json_stream(
+                    response=r,
+                    extract_content_callback=extract_ollama_chat_content,
+                    intended_api_type=request_api_type,
+                    strip_start_stop_line_breaks=self.strip_start_stop_line_breaks,
+                    add_user_assistant=add_user_assistant,
+                    add_missing_assistant=add_missing_assistant
+                )
 
-                                    if not first_chunk_processed:
-                                        first_chunk_buffer += content
+        except requests.RequestException as e:
+            logger.error(f"Request failed during Ollama Chat streaming: {e}")
+            logger.error(traceback.format_exc())
+            error_json = api_utils.build_response_json(
+                token=f"Error communicating with API: {e}",
+                api_type=request_api_type,
+                finish_reason="stop",
+                current_username=get_current_username()
+            )
+            yield api_utils.sse_format(error_json, request_api_type)
 
-                                        if self.strip_start_stop_line_breaks:
-                                            first_chunk_buffer = first_chunk_buffer.lstrip()
-
-                                        if add_user_assistant and add_missing_assistant:
-                                            # Check for "Assistant:" in the full buffer
-                                            if "Assistant:" in first_chunk_buffer:
-                                                # If it starts with "Assistant:", strip it
-                                                first_chunk_buffer = api_utils.remove_assistant_prefix(
-                                                    first_chunk_buffer)
-                                                # Mark as processed since we've handled the prefix
-                                                first_chunk_processed = True
-                                                content = first_chunk_buffer
-                                            elif len(first_chunk_buffer) > max_buffer_length or finish_reason:
-                                                # If buffer is too large or stream finishes, pass it as is
-                                                first_chunk_processed = True
-                                                content = first_chunk_buffer
-                                            else:
-                                                # Keep buffering until we have more tokens
-                                                continue
-                                        elif len(first_chunk_buffer) > max_buffer_length or finish_reason:
-                                            # If buffer is too large or stream finishes, pass it as is
-                                            first_chunk_processed = True
-                                            content = first_chunk_buffer
-                                        else:
-                                            # Keep buffering until we have more tokens
-                                            continue
-
-                                    total_tokens += len(content.split())
-
-                                    completion_json = api_utils.build_response_json(
-                                        token=content,
-                                        finish_reason=None,  # Don't add "stop" or "done" yet
-                                        current_username=get_current_username()
-                                    )
-
-                                    yield api_utils.sse_format(completion_json, output_format)
-
-                                if chunk_data.get("done"):
-                                    break
-
-                            except json.JSONDecodeError as e:
-                                logger.warning(f"Failed to parse JSON: {e}")
-                                continue
-
-                    total_duration = int((time.time() - start_time) * 1e9)
-
-                    # Send the final payload with "done" and "stop"
-                    final_completion_json = api_utils.build_response_json(
-                        token="",
-                        finish_reason="stop",
-                        current_username=get_current_username(),
-                    )
-                    logger.debug("Total duration: {}", total_duration)
-                    yield api_utils.sse_format(final_completion_json, output_format)
-
-                    if output_format not in ('ollamagenerate', 'ollamaapichat'):
-                        logger.info("End of stream reached, sending [DONE] signal.")
-                        yield api_utils.sse_format("[DONE]", output_format)
-
-            except requests.RequestException as e:
-                logger.warning(f"Request failed: {e}")
-                raise
-
-        return generate_sse_stream()
+        except Exception as e:
+            logger.error(f"An unexpected error occurred during Ollama Chat streaming: {e}")
+            logger.error(traceback.format_exc())
+            error_json = api_utils.build_response_json(
+                token=f"An unexpected error occurred: {e}",
+                api_type=request_api_type,
+                finish_reason="stop",
+                current_username=get_current_username()
+            )
+            yield api_utils.sse_format(error_json, request_api_type)
 
     def handle_non_streaming(
             self,
