@@ -13,9 +13,6 @@ if parent_dir not in sys.path:
 
 from mcp_service_discoverer import MCPServiceDiscoverer, DEFAULT_MCPO_URL
 
-# Disable logging during tests unless specifically needed
-logging.disable(logging.CRITICAL)
-
 class TestMCPServiceDiscoverer(unittest.TestCase):
     """Tests for the MCPServiceDiscoverer class."""
 

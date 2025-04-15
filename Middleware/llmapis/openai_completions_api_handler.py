@@ -2,11 +2,12 @@ import json
 import logging
 import time
 import traceback
-from typing import Dict, Generator, List, Optional
+from typing import Dict, Generator, List, Optional, Tuple
 
 import requests
 
 from Middleware.utilities import instance_utils, api_utils
+from Middleware.utilities.api_utils import handle_sse_and_json_stream
 from Middleware.utilities.config_utils import (
     get_is_chat_complete_add_user_assistant,
     get_is_chat_complete_add_missing_assistant, get_current_username
@@ -29,7 +30,7 @@ class OpenAiCompletionsApiHandler(LlmApiHandler):
             prompt: Optional[str] = None
     ) -> Generator[str, None, None]:
         """
-        Handle streaming response for OpenAI Completions API.
+        Handle streaming response for OpenAI Completions API using the common utility.
 
         Args:
             conversation (Optional[List[Dict[str, str]]]): A list of messages in the conversation.
@@ -37,15 +38,16 @@ class OpenAiCompletionsApiHandler(LlmApiHandler):
             system_prompt (Optional[str]): The system prompt to use.
             prompt (Optional[str]): The user prompt to use.
 
-        Returns:
-            Generator[str, None, None]: A generator yielding chunks of the response.
+        Yields:
+            str: Server-Sent Event formatted strings.
         """
         self.set_gen_input()
 
         full_prompt = prep_full_prompt(system_prompt, prompt)
 
         url = f"{self.base_url}/v1/completions"
-        data = {"prompt": full_prompt, "stream": True, "model": self.model_name, **(self.gen_input or {})}
+        data = {"prompt": full_prompt, "model": self.model_name, **(self.gen_input or {})}
+        data['stream'] = True
 
         add_user_assistant = get_is_chat_complete_add_user_assistant()
         add_missing_assistant = get_is_chat_complete_add_missing_assistant()
@@ -53,120 +55,64 @@ class OpenAiCompletionsApiHandler(LlmApiHandler):
         logger.info(f"OpenAI Completions Streaming flow!")
         logger.info(f"URL: {url}")
         logger.debug(f"Headers: {self.headers}")
-        logger.debug(f"Sending request with data: {json.dumps(data, indent=2)}")
+        logger.debug(f"Sending request with data: {repr(data)}")
 
         output_format = instance_utils.API_TYPE
 
-        def generate_sse_stream():
-            try:
-                with self.session.post(url, headers=self.headers, json=data, stream=True) as r:
-                    logger.info(f"Response status code: {r.status_code}")
-                    buffer = ""
-                    first_chunk_buffer = ""
-                    first_chunk_processed = False
-                    max_buffer_length = 20
-                    start_time = time.time()
-                    total_tokens = 0
+        # Define the specific content extractor for OpenAI Completions API
+        def extract_openai_completions_content(chunk_data: dict) -> Tuple[str, Optional[str]]:
+            token = ""
+            finish_reason = None
+            if 'choices' in chunk_data and chunk_data['choices']:
+                choice = chunk_data['choices'][0]
+                token = choice.get("text", "") # Completions API uses 'text'
+                finish_reason = choice.get("finish_reason")
+            return token, finish_reason
 
-                    # Variables to track the current event type
-                    current_event = None
+        try:
+            logger.info(f"Initiating streaming request to {url}")
+            with self.session.post(url, headers=self.headers, json=data, stream=True) as r:
+                logger.info(f"Response status code: {r.status_code}")
+                r.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
 
-                    for chunk in r.iter_content(chunk_size=1024, decode_unicode=True):
-                        buffer += chunk
-                        while "\n" in buffer:
-                            line, buffer = buffer.split("\n", 1)
-                            line = line.strip()
+                # Use the utility function with the specific extractor
+                yield from handle_sse_and_json_stream(
+                    response=r,
+                    extract_content_callback=extract_openai_completions_content,
+                    output_format=output_format,
+                    strip_start_stop_line_breaks=self.strip_start_stop_line_breaks,
+                    add_user_assistant=add_user_assistant,
+                    add_missing_assistant=add_missing_assistant
+                    # max_buffer_length can use default or be passed if needed
+                )
 
-                            if line.startswith("data:"):
-                                data_str = line[len("data:"):].strip()
+        except requests.RequestException as e:
+            logger.error(f"Request failed during OpenAI Completions streaming: {e}")
+            logger.error(traceback.format_exc())
+            # Yield an error message in SSE format
+            error_json = api_utils.build_response_json(
+                token=f"Error communicating with API: {e}",
+                finish_reason="stop",
+                current_username=get_current_username()
+            )
+            yield api_utils.sse_format(error_json, output_format)
+            # Also send DONE signal after error if necessary
+            if output_format not in ('ollamagenerate', 'ollamaapichat'):
+                yield api_utils.sse_format("[DONE]", output_format)
 
-                                if data_str == '[DONE]':
-                                    break
-
-                                try:
-                                    chunk_data = json.loads(data_str)
-                                    token = ""
-                                    finish_reason = None
-
-                                    # Extract token and finish_reason
-                                    if 'choices' in chunk_data:
-                                        choice = chunk_data['choices'][0]
-                                        if "text" in choice:
-                                            token = choice["text"]
-                                        finish_reason = choice.get("finish_reason")
-
-                                    if not first_chunk_processed:
-                                        first_chunk_buffer += token
-
-                                        if self.strip_start_stop_line_breaks:
-                                            first_chunk_buffer = first_chunk_buffer.lstrip()
-
-                                        if add_user_assistant and add_missing_assistant:
-                                            # Check for "Assistant:" in the full buffer
-                                            if "Assistant:" in first_chunk_buffer:
-                                                # If it starts with "Assistant:", strip it
-                                                first_chunk_buffer = api_utils.remove_assistant_prefix(
-                                                    first_chunk_buffer)
-                                                # Mark as processed since we've handled the prefix
-                                                first_chunk_processed = True
-                                                token = first_chunk_buffer
-                                            elif len(first_chunk_buffer) > max_buffer_length or finish_reason:
-                                                # If buffer is too large or stream finishes, pass it as is
-                                                first_chunk_processed = True
-                                                token = first_chunk_buffer
-                                            else:
-                                                # Keep buffering until we have more tokens
-                                                continue
-                                        elif len(first_chunk_buffer) > max_buffer_length or finish_reason:
-                                            # If buffer is too large or stream finishes, pass it as is
-                                            first_chunk_processed = True
-                                            token = first_chunk_buffer
-                                        else:
-                                            # Keep buffering until we have more tokens
-                                            continue
-
-                                    # Handle stripping newlines
-                                    if self.strip_start_stop_line_breaks and not finish_reason:
-                                        token = token.rstrip("\n")
-
-                                    total_tokens += len(token.split())
-
-                                    # Generate response using ResponseBuilder
-                                    completion_json = api_utils.build_response_json(
-                                        token=token,
-                                        finish_reason=None,  # Intermediate payloads don't include "stop" or "done"
-                                        current_username=get_current_username()
-                                    )
-
-                                    yield api_utils.sse_format(completion_json, output_format)
-
-                                    if finish_reason == "stop":
-                                        break
-
-                                except json.JSONDecodeError as e:
-                                    logger.warning(f"Failed to parse JSON: {e}")
-                                    continue
-
-                    # Final message signaling end of stream
-                    total_duration = int((time.time() - start_time) * 1e9)
-
-                    final_completion_json = api_utils.build_response_json(
-                        token="",
-                        finish_reason="stop",  # Final payload explicitly includes "stop"
-                        current_username=get_current_username()
-                    )
-                    logger.debug("Total duration: {}", total_duration)
-                    yield api_utils.sse_format(final_completion_json, output_format)
-
-                    if output_format not in ('ollamagenerate', 'ollamaapichat'):
-                        logger.debug("End of stream reached, sending [DONE] signal.")
-                        yield api_utils.sse_format("[DONE]", output_format)
-
-            except requests.RequestException as e:
-                logger.warning(f"Request failed: {e}")
-                raise
-
-        return generate_sse_stream()
+        except Exception as e:
+            logger.error(f"An unexpected error occurred during OpenAI Completions streaming: {e}")
+            logger.error(traceback.format_exc())
+            # Yield an error message in SSE format
+            error_json = api_utils.build_response_json(
+                token=f"An unexpected error occurred: {e}",
+                finish_reason="stop",
+                current_username=get_current_username()
+            )
+            yield api_utils.sse_format(error_json, output_format)
+            # Also send DONE signal after error
+            if output_format not in ('ollamagenerate', 'ollamaapichat'):
+                yield api_utils.sse_format("[DONE]", output_format)
 
     def handle_non_streaming(
             self,

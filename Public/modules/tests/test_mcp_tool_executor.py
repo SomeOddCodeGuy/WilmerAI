@@ -8,7 +8,7 @@ import requests
 # Adjust import paths
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../..")))
 
-import WilmerData.Public.modules.mcp_tool_executor as mcp_tool_executor
+import WilmerAI.Public.modules.mcp_tool_executor as mcp_tool_executor
 
 class TestMcpToolExecutor(unittest.TestCase):
     
@@ -80,8 +80,8 @@ class TestMcpToolExecutor(unittest.TestCase):
         # 2. Verify the final result returned by the function matches the mocked API response
         self.assertEqual(result, self.time_response)
 
-    @patch('WilmerData.Public.modules.mcp_tool_executor.execute_tool_call')
-    @patch('WilmerData.Public.modules.mcp_tool_executor.extract_tool_calls')
+    @patch('WilmerAI.Public.modules.mcp_tool_executor.execute_tool_call')
+    @patch('WilmerAI.Public.modules.mcp_tool_executor.extract_tool_calls')
     def test_invoke_with_tool_call(self, mock_extract, mock_execute):
         # Setup mocks
         # Use the updated tool call name from setUp
@@ -112,7 +112,7 @@ class TestMcpToolExecutor(unittest.TestCase):
         # Assert execute_tool_call was called with the extracted tool_call and the dummy map
         mock_execute.assert_called_once_with(tool_call_json, mcp_tool_executor.DEFAULT_MCPO_URL, dummy_tool_map)
 
-    @patch('WilmerData.Public.modules.mcp_tool_executor.extract_tool_calls')
+    @patch('WilmerAI.Public.modules.mcp_tool_executor.extract_tool_calls')
     def test_invoke_with_no_tool_call(self, mock_extract):
         # Setup mock to return no tool calls
         mock_extract.return_value = []

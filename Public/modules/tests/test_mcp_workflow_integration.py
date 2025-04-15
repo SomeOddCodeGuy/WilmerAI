@@ -10,15 +10,15 @@ import requests
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../..")))
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../WilmerAI")))
 
-import WilmerData.Public.modules.mcp_workflow_integration as mcp_workflow_integration
-from WilmerData.Public.modules.mcp_workflow_integration import (
+import WilmerAI.Public.modules.mcp_workflow_integration as mcp_workflow_integration
+from WilmerAI.Public.modules.mcp_workflow_integration import (
     MCPIntegrationError,
     MCPMessageParsingError,
     MCPConfigurationError,
     MCPToolExecutionError,
     parse_string_messages
 )
-from WilmerData.Public.modules.mcp_tool_executor import DEFAULT_MCPO_URL
+from WilmerAI.Public.modules.mcp_tool_executor import DEFAULT_MCPO_URL
 
 # Mock the weather service requests
 def mock_mcp_service_response(*args, **kwargs):
@@ -88,7 +88,7 @@ class TestMcpWorkflowIntegration(unittest.TestCase):
     def tearDown(self):
         pass # Nothing needed currently
 
-    @patch('WilmerData.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
+    @patch('WilmerAI.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
     def test_invoke_with_no_tool_call(self, mock_executor_invoke):
         # Setup mock to return no tool call
         mock_executor_invoke.return_value = {
@@ -114,7 +114,7 @@ class TestMcpWorkflowIntegration(unittest.TestCase):
         # Verify the final result is the original response
         self.assertEqual(result, self.response_content_without_tool_call)
 
-    @patch('WilmerData.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
+    @patch('WilmerAI.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
     def test_invoke_with_tool_call(self, mock_executor_invoke):
         """Test that the Invoke function handles tool calls correctly"""
         # Setup mock to return a tool call result
@@ -210,7 +210,7 @@ class TestMcpWorkflowIntegration(unittest.TestCase):
         self.assertIn("Status: error", result)
 
     # --- Tests for Invoke Argument Handling --- 
-    @patch('WilmerData.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
+    @patch('WilmerAI.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
     def test_invoke_with_messages_kwarg(self, mock_executor_invoke):
         """Test Invoke accepts messages as a kwarg (no original_response)."""
         mock_executor_invoke.return_value = {"response": "", "has_tool_call": False}
@@ -227,7 +227,7 @@ class TestMcpWorkflowIntegration(unittest.TestCase):
         )
         self.assertEqual(result, "")
         
-    @patch('WilmerData.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
+    @patch('WilmerAI.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
     def test_invoke_with_messages_arg(self, mock_executor_invoke):
         """Test Invoke accepts messages as first positional arg (no original_response)."""
         mock_executor_invoke.return_value = {"response": "", "has_tool_call": False}
@@ -244,7 +244,7 @@ class TestMcpWorkflowIntegration(unittest.TestCase):
         )
         self.assertEqual(result, "")
         
-    @patch('WilmerData.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
+    @patch('WilmerAI.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
     def test_invoke_with_messages_and_response_kwargs(self, mock_executor_invoke):
         """Test Invoke works with both messages and original_response as kwargs."""
         original_response = "I'll help you with that."
@@ -264,7 +264,7 @@ class TestMcpWorkflowIntegration(unittest.TestCase):
         )
         self.assertEqual(result, original_response)
         
-    @patch('WilmerData.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
+    @patch('WilmerAI.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
     def test_invoke_with_stringified_messages_list(self, mock_executor):
         """Test Invoke with messages provided as a stringified list."""
         # Use json.dumps to create a valid JSON string
@@ -284,7 +284,7 @@ class TestMcpWorkflowIntegration(unittest.TestCase):
         )
         self.assertEqual(result, "")
 
-    @patch('WilmerData.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
+    @patch('WilmerAI.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
     def test_invoke_with_stringified_messages_list_and_response(self, mock_executor):
         """Test Invoke with stringified messages list and original_response."""
         # Use json.dumps to create a valid JSON string
@@ -307,7 +307,7 @@ class TestMcpWorkflowIntegration(unittest.TestCase):
         )
         self.assertEqual(result, original_response)
             
-    @patch('WilmerData.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
+    @patch('WilmerAI.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
     def test_invoke_with_simple_string_message(self, mock_executor):
         """Test Invoke with a simple user message string (with prefix)."""
         message_str = "user: Hello there"
@@ -323,7 +323,7 @@ class TestMcpWorkflowIntegration(unittest.TestCase):
         )
         self.assertEqual(result, "")
 
-    @patch('WilmerData.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
+    @patch('WilmerAI.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
     def test_invoke_with_simple_string_message_no_prefix(self, mock_executor):
         """Test Invoke with a simple user message string (no prefix)."""
         message_str = "Hello there"
@@ -339,7 +339,7 @@ class TestMcpWorkflowIntegration(unittest.TestCase):
         )
         self.assertEqual(result, "")
 
-    @patch('WilmerData.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
+    @patch('WilmerAI.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
     def test_invoke_with_simple_string_message_and_response(self, mock_executor):
         """Test Invoke with a simple user message string and response, triggering tool."""
         message_str = "user: What time is it?"
@@ -363,7 +363,7 @@ class TestMcpWorkflowIntegration(unittest.TestCase):
         )
         self.assertEqual(result, expected_tool_result_format)
         
-    @patch('WilmerData.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
+    @patch('WilmerAI.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
     def test_invoke_with_production_like_string_message(self, mock_executor):
         """Test Invoke handles production-like message formats (long string with prefix)."""
         # Simulate a long message string potentially split across lines but passed as one string
@@ -423,7 +423,7 @@ class TestMcpWorkflowIntegration(unittest.TestCase):
         with self.assertRaisesRegex(MCPMessageParsingError, "must be a list or string"):
             mcp_workflow_integration.Invoke(invalid_messages, tool_execution_map=self.tool_execution_map)
 
-    @patch('WilmerData.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
+    @patch('WilmerAI.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
     def test_tool_execution_with_validation_success(self, mock_executor):
         """Test successful tool execution when validation is enabled."""
         mock_executor.return_value = {
@@ -442,7 +442,7 @@ class TestMcpWorkflowIntegration(unittest.TestCase):
         self.assertEqual(result, expected_result)
         mock_executor.assert_called_once()
 
-    @patch('WilmerData.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
+    @patch('WilmerAI.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke')
     def test_tool_execution_with_validation_failure(self, mock_executor):
         """Test tool execution returns formatted error when validation fails."""
         error_detail = {"error": "Tool failed", "status": "error", "timestamp": "now"}
@@ -467,7 +467,7 @@ class TestMcpWorkflowIntegration(unittest.TestCase):
         
     def test_node_type_validation_valid(self):
         """Test Invoke proceeds with a valid node_type."""
-        with patch('WilmerData.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke') as mock_executor:
+        with patch('WilmerAI.Public.modules.mcp_workflow_integration.mcp_tool_executor.Invoke') as mock_executor:
             mock_executor.return_value = {"response": "", "has_tool_call": False}
             # Should initialize and run without raising error
             result = mcp_workflow_integration.Invoke(

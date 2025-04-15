@@ -16,25 +16,21 @@ To run all tests, follow these steps:
 
 1.  **Navigate to the project root:**
     ```bash
-    cd /root/projects/Wilmer/WilmerAI
+    cd /root/projects/Wilmer
     ```
 
-2.  **Activate the virtual environment:**
+2.  **Ensure the virtual environment is sourced (if not already):**
     ```bash
-    source venv/bin/activate
+    # If WilmerAI/venv exists and is not activated
+    source WilmerAI/venv/bin/activate 
     ```
 
-3.  **Navigate to the tests directory:**
+3.  **Run the tests using `unittest discover`:**
+    This command sets the necessary Python path and discovers tests within the `WilmerAI/Public/modules/tests` directory.
     ```bash
-    cd ../WilmerData/Public/modules/tests
+    export PYTHONPATH=/root/projects/Wilmer:/root/projects/Wilmer/WilmerAI:${PYTHONPATH} && \
+    python -m unittest discover -s WilmerAI/Public/modules/tests -p 'test_*.py'
     ```
-
-4.  **Run the test discovery script:**
-    ```bash
-    python run_tests.py
-    ```
-
-The script will automatically discover and execute all files matching the `test_*.py` pattern within this directory.
 
 ## Test Coverage
 

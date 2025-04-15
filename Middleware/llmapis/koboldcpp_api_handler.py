@@ -7,6 +7,7 @@ from typing import Dict, Generator, List, Optional
 import requests
 
 from Middleware.utilities import instance_utils, api_utils
+from Middleware.utilities.api_utils import handle_sse_and_json_stream
 from Middleware.utilities.config_utils import (
     get_is_chat_complete_add_user_assistant,
     get_is_chat_complete_add_missing_assistant, get_current_username
@@ -56,109 +57,94 @@ class KoboldCppApiHandler(LlmApiHandler):
 
         output_format = instance_utils.API_TYPE
 
-        def generate_sse_stream():
-            try:
-                with self.session.post(url, headers=self.headers, json=data, stream=True) as r:
-                    logger.info(f"Response status code: {r.status_code}")
-                    buffer = ""
-                    first_chunk_buffer = ""
-                    first_chunk_processed = False
-                    max_buffer_length = 20
-                    start_time = time.time()
-                    total_tokens = 0
+        try:
+            with self.session.post(url, headers=self.headers, json=data, stream=True) as r:
+                logger.info(f"Response status code: {r.status_code}")
+                r.raise_for_status()  # Raise exception for bad status codes
 
-                    # Variables to track the current event type
-                    current_event = None
+                first_chunk_buffer = ""
+                first_chunk_processed = False
+                max_buffer_length = 20  # Or a suitable length
 
-                    for chunk in r.iter_content(chunk_size=1024, decode_unicode=True):
-                        buffer += chunk
-                        while "\n" in buffer:
-                            line, buffer = buffer.split("\n", 1)
-                            line = line.strip()
+                # Use the utility function to handle SSE/JSON stream parsing
+                for chunk_data in handle_sse_and_json_stream(r, output_format, event_filter="message"):
+                    token = chunk_data.get("token", "")
+                    finish_reason = chunk_data.get("finish_reason", "")
 
-                            if line.startswith("event:"):
-                                # Extract the event type
-                                current_event = line[len("event:"):].strip()
-                                continue  # Move to the next line
+                    if not first_chunk_processed:
+                        first_chunk_buffer += token
 
-                            if line.startswith("data:"):
-                                data_str = line[len("data:"):].strip()
-                                if current_event == "message":
-                                    try:
-                                        if data_str == '[DONE]':
-                                            break
-                                        chunk_data = json.loads(data_str)
+                        if self.strip_start_stop_line_breaks:
+                            first_chunk_buffer = first_chunk_buffer.lstrip()
 
-                                        token = chunk_data.get("token", "")
-                                        finish_reason = chunk_data.get("finish_reason", "")
+                        if add_user_assistant and add_missing_assistant:
+                            # Check for "Assistant:" in the full buffer
+                            if "Assistant:" in first_chunk_buffer:
+                                # If it starts with "Assistant:", strip it
+                                first_chunk_buffer = api_utils.remove_assistant_prefix(first_chunk_buffer)
+                                # Mark as processed since we've handled the prefix
+                                first_chunk_processed = True
+                                token = first_chunk_buffer
+                            elif len(first_chunk_buffer) > max_buffer_length or finish_reason:
+                                # If buffer is too large or stream finishes, pass it as is
+                                first_chunk_processed = True
+                                token = first_chunk_buffer
+                            else:
+                                # Keep buffering until we have more tokens
+                                continue
+                        elif len(first_chunk_buffer) > max_buffer_length or finish_reason:
+                             # If buffer is too large or stream finishes, pass it as is
+                            first_chunk_processed = True
+                            token = first_chunk_buffer
+                        else:
+                             # Keep buffering until we have more tokens
+                            continue
 
-                                        if not first_chunk_processed:
-                                            first_chunk_buffer += token
+                    # If token is empty after processing first chunk, skip
+                    if not token and first_chunk_processed:
+                         continue
 
-                                            if self.strip_start_stop_line_breaks:
-                                                first_chunk_buffer = first_chunk_buffer.lstrip()
-
-                                            if add_user_assistant and add_missing_assistant:
-                                                # Check for "Assistant:" in the full buffer
-                                                if "Assistant:" in first_chunk_buffer:
-                                                    # If it starts with "Assistant:", strip it
-                                                    first_chunk_buffer = api_utils.remove_assistant_prefix(
-                                                        first_chunk_buffer)
-                                                    # Mark as processed since we've handled the prefix
-                                                    first_chunk_processed = True
-                                                    token = first_chunk_buffer
-                                                elif len(first_chunk_buffer) > max_buffer_length or finish_reason:
-                                                    # If buffer is too large or stream finishes, pass it as is
-                                                    first_chunk_processed = True
-                                                    token = first_chunk_buffer
-                                                else:
-                                                    # Keep buffering until we have more tokens
-                                                    continue
-                                            elif len(first_chunk_buffer) > max_buffer_length or finish_reason:
-                                                # If buffer is too large or stream finishes, pass it as is
-                                                first_chunk_processed = True
-                                                token = first_chunk_buffer
-                                            else:
-                                                # Keep buffering until we have more tokens
-                                                continue
-
-                                        total_tokens += len(token.split())
-
-                                        completion_json = api_utils.build_response_json(
-                                            token=token,
-                                            finish_reason=None,  # Don't add "stop" or "done" yet
-                                            current_username=get_current_username()
-                                        )
-
-                                        yield api_utils.sse_format(completion_json, output_format)
-
-                                        if finish_reason == "stop":
-                                            break
-
-                                    except json.JSONDecodeError as e:
-                                        logger.warning(f"Failed to parse JSON: {e}")
-                                        continue
-
-                    total_duration = int((time.time() - start_time) * 1e9)
-
-                    # Send the final payload with "done" and "stop"
-                    final_completion_json = api_utils.build_response_json(
-                        token="",
-                        finish_reason="stop",
-                        current_username=get_current_username(),
+                    completion_json = api_utils.build_response_json(
+                        token=token,
+                        finish_reason=None, # Let the final block handle finish_reason
+                        current_username=get_current_username()
                     )
-                    logger.debug("Total duration: {}", total_duration)
-                    yield api_utils.sse_format(final_completion_json, output_format)
+                    yield api_utils.sse_format(completion_json, output_format)
 
-                    if output_format not in ('ollamagenerate', 'ollamaapichat'):
-                        logger.debug("End of stream reached, sending [DONE] signal.")
-                        yield api_utils.sse_format("[DONE]", output_format)
+                    if finish_reason == "stop":
+                         break # Exit loop if Kobold signals stop
 
-            except requests.RequestException as e:
-                logger.warning(f"Request failed: {e}")
-                raise
+                # Send the final payload with "stop"
+                final_completion_json = api_utils.build_response_json(
+                    token="",
+                    finish_reason="stop",
+                    current_username=get_current_username(),
+                )
+                yield api_utils.sse_format(final_completion_json, output_format)
 
-        return generate_sse_stream()
+                # Send [DONE] signal if required by output format
+                if output_format not in ('ollamagenerate', 'ollamaapichat'):
+                     logger.debug("End of stream reached, sending [DONE] signal.")
+                     yield api_utils.sse_format("[DONE]", output_format)
+
+        except requests.RequestException as e:
+            logger.error(f"Request failed: {e}")
+            logger.error(traceback.format_exc())
+            # Yield an error message in SSE format
+            error_json = api_utils.build_error_json(str(e), get_current_username())
+            yield api_utils.sse_format(error_json, output_format)
+            # Also send DONE signal after error if necessary
+            if output_format not in ('ollamagenerate', 'ollamaapichat'):
+                yield api_utils.sse_format("[DONE]", output_format)
+            # Reraise might not be ideal for streaming; yielding error is better UX.
+            # Consider whether to stop execution or allow retries elsewhere.
+        except Exception as e:
+             logger.error(f"An unexpected error occurred during streaming: {e}")
+             logger.error(traceback.format_exc())
+             error_json = api_utils.build_error_json(f"Unexpected streaming error: {e}", get_current_username())
+             yield api_utils.sse_format(error_json, output_format)
+             if output_format not in ('ollamagenerate', 'ollamaapichat'):
+                 yield api_utils.sse_format("[DONE]", output_format)
 
     def handle_non_streaming(
             self,

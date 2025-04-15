@@ -5,8 +5,14 @@ import os
 
 # Adjust import paths
 # Assuming the script is run from the 'tests' directory
+# Go up three levels to reach the WilmerAI source root
+source_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
+print(f"Adding source root to path: {source_root}")
+sys.path.insert(0, source_root)
+
 # Go up four levels to reach the project root ('Wilmer')
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
+print(f"Adding project root to path: {project_root}")
 sys.path.insert(0, project_root)
 
 # Ensure the modules directory itself is in the path if needed

@@ -8,9 +8,57 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from Middleware.utilities.api_utils import extract_text_from_chunk
+# Import the public function and the private helper for direct testing
+from Middleware.utilities.api_utils import extract_text_from_chunk, _extract_content_from_parsed_json
 
 class TestApiUtils(unittest.TestCase):
+
+    # === Direct Tests for Helper Function ===
+    def test_helper_extract_content_openai(self):
+        parsed = {"choices": [{"delta": {"content": "OpenAI Text"}}]}
+        self.assertEqual(_extract_content_from_parsed_json(parsed), "OpenAI Text")
+
+    def test_helper_extract_content_ollama(self):
+        parsed = {"response": "Ollama Text"}
+        self.assertEqual(_extract_content_from_parsed_json(parsed), "Ollama Text")
+
+    def test_helper_extract_content_message(self):
+        parsed = {"message": {"content": "Message Text"}}
+        self.assertEqual(_extract_content_from_parsed_json(parsed), "Message Text")
+
+    def test_helper_extract_content_priority_openai(self):
+        parsed = {"choices": [{"delta": {"content": "OpenAI Wins"}}], "response": "Ollama Loses", "message": {"content": "Msg Loses"}}
+        self.assertEqual(_extract_content_from_parsed_json(parsed), "OpenAI Wins")
+        
+    def test_helper_extract_content_priority_ollama(self):
+        parsed = {"choices": [{"delta": {"content": ""}}], "response": "Ollama Wins", "message": {"content": "Msg Loses"}}
+        self.assertEqual(_extract_content_from_parsed_json(parsed), "Ollama Wins")
+        
+        parsed_no_choices = {"response": "Ollama Wins", "message": {"content": "Msg Loses"}}
+        self.assertEqual(_extract_content_from_parsed_json(parsed_no_choices), "Ollama Wins")
+        
+    def test_helper_extract_content_priority_message(self):
+        parsed = {"choices": [{"delta": {"content": ""}}], "response": "", "message": {"content": "Msg Wins"}}
+        self.assertEqual(_extract_content_from_parsed_json(parsed), "Msg Wins")
+        
+        parsed_no_choices_no_resp = {"message": {"content": "Msg Wins"}}
+        self.assertEqual(_extract_content_from_parsed_json(parsed_no_choices_no_resp), "Msg Wins")
+
+    def test_helper_extract_content_empty_invalid(self):
+        self.assertEqual(_extract_content_from_parsed_json({}), "")
+        self.assertEqual(_extract_content_from_parsed_json({"choices": []}), "")
+        self.assertEqual(_extract_content_from_parsed_json({"choices": [{}]}), "")
+        self.assertEqual(_extract_content_from_parsed_json({"choices": [{"delta": {}}]}), "")
+        self.assertEqual(_extract_content_from_parsed_json({"choices": [{"delta": {"content": ""}}]}), "")
+        self.assertEqual(_extract_content_from_parsed_json({"response": ""}), "")
+        self.assertEqual(_extract_content_from_parsed_json({"message": {}}), "")
+        self.assertEqual(_extract_content_from_parsed_json({"message": {"content": ""}}), "")
+        self.assertEqual(_extract_content_from_parsed_json("not a dict"), "") # Test non-dict input
+        self.assertEqual(_extract_content_from_parsed_json(None), "")
+
+    # === Tests for the Public Function (extract_text_from_chunk) ===
+    # Keep existing tests, they should still pass as they test the overall behavior
+    # with different input chunk types (SSE string, plain JSON string, dict, etc.)
 
     def test_extract_text_from_openai_sse_chunk(self):
         """Test extraction from a standard OpenAI SSE chunk."""
@@ -130,6 +178,74 @@ class TestApiUtils(unittest.TestCase):
     def test_extract_text_from_empty_string(self):
         """Test extraction when input is an empty string."""
         self.assertEqual(extract_text_from_chunk(""), "")
+
+    def test_extract_text_from_chunk_non_json_string(self):
+        self.assertEqual(extract_text_from_chunk("Just a plain string"), "")
+
+    def test_extract_text_from_chunk_number(self):
+        self.assertEqual(extract_text_from_chunk(123), "")
+
+    def test_extract_text_from_chunk_dict_ollama(self):
+        """Test extracting text from a dictionary chunk in Ollama format."""
+        chunk = {
+            "model": "test-model",
+            "created_at": "2023-01-01T12:00:00Z",
+            "response": "This is Ollama text.",
+            "done": False
+        }
+        self.assertEqual(extract_text_from_chunk(chunk), "This is Ollama text.")
+
+    def test_extract_text_from_chunk_dict_openai_chat(self):
+        """Test extracting text from a dictionary chunk in OpenAI Chat format (message.content)."""
+        chunk = {
+            "model": "test-model",
+            "message": {
+                "role": "assistant",
+                "content": "This is OpenAI Chat text."
+            },
+            "done": True
+        }
+        self.assertEqual(extract_text_from_chunk(chunk), "This is OpenAI Chat text.")
+    
+    def test_extract_text_from_chunk_dict_mixed_prefers_response(self):
+        """Test that 'response' is checked if 'message.content' is empty/missing in dict."""
+        chunk = {
+            "model": "test-model",
+            "message": {"role": "assistant", "content": ""}, # Empty content
+            "response": "This is the response text.",
+            "done": False
+        }
+        self.assertEqual(extract_text_from_chunk(chunk), "This is the response text.")
+        
+        chunk_no_content = {
+            "model": "test-model",
+            "message": {"role": "assistant"}, # No content key
+            "response": "This is the response text.",
+            "done": False
+        }
+        self.assertEqual(extract_text_from_chunk(chunk_no_content), "This is the response text.")
+        
+        chunk_no_message = {
+            "model": "test-model",
+            "response": "This is the response text.",
+            "done": False
+        }
+        self.assertEqual(extract_text_from_chunk(chunk_no_message), "This is the response text.")
+
+    def test_extract_text_from_chunk_sse_ollama(self):
+        """Test extracting text from an SSE string chunk in Ollama format."""
+        chunk_str = 'data: { "model": "test", "response": "Ollama SSE text", "done": false }'
+        self.assertEqual(extract_text_from_chunk(chunk_str), "Ollama SSE text")
+
+    def test_extract_text_from_chunk_sse_openai(self):
+        """Test extracting text from an SSE string chunk in OpenAI format."""
+        chunk_str = 'data: { "choices": [{ "delta": { "content": "OpenAI SSE text" } }] }'
+        self.assertEqual(extract_text_from_chunk(chunk_str), "OpenAI SSE text")
+
+    def test_extract_text_from_chunk_sse_done(self):
+        """Test extracting text from an SSE [DONE] signal."""
+        chunk_str = 'data: [DONE]'
+        self.assertEqual(extract_text_from_chunk(chunk_str), "")
 
 if __name__ == '__main__':
     unittest.main() 
