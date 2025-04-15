@@ -251,6 +251,7 @@ def handle_sse_and_json_stream(
     first_chunk_processed = False
     start_time = time.time()
     total_tokens = 0 # Note: token calculation might be slightly off if callback handles complex structures
+    full_response_text = "" # Initialize accumulator for the full response text
 
     try:
         for chunk in response.iter_content(chunk_size=1024, decode_unicode=True):
@@ -323,6 +324,7 @@ def handle_sse_and_json_stream(
                         # --- Yield processed chunk ---
                         if token or first_chunk_processed: # Yield even if token is empty after first chunk is processed
                              total_tokens += len(token.split()) # Rough estimate
+                             full_response_text += token # Accumulate the text
 
                              completion_json = build_response_json(
                                  token=token,
@@ -344,6 +346,11 @@ def handle_sse_and_json_stream(
 
         # --- End of stream processing ---
         total_duration = int((time.time() - start_time) * 1e9)
+
+        # Log the full accumulated text
+        logger.info("\n\n*****************************************************************************\n")
+        logger.info("\n\nOutput from the LLM (streaming): %s", full_response_text)
+        logger.info("\n*****************************************************************************\n\n")
 
         # Final message signaling end of stream
         final_completion_json = build_response_json(
