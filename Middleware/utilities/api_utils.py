@@ -144,10 +144,6 @@ def extract_openai_chat_content(chunk_data: dict) -> Tuple[str, Optional[str]]:
 
 def extract_text_from_chunk(chunk) -> str:
     """Extract text content from a chunk, handling various data types."""
-    # <<< Add critical log/print at function start >>>
-    # logger.critical("##### ENTERING extract_text_from_chunk #####")
-    # print("##### ENTERING extract_text_from_chunk #####", flush=True) # Alternative if logging isn't working
-    # <<< End critical log >>>
     extracted = ""
     try:
         # Handle None
@@ -223,7 +219,6 @@ def remove_assistant_prefix(response_text: str) -> str:
     return response_text
 
 
-# <<< New Function >>>
 def handle_sse_and_json_stream(
         response: requests.Response,
         extract_content_callback: callable,
@@ -371,4 +366,3 @@ def handle_sse_and_json_stream(
     except Exception as e:
         logger.error(f"Unexpected error during streaming setup or iteration: {e}", exc_info=True)
         raise # Re-raise unexpected errors
-# <<< End New Function >>>
