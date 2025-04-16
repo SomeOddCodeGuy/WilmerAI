@@ -14,12 +14,12 @@
         "title": "System Prompt Initialization & Tool Discovery",
         "agentName": "System Prompt Handler",
         "type": "PythonModule",
-        "module_path": "/root/projects/Wilmer/WilmerData/Public/modules/ensure_system_prompt.py",
+        "module_path": "/root/projects/Wilmer/WilmerAI/Public/modules/ensure_system_prompt.py",
         "args": [
             "{messages}"
         ],
         "kwargs": {
-            "default_prompt_path": "/root/projects/Wilmer/WilmerData/Public/Configs/default_tool_prompt.txt",
+            "default_prompt_path": "/root/projects/Wilmer/WilmerAI/Public/Configs/default_tool_prompt.txt",
             "user_identified_services": "{agent1Output}"
         }
     },
@@ -40,7 +40,7 @@
         "title": "Response Sanitizer",
         "agentName": "MCP Response Sanitizer",
         "type": "PythonModule",
-        "module_path": "/root/projects/Wilmer/WilmerData/Public/modules/sanitize_llm_response.py",
+        "module_path": "/root/projects/Wilmer/WilmerAI/Public/modules/sanitize_llm_response.py",
         "args": [
             "{{ agent3Output }}"
         ],
@@ -51,7 +51,7 @@
         "title": "Tool Execution and Response Formatting",
         "agentName": "MCP Tool Executor",
         "type": "PythonModule",
-        "module_path": "/root/projects/Wilmer/WilmerData/Public/modules/mcp_workflow_integration.py",
+        "module_path": "/root/projects/Wilmer/WilmerAI/Public/modules/mcp_workflow_integration.py",
         "args": [
             "{{ agent2Output['messages'] | tojson }}"
         ],

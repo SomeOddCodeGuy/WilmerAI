@@ -308,7 +308,6 @@ def handle_sse_and_json_stream(
 
                 # --- Common Processing for extracted data_str ---
                 if data_str:
-                    logger.debug(f"Extracted data_str: {data_str[:100]}...")
                     try:
                         chunk_data = json.loads(data_str)
                         extracted_info = extract_content_callback(chunk_data)
@@ -321,7 +320,6 @@ def handle_sse_and_json_stream(
                             logger.warning(f"Unexpected return type from callback: {type(extracted_info)}...")
                             token = ""
                         
-                        logger.debug(f"Callback returned: token='{token}', finish_reason='{finish_reason_from_chunk}'")
 
                         # --- Simplified Yielding Logic ---
                         if token: # Only process if the token has content
@@ -354,7 +352,6 @@ def handle_sse_and_json_stream(
                                     current_username=get_current_username()
                                 )
                                 formatted_sse = sse_format(completion_json, intended_api_type)
-                                logger.debug(f"Yielding: {formatted_sse.strip()}")
                                 yield formatted_sse
                         else:
                             logger.debug(f"Token was empty, skipping yield.")
