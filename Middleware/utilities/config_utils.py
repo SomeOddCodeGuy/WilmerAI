@@ -356,6 +356,17 @@ def get_template_config_path(template_file_name):
     return get_config_path('PromptTemplates', template_file_name)
 
 
+def get_default_tool_prompt_path():
+    """
+    Constructs the file path for the default tool prompt file.
+
+    :return: The full path to the default tool prompt file.
+    """
+    config_dir = str(get_root_config_directory())
+    config_file = os.path.join(config_dir, 'default_tool_prompt.txt')
+    return config_file
+
+
 def load_template_from_json(template_file_name):
     """
     Loads a prompt template from a JSON configuration file.

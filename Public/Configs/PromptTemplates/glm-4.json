@@ -1,0 +1,11 @@
+{
+    "promptTemplateAssistantPrefix": "",
+    "promptTemplateAssistantSuffix": "",
+    "promptTemplateEndToken": "",
+    "promptTemplateSystemPrefix": "[gMASK] <sop> <|system|>\n",
+    "promptTemplateSystemSuffix": " <|user|>\n",
+    "promptTemplateUserPrefix": "",
+    "promptTemplateUserSuffix": " <|assistant|>",
+    "promptTemplateSystemmesPrefix": "[gMASK] <sop> <|system|>\n",
+    "promptTemplateSystemmesSuffix": " <|user|>\n"
+}

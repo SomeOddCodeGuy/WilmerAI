@@ -4,7 +4,8 @@ import logging
 import time
 import uuid
 from datetime import datetime
-from typing import Any, Dict, Union, List, Generator
+from typing import Any, Dict, Union, List, Generator, Optional
+from functools import wraps
 
 from flask import Flask, jsonify, request, Response
 from flask.views import MethodView
@@ -15,12 +16,96 @@ from Middleware.utilities.config_utils import get_custom_workflow_is_active, \
     get_is_chat_complete_add_missing_assistant
 from Middleware.utilities.prompt_extraction_utils import parse_conversation, extract_discussion_id
 from Middleware.utilities.text_utils import replace_brackets_in_list
+from Middleware.utilities.message_transformation_utils import transform_messages
 from Middleware.workflows.categorization.prompt_categorizer import PromptCategorizer
 from Middleware.workflows.managers.workflow_manager import WorkflowManager
 
 app = Flask(__name__)
+app.config['JSON_AS_ASCII'] = False # Ensure jsonify handles unicode correctly without escaping them unnecessarily
 
 logger = logging.getLogger(__name__)
+
+
+# --- Helper Function for OpenWebUI Tool Detection ---
+# We don't support OpenWebUI tool calls yet, so we return an early response if we detect one
+def _check_and_handle_openwebui_tool_request(request_data: Dict[str, Any], api_type: str) -> Optional[Response]:
+    """
+    Checks if the request is an OpenWebUI tool selection request and returns an early response if it is.
+
+    :param request_data: The incoming request JSON data.
+    :param api_type: The type of API endpoint ('openaichatcompletion' or 'ollamaapichat').
+    :return: A Flask Response object if it's an OpenWebUI request, otherwise None.
+    """
+    openwebui_tool_pattern = "Your task is to choose and return the correct tool(s) from the list of available tools based on the query"
+    if 'messages' in request_data:
+        for message in request_data['messages']:
+            if message.get('role') == 'system' and openwebui_tool_pattern in message.get('content', ''):
+                logger.info(f"Detected OpenWebUI tool selection request via {api_type}. Returning early.")
+                if api_type == 'openaichatcompletion':
+                    # Return OpenAI chat compatible format for no tool calls
+                    response = {
+                        "id": f"chatcmpl-opnwui-tool-{int(time.time())}",
+                        "object": "chat.completion",
+                        "created": int(time.time()),
+                        "model": api_utils.get_model_name(),
+                        "system_fingerprint": "wmr_123456789",
+                        "choices": [
+                            {
+                                "index": 0,
+                                "message": {
+                                    "role": "assistant",
+                                    "content": None,
+                                    "tool_calls": []
+                                },
+                                "logprobs": None,
+                                "finish_reason": "tool_calls"
+                            }
+                        ],
+                        "usage": {}
+                    }
+                    return jsonify(response)
+                elif api_type == 'ollamaapichat':
+                    # Return Ollama /api/chat compatible format for no tool calls
+                    current_time = datetime.utcnow().isoformat() + 'Z'
+                    response_json = {
+                        "model": request_data.get("model", api_utils.get_model_name()), # Use requested model or default
+                        "created_at": current_time,
+                        "message": {
+                            "role": "assistant",
+                            "content": "" # Empty content for Ollama
+                        },
+                        "done_reason": "stop",
+                        "done": True,
+                        "total_duration": 0, "load_duration": 0, "prompt_eval_count": 0,
+                        "prompt_eval_duration": 0, "eval_count": 0, "eval_duration": 0
+                    }
+                    return jsonify(response_json)
+                else:
+                    logger.warning(f"Unknown api_type '{api_type}' for OpenWebUI tool request handling.")
+                    return None # Or handle error appropriately
+    return None # Not an OpenWebUI tool request
+
+# --- Decorator for OpenWebUI Tool Check ---
+def handle_openwebui_tool_check(api_type: str):
+    """Decorator to check for and handle OpenWebUI tool selection requests."""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            # Use force=True to handle potential non-JSON content types
+            request_data = request.get_json(force=True, silent=True)
+            if request_data is None:
+                # Handle cases where request data is not valid JSON
+                logger.warning(f"Request to {func.__name__} did not contain valid JSON.")
+                # Decide how to handle this - maybe return an error or let the original function handle it
+                # For now, let the original function proceed, it might handle non-JSON requests or raise its own error
+                return func(*args, **kwargs)
+
+            early_response = _check_and_handle_openwebui_tool_request(request_data, api_type)
+            if early_response:
+                return early_response
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
 
 
 class ModelsAPI(MethodView):
@@ -67,7 +152,7 @@ class CompletionsAPI(MethodView):
         messages = parse_conversation(prompt)
 
         if stream:
-            return Response(WilmerApi.handle_user_prompt(messages, True), content_type='application/json')
+            return Response(WilmerApi.handle_user_prompt(messages, True), mimetype='text/event-stream')
         else:
             return_response: str = WilmerApi.handle_user_prompt(messages, False)
             current_time: int = int(time.time())
@@ -92,6 +177,7 @@ class CompletionsAPI(MethodView):
 
 class ChatCompletionsAPI(MethodView):
     @staticmethod
+    @handle_openwebui_tool_check('openaichatcompletion') # Apply decorator
     def post() -> Union[Response, Dict[str, Any]]:
         """
         Handles POST requests for OpenAI Compatible chat/completions. It processes the incoming data and returns a response.
@@ -102,7 +188,7 @@ class ChatCompletionsAPI(MethodView):
         instance_utils.API_TYPE = "openaichatcompletion"
         add_user_assistant = get_is_chat_complete_add_user_assistant()
         add_missing_assistant = get_is_chat_complete_add_missing_assistant()
-        request_data: Dict[str, Any] = request.get_json()
+        request_data: Dict[str, Any] = request.get_json() # get_json is safe here due to decorator check
         logger.info(f"ChatCompletionsAPI request received: {json.dumps(request_data)}")
 
         stream: bool = request_data.get("stream", False)
@@ -117,26 +203,10 @@ class ChatCompletionsAPI(MethodView):
             if "role" not in message or "content" not in message:
                 raise ValueError("Each message must have 'role' and 'content' fields.")
 
-        # Transform the messages while preserving their order
-        transformed_messages: List[Dict[str, str]] = []
-        for message in messages:
-            role = message["role"]
-            content = message["content"]
-
-            if add_user_assistant:
-                if role == "user":
-                    content = "User: " + content
-                elif role == "assistant":
-                    content = "Assistant: " + content
-
-            transformed_messages.append({"role": role, "content": content})
-
-        # Check if the last message is not from assistant and add an assistant message if needed
-        if add_missing_assistant:
-            if add_user_assistant and messages and messages[-1]["role"] != "assistant":
-                transformed_messages.append({"role": "assistant", "content": "Assistant: "})
-            elif messages and messages[-1]["role"] != "assistant":
-                transformed_messages.append({"role": "assistant", "content": ""})
+        # Use centralized message transformation utility
+        transformed_messages = transform_messages(
+            messages, add_user_assistant, add_missing_assistant
+        )
 
         if stream:
             return Response(
@@ -216,7 +286,8 @@ class GenerateAPI(MethodView):
 
         # Generate and return the appropriate response
         if stream:
-            return Response(WilmerApi.handle_user_prompt(messages, stream=True), content_type='application/json')
+            # Use mimetype='text/event-stream' for SSE
+            return Response(WilmerApi.handle_user_prompt(messages, stream=True), mimetype='text/event-stream')
         else:
             return_response: str = WilmerApi.handle_user_prompt(messages, stream=False)
             current_time: int = int(time.time())
@@ -241,6 +312,7 @@ class GenerateAPI(MethodView):
 
 class ApiChatAPI(MethodView):
     @staticmethod
+    @handle_openwebui_tool_check('ollamaapichat') # Apply decorator
     def post() -> Response:
         """
         Handles POST requests for Ollama's /api/chat endpoint.
@@ -252,55 +324,25 @@ class ApiChatAPI(MethodView):
 
         # Try to parse JSON even if Content-Type is not 'application/json'
         try:
+            # Use force=True as decorator also uses it, ensures consistency
             request_data: Dict[str, Any] = request.get_json(force=True)
+            if request_data is None: # Add check for None if force=True fails silently
+                 raise ValueError("Request data is not valid JSON")
         except Exception as e:
-            logger.error(f"Failed to parse JSON: {e}")
+            logger.error(f"Failed to parse JSON in ApiChatAPI: {e}")
             return jsonify({"error": "Invalid JSON data"}), 400
-
-        logger.info(f"ApiChatAPI request received: {json.dumps(request_data)}")
 
         # Validate 'model' and 'messages' fields
         if 'model' not in request_data or 'messages' not in request_data:
             return jsonify({"error": "Both 'model' and 'messages' fields are required."}), 400
 
         messages: List[Dict[str, Any]] = request_data["messages"]
-        transformed_messages: List[Dict[str, Any]] = []
-
-        for message in messages:
-            # Validate that each message has 'role' and 'content'
-            if "role" not in message or "content" not in message:
-                return jsonify({"error": "Each message must have 'role' and 'content' fields."}), 400
-
-            role = message["role"]
-            content = message["content"]
-
-            # Process the 'images' field if it exists
-            if "images" in message and isinstance(message["images"], list):
-                for image_base64 in message["images"]:
-                    # Add each image as its own message with the role "images"
-                    transformed_messages.append({
-                        "role": "images",
-                        "content": image_base64
-                    })
-
-            if add_user_assistant:
-                if role == "user":
-                    content = "User: " + content
-                elif role == "assistant":
-                    content = "Assistant: " + content
-
-            # Add the original message to the collection
-            transformed_message = {"role": role, "content": content}
-            transformed_messages.append(transformed_message)
-
-        # Add assistant response if necessary
-        if add_user_assistant:
-            if transformed_messages and transformed_messages[-1]["role"] != "assistant":
-                transformed_messages.append({"role": "assistant", "content": "Assistant: "})
-        elif add_missing_assistant:
-            if transformed_messages and transformed_messages[-1]["role"] != "assistant":
-                transformed_messages.append({"role": "assistant", "content": ""})
-
+        
+        # Use centralized message transformation utility to process the messages while preserving order
+        transformed_messages = transform_messages(
+            messages, add_user_assistant, add_missing_assistant
+        )
+        
         # Process the response
         stream = request_data.get("stream", True)
         if isinstance(stream, str):
@@ -311,9 +353,10 @@ class ApiChatAPI(MethodView):
         if stream:
             return Response(response_data, mimetype='text/event-stream')
         else:
+            response_json = None  # Initialize
             try:
                 current_time = datetime.utcnow().isoformat() + 'Z'
-                response = {
+                response_json = {
                     "model": request_data.get("model", "llama3.2"),
                     "created_at": current_time,
                     "message": {
@@ -329,10 +372,20 @@ class ApiChatAPI(MethodView):
                     "eval_count": 392,  # TODO: Replace with calculated or real values
                     "eval_duration": 4476000000  # TODO: Replace with calculated or real values
                 }
-                return jsonify(response)
-            except Exception as e:
-                logger.error(f"Failed to process non-streaming response: {e}")
-                return jsonify({"error": "Invalid response from model"}), 500
+            except Exception as construct_e:
+                logger.error(f"FAILED to construct response_json dictionary: {construct_e} ---", exc_info=True)
+                # Return generic error for now
+                return jsonify({"error": "Failed to construct final response content"}), 500
+
+            try:
+                # Attempt to jsonify
+                flask_response = jsonify(response_json)
+                return flask_response
+            except Exception as jsonify_e:
+                logger.error(f"--- ApiChatAPI: FAILED during jsonify: {jsonify_e} ---", exc_info=True)
+                logger.error(f"--- ApiChatAPI: response_json content that failed jsonify (truncated): {str(response_json)[:1000]}...")
+                # Return generic error for now
+                return jsonify({"error": "Failed to finalize response format"}), 500
 
 
 class TagsAPI(MethodView):

@@ -1,0 +1,14 @@
+[
+    {
+        "title": "Processing Application Task",
+        "agentName": "Task Processing Agent",
+        "systemPrompt": "When given a task from OpenWebUI client application, respond with ONLY the requested output in the specified format. Do not provide explanations or additional text unless specifically asked for in the request.\nThe additional instructions for this task will be included in the conversation below.",
+        "prompt": "",
+        "lastMessagesToSendInsteadOfPrompt": 10,
+        "endpointName": "General-Endpoint",
+        "preset": "General_Preset",
+        "maxResponseSizeInTokens": 2000,
+        "addUserTurnTemplate": false,
+        "addDiscussionIdTimestampsForLLM": false
+    }
+]

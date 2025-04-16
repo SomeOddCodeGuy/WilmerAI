@@ -5,4 +5,4 @@ CONFIG_DIRECTORY = None
 USER = None
 LOGGING_DIRECTORY = "logs"
 API_TYPE = "openai"
-IMAGE_API_TYPES = ["ollamaApiChatImageSpecific"]
+IMAGE_API_TYPES = ["ollamaApiChatImageSpecific", "openAIApiChatImageSpecific"]
