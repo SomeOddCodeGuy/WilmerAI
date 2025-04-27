@@ -26,20 +26,18 @@ class WorkflowVariableManager:
         processed_prompts = {}
         for key, text in prompt_configurations.items():
             if llm_handler is not None:
-                template_file = llm_handler.prompt_template_file_name if "chat" in key else llm_handler.prompt_template_file_name
+                template_file = get_chat_template_name() if "chat" in key else llm_handler.prompt_template_file_name
             else:
-                template_file = llm_handler.prompt_template_file_name
+                template_file = get_chat_template_name()
             processed_prompts[key] = format_templated_prompt(text, llm_handler, template_file)
         return processed_prompts
 
-    def __init__(self, chat_prompt_template_name: str, **kwargs):
+    def __init__(self, **kwargs):
         """
         Initializes the WorkflowVariableManager with optional category-related attributes.
 
         :param kwargs: Optional keyword arguments to set category-related attributes.
         """
-        if not chat_prompt_template_name:
-            raise ValueError("chat_prompt_template_name must be provided to WorkflowVariableManager")
 
         self.category_list = None
         self.categoriesSeparatedByOr = None
@@ -48,7 +46,7 @@ class WorkflowVariableManager:
         self.categoryNameBulletpoints = None
         self.category_descriptions = None
         self.categories = None
-        self.chatPromptTemplate = chat_prompt_template_name
+        self.chatPromptTemplate = get_chat_template_name()
         self.set_categories_from_kwargs(**kwargs)
 
     def apply_variables(self, prompt: str, llm_handler: Any, messages: List[Dict[str, str]],
@@ -94,7 +92,7 @@ class WorkflowVariableManager:
             prompt_configurations = self.generate_conversation_turn_variables(messages, llm_handler,
                                                                               remove_all_system_override)
             variables.update(prompt_configurations)
-            variables.update(format_system_prompts(messages, llm_handler, self.chatPromptTemplate))
+            variables.update(format_system_prompts(messages, llm_handler, get_chat_template_name()))
 
         # Merge any agent outputs
         variables.update(agent_outputs or {})
