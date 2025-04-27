@@ -2,7 +2,7 @@ import json
 import logging
 import time
 import traceback
-from typing import Dict, Generator, List, Optional, Tuple
+from typing import Dict, Generator, List, Optional
 
 import requests
 
@@ -12,7 +12,6 @@ from Middleware.utilities.config_utils import (
     get_is_chat_complete_add_missing_assistant, get_current_username
 )
 from Middleware.utilities.text_utils import return_brackets_in_string
-from Middleware.utilities.api_utils import handle_sse_and_json_stream
 from .llm_api_handler import LlmApiHandler
 
 logger = logging.getLogger(__name__)
@@ -30,15 +29,16 @@ class OllamaGenerateHandler(LlmApiHandler):
             prompt: Optional[str] = None
     ) -> Generator[str, None, None]:
         """
-        Handle streaming response for Ollama Generate API using the common utility.
+        Handle streaming response for Ollama API.
 
         Args:
-            conversation (Optional[List[Dict[str, str]]]): Not used.
-            system_prompt (Optional[str]): System prompt.
-            prompt (Optional[str]): User prompt.
+            conversation (Optional[List[Dict[str, str]]]): A list of messages in the conversation.
+                Not used in this API; prompt is constructed from system_prompt and prompt.
+            system_prompt (Optional[str]): The system prompt to use.
+            prompt (Optional[str]): The user prompt to use.
 
-        Yields:
-            str: Server-Sent Event formatted strings.
+        Returns:
+            Generator[str, None, None]: A generator yielding chunks of the response.
         """
         self.set_gen_input()
 
@@ -51,59 +51,106 @@ class OllamaGenerateHandler(LlmApiHandler):
         add_user_assistant = get_is_chat_complete_add_user_assistant()
         add_missing_assistant = get_is_chat_complete_add_missing_assistant()
 
-        # This handler always produces Ollama Generate format
-        output_api_type = "ollamagenerate"
-        logger.info(f"Ollama Generate Streaming flow! Formatting as: {output_api_type}")
+        logger.info(f"Ollama Streaming flow!")
         logger.info(f"URL: {url}")
         logger.debug(f"Headers: {self.headers}")
         logger.debug(f"Sending request with data: {json.dumps(data, indent=2)}")
 
-        def extract_ollama_generate_content(chunk_data: dict) -> Tuple[str, Optional[str]]:
-            token = chunk_data.get("response", "")
-            finish_reason = None
-            if chunk_data.get("done") == True:
-                pass
-            return token, None
+        output_format = instance_utils.API_TYPE
 
-        try:
-            logger.info(f"Initiating streaming request to {url}")
-            with self.session.post(url, headers=self.headers, json=data, stream=True) as r:
-                logger.info(f"Response status code: {r.status_code}")
-                r.raise_for_status()
+        def generate_sse_stream():
+            try:
+                with self.session.post(url, headers=self.headers, json=data, stream=True) as r:
+                    logger.info(f"Response status code: {r.status_code}")
+                    first_chunk_buffer = ""
+                    first_chunk_processed = False
+                    max_buffer_length = 20
+                    start_time = time.time()
+                    total_tokens = 0
 
-                yield from handle_sse_and_json_stream(
-                    response=r,
-                    extract_content_callback=extract_ollama_generate_content,
-                    intended_api_type=output_api_type,
-                    strip_start_stop_line_breaks=self.strip_start_stop_line_breaks,
-                    add_user_assistant=add_user_assistant,
-                    add_missing_assistant=add_missing_assistant
-                )
+                    for line in r.iter_lines(decode_unicode=True):
+                        if not line.strip():
+                            continue  # Skip empty lines
 
-        except requests.RequestException as e:
-            logger.warning(f"Request failed: {e}")
-            error_json = api_utils.build_response_json(
-                token=f"Error communicating with API: {e}",
-                api_type=output_api_type,
-                finish_reason="stop",
-                current_username=get_current_username()
-            )
-            yield api_utils.sse_format(error_json, output_api_type)
-            if output_api_type not in ('ollamagenerate', 'ollamaapichat'):
-                yield api_utils.sse_format("[DONE]", output_api_type)
+                        try:
+                            chunk_data = json.loads(line.strip())
+                            token = ""
+                            finish_reason = None  # Default to None for intermediate payloads
 
-        except Exception as e:
-            logger.error("Unexpected error: %s", e)
-            traceback.print_exc()
-            error_json = api_utils.build_response_json(
-                token=f"An unexpected error occurred: {e}",
-                api_type=output_api_type,
-                finish_reason="stop",
-                current_username=get_current_username()
-            )
-            yield api_utils.sse_format(error_json, output_api_type)
-            if output_api_type not in ('ollamagenerate', 'ollamaapichat'):
-                yield api_utils.sse_format("[DONE]", output_api_type)
+                            # Extract token and finish_reason
+                            if 'response' in chunk_data:
+                                token = chunk_data['response']
+                            finish_reason = chunk_data.get("done")
+
+                            if not first_chunk_processed:
+                                first_chunk_buffer += token
+
+                                if self.strip_start_stop_line_breaks:
+                                    first_chunk_buffer = first_chunk_buffer.lstrip()
+
+                                if add_user_assistant and add_missing_assistant:
+                                    # Check for "Assistant:" in the full buffer
+                                    if "Assistant:" in first_chunk_buffer:
+                                        # If it starts with "Assistant:", strip it
+                                        first_chunk_buffer = api_utils.remove_assistant_prefix(
+                                            first_chunk_buffer)
+                                        # Mark as processed since we've handled the prefix
+                                        first_chunk_processed = True
+                                        token = first_chunk_buffer
+                                    elif len(first_chunk_buffer) > max_buffer_length or finish_reason:
+                                        # If buffer is too large or stream finishes, pass it as is
+                                        first_chunk_processed = True
+                                        token = first_chunk_buffer
+                                    else:
+                                        # Keep buffering until we have more tokens
+                                        continue
+                                elif len(first_chunk_buffer) > max_buffer_length or finish_reason:
+                                    # If buffer is too large or stream finishes, pass it as is
+                                    first_chunk_processed = True
+                                    token = first_chunk_buffer
+                                else:
+                                    # Keep buffering until we have more tokens
+                                    continue
+
+                            # Handle stripping newlines
+                            if self.strip_start_stop_line_breaks and not finish_reason:
+                                token = token.rstrip("\n")
+
+                            total_tokens += len(token.split())
+
+                            # Generate response using ResponseBuilder
+                            completion_json = api_utils.build_response_json(
+                                token=token,
+                                finish_reason=None,  # Intermediate payloads don't include "stop" or "done"
+                                current_username=get_current_username()
+                            )
+
+                            yield api_utils.sse_format(completion_json, output_format)
+
+                        except json.JSONDecodeError as e:
+                            logger.warning(f"Failed to parse JSON: {e}")
+                            continue
+
+                    # Final message signaling end of stream
+                    total_duration = int((time.time() - start_time) * 1e9)
+
+                    final_completion_json = api_utils.build_response_json(
+                        token="",
+                        finish_reason="stop",  # Final payload explicitly includes "stop"
+                        current_username=get_current_username()
+                    )
+                    logger.debug("Total duration: {}", total_duration)
+                    yield api_utils.sse_format(final_completion_json, output_format)
+
+                    if output_format not in ('ollamagenerate', 'ollamaapichat'):
+                        logger.warning("End of stream reached, sending [DONE] signal.")
+                        yield api_utils.sse_format("[DONE]", output_format)
+
+            except requests.RequestException as e:
+                logger.warning(f"Request failed: {e}")
+                raise
+
+        return generate_sse_stream()
 
     def handle_non_streaming(
             self,

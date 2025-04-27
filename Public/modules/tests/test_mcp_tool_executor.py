@@ -1,6 +1,6 @@
 import json
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, mock_open
 import sys
 import os
 import requests
@@ -9,6 +9,8 @@ import requests
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../..")))
 
 import WilmerAI.Public.modules.mcp_tool_executor as mcp_tool_executor
+import WilmerAI.Public.modules.ensure_system_prompt as ensure_system_prompt
+from WilmerAI.Public.modules.mcp_service_discoverer import MCPServiceDiscoverer
 
 class TestMcpToolExecutor(unittest.TestCase):
     
@@ -284,6 +286,174 @@ class TestMcpToolExecutor(unittest.TestCase):
         self.assertEqual(path_params, {}, "Path parameters should be empty")
         self.assertIsNotNone(body_params, "Body parameters should not be None")
         self.assertEqual(body_params, parameters, "Body parameters should contain all original LLM parameters")
+
+# ADDED: TestEnsureSystemPrompt class from test_mcp_integration.py
+class TestEnsureSystemPrompt(unittest.TestCase):
+    """Tests for the ensure_system_prompt.py module's Invoke function"""
+
+    def test_ensure_prompt_with_discovery(self):
+        """Test ensure_system_prompt.Invoke when system prompt exists and needs tools"""
+        # Patch the discoverer CLASS, its __init__ and the target method
+        with patch('WilmerAI.Public.modules.ensure_system_prompt.MCPServiceDiscoverer') as MockDiscoverer, \
+             patch('WilmerAI.Public.modules.ensure_system_prompt.load_default_prompt') as mock_load_default, \
+             patch('WilmerAI.Public.modules.ensure_system_prompt._integrate_tools_into_prompt') as mock_integrate, \
+             patch('WilmerAI.Public.modules.ensure_system_prompt._format_mcp_tools_for_llm_prompt') as mock_format:
+
+            # --- Mock Setup ---
+            # Configure the mock INSTANCE that will be returned when MCPServiceDiscoverer() is called
+            mock_discoverer_instance = MockDiscoverer.return_value
+            mock_discovered_tools = {"get_weather": {"service": "weather", "llm_schema": {}}}
+            mock_discoverer_instance.discover_mcp_tools.return_value = mock_discovered_tools
+
+            prompt_content = "System prompt mentioning time service"
+            messages_input = [{"role": "system", "content": prompt_content}]
+            mock_format.return_value = "Available Tools: [formatted weather tool]"
+            mock_integrate.return_value = f"{prompt_content}\\n\\nAvailable Tools: [formatted weather tool]"
+            user_identified_services_input = "weather"
+
+            # --- Call ---
+            result = ensure_system_prompt.Invoke(
+                messages_input,
+                user_identified_services=user_identified_services_input
+            )
+
+            # --- Assertions ---
+            # Check the call on the MOCK INSTANCE's method
+            mock_discoverer_instance.discover_mcp_tools.assert_called_once_with(["weather"])
+            mock_format.assert_called_once_with(mock_discovered_tools)
+            mock_integrate.assert_called_once_with(prompt_content, mock_format.return_value)
+            self.assertIn("messages", result)
+            self.assertIn("chat_system_prompt", result)
+            self.assertIn("discovered_tools_map", result)
+            self.assertEqual(result["chat_system_prompt"], mock_integrate.return_value)
+            self.assertEqual(result["discovered_tools_map"], mock_discovered_tools)
+            self.assertEqual(len(result["messages"]), 1)
+            self.assertEqual(result["messages"][0]["content"], mock_integrate.return_value)
+            mock_load_default.assert_not_called()
+
+    def test_ensure_prompt_no_tools_found(self):
+        """Test ensure_system_prompt.Invoke when no tools are discovered"""
+        # Patch the discoverer CLASS
+        with patch('WilmerAI.Public.modules.ensure_system_prompt.MCPServiceDiscoverer') as MockDiscoverer, \
+             patch('WilmerAI.Public.modules.ensure_system_prompt.load_default_prompt') as mock_load_default, \
+             patch('WilmerAI.Public.modules.ensure_system_prompt._integrate_tools_into_prompt') as mock_integrate, \
+             patch('WilmerAI.Public.modules.ensure_system_prompt._format_mcp_tools_for_llm_prompt') as mock_format:
+
+            # --- Mock Setup ---
+            # Configure the mock INSTANCE
+            mock_discoverer_instance = MockDiscoverer.return_value
+            mock_discoverer_instance.discover_mcp_tools.return_value = {} # No tools found
+
+            prompt_content = "System prompt mentioning service-x <required_format>"
+            messages_input = [{"role": "system", "content": prompt_content}]
+            user_identified_services_input = "service-x"
+            mock_format.return_value = "" # Expected format when no tools
+
+            # --- Call ---
+            result = ensure_system_prompt.Invoke(
+                messages_input,
+                user_identified_services=user_identified_services_input
+            )
+
+            # --- Assertions ---
+            # Check the call on the MOCK INSTANCE's method
+            mock_discoverer_instance.discover_mcp_tools.assert_called_once_with(["service-x"])
+            mock_format.assert_called_once_with({}) # Called with empty map
+            # Integration SHOULD happen because prompt lacks "Available Tools:"
+            mock_integrate.assert_called_once_with(prompt_content, "")
+            self.assertEqual(result["chat_system_prompt"], mock_integrate.return_value) # Check that the integrated prompt is returned
+            self.assertEqual(result["discovered_tools_map"], {})
+            self.assertEqual(result["messages"][0]["content"], mock_integrate.return_value) # Check integrated prompt in messages
+            mock_load_default.assert_not_called()
+
+    def test_ensure_prompt_no_initial_prompt(self):
+        """Test ensure_system_prompt.Invoke when no system prompt exists initially"""
+        # Patch the discoverer CLASS, load_default_prompt, and other helpers
+        with patch('WilmerAI.Public.modules.ensure_system_prompt.load_default_prompt') as mock_load_default, \
+             patch('WilmerAI.Public.modules.ensure_system_prompt.MCPServiceDiscoverer') as MockDiscoverer, \
+             patch('WilmerAI.Public.modules.ensure_system_prompt._integrate_tools_into_prompt') as mock_integrate, \
+             patch('WilmerAI.Public.modules.ensure_system_prompt._format_mcp_tools_for_llm_prompt') as mock_format:
+
+            # --- Mock Setup ---
+            # Configure the mock INSTANCE
+            mock_discoverer_instance = MockDiscoverer.return_value
+            mock_discovered_tools = {"get_weather": {"service": "weather", "llm_schema": {}}}
+            mock_discoverer_instance.discover_mcp_tools.return_value = mock_discovered_tools
+
+            # Mock load_default_prompt return value
+            default_prompt_content = "Default Prompt Content"
+            mock_load_default.return_value = default_prompt_content
+
+            messages_input = [{"role": "user", "content": "Hello"}]
+            mock_format.return_value = "Available Tools: [formatted weather tool]"
+            mock_integrate.return_value = f"{default_prompt_content}\\n\\nAvailable Tools: [formatted weather tool]"
+            user_identified_services_input = "weather"
+
+            # --- Call ---
+            result = ensure_system_prompt.Invoke(
+                messages_input,
+                user_identified_services=user_identified_services_input,
+                default_prompt_path="/fake/path.txt"
+            )
+
+            # --- Assertions ---
+            mock_load_default.assert_called_once_with("/fake/path.txt") # Assert load_default_prompt was called
+            # Check the call on the MOCK INSTANCE's method
+            mock_discoverer_instance.discover_mcp_tools.assert_called_once_with(["weather"])
+            mock_format.assert_called_once_with(mock_discovered_tools)
+            mock_integrate.assert_called_once_with(default_prompt_content, mock_format.return_value)
+            self.assertEqual(len(result["messages"]), 2)
+            self.assertEqual(result["messages"][0]["role"], "system")
+            self.assertEqual(result["messages"][0]["content"], mock_integrate.return_value)
+            self.assertEqual(result["chat_system_prompt"], mock_integrate.return_value)
+            self.assertEqual(result["discovered_tools_map"], mock_discovered_tools)
+
+    @patch('WilmerAI.Public.modules.ensure_system_prompt.MCPServiceDiscoverer.discover_mcp_tools')
+    @patch('WilmerAI.Public.modules.ensure_system_prompt.load_default_prompt')
+    def test_ensure_prompt_with_generator_input(self, mock_load_prompt, mock_discover_tools):
+        """Test ensure_system_prompt handles generator input for user_identified_services."""
+        # --- GIVEN ---
+        # Mock dependencies
+        # Use a simpler default prompt that _integrate_tools_into_prompt can append to
+        mock_load_prompt.return_value = "Default system prompt."
+        mock_discover_tools.return_value = {
+            "get_time": {"service": "time", "summary": "Gets time", "llm_schema": {"name": "get_time", "description": "Gets time"}} # Add llm_schema for format test
+        }
+        
+        initial_messages = [
+            {"role": "user", "content": "Check time and weather"} # No initial system prompt
+        ]
+        
+        # Create a generator for the services
+        def service_generator():
+            yield "time"
+            yield ", " # Simulate potential comma separation
+            yield "weather"
+            
+        # --- WHEN ---
+        # Call Invoke with the generator
+        result = ensure_system_prompt.Invoke(
+            initial_messages,
+            user_identified_services=service_generator(), # Pass the generator
+            mcpo_url="http://fake-mcp:8889"
+        )
+        
+        # --- THEN ---
+        # 1. Verify discover_mcp_tools was called with the aggregated list
+        mock_discover_tools.assert_called_once_with(['time', 'weather'])
+        
+        # 2. Verify the system prompt was correctly added and formatted
+        self.assertEqual(len(result["messages"]), 2) # User + System
+        system_msg = result["messages"][0]
+        self.assertEqual(system_msg["role"], "system")
+        self.assertIn("Default system prompt.", system_msg["content"]) # Check base prompt
+        self.assertIn("Available Tools:", system_msg["content"])      # Check tool section header
+        self.assertIn("\"name\": \"get_time\"", system_msg["content"]) # Check tool formatting (using llm_schema)
+        self.assertIn("<required_format>", system_msg["content"])     # Check required format section
+
+        # 3. Verify returned system prompt and discovered tools map
+        self.assertEqual(result["chat_system_prompt"], system_msg["content"])
+        self.assertEqual(result["discovered_tools_map"], mock_discover_tools.return_value)
 
 if __name__ == '__main__':
     unittest.main() 

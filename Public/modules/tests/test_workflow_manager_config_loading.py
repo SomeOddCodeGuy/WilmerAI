@@ -1,101 +1,138 @@
 import unittest
 import json
-from unittest.mock import patch, mock_open, MagicMock, call
+import os
+import sys
+from unittest.mock import patch, MagicMock, mock_open
+import logging
 
-# Assuming WorkflowManager and get_workflow_path are accessible
-# Adjust imports based on actual project structure if needed
+# Add project root to path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../WilmerAI'))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+# Import necessary classes
 from Middleware.workflows.managers.workflow_manager import WorkflowManager
-# Need to mock get_user_config which is called during WorkflowManager init via config_utils
-from Middleware.utilities.config_utils import get_workflow_path, get_user_config
-# Need LlmHandlerService for mocking
-from Middleware.services.llm_service import LlmHandlerService
+from Middleware.llmapis.llm_api import LlmApiService # Assuming LlmApiService is needed for init
+from Middleware.utilities.sql_lite_utils import SqlLiteUtils # Assuming SqlLiteUtils is needed
+from Middleware.utilities.config_utils import WorkflowPathResolver # Import the resolver
 
+# Configure logging for visibility
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
+# Helper function to consume the generator returned by run_workflow(stream=True)
+def consume_sync_gen(gen):
+    items = []
+    for item in gen:
+        items.append(item)
+    return items
+
+# Define a mock class for LlmApiService if needed
+class MockLlmApiServiceForInit:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    # Add any methods WorkflowManager might call during init or the test run
+    def some_method(self):
+        return None
+
+# --- Test Class --- 
 class TestWorkflowManagerConfigLoading(unittest.TestCase):
 
-    # Use patch decorator for get_user_config to mock it for the entire test method
-    @patch('Middleware.utilities.config_utils.get_user_config')
-    # Also patch the LlmHandlerService instantiation within WorkflowManager
-    @patch('Middleware.workflows.managers.workflow_manager.LlmHandlerService')
-    # Patch builtins.open carefully
-    @patch('builtins.open')
-    def test_run_workflow_with_list_config_succeeds(self, mock_open_func, MockLlmHandlerService, mock_get_user_config):
-        """
-        Test that run_workflow succeeds when the config file contains a list.
-        """
-        # Mock get_user_config 
-        mock_get_user_config.return_value = {'currentUser': 'testUser', 'chatPromptTemplateName': 'default'}
-        
-        # Mock the LlmHandlerService
-        mock_llm_service_instance = MockLlmHandlerService.return_value
-        # Mock the loaded LLM handler to prevent further file reads for templates etc.
-        mock_llm_handler = MagicMock()
-        mock_llm_handler.prompt_template_file_name = 'mock_template' # Avoid None issues if accessed
-        mock_llm_service_instance.load_model_from_config.return_value = mock_llm_handler
+    def setUp(self):
+        self.mock_user_config = {'currentUser': 'test_config_user', 'chatPromptTemplateName': 'default'} # Example user config
+        self.current_username = self.mock_user_config['currentUser']
+        self.workflow_name = "test_config_workflow"
+        self.initial_messages = [{"role": "user", "content": "Hello Config"}]
+        self.request_id = "config-req-1"
+        self.discussion_id = "config-disc-1"
+        self.frontend_api_type = "openaichatcompletion"
 
-        workflow_name = "test-list-config-workflow"
-        mock_config_path = f"/root/projects/Wilmer/WilmerAI/Public/Configs/Workflows/{workflow_name}.json"
-        mock_user_config_path = "/root/projects/Wilmer/WilmerAI/Public/Configs/Users/_current-user.json"
-        
-        # Valid JSON list content
-        valid_list_json_content = json.dumps([
-            {"title": "Step 1", "type": "Standard", "endpointName": "test-endpoint"} 
-        ])
-        
-        # --- Refined Mocking for open --- 
-        # Create mock file handles
-        mock_workflow_file_handle = mock_open(read_data=valid_list_json_content).return_value
-        mock_user_config_content = json.dumps({'currentUser': 'testUser', 'chatPromptTemplateName': 'default'}) # Ensure currentUser is here
-        mock_user_config_handle = mock_open(read_data=mock_user_config_content).return_value
+    # REMOVE patch decorators
+    def test_run_workflow_with_file_path_succeeds(self): # Remove mock args
+        """Test that run_workflow correctly loads config from a file path."""
+        # --- GIVEN ---
+        fake_workflow_path = '/path/to/workflow/test_config_workflow.json'
+        mock_workflow_steps = [{'title': 'Step 1', 'type': 'Standard'}]
+        mock_get_path = MagicMock(return_value=fake_workflow_path)
 
-        def open_side_effect(file_path, *args, **kwargs):
-            print(f"Mock open checking path: {file_path}") # Debug print
-            if file_path == mock_config_path:
-                print(f"Mock open returning workflow handle for: {file_path}")
-                return mock_workflow_file_handle
-            elif file_path == mock_user_config_path:
-                print(f"Mock open returning user config handle for: {file_path}")
-                return mock_user_config_handle
-            else:
-                # For any other file path, return a default mock_open handle 
-                # to avoid errors, but we won't assert calls on these.
-                print(f"Mock open returning default handle for: {file_path}")
-                return mock_open().return_value
-        
-        # Apply the side effect to our patched open function
-        mock_open_func.side_effect = open_side_effect
-        # --- End Refined Mocking --- 
+        # Configure path resolver mock
+        # Patch dependencies needed for init and run
+        with patch('Middleware.workflows.managers.workflow_manager.LlmHandlerService') as MockLlmService, \
+             patch('Middleware.workflows.managers.workflow_manager.json.load', return_value=mock_workflow_steps) as mock_json_load_patch, \
+             patch('builtins.open', mock_open(read_data=json.dumps(mock_workflow_steps))) as mock_open_patch, \
+             patch('Middleware.workflows.managers.workflow_manager.SqlLiteUtils') as MockSqlUtils:
 
-        dummy_messages = [{"role": "user", "content": "Hello"}]
-        dummy_request_id = "test-req-123"
-        dummy_discussion_id = "test-disc-456"
+            manager = WorkflowManager(
+                workflow_config_name=self.workflow_name,
+                path_finder_func=mock_get_path, # Inject mock path finder
+                user_config=self.mock_user_config, # Inject user_config
+                current_username=self.current_username, # Inject username
+                chat_template_name='default' # Inject template name
+            )
 
-        with patch('Middleware.workflows.managers.workflow_manager.get_workflow_path', return_value=mock_config_path) as mock_get_path:
-            # Note: 'builtins.open' is already patched via decorator
-            workflow_manager_instance = WorkflowManager(workflow_config_name=workflow_name)
-            
-            try:
-                _ = workflow_manager_instance.run_workflow(
-                    messages=dummy_messages,
-                    request_id=dummy_request_id,
-                    discussionId=dummy_discussion_id,
-                    stream=False 
+            # Instance mock for _process_section
+            mock_process_instance = MagicMock(return_value="Mock Step Output")
+            manager._process_section = mock_process_instance
+
+            # --- WHEN --- 
+            results = []
+            result_gen = manager.run_workflow(
+                messages=self.initial_messages, request_id=self.request_id, discussionId=self.discussion_id,
+                stream=False
+            )
+            # Consume the generator
+            results = consume_sync_gen(result_gen)
+
+            # --- THEN --- 
+            mock_get_path.assert_called_once_with(self.workflow_name)
+            mock_open_patch.assert_called_once_with(fake_workflow_path)
+            mock_json_load_patch.assert_called_once()
+            mock_process_instance.assert_called_once() # Verify instance mock was called
+            self.assertGreaterEqual(len(results), 1) 
+            call_args, call_kwargs = mock_process_instance.call_args
+            # The config passed should be the dictionary from the list
+            self.assertEqual(call_args[0], mock_workflow_steps[0])
+            self.assertGreaterEqual(len(results), 1)
+            MockSqlUtils.delete_node_locks.assert_called_once()
+
+    # REMOVE patch decorators
+    def test_invalid_config_format_raises_error(self): # Remove mock args
+        """Test that WorkflowManager handles JSONDecodeError gracefully."""
+        # --- GIVEN ---
+        workflow_name_invalid = "invalid_workflow"
+        fake_path_invalid = f'/fake/workflows/{workflow_name_invalid}.json'
+        invalid_config_content = "just a string, not json list/dict"
+        mock_get_path = MagicMock(return_value=fake_path_invalid)
+
+        # Patch dependencies
+        with patch('Middleware.workflows.managers.workflow_manager.LlmHandlerService') as MockLlmService, \
+             patch('builtins.open', mock_open(read_data=invalid_config_content)) as mock_open_patch, \
+             patch('Middleware.workflows.managers.workflow_manager.json.load', side_effect=json.JSONDecodeError("Invalid format", "", 0)) as mock_json_load_patch:
+
+            manager = WorkflowManager(
+                workflow_config_name=workflow_name_invalid,
+                path_finder_func=mock_get_path, # Inject mock path finder
+                user_config=self.mock_user_config, # Inject user_config
+                current_username=self.current_username, # Inject username
+                chat_template_name='default' # Inject template name
+            )
+
+            # --- WHEN & THEN ---
+            with patch('Middleware.workflows.managers.workflow_manager.SqlLiteUtils') as MockSqlUtils:
+                result = manager.run_workflow(
+                    self.initial_messages, self.request_id, self.discussion_id,
+                    stream=False
                 )
-                pass 
-            except Exception as e:
-                self.fail(f"run_workflow raised an unexpected exception: {e}")
-            
-            # Verify mocks
-            mock_get_path.assert_called_once_with(workflow_name)
-            # Assert that our main patched open function was called with the specific workflow path
-            mock_open_func.assert_any_call(mock_config_path)
-            # Assert that open was also called for the user config path
-            mock_open_func.assert_any_call(mock_user_config_path)
-            # Check if the specific handle for our file was used (e.g., read was called on it)
-            mock_workflow_file_handle.read.assert_called_once() 
-            mock_user_config_handle.read.assert_called_once()
-            mock_get_user_config.assert_called()
-            mock_llm_service_instance.load_model_from_config.assert_called()
+                # The run_workflow catches the exception and logs it, potentially returning None or empty
+                self.assertTrue(result is None or (isinstance(result, list) and not result), 
+                                f"Expected None or empty list due to caught exception, got: {result}")
+
+            # Verify mocks were called up to the point of failure
+            mock_get_path.assert_called_once_with(workflow_name_invalid)
+            mock_open_patch.assert_called_once_with(fake_path_invalid)
+            mock_json_load_patch.assert_called_once()
+            MockSqlUtils.delete_node_locks.assert_called_once()
 
 if __name__ == '__main__':
     unittest.main() 

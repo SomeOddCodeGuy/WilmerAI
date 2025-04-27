@@ -6,6 +6,9 @@ import requests
 import ast
 from typing import Dict, List, Any, Optional, Tuple
 
+# Import the aggregation utility using explicit relative import
+from .workflow_utils import aggregate_generator_input
+
 logger = logging.getLogger(__name__)
 
 # Import functions/classes from other MCP modules
@@ -76,7 +79,7 @@ def Invoke(messages, **kwargs):
     Keyword Args:
         default_prompt_path: Path to default prompt file
         mcpo_url: Base URL for MCPO server
-        user_identified_services: Comma-separated list of service names identified in user messages
+        user_identified_services: Comma-separated list of service names identified in user messages (might be a generator)
         
     Returns:
         Dict containing: messages, chat_system_prompt, discovered_tools_map
@@ -85,7 +88,16 @@ def Invoke(messages, **kwargs):
     
     default_prompt_path = kwargs.get("default_prompt_path", get_default_tool_prompt_path())
     mcpo_url = kwargs.get("mcpo_url", "http://localhost:8889")
-    user_identified_services = kwargs.get("user_identified_services", "")
+    
+    # --- Workaround Start ---
+    # Aggregate user_identified_services if it's a generator
+    raw_user_services = kwargs.get("user_identified_services", "")
+    user_identified_services = aggregate_generator_input(raw_user_services)
+    # Ensure it's a string after potential aggregation before proceeding
+    if not isinstance(user_identified_services, str):
+        logger.warning(f"user_identified_services was not a string or aggregatable generator, defaulting to empty. Type: {type(user_identified_services)}")
+        user_identified_services = ""
+    # --- Workaround End ---
 
     if isinstance(messages, list):
         pass

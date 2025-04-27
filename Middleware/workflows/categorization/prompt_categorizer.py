@@ -139,7 +139,21 @@ class PromptCategorizer:
         attempts = 0
 
         while attempts < 4:
-            category = workflow_manager.run_workflow(user_request, request_id, nonResponder=True).strip()
+            workflow_result = workflow_manager.run_workflow(user_request, request_id, nonResponder=True, stream=False)
+
+            # Consume generator if necessary to get the final string
+            if hasattr(workflow_result, '__iter__') and not isinstance(workflow_result, str):
+                raw_category_output = "".join(list(workflow_result))
+            else:
+                raw_category_output = workflow_result
+
+            # Check if the output is None before attempting to strip
+            if raw_category_output is None:
+                logger.warning("Categorization workflow returned None. Assigning empty string.")
+                category = "UNKNOWN" 
+            else:
+                category = raw_category_output.strip()
+            
             logger.info(
                 "\n\n*****************************************************************************\n")
             logger.info("\n\nOutput from the LLM: %s", category)

@@ -2,7 +2,6 @@ import logging
 import traceback
 from copy import deepcopy
 from typing import Dict, Any, Optional, List
-import json
 
 from Middleware.utilities.automation_utils import run_dynamic_module
 from Middleware.utilities.config_utils import get_discussion_chat_summary_file_path, get_discussion_memory_file_path
@@ -214,48 +213,37 @@ class PromptProcessor:
             return self.llm_handler.llm.get_response_from_llm(system_prompt=system_prompt, prompt=prompt,
                                                               llm_takes_images=self.llm_handler.takes_image_collection)
         else:
-            logger.info("--- PromptProcessor: Entering BRANCH for message-collection APIs ---")
             # New workflow for takes_message_collection = True
-            final_collection = []
+            collection = []
 
-            system_prompt_str = self.workflow_variable_service.apply_variables(
+            system_prompt = self.workflow_variable_service.apply_variables(
                 prompt=config.get("systemPrompt", ""),
                 llm_handler=self.llm_handler,
                 messages=message_copy,
                 agent_outputs=agent_outputs,
                 config=config
             )
+            if system_prompt:
+                collection.append({"role": "system", "content": system_prompt})
 
             prompt = config.get("prompt", "")
             prompt = self.workflow_variable_service.apply_variables(
-                prompt=prompt,
+                prompt=config.get("prompt", ""),
                 llm_handler=self.llm_handler,
                 messages=message_copy,
                 agent_outputs=agent_outputs,
                 config=config
             )
-
-            # Start building final_collection
-            if system_prompt_str:
-                final_collection.append({"role": "system", "content": system_prompt_str})
-
-            if prompt: # If node had a specific prompt, use it as the user message
-                final_collection.append({"role": "user", "content": prompt})
-            else: # Otherwise, use last N turns
-                last_messages_to_send = config.get("lastMessagesToSendInsteadOfPrompt", 10)
+            if prompt:
+                collection.append({"role": "user", "content": prompt})
+            else:
+                # Extracting without template because this is for chat/completions
+                last_messages_to_send = config.get("lastMessagesToSendInsteadOfPrompt", 5)
                 last_n_turns = extract_last_n_turns(message_copy, last_messages_to_send,
                                                     self.llm_handler.takes_message_collection)
-                # Add turns from history, skipping any system messages within it
-                for turn in last_n_turns:
-                    if turn.get("role") != "system":
-                        final_collection.append(turn)
+                collection.extend(last_n_turns)
 
-            # Ensure there's at least one non-system message if needed by API
-            if not any(msg.get("role") != "system" for msg in final_collection):
-                logger.warning("LLM collection only contains a system message. Adding a placeholder user message.")
-                final_collection.append({"role": "user", "content": "Continue."})
-
-            return self.llm_handler.llm.get_response_from_llm(final_collection,
+            return self.llm_handler.llm.get_response_from_llm(collection,
                                                               llm_takes_images=self.llm_handler.takes_image_collection)
 
     def handle_process_chat_summary(self, config: Dict, messages: List[Dict[str, str]],

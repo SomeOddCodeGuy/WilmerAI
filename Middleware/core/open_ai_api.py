@@ -16,11 +16,11 @@ from Middleware.utilities.config_utils import get_custom_workflow_is_active, \
     get_is_chat_complete_add_missing_assistant
 from Middleware.utilities.prompt_extraction_utils import parse_conversation, extract_discussion_id
 from Middleware.utilities.text_utils import replace_brackets_in_list
-from Middleware.utilities.message_transformation_utils import transform_messages
 from Middleware.workflows.categorization.prompt_categorizer import PromptCategorizer
 from Middleware.workflows.managers.workflow_manager import WorkflowManager
 
 app = Flask(__name__)
+
 app.config['JSON_AS_ASCII'] = False # Ensure jsonify handles unicode correctly without escaping them unnecessarily
 
 logger = logging.getLogger(__name__)
@@ -107,7 +107,6 @@ def handle_openwebui_tool_check(api_type: str):
         return wrapper
     return decorator
 
-
 class ModelsAPI(MethodView):
     @staticmethod
     def get() -> Response:
@@ -152,7 +151,7 @@ class CompletionsAPI(MethodView):
         messages = parse_conversation(prompt)
 
         if stream:
-            return Response(WilmerApi.handle_user_prompt(messages, True), mimetype='text/event-stream')
+            return Response(WilmerApi.handle_user_prompt(messages, True), content_type='application/json')
         else:
             return_response: str = WilmerApi.handle_user_prompt(messages, False)
             current_time: int = int(time.time())
@@ -188,7 +187,7 @@ class ChatCompletionsAPI(MethodView):
         instance_utils.API_TYPE = "openaichatcompletion"
         add_user_assistant = get_is_chat_complete_add_user_assistant()
         add_missing_assistant = get_is_chat_complete_add_missing_assistant()
-        request_data: Dict[str, Any] = request.get_json() # get_json is safe here due to decorator check
+        request_data: Dict[str, Any] = request.get_json()
         logger.info(f"ChatCompletionsAPI request received: {json.dumps(request_data)}")
 
         stream: bool = request_data.get("stream", False)
@@ -203,10 +202,26 @@ class ChatCompletionsAPI(MethodView):
             if "role" not in message or "content" not in message:
                 raise ValueError("Each message must have 'role' and 'content' fields.")
 
-        # Use centralized message transformation utility
-        transformed_messages = transform_messages(
-            messages, add_user_assistant, add_missing_assistant
-        )
+        # Transform the messages while preserving their order
+        transformed_messages: List[Dict[str, str]] = []
+        for message in messages:
+            role = message["role"]
+            content = message["content"]
+
+            if add_user_assistant:
+                if role == "user":
+                    content = "User: " + content
+                elif role == "assistant":
+                    content = "Assistant: " + content
+
+            transformed_messages.append({"role": role, "content": content})
+
+        # Check if the last message is not from assistant and add an assistant message if needed
+        if add_missing_assistant:
+            if add_user_assistant and messages and messages[-1]["role"] != "assistant":
+                transformed_messages.append({"role": "assistant", "content": "Assistant: "})
+            elif messages and messages[-1]["role"] != "assistant":
+                transformed_messages.append({"role": "assistant", "content": ""})
 
         if stream:
             return Response(
@@ -286,8 +301,7 @@ class GenerateAPI(MethodView):
 
         # Generate and return the appropriate response
         if stream:
-            # Use mimetype='text/event-stream' for SSE
-            return Response(WilmerApi.handle_user_prompt(messages, stream=True), mimetype='text/event-stream')
+            return Response(WilmerApi.handle_user_prompt(messages, stream=True), content_type='application/json')
         else:
             return_response: str = WilmerApi.handle_user_prompt(messages, stream=False)
             current_time: int = int(time.time())
@@ -324,25 +338,55 @@ class ApiChatAPI(MethodView):
 
         # Try to parse JSON even if Content-Type is not 'application/json'
         try:
-            # Use force=True as decorator also uses it, ensures consistency
             request_data: Dict[str, Any] = request.get_json(force=True)
-            if request_data is None: # Add check for None if force=True fails silently
-                 raise ValueError("Request data is not valid JSON")
         except Exception as e:
-            logger.error(f"Failed to parse JSON in ApiChatAPI: {e}")
+            logger.error(f"Failed to parse JSON: {e}")
             return jsonify({"error": "Invalid JSON data"}), 400
+
+        logger.info(f"ApiChatAPI request received: {json.dumps(request_data)}")
 
         # Validate 'model' and 'messages' fields
         if 'model' not in request_data or 'messages' not in request_data:
             return jsonify({"error": "Both 'model' and 'messages' fields are required."}), 400
 
         messages: List[Dict[str, Any]] = request_data["messages"]
-        
-        # Use centralized message transformation utility to process the messages while preserving order
-        transformed_messages = transform_messages(
-            messages, add_user_assistant, add_missing_assistant
-        )
-        
+        transformed_messages: List[Dict[str, Any]] = []
+
+        for message in messages:
+            # Validate that each message has 'role' and 'content'
+            if "role" not in message or "content" not in message:
+                return jsonify({"error": "Each message must have 'role' and 'content' fields."}), 400
+
+            role = message["role"]
+            content = message["content"]
+
+            # Process the 'images' field if it exists
+            if "images" in message and isinstance(message["images"], list):
+                for image_base64 in message["images"]:
+                    # Add each image as its own message with the role "images"
+                    transformed_messages.append({
+                        "role": "images",
+                        "content": image_base64
+                    })
+
+            if add_user_assistant:
+                if role == "user":
+                    content = "User: " + content
+                elif role == "assistant":
+                    content = "Assistant: " + content
+
+            # Add the original message to the collection
+            transformed_message = {"role": role, "content": content}
+            transformed_messages.append(transformed_message)
+
+        # Add assistant response if necessary
+        if add_user_assistant:
+            if transformed_messages and transformed_messages[-1]["role"] != "assistant":
+                transformed_messages.append({"role": "assistant", "content": "Assistant: "})
+        elif add_missing_assistant:
+            if transformed_messages and transformed_messages[-1]["role"] != "assistant":
+                transformed_messages.append({"role": "assistant", "content": ""})
+
         # Process the response
         stream = request_data.get("stream", True)
         if isinstance(stream, str):
@@ -353,10 +397,9 @@ class ApiChatAPI(MethodView):
         if stream:
             return Response(response_data, mimetype='text/event-stream')
         else:
-            response_json = None  # Initialize
             try:
                 current_time = datetime.utcnow().isoformat() + 'Z'
-                response_json = {
+                response = {
                     "model": request_data.get("model", "llama3.2"),
                     "created_at": current_time,
                     "message": {
@@ -372,20 +415,10 @@ class ApiChatAPI(MethodView):
                     "eval_count": 392,  # TODO: Replace with calculated or real values
                     "eval_duration": 4476000000  # TODO: Replace with calculated or real values
                 }
-            except Exception as construct_e:
-                logger.error(f"FAILED to construct response_json dictionary: {construct_e} ---", exc_info=True)
-                # Return generic error for now
-                return jsonify({"error": "Failed to construct final response content"}), 500
-
-            try:
-                # Attempt to jsonify
-                flask_response = jsonify(response_json)
-                return flask_response
-            except Exception as jsonify_e:
-                logger.error(f"--- ApiChatAPI: FAILED during jsonify: {jsonify_e} ---", exc_info=True)
-                logger.error(f"--- ApiChatAPI: response_json content that failed jsonify (truncated): {str(response_json)[:1000]}...")
-                # Return generic error for now
-                return jsonify({"error": "Failed to finalize response format"}), 500
+                return jsonify(response)
+            except Exception as e:
+                logger.error(f"Failed to process non-streaming response: {e}")
+                return jsonify({"error": "Invalid response from model"}), 500
 
 
 class TagsAPI(MethodView):

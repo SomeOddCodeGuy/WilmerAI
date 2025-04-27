@@ -5,12 +5,16 @@ import requests
 import os
 from typing import Dict, List, Any, Optional, Tuple, Union, Callable
 import datetime
+import sys
 
-# Import the new class using direct import
-# Use the DEFAULT_MCPO_URL directly from the discoverer module
-from mcp_service_discoverer import MCPServiceDiscoverer, DEFAULT_MCPO_URL
-# Import the moved function
-from mcp_prompt_utils import _format_mcp_tools_for_llm_prompt, _integrate_tools_into_prompt
+# Adjust import paths
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../..")))
+
+import WilmerAI.Public.modules.mcp_tool_executor as mcp_tool_executor
+# Use absolute import
+from WilmerAI.Public.modules.mcp_service_discoverer import MCPServiceDiscoverer, DEFAULT_MCPO_URL
+# Corrected relative import for mcp_prompt_utils
+from .mcp_prompt_utils import _format_mcp_tools_for_llm_prompt, _integrate_tools_into_prompt
 
 logger = logging.getLogger(__name__)
 

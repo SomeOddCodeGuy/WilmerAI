@@ -1,10 +1,14 @@
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock, ANY, call
 import json
 import sys
 import os
 import time # Import time for mocking strftime
 import logging # Import logging
+import asyncio
+import uuid # Ensure uuid is imported
+from typing import List, Dict, Any, AsyncGenerator
+import requests
 
 # Configure logging for this test file
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -18,174 +22,153 @@ from Middleware.llmapis.openai_api_handler import OpenAiApiHandler
 # Import the function we need to mock in api_utils
 from Middleware.utilities import api_utils
 
-# Mock config loading and other dependencies
-@patch('Middleware.utilities.config_utils.load_config')
-@patch('Middleware.utilities.api_utils.get_current_username') # Mock username used in model name
-@patch('time.strftime') # Mock time for created_at
+# Helper async function to consume async generators
+async def consume_async_gen(agen: AsyncGenerator) -> List[Any]:
+    items = []
+    async for item in agen:
+        items.append(item)
+    return items
+
+# Mock LlmHandlerService for initialization
+class MockLlmHandlerService:
+    def get_llm_handler(self, *args, **kwargs):
+        # Return a mock handler if needed by the tested class methods
+        return AsyncMock()
+
 class TestOpenAiApiHandlerOllamaSSE(unittest.TestCase):
 
-    @patch('requests.Session')
-    def test_handle_streaming_openai_sse_format(self, mock_session_cls, mock_time_strftime, mock_get_username, mock_load_config):
+    def setUp(self):
+        self.mock_config = {
+            'endpointName': 'TestOpenAIEndpoint',
+            'endpoint': 'http://mock-openai-api.com/v1/chat/completions',
+            'apiTypeConfigFileName': 'OpenAIChatCompletion_Config',
+            'presetConfigFileName': 'mock_preset',
+            'addGenerationPrompt': False,
+            'stripStartStopLineBreaks': True,
+            'max_tokens': 512,
+            'maxContextTokenSize': 4096
+        }
+        self.mock_api_type_config = {
+            'type': 'openaichatcompletion',
+            'presetType': 'OpenAI',
+            'apiBaseUrl': 'http://mock-openai-api.com',
+            'apiKey': 'TEST_API_KEY',
+            'defaultHeaders': {'Authorization': 'Bearer TEST_API_KEY'},
+            'backendApiPath': '/v1/chat/completions'
+        }
+        self.mock_preset = {'temperature': 0.5}
+
+        # Use context manager patches within setUp for dependencies
+        # needed ONLY for instantiation
+        with patch('Middleware.utilities.config_utils.get_endpoint_config', return_value=self.mock_config), \
+             patch('Middleware.utilities.config_utils.get_api_type_config', return_value=self.mock_api_type_config), \
+             patch('Middleware.utilities.config_utils.get_current_username', return_value="testuser"):
+             # Removed patch for load_preset_config
+             # patch('Middleware.utilities.config_utils.load_preset_config', return_value=self.mock_preset): 
+            
+            # Pass the preset directly if the handler expects it, 
+            # or ensure endpoint_config contains enough info
+            self.handler = OpenAiApiHandler(
+                endpoint_config=self.mock_config,
+                api_type_config=self.mock_api_type_config,
+                gen_input=self.mock_preset,
+                stream=True,
+                max_tokens=self.mock_config['max_tokens'],
+                base_url=self.mock_api_type_config['apiBaseUrl'],
+                model_name=self.mock_config.get('modelNameToSendToAPI', ''),
+                headers=self.mock_api_type_config['defaultHeaders'],
+                strip_start_stop_line_breaks=self.mock_config['stripStartStopLineBreaks'],
+                api_key=self.mock_api_type_config.get('apiKey', '')
+            )
+
+    def test_handle_streaming_openai_sse_format(self):
+        """Test that handle_streaming yields chunks in the correct OpenAI SSE format
+           (data: {json}\n\n) when the frontend expects OpenAI.
         """
-        Test that handle_streaming yields chunks in the correct OpenAI SSE format
-        when configured for 'openaichatcompletion'.
-        """
-        # 1. Mock dependencies
-        mock_get_username.return_value = "mock-openai-model"
-        mock_time_strftime.return_value = "2024-01-02T13:00:00Z" # Use different time for clarity
+        # --- GIVEN ---
+        fixed_uuid = uuid.UUID('12345678-1234-5678-1234-567812345678') # Fixed UUID
+        fixed_time = 1678886400 # Fixed timestamp
 
-        # Mock configuration loading (Use OpenAI apiType)
-        mock_endpoint_config = {
-            "endpoint": "http://mock-openai-backend.com/v1",
-            "modelNameToSendToAPI": "mock-openai-model",
-            "apiTypeConfigFileName": "openaichatcompletion_config", # Use OpenAI config name
-            "presetConfigFileName": "mock_preset",
-            "addGenerationPrompt": False,
-            "stripStartStopLineBreaks": True,
-            "maxContextTokenSize": 4096,
-            "max_tokens": 1024
-        }
-        mock_api_type_config = {
-            "apiType": "openaichatcompletion", # Critical: Set API type to OpenAI
-            "apiKey": "fake-openai-key",
-            "apiBaseUrl": "http://mock-openai-backend.com",
-            "defaultHeaders": {"Authorization": "Bearer {apiKey}", "Content-Type": "application/json"},
-            "streamPropertyName": "stream",
-            "maxNewTokensPropertyName": "max_tokens",
-            # Backend properties (assuming OpenAI backend)
-            "backendApiType": "openaichatcompletion",
-            "backendApiPath": "/v1/chat/completions",
-            "backendResponseTokenExtractor": "extract_openai_chat_content",
-            "backendResponseFinishReasonExtractor": "extract_openai_finish_reason"
-        }
-        mock_preset_config = {
-            "temperature": 0.5,
-            "top_p": 1.0
-        }
+        # GIVEN: Simulate response from an OpenAI-compatible API (stream=True)
+        mock_response = MagicMock(spec=requests.Response)
 
-        # 2. Prepare mock LLM response chunks (Simulating OpenAI backend response)
-        raw_llm_chunks = ["Test", " ", "OpenAI", "!"]
-        mock_response = MagicMock()
-        # Backend sends OpenAI format
-        mock_response.iter_content = MagicMock(return_value=(
-            f"data: {json.dumps({'choices': [{'delta': {'content': chunk}}], 'model': 'mock-backend'})}\n\n".encode('utf-8')
-            for chunk in raw_llm_chunks + [''] # Add empty chunk to allow finish reason processing
-        ))
-        # Add finish reason chunk
-        final_backend_chunk = f"data: {json.dumps({'choices': [{'finish_reason': 'stop', 'delta':{}}], 'model': 'mock-backend'})}\n\n".encode('utf-8')
-        mock_response.iter_content.return_value = list(mock_response.iter_content()) + [final_backend_chunk]
-        # Add DONE marker
-        done_marker = b"data: [DONE]\n\n"
-        mock_response.iter_content.return_value = list(mock_response.iter_content()) + [done_marker]
+        # Raw chunks from backend (OpenAI format)
+        chunk1_backend = {"id":"chatcmpl-mock1","object":"chat.completion.chunk","created":1678886401,"model":"gpt-mock","choices":[{"index":0,"delta":{"content":"Hello "},"finish_reason":None}]}
+        chunk2_backend = {"id":"chatcmpl-mock1","object":"chat.completion.chunk","created":1678886402,"model":"gpt-mock","choices":[{"index":0,"delta":{"content":"World"},"finish_reason":None}]}
+        chunk3_backend = {"id":"chatcmpl-mock1","object":"chat.completion.chunk","created":1678886403,"model":"gpt-mock","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]} # Finish reason chunk
+        done_chunk_backend = 'data: [DONE]\n\n' # Keep as string
 
+        # Backend yields standard SSE formatted chunks as STRINGS
+        mock_response.iter_content.return_value = [
+            f"data: {json.dumps(chunk1_backend)}\n\n",
+            f"data: {json.dumps(chunk2_backend)}\n\n",
+            f"data: {json.dumps(chunk3_backend)}\n\n",
+            done_chunk_backend
+        ]
         mock_response.raise_for_status = MagicMock()
         mock_response.status_code = 200
 
-        # 3. Mock the HTTP session
-        mock_session_instance = MagicMock()
-        mock_session_instance.post.return_value.__enter__.return_value = mock_response
-        mock_session_cls.return_value = mock_session_instance
+        # GIVEN: Mock the HTTP session instance directly
+        mock_session_instance = MagicMock(spec=requests.Session) # Create mock instance
+        mock_post_context = MagicMock()
+        mock_post_context.__enter__.return_value = mock_response
+        mock_post_context.__exit__ = MagicMock(return_value=None)
+        mock_session_instance.post.return_value = mock_post_context
+        self.handler.session = mock_session_instance # Assign mocked session
 
-        # 4. Instantiate the handler
-        handler = OpenAiApiHandler(
-            base_url=mock_api_type_config["apiBaseUrl"],
-            api_key=mock_api_type_config["apiKey"],
-            gen_input={"temperature": mock_preset_config["temperature"], "top_p": mock_preset_config["top_p"]},
-            model_name=mock_endpoint_config["modelNameToSendToAPI"],
-            headers={"Authorization": f"Bearer {mock_api_type_config['apiKey']}", "Content-Type": "application/json"},
-            strip_start_stop_line_breaks=mock_endpoint_config["stripStartStopLineBreaks"],
-            stream=True,
-            api_type_config=mock_api_type_config,
-            endpoint_config=mock_endpoint_config,
-            max_tokens=mock_endpoint_config["max_tokens"]
-        )
-        handler.session = mock_session_instance
+        # --- WHEN ---
+        # Frontend is expecting OpenAI format
+        messages = [{"role": "user", "content": "Test OpenAI SSE"}]
+        test_username = "mock_openai_user"
 
-        # 5. Patch instance_utils.API_TYPE and call handle_streaming
-        # Patch the specific API type for this test run
-        with patch('Middleware.utilities.instance_utils.API_TYPE', 'openaichatcompletion'):
-            messages = [{"role": "user", "content": "Test"}]
-            stream_generator = handler.handle_streaming(conversation=messages)
+        # --- Define expected payloads BEFORE patching --- 
+        # Build expected JSON PAYLOADS that build_response_json should return
+        expected_payload1 = {"id": "chatcmpl-fixed1","object":"chat.completion.chunk","created":1,"model":"fixed_model","choices":[{"index":0,"delta":{"content":"Hello "},"finish_reason":None}]}
+        expected_payload2 = {"id": "chatcmpl-fixed2","object":"chat.completion.chunk","created":2,"model":"fixed_model","choices":[{"index":0,"delta":{"content":"World"},"finish_reason":None}]}
+        expected_payload3 = {"id": "chatcmpl-fixed3","object":"chat.completion.chunk","created":3,"model":"fixed_model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
 
-            # 6. Collect output
+        # Define side effect for the build_response_json mock
+        def build_json_side_effect(token, current_username, finish_reason=None, **kwargs):
+            self.assertEqual(current_username, test_username)
+            if finish_reason == "stop":
+                return expected_payload3 # Final payload
+            elif token == "Hello ":
+                return expected_payload1
+            elif token == "World":
+                return expected_payload2
+            else:
+                # Fallback or raise error if unexpected token received
+                raise ValueError(f"Unexpected token in build_json_side_effect: {token}")
+
+        # Use patch context manager for build_response_json
+        with patch('Middleware.utilities.api_utils.build_response_json', side_effect=build_json_side_effect) as mock_build_json:
+            stream_generator = self.handler.handle_streaming(
+                conversation=messages
+            )
             output_chunks = list(stream_generator)
 
-        # 7. Define the CORRECT expected OpenAI /v1/chat/completions SSE format structure
-        #    We will compare parsed JSON objects, not raw strings.
-        expected_events = []
-        expected_model = "mock-openai-model"
+        # --- THEN ---
+        # Expected: SSE(payload1), SSE(payload2), SSE(payload3), SSE([DONE])
+        self.assertEqual(len(output_chunks), 4, f"Expected 4 chunks, got {len(output_chunks)}: {output_chunks}")
 
-        for token in raw_llm_chunks:
-            if not token: continue # Skip empty processing tokens
-            expected_event_payload = {
-                # id: Ignored during comparison
-                "object": "chat.completion.chunk",
-                # created: Ignored during comparison
-                "model": expected_model,
-                "system_fingerprint": "fp_44709d6fcb", # Assuming this is constant
-                "choices": [
-                    {
-                        "index": 0,
-                        "delta": {"content": token},
-                        "logprobs": None,
-                        "finish_reason": None
-                    }
-                ]
-            }
-            expected_events.append(expected_event_payload)
+        # Check the formatted SSE strings using the pre-defined payloads
+        self.assertEqual(output_chunks[0], f"data: {json.dumps(expected_payload1)}\n\n")
+        self.assertEqual(output_chunks[1], f"data: {json.dumps(expected_payload2)}\n\n")
+        # Verify the final data chunk (index 2) contains payload 3
+        self.assertEqual(output_chunks[2], f"data: {json.dumps(expected_payload3)}\n\n",
+                         "Final data chunk payload mismatch")
 
-        # Add the final chunk payload with finish_reason
-        final_event_payload = {
-            "object": "chat.completion.chunk",
-            "model": expected_model,
-            "system_fingerprint": "fp_44709d6fcb",
-            "choices": [
-                {
-                    "index": 0,
-                    "delta": {}, # Delta might be empty if only finish_reason is sent
-                    "logprobs": None,
-                    "finish_reason": "stop"
-                }
-            ]
-            # NOTE: Sometimes OpenAI sends delta: {"content": ""} and finish_reason: "stop" in the same chunk
-            # Adjust if the implementation's final chunk payload differs slightly.
-        }
-        expected_events.append(final_event_payload)
+        # Verify the final [DONE] chunk (index 3)
+        self.assertEqual(output_chunks[3], 'data: [DONE]\n\n',
+                         f"Expected final chunk (index 3) to be 'data: [DONE]\n\n', got: {repr(output_chunks[3])}")
 
-        # Parse the actual output chunks
-        actual_events = []
-        done_signal_received = False
-        for chunk_str in output_chunks:
-            if chunk_str.startswith("data: "):
-                json_str = chunk_str[len("data: "):].strip()
-                if json_str == "[DONE]":
-                    done_signal_received = True
-                    continue
-                try:
-                    parsed = json.loads(json_str)
-                    # Remove volatile fields before comparison
-                    parsed.pop('id', None)
-                    parsed.pop('created', None)
-                    actual_events.append(parsed)
-                except json.JSONDecodeError:
-                    self.fail(f"Failed to parse actual output chunk as JSON: {json_str}")
-
-        # 8. Assert the list of parsed event payloads match
-        self.assertEqual(len(actual_events), len(expected_events),
-                         f"Number of actual events ({len(actual_events)}) does not match expected ({len(expected_events)})")
-
-        for i in range(len(expected_events)):
-            # Special handling for the last event which might have delta: {} vs delta: {"content": ""}
-            if i == len(expected_events) - 1:
-                # Tolerate empty content in delta for the final chunk
-                if actual_events[i]['choices'][0]['delta'] == {'content': ''} and expected_events[i]['choices'][0]['delta'] == {}:
-                     actual_events[i]['choices'][0]['delta'] = {}
-
-            self.assertDictEqual(actual_events[i], expected_events[i],
-                                 f"Actual event {i} does not match expected event {i}.")
-
-        # Assert the [DONE] signal was received
-        self.assertTrue(done_signal_received, "Final data: [DONE] signal was not received.")
+        # Verify build_response_json was called correctly (3 times for content, 1 for final)
+        self.assertEqual(mock_build_json.call_count, 3, "build_response_json call count mismatch")
+        mock_build_json.assert_has_calls([
+            call(token='Hello ', current_username=test_username, finish_reason=None, additional_fields=None),
+            call(token='World', current_username=test_username, finish_reason=None, additional_fields=None),
+            call(token='', current_username=test_username, finish_reason='stop', additional_fields=None)
+        ], any_order=False) # Order matters here
 
 
 if __name__ == '__main__':

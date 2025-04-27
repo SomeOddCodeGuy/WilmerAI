@@ -5,6 +5,8 @@ import sys
 import os
 import time
 import logging
+import uuid
+import requests
 
 # Configure logging for this test file
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -17,142 +19,100 @@ if project_root not in sys.path:
 from Middleware.llmapis.ollama_chat_api_handler import OllamaChatHandler
 from Middleware.utilities import api_utils
 
-@patch('Middleware.utilities.config_utils.load_config')
-@patch('Middleware.utilities.api_utils.get_current_username')
-@patch('time.strftime')
+# Mock LlmHandlerService if needed for init (though not directly used here)
+class MockLlmHandlerService: # Basic mock if needed
+    pass 
+
 class TestOllamaChatApiHandlerSSE(unittest.TestCase):
 
-    @patch('requests.Session')
-    def test_handle_streaming_ollama_chat_sse_format(self, mock_session_cls, mock_time_strftime, mock_get_username, mock_load_config):
+    def test_handle_streaming_ollama_chat_sse_format(self):
+        """Test that OllamaChatHandler.handle_streaming yields chunks in the correct
+        Ollama Chat SSE format (plain JSON lines without 'data:' prefix).
         """
-        Test that OllamaChatHandler.handle_streaming yields chunks in the correct
-        Ollama /api/chat SSE format (raw JSON + \n).
-        """
-        # 1. Mock dependencies
-        mock_get_username.return_value = "mock-ollama-chat-model"
-        mock_time_strftime.return_value = "2024-01-03T10:00:00Z"
+        # --- GIVEN ---
+        fixed_uuid = uuid.UUID('11111111-1111-1111-1111-111111111111') # Fixed UUID
+        fixed_time = 1678886400 # Fixed timestamp
 
-        # Mock configuration (specific to Ollama Chat)
+        # Define realistic mock configs instead of MagicMock
         mock_endpoint_config = {
-            "endpoint": "http://mock-ollama-backend.com/api/chat",
-            "modelNameToSendToAPI": "mock-ollama-chat-model",
-            "apiTypeConfigFileName": "ollamachat_config", # Simulate Ollama Chat config
-            "presetConfigFileName": "mock_preset",
-            "addGenerationPrompt": False,
-            "stripStartStopLineBreaks": True,
-            "maxContextTokenSize": 4096,
-            "max_tokens": 1024
+            "maxContextTokenSize": 2048, # Example value needed by set_gen_input
+            # Add other keys if handler init uses them
         }
         mock_api_type_config = {
-            "apiType": "ollamaapichat", # Critical: Set API type to Ollama Chat
-            "apiKey": None, # Ollama typically doesn't use API keys
-            "apiBaseUrl": "http://mock-ollama-backend.com",
+            "type": "ollamaapichat",
+            "truncatePropertyName": "num_ctx", # Example key needed by set_gen_input
+            "streamPropertyName": "stream", # Example key needed by set_gen_input
+            "maxNewTokensPropertyName": "num_predict", # Example key needed by set_gen_input
+            "apiKey": "",
+            "apiBaseUrl": "http://mock-ollama",
             "defaultHeaders": {"Content-Type": "application/json"},
-            "streamPropertyName": "stream", # Property name in the request payload
-            "maxNewTokensPropertyName": "num_predict", # Example, adjust if needed
-            # Backend properties (assuming backend uses Ollama Chat API itself)
-            "backendApiType": "ollamaapichat",
-            "backendApiPath": "/api/chat",
-            "backendResponseTokenExtractor": "extract_ollama_chat_content", # Custom extractor needed
-            "backendResponseFinishReasonExtractor": "extract_ollama_finish_reason" # Custom extractor needed
-        }
-        mock_preset_config = {
-            "temperature": 0.8,
-            "top_p": 0.9
+            # Add other keys if handler init uses them
         }
 
-        # 2. Prepare mock LLM response chunks (Simulating OLLAMA backend response)
-        #    Even though the backend is Ollama, WilmerAI's handler might still internally
-        #    parse based on a generic SSE structure or its specific extractor logic.
-        #    For robustness, simulate the actual Ollama backend format here.
-        raw_backend_tokens = ["This ", "is ", "Ollama ", "Chat!"]
-        mock_response = MagicMock()
-        backend_chunks = []
-        for token in raw_backend_tokens:
-            chunk = {
-                "model": mock_endpoint_config["modelNameToSendToAPI"],
-                "created_at": mock_time_strftime.return_value,
-                "message": {"role": "assistant", "content": token},
-                "done": False
-            }
-            backend_chunks.append(f"{json.dumps(chunk)}\n".encode('utf-8'))
-
-        # Add final done chunk from backend
-        final_backend_chunk = {
-            "model": mock_endpoint_config["modelNameToSendToAPI"],
-            "created_at": mock_time_strftime.return_value,
-            "message": {"role": "assistant", "content": ""},
-            "done": True,
-            "total_duration": 123, "load_duration": 456, # Example backend timings
-            "prompt_eval_count": 7, "prompt_eval_duration": 890,
-            "eval_count": 10, "eval_duration": 1112
-        }
-        backend_chunks.append(f"{json.dumps(final_backend_chunk)}\n".encode('utf-8'))
-
-        # Mock iter_content to yield byte chunks
-        mock_response.iter_content = MagicMock(return_value=backend_chunks)
+        # Simulate response from Ollama Chat API (stream=True)
+        mock_response = MagicMock(spec=requests.Response)
+        # Content chunks as bytes, mimicking iter_content
+        chunk1_data = {"model":"test_model","created_at":"2023-08-04T08:52:19.325406415Z","message":{"role":"assistant","content":"Hello "},"done":False}
+        chunk2_data = {"model":"test_model","created_at":"2023-08-04T08:52:19.555406415Z","message":{"role":"assistant","content":"world"},"done":False}
+        chunk3_data = {"model":"test_model","created_at":"2023-08-04T08:52:19.999406415Z","message":{"role":"assistant","content":"!"},"done":True}
+        # Ollama streaming yields JSON lines
+        mock_response.iter_content.return_value = [
+            (json.dumps(chunk1_data) + '\n').encode('utf-8'),
+            (json.dumps(chunk2_data) + '\n').encode('utf-8'),
+            (json.dumps(chunk3_data) + '\n').encode('utf-8'),
+        ]
         mock_response.raise_for_status = MagicMock()
-        mock_response.status_code = 200
-
-        # 3. Mock the HTTP session
-        mock_session_instance = MagicMock()
-        mock_session_instance.post.return_value.__enter__.return_value = mock_response
-        mock_session_cls.return_value = mock_session_instance
-
-        # 4. Instantiate the CORRECT handler
+        mock_response.status_code = 200 # Explicitly mock status code
+        # Explicitly make iter_content a callable mock that returns the list
+        mock_response.iter_content = MagicMock(return_value=mock_response.iter_content.return_value)
+        
         handler = OllamaChatHandler(
-            base_url=mock_api_type_config["apiBaseUrl"],
-            api_key=mock_api_type_config["apiKey"],
-            gen_input={"temperature": mock_preset_config["temperature"], "top_p": mock_preset_config["top_p"]},
-            model_name=mock_endpoint_config["modelNameToSendToAPI"],
-            headers=mock_api_type_config["defaultHeaders"],
-            strip_start_stop_line_breaks=mock_endpoint_config["stripStartStopLineBreaks"],
+            endpoint_config=mock_endpoint_config, # Use mock dict
+            api_type_config=mock_api_type_config, # Use mock dict
+            gen_input={},     # Start with empty dict
+            max_tokens=100,
             stream=True,
-            api_type_config=mock_api_type_config,
-            endpoint_config=mock_endpoint_config,
-            max_tokens=mock_endpoint_config["max_tokens"]
+            base_url=mock_api_type_config['apiBaseUrl'], 
+            model_name="test_model", 
+            headers=mock_api_type_config['defaultHeaders'], 
+            strip_start_stop_line_breaks=False,
+            api_key="" 
         )
-        handler.session = mock_session_instance
+        
+        # Manually Patch the session instance on the handler
+        mock_session_instance = MagicMock(spec=requests.Session)
+        mock_post_context = MagicMock()
+        mock_post_context.__enter__.return_value = mock_response
+        mock_post_context.__exit__ = MagicMock(return_value=None)
+        mock_session_instance.post.return_value = mock_post_context
+        handler.session = mock_session_instance # Replace the real session with the mock
 
-        # 5. Patch instance_utils.API_TYPE (simulating incoming request type) and call handle_streaming
-        with patch('Middleware.utilities.instance_utils.API_TYPE', 'ollamaapichat'):
-            messages = [{"role": "user", "content": "Test Ollama Chat"}]
-            stream_generator = handler.handle_streaming(conversation=messages)
+        # --- WHEN ---
+        # Use nested patch context managers
+        with patch('uuid.uuid4', return_value=fixed_uuid) as mock_uuid_patch, \
+             patch('time.time', return_value=fixed_time) as mock_time_patch:
+            result_generator = handler.handle_streaming([])
+            results = list(result_generator)
 
-            # 6. Collect output
-            output_chunks = list(stream_generator)
+        # --- THEN ---
+        self.assertEqual(len(results), 4) # 3 content chunks + 1 final chunk
 
-        # 7. Define the CORRECT expected Ollama /api/chat SSE output format (raw JSON + \n)
-        expected_output = []
-        expected_model = mock_get_username.return_value # WilmerAI uses username as model
-        expected_created_at = mock_time_strftime.return_value
+        # Build expected JSON dictionaries for comparison
+        test_username = "test_user_ollama_chat"
+        expected_json1 = api_utils.build_response_json("Hello ", 'ollamaapichat', current_username=test_username)
+        expected_json2 = api_utils.build_response_json("world", 'ollamaapichat', current_username=test_username)
+        expected_json3 = api_utils.build_response_json("!", 'ollamaapichat', current_username=test_username)
+        expected_final_json = api_utils.build_response_json("", 'ollamaapichat', current_username=test_username, finish_reason="stop")
 
-        for token in raw_backend_tokens:
-            # Build the expected JSON payload using api_utils helper for consistency
-            payload_str = api_utils.build_response_json(
-                token=token,
-                finish_reason=None,
-                current_username=expected_model,
-                api_type='ollamaapichat'
-            )
-            # Expect raw JSON followed by a single newline
-            expected_output.append(f"{payload_str}\n")
+        # Check that the yielded strings match the Ollama format (json + \n)
+        self.assertEqual(results[0], json.dumps(expected_json1) + '\n')
+        self.assertEqual(results[1], json.dumps(expected_json2) + '\n')
+        self.assertEqual(results[2], json.dumps(expected_json3) + '\n')
+        self.assertEqual(results[3], json.dumps(expected_final_json) + '\n') # Check final chunk
 
-        # Add the final done chunk payload (raw JSON + newline)
-        # Note: build_response_json adds timing fields for the final ollamaapichat chunk
-        final_payload_str = api_utils.build_response_json(
-            token="", # Empty content for final
-            finish_reason="stop",
-            current_username=expected_model,
-            api_type='ollamaapichat'
-        )
-        expected_output.append(f"{final_payload_str}\n")
-
-        # DO NOT add the final [DONE] signal for Ollama
-
-        # 8. Assert the output matches the expected Ollama /api/chat SSE format
-        self.assertEqual(output_chunks, expected_output,
-                         "Output stream does not match expected Ollama /api/chat SSE format.")
+        # Verify no SSE prefix/suffix were added
+        self.assertFalse(any(r.startswith('data:') for r in results))
+        self.assertFalse(any(r.endswith('\n\n') for r in results))
 
 if __name__ == '__main__':
     unittest.main()

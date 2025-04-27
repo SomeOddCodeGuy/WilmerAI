@@ -45,9 +45,10 @@ class MCPToolExecutionError(MCPIntegrationError):
 current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
     sys.path.append(current_dir)
-import mcp_tool_executor
-# Import DEFAULT_MCPO_URL from the centralized location
-from mcp_service_discoverer import DEFAULT_MCPO_URL
+# Use absolute import
+from WilmerAI.Public.modules import mcp_tool_executor
+# Import DEFAULT_MCPO_URL from the centralized location using absolute import
+from WilmerAI.Public.modules.mcp_service_discoverer import DEFAULT_MCPO_URL
 
 logger = logging.getLogger(__name__)
 

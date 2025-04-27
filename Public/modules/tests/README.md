@@ -29,7 +29,7 @@ To run all tests, follow these steps:
     This command sets the necessary Python path and discovers tests within the `WilmerAI/Public/modules/tests` directory.
     ```bash
     export PYTHONPATH=/root/projects/Wilmer:/root/projects/Wilmer/WilmerAI:${PYTHONPATH} && \
-    python -m unittest discover -s WilmerAI/Public/modules/tests -p 'test_*.py'
+    WilmerAI/venv/bin/python -m unittest discover -s WilmerAI/Public/modules/tests -p 'test_*.py'
     ```
 
 ## Test Coverage

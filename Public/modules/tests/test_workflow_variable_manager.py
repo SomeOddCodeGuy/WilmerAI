@@ -25,7 +25,7 @@ class TestWorkflowVariableManager(unittest.TestCase):
         # Create a mock LLM handler for testing
         self.mock_llm_handler = MagicMock()
         self.mock_llm_handler.takes_message_collection = True
-        self.mock_llm_handler.prompt_template_file_name = "test_template"
+        self.mock_llm_handler.prompt_template_file_name = "test_template.txt"
 
         # Mock the template data (used as return value for patched loader)
         self.mock_template = {
@@ -37,6 +37,9 @@ class TestWorkflowVariableManager(unittest.TestCase):
             "promptTemplateSystemSuffix": "",
             "promptTemplateEndToken": "<|end|>"
         }
+
+        # Provide the required chat_prompt_template_name
+        self.manager = WorkflowVariableManager(chat_prompt_template_name='test-chat-template')
 
     def test_generate_conversation_turn_variables_extracts_last_user_message(self):
         """GIVEN a sequence of messages, WHEN generate_conversation_turn_variables is called,
@@ -154,7 +157,7 @@ class TestWorkflowVariableManager(unittest.TestCase):
              patch('Middleware.utilities.config_utils.get_user_config', return_value={'chatPromptTemplateName': 'mock_template'}) as mock_get_config:
             
             # Instantiation should now work with get_user_config patched
-            manager = WorkflowVariableManager()
+            manager = WorkflowVariableManager(chat_prompt_template_name='mock-chat-template')
             prompt_string = "Prompt with messages: {messages}" # Include the placeholder
             mock_llm_handler = MagicMock()
             mock_llm_handler.prompt_template_file_name = None # Assume no template for basic format
