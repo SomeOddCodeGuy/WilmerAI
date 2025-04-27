@@ -379,12 +379,17 @@ def load_template_from_json(template_file_name):
     return load_config(config_path)
 
 
-def get_workflow_path(workflow_name: str) -> str:
-    # Load the user config first
-    user_config = get_user_config()
-    # Pass the user_config to the resolver
-    resolver = WorkflowPathResolver(user_config=user_config)
-    return resolver.get_path(workflow_name)
+def get_workflow_path(workflow_name):
+    """
+    Retrieves the file path to a workflow configuration file.
+
+    :param workflow_name: The name of the workflow configuration.
+    :return: The full path to the workflow configuration file.
+    """
+    user_name = get_current_username()
+    config_dir = str(get_root_config_directory())
+    config_file = os.path.join(config_dir, 'Workflows', user_name, f'{workflow_name}.json')
+    return config_file
 
 
 def get_discussion_id_workflow_path():
@@ -457,57 +462,3 @@ def get_use_file_logging() -> bool:
     :return: The useFileLogging setting from the user configuration.
     """
     return get_config_value('useFileLogging')
-
-
-# New Class for resolving workflow paths
-class WorkflowPathResolver:
-    def __init__(self, user_config: Dict[str, Any]):
-        """Initializes the resolver with the user's config."""
-        self.user_config = user_config
-        self.current_user = get_current_username()
-        # Determine the base path for workflows relative to this file's location
-        # Assumes config_utils.py is in Middleware/utilities
-        self.base_workflow_dir = os.path.abspath(os.path.join(
-            os.path.dirname(__file__), # Current directory (Middleware/utilities)
-            '..', # Up to Middleware
-            '..', # Up to WilmerAI root?
-            'Public', 
-            'Configs', 
-            'Workflows'
-        ))
-        logger.debug(f"WorkflowPathResolver initialized for user '{self.current_user}'. Base workflow dir: {self.base_workflow_dir}")
-
-    def get_path(self, workflow_name: str) -> str:
-        """Resolves the full path for a given workflow name."""
-        # Check if the workflow name already contains a path separator, indicating a full or relative path outside the standard dir
-        if os.path.sep in workflow_name or (os.altsep and os.altsep in workflow_name):
-             # If it seems like a full path, use it directly
-             if os.path.isabs(workflow_name):
-                  logger.debug(f"Workflow name '{workflow_name}' appears to be an absolute path.")
-                  return workflow_name
-             else:
-                 # If relative, resolve it relative to the *workspace root* (adjust if needed)
-                 # This part might need refinement based on expected relative path behavior
-                 logger.warning(f"Workflow name '{workflow_name}' appears to be a relative path. Resolving from workspace root. Adjust if needed.")
-                 # Assuming workspace root is the parent of 'WilmerAI' directory
-                 workspace_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..')) 
-                 return os.path.join(workspace_root, workflow_name)
-        
-        # Otherwise, assume it's a name within the user's workflow directory
-        user_workflow_dir = os.path.join(self.base_workflow_dir, self.current_user)
-        workflow_filename = f"{workflow_name}.json"
-        full_path = os.path.join(user_workflow_dir, workflow_filename)
-        logger.debug(f"Resolved workflow '{workflow_name}' to path: {full_path}")
-        # Check if the file exists in the user-specific directory
-        if not os.path.exists(full_path):
-            # Fallback to the default workflow directory if it doesn't exist for the user
-            default_workflow_dir = os.path.join(self.base_workflow_dir, '_default') # Assuming a _default folder
-            fallback_path = os.path.join(default_workflow_dir, workflow_filename)
-            logger.warning(f"Workflow file not found at user path '{full_path}'. Trying default path '{fallback_path}'.")
-            if os.path.exists(fallback_path):
-                return fallback_path
-            else:
-                # If neither exists, return the original user path - FileNotFoundError will be raised later
-                logger.error(f"Workflow file '{workflow_filename}' not found in user dir '{user_workflow_dir}' or default dir '{default_workflow_dir}'.")
-                return full_path # Let the caller handle the FileNotFoundError
-        return full_path
