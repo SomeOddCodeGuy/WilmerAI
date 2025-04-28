@@ -14,6 +14,7 @@ from .koboldcpp_api_handler import KoboldCppApiHandler
 from .llm_api_handler import LlmApiHandler
 from .ollama_chat_api_handler import OllamaChatHandler
 from .ollama_chat_api_image_specific_handler import OllamaApiChatImageSpecificHandler
+from .openai_chat_api_image_specific_handler import OpenAIApiChatImageSpecificHandler
 from .ollama_generate_api_handler import OllamaGenerateHandler
 from .openai_api_handler import OpenAiApiHandler
 from .openai_completions_api_handler import OpenAiCompletionsApiHandler
@@ -155,6 +156,19 @@ class LlmApiService:
                 endpoint_config=self.endpoint_file,
                 max_tokens=self.max_tokens
             )
+        elif self.llm_type == "openAIApiChatImageSpecific":
+             return OpenAIApiChatImageSpecificHandler(
+                 base_url=self.endpoint_url,
+                 api_key=self.api_key,
+                 gen_input=self._gen_input,
+                 model_name=self.model_name,
+                 headers=self.headers,
+                 strip_start_stop_line_breaks=self.strip_start_stop_line_breaks,
+                 stream=self.stream,
+                 api_type_config=self.api_type_config,
+                 endpoint_config=self.endpoint_file,
+                 max_tokens=self.max_tokens
+             )
         else:
             raise ValueError(f"Unsupported LLM type: {self.llm_type}")
 

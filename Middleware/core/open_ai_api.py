@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import json
 import logging
@@ -24,6 +25,58 @@ app = Flask(__name__)
 app.config['JSON_AS_ASCII'] = False # Ensure jsonify handles unicode correctly without escaping them unnecessarily
 
 logger = logging.getLogger(__name__)
+
+
+# --- Helper Function for Sanitizing Log Data ---
+def _sanitize_log_data(data: Any, max_len: int = 200, head_tail_len: int = 50) -> Any:
+    """
+    Recursively sanitizes data for logging by truncating long strings, especially base64 image data.
+    Creates a deep copy to avoid modifying the original data.
+
+    Args:
+        data: The data structure (dict, list, str, etc.) to sanitize.
+        max_len: The maximum length for a string before considering truncation.
+        head_tail_len: The number of characters to keep from the head and tail of truncated strings.
+
+    Returns:
+        A sanitized deep copy of the input data.
+    """
+    data_copy = copy.deepcopy(data)
+
+    def _sanitize_recursive(item):
+        if isinstance(item, dict):
+            # Sanitize dictionary values
+            return {k: _sanitize_recursive(v) for k, v in item.items()}
+        elif isinstance(item, list):
+            # Sanitize list elements
+            return [_sanitize_recursive(elem) for elem in item]
+        elif isinstance(item, str):
+            # Check for common base64 image data prefix and length
+            is_potential_image_data = item.startswith("data:image") and "base64," in item
+            if is_potential_image_data and len(item) > max_len:
+                try:
+                    prefix_end = item.find("base64,") + len("base64,")
+                    prefix = item[:prefix_end]
+                    encoded_data = item[prefix_end:]
+                    if len(encoded_data) > (max_len - prefix_end): # Check actual data length relative to budget
+                        return f"{prefix}{encoded_data[:head_tail_len]}...[truncated]...{encoded_data[-head_tail_len:]}"
+                except Exception: # Fallback in case string manipulation fails
+                    pass # Return original string if slicing fails
+
+            # Also truncate other generic very long strings, using a larger threshold
+            elif len(item) > (max_len * 5):
+                 # Ensure head_tail_len * 2 doesn't exceed string length
+                 safe_head_tail = min(head_tail_len * 2, len(item) // 2)
+                 return f"{item[:safe_head_tail]}...[truncated]...{item[-safe_head_tail:]}"
+            # Return the original string if no truncation needed or failed
+            return item
+        else:
+            # Return non-string, non-collection items as is
+            return item
+
+    return _sanitize_recursive(data_copy)
+
+# --- End Helper Function ---
 
 
 # --- Helper Function for OpenWebUI Tool Detection ---
@@ -142,7 +195,8 @@ class CompletionsAPI(MethodView):
         instance_utils.API_TYPE = "openaicompletion"
         logger.info("CompletionsAPI request received")
         data: Dict[str, Any] = request.json
-        logger.debug(f"CompletionsAPI request received: {json.dumps(data)}")
+        # Use sanitized data for logging
+        logger.debug(f"CompletionsAPI request received: {json.dumps(_sanitize_log_data(data))}")
         prompt: str = data.get("prompt", "")
 
         logger.debug("CompletionsAPI Processing Data")
@@ -188,7 +242,8 @@ class ChatCompletionsAPI(MethodView):
         add_user_assistant = get_is_chat_complete_add_user_assistant()
         add_missing_assistant = get_is_chat_complete_add_missing_assistant()
         request_data: Dict[str, Any] = request.get_json()
-        logger.info(f"ChatCompletionsAPI request received: {json.dumps(request_data)}")
+        # Use sanitized data for logging
+        logger.info(f"ChatCompletionsAPI request received: {json.dumps(_sanitize_log_data(request_data))}")
 
         stream: bool = request_data.get("stream", False)
 
@@ -266,7 +321,8 @@ class GenerateAPI(MethodView):
 
         # Parse the JSON request
         data: Dict[str, Any] = request.get_json()
-        logger.debug(f"GenerateAPI request received: {json.dumps(data)}")
+        # Use sanitized data for logging
+        logger.debug(f"GenerateAPI request received: {json.dumps(_sanitize_log_data(data))}")
 
         # Extract required parameters
         model: str = data.get("model")
@@ -297,7 +353,8 @@ class GenerateAPI(MethodView):
                 })
 
         logger.debug("GenerateAPI Processing Data")
-        logger.debug(f"Messages: {json.dumps(messages)}")
+        # Sanitize messages before logging just to be safe
+        logger.debug(f"Messages prepared for processing: {json.dumps(_sanitize_log_data(messages))}")
 
         # Generate and return the appropriate response
         if stream:
@@ -343,7 +400,8 @@ class ApiChatAPI(MethodView):
             logger.error(f"Failed to parse JSON: {e}")
             return jsonify({"error": "Invalid JSON data"}), 400
 
-        logger.info(f"ApiChatAPI request received: {json.dumps(request_data)}")
+        # Use sanitized data for logging
+        logger.info(f"ApiChatAPI request received: {json.dumps(_sanitize_log_data(request_data))}")
 
         # Validate 'model' and 'messages' fields
         if 'model' not in request_data or 'messages' not in request_data:

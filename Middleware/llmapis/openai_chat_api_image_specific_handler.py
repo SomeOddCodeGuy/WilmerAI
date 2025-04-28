@@ -7,6 +7,7 @@ import re
 import os
 from typing import Dict, Generator, List, Optional
 from urllib.parse import urlparse
+from copy import deepcopy
 
 import requests
 
@@ -27,8 +28,7 @@ class OpenAIApiChatImageSpecificHandler(LlmApiHandler):
             self,
             conversation: Optional[List[Dict[str, str]]] = None,
             system_prompt: Optional[str] = None,
-            prompt: Optional[str] = None,
-            current_username: str = None
+            prompt: Optional[str] = None
     ) -> Generator[str, None, None]:
         """
         Handle streaming response for OpenAI API with image support.
@@ -37,7 +37,6 @@ class OpenAIApiChatImageSpecificHandler(LlmApiHandler):
             conversation (Optional[List[Dict[str, str]]]): A list of messages in the conversation.
             system_prompt (Optional[str]): The system prompt to use.
             prompt (Optional[str]): The user prompt to use.
-            current_username (str): The current username.
 
         Returns:
             Generator[str, None, None]: A generator yielding chunks of the response.
@@ -168,7 +167,7 @@ class OpenAIApiChatImageSpecificHandler(LlmApiHandler):
                                         completion_json = api_utils.build_response_json(
                                             token=content,
                                             finish_reason=None,  # Don't add "stop" or "done" yet
-                                            current_username=current_username
+                                            current_username=get_current_username()
                                         )
 
                                         yield api_utils.sse_format(completion_json, output_format)
@@ -179,6 +178,18 @@ class OpenAIApiChatImageSpecificHandler(LlmApiHandler):
                             except json.JSONDecodeError as e:
                                 logger.warning(f"Failed to parse JSON: {e}")
                                 continue
+                            except Exception as e:
+                                logger.error(f"Error during streaming processing: {e}", exc_info=True)
+                                # Yield a formatted error message
+                                error_token = f"Error during streaming processing: {e}"
+                                error_json = api_utils.build_response_json(
+                                    token=error_token,
+                                    finish_reason="stop",
+                                    current_username=get_current_username()
+                                )
+                                yield api_utils.sse_format(error_json, output_format)
+                                # Stop processing after yielding the error
+                                raise StopIteration # Use StopIteration to signal generator end cleanly after error
 
                     total_duration = int((time.time() - start_time) * 1e9)
 
@@ -186,9 +197,9 @@ class OpenAIApiChatImageSpecificHandler(LlmApiHandler):
                     final_completion_json = api_utils.build_response_json(
                         token="",
                         finish_reason="stop",
-                        current_username=current_username,
+                        current_username=get_current_username(),
                     )
-                    logger.debug("Total duration: {}", total_duration)
+                    logger.debug("Total duration: %s", total_duration)
                     yield api_utils.sse_format(final_completion_json, output_format)
 
                     # Always send [DONE] for OpenAI API format
@@ -198,6 +209,22 @@ class OpenAIApiChatImageSpecificHandler(LlmApiHandler):
             except requests.RequestException as e:
                 logger.warning(f"Request failed: {e}")
                 raise
+            # Add a general exception catch block here
+            except Exception as e:
+                logger.error(f"Unexpected error during streaming request setup or iteration: {e}", exc_info=True)
+                # Yield a formatted error message if possible
+                try:
+                    error_token = f"Error during streaming processing: {e}"
+                    error_json = api_utils.build_response_json(
+                        token=error_token,
+                        finish_reason="stop",
+                        current_username=get_current_username()
+                    )
+                    yield api_utils.sse_format(error_json, output_format)
+                except Exception as inner_e:
+                    logger.error(f"Failed to yield formatted error message: {inner_e}")
+                # Stop the generator cleanly after yielding the error (or attempting to)
+                raise StopIteration from e
 
         return generate_sse_stream()
 
@@ -386,137 +413,208 @@ def convert_to_data_uri(file_path, mime_type=None):
 def prep_corrected_conversation(conversation, system_prompt, prompt):
     """
     Prepare a corrected conversation for the OpenAI API with enhanced image handling.
-    
+
     Supports:
     - HTTP/HTTPS URLs with proper protocol
     - Base64-encoded images (with or without data URI prefix)
     - File URLs (converted to data URIs)
+
+    Skips invalid URLs or images that fail processing.
     """
     if conversation is None:
         conversation = []
 
-    # Add system prompt and user prompt to the conversation if provided
+    # Create a deep copy to avoid modifying the original list
+    current_conversation = deepcopy(conversation)
+
+    # Add system prompt and user prompt to the copied conversation if provided
     if system_prompt:
-        conversation.append({"role": "system", "content": system_prompt})
+        current_conversation.append({"role": "system", "content": system_prompt})
     if prompt:
-        conversation.append({"role": "user", "content": prompt})
+        current_conversation.append({"role": "user", "content": prompt})
 
     # Collect all image contents and filter them with enhanced processing
     image_contents = []
-    for msg in conversation:
-        if msg["role"] == "images":
-            content = msg["content"]
-            
-            # If it looks like base64 data
-            if content.startswith('data:image/'):
-                # It's already a data URI
-                logger.debug("Processing data URI image")
-                image_contents.append({
-                    "type": "image_url",
-                    "image_url": {"url": content}
-                })
-                continue
-                
-            elif ';base64,' in content:
-                # Base64 data that might need the prefix
-                if not content.startswith('data:'):
-                    logger.debug("Adding data URI prefix to base64 image data")
-                    content = f"data:image/jpeg;base64,{content.split(';base64,', 1)[1]}"
-                image_contents.append({
-                    "type": "image_url",
-                    "image_url": {"url": content}
-                })
-                continue
-                
-            elif is_base64_image(content):
-                # Looks like raw base64, add proper data URI prefix
-                logger.debug("Converting raw base64 to data URI")
-                content = f"data:image/jpeg;base64,{content}"
-                image_contents.append({
-                    "type": "image_url",
-                    "image_url": {"url": content}
-                })
-                continue
-                
-            # Handle file URLs
-            elif content.startswith('file://'):
-                try:
-                    # Convert file URL to data URI
-                    logger.debug("Converting file URL to data URI")
-                    file_path = content[7:]  # Strip "file://"
-                    data_uri = convert_to_data_uri(file_path)
-                    image_contents.append({
-                        "type": "image_url",
-                        "image_url": {"url": data_uri}
-                    })
-                    continue
-                except Exception as e:
-                    logger.error(f"Error converting file URL to data URI: {e}")
-                    # Skip further processing for this failed file URL
-                    continue
-            
-            # Process as URL strings - might be multiple URLs separated by whitespace
-            for image_url in content.split():
-                if not image_url.strip():
-                    continue
-                    
-                # Clean and validate URL
-                image_url = image_url.strip()
-                
-                # Ensure URL has proper protocol
-                if not image_url.startswith(('http://', 'https://')):
-                    # Add https:// prefix if missing
-                    if image_url.startswith('//'):
-                        image_url = 'https:' + image_url
-                    else:
-                        image_url = 'https://' + image_url
-                        
-                # Final validation - check BEFORE appending
-                if is_valid_http_url(image_url):
-                    logger.debug(f"Adding HTTP image URL: {image_url}")
-                    image_contents.append({
-                        "type": "image_url",
-                        "image_url": {"url": image_url}
-                    })
-                else:
-                    logger.warning(f"Invalid image URL skipped: {image_url}")
-    
-    # Filter out image messages from conversation
-    conversation = [msg for msg in conversation if msg["role"] != "images"]
+    image_messages_present = False # Flag to track if 'images' role existed
 
-    # Format conversation for OpenAI API with images
-    # Find the last user message and append images if there are any
+    # Process image messages separately first
+    potential_images = []
+    temp_conversation = []
+    for msg in current_conversation:
+        if msg["role"] == "images":
+            image_messages_present = True
+            content = msg.get("content", "")
+            if isinstance(content, str): # Handle potential list content safely
+                potential_images.extend(content.split())
+            elif isinstance(content, list):
+                 # If content is already a list (e.g., from previous processing?), extract strings
+                 for item in content:
+                      if isinstance(item, str):
+                           potential_images.extend(item.split())
+                      # Silently ignore non-string items in list for now
+            # else: Silently ignore non-string/non-list content
+        else:
+            temp_conversation.append(msg)
+
+    # Update conversation to remove the original 'images' role messages
+    current_conversation = temp_conversation
+
+    # Process the collected potential image strings
+    for image_url_or_data in potential_images:
+        content = image_url_or_data.strip()
+        if not content:
+            continue
+
+        processed = False
+        # Handle data URIs first
+        if content.startswith('data:image/'):
+            logger.debug("Processing data URI image")
+            image_contents.append({
+                "type": "image_url",
+                "image_url": {"url": content}
+            })
+            processed = True
+        # Handle base64 that might need prefix
+        elif ';base64,' in content:
+            if not content.startswith('data:'):
+                logger.debug("Adding data URI prefix to base64 image data")
+                try:
+                     # Extract actual base64 part after the first ;base64,
+                     b64_data = content.split(';base64,', 1)[1]
+                     # Simple check if it resembles base64
+                     if is_base64_image(b64_data): # Check the data part
+                          content = f"data:image/jpeg;base64,{b64_data}"
+                          image_contents.append({
+                               "type": "image_url",
+                               "image_url": {"url": content}
+                          })
+                          processed = True
+                     else:
+                          logger.warning(f"Skipping invalid base64 data after ';base64,': {content[:50]}...")
+                except IndexError:
+                     logger.warning(f"Skipping malformed base64 string: {content[:50]}...")
+            else: # Already has data: prefix but wasn't image?
+                 logger.warning(f"Skipping non-image data URI: {content[:50]}...")
+
+        # Handle raw base64
+        elif is_base64_image(content):
+            logger.debug("Converting raw base64 to data URI")
+            content = f"data:image/jpeg;base64,{content}"
+            image_contents.append({
+                "type": "image_url",
+                "image_url": {"url": content}
+            })
+            processed = True
+        # Handle file URLs
+        elif content.startswith('file://'):
+            try:
+                logger.debug("Converting file URL to data URI")
+                parsed_uri = urlparse(content)
+                file_path = parsed_uri.path # Use urlparse to handle file paths correctly
+                # Handle different OS path representations from file URI
+                if os.name == 'nt': # Windows: file:///C:/path -> /C:/path
+                     if file_path.startswith('/'):
+                          file_path = file_path[1:]
+                     file_path = file_path.replace('/', '\\') # Convert to backslashes
+                # Other OS might need specific handling if paths aren't standard
+
+                data_uri = convert_to_data_uri(file_path)
+                image_contents.append({
+                    "type": "image_url",
+                    "image_url": {"url": data_uri}
+                })
+                processed = True
+            except FileNotFoundError:
+                logger.error(f"File not found for URL: {content}, Path: {file_path}")
+            except Exception as e:
+                logger.error(f"Error converting file URL {content} to data URI: {e}")
+            # If file conversion fails, processed remains False
+
+        # Handle HTTP/HTTPS URLs last
+        if not processed and is_valid_http_url(content):
+            # Use the already validated content as the URL
+            image_url = content
+            logger.debug(f"Adding HTTP image URL: {image_url}")
+            image_contents.append({
+                "type": "image_url",
+                "image_url": {"url": image_url}
+            })
+            processed = True
+            # Removed the potentially problematic auto-prefixing logic
+            # else:
+            #     logger.warning(f"Invalid or non-HTTP/S image URL skipped: {content}")
+
+        # If after all checks, it wasn't processed, log a warning
+        if not processed:
+            logger.warning(f"Skipping unrecognized image source: {content[:100]}...")
+
+    # Now, modify the *last* user message to include the *valid* images, if any
     if image_contents:
-        for msg in reversed(conversation):
-            if msg["role"] == "user":
-                # For OpenAI API, content needs to be a list when images are present
-                if isinstance(msg["content"], str):
-                    # Convert content to a list with text as the first item
-                    msg["content"] = [
-                        {"type": "text", "text": msg["content"]},
-                        *image_contents
-                    ]
+        last_user_msg_index = -1
+        for i in range(len(current_conversation) - 1, -1, -1):
+            if current_conversation[i]["role"] == "user":
+                last_user_msg_index = i
                 break
-        
-        # If no user message found, add one with the images
-        if not any(msg["role"] == "user" for msg in conversation):
-            conversation.append({
+
+        if last_user_msg_index != -1:
+            user_msg = current_conversation[last_user_msg_index]
+            if isinstance(user_msg["content"], str):
+                # Convert content to a list with text as the first item
+                user_msg["content"] = [
+                    {"type": "text", "text": user_msg["content"]},
+                    *image_contents # Add only the valid images
+                ]
+            elif isinstance(user_msg["content"], list):
+                 # If already a list, assume it might have text/image structure,
+                 # append new valid images carefully.
+                 # This assumes the original list structure is [{'type':'text', ...}, ...]
+                 # Filter out any pre-existing image_url types before adding new ones
+                 # to avoid duplicates if function is called multiple times?
+                 # For simplicity now, just append if not already present by URL.
+                 existing_urls = {item['image_url']['url'] for item in user_msg['content'] if item.get('type') == 'image_url'}
+                 for img_item in image_contents:
+                      if img_item['image_url']['url'] not in existing_urls:
+                           user_msg['content'].append(img_item)
+            # else: handle case where content is neither str nor list? (ignore for now)
+
+        else:
+            # If no user message found, add one with the images
+            current_conversation.append({
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": "Please describe this image."},
+                    {"type": "text", "text": "Please describe the image(s)."}, # Generic text
                     *image_contents
                 ]
             })
+    elif image_messages_present and not image_contents:
+         # If original message had 'images' role but none were valid,
+         # ensure the last user message content remains a simple string.
+         # This addresses the test failures where they expected string content.
+         last_user_msg_index = -1
+         for i in range(len(current_conversation) - 1, -1, -1):
+             if current_conversation[i]["role"] == "user":
+                 last_user_msg_index = i
+                 break
+         if last_user_msg_index != -1:
+              user_msg = current_conversation[last_user_msg_index]
+              if isinstance(user_msg.get("content"), list):
+                   # Find the text part and revert content to just that string
+                   text_content = ""
+                   for item in user_msg["content"]:
+                        if item.get("type") == "text":
+                             text_content = item.get("text", "")
+                             break
+                   user_msg["content"] = text_content
+                   logger.debug(f"Reverted user message content to string as no valid images were found.")
 
-    # Convert roles for OpenAI API format
-    corrected_conversation = [
-        {**msg, "role": "system" if msg["role"] == "systemMes" else msg["role"]}
-        for msg in conversation
-    ]
+    # Final pass for role conversion and cleanup
+    final_conversation = []
+    for msg in current_conversation:
+        # Convert systemMes role
+        if msg["role"] == "systemMes":
+            msg["role"] = "system"
+        # Skip empty assistant messages at the end
+        if not (msg == current_conversation[-1] and msg["role"] == "assistant" and not msg.get("content")):
+             final_conversation.append(msg)
 
-    # Remove empty assistant messages
-    if corrected_conversation and corrected_conversation[-1]["role"] == "assistant" and (
-            corrected_conversation[-1]["content"] == "" or not corrected_conversation[-1]["content"]):
-        corrected_conversation.pop()
-
-    return corrected_conversation 
+    return final_conversation 

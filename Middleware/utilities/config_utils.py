@@ -33,6 +33,9 @@ def load_config(config_file):
 
 
 def get_config_property_if_exists(config_property, config_data):
+    # Handle cases where config_data might be None
+    if config_data is None:
+        return None
     if config_data.get(config_property) and config_data.get(config_property) != "":
         return config_data.get(config_property)
     else:
