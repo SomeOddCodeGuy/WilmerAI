@@ -98,7 +98,7 @@ class WorkflowManager:
         Initializes the WorkflowManager with the given workflow configuration name and optional parameters.
 
         :param workflow_config_name: The name of the workflow configuration file.
-        :param kwargs: Optional keyword arguments, including 'llm_handler' and 'lookbackStartTurn', 'path_finder_func', 'chat_template_name'.
+        :param kwargs: Optional keyword arguments, including 'llm_handler' and 'lookbackStartTurn', 'path_finder_func'(to allow testing e.g. overriding the default path).
         """
         # path_finder_func is needed for testing. When not provided, default_get_workflow_path is used (original behavior)
         self.path_finder_func = kwargs.pop('path_finder_func', default_get_workflow_path)
@@ -108,16 +108,8 @@ class WorkflowManager:
             self.llm_handler = kwargs['llm_handler']
         if 'lookbackStartTurn' in kwargs:
             self.lookbackStartTurn = kwargs['lookbackStartTurn']
-        if 'chat_template_name' in kwargs:
-            chat_template_name = kwargs.pop('chat_template_name')
-            logger.debug(f"Using injected chat_template_name: {chat_template_name}")
-        else:
-            chat_template_name = get_chat_template_name()
-            logger.debug(f"Using default chat_template_name: {chat_template_name}")
         
-        self.workflow_variable_service = WorkflowVariableManager(
-            chat_prompt_template_name=chat_template_name, 
-            **kwargs)
+        self.workflow_variable_service = WorkflowVariableManager(**kwargs)
         self.workflowConfigName = workflow_config_name
         self.llm_handler_service = LlmHandlerService()
 

@@ -10,9 +10,10 @@ import sys
 # Adjust import paths
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../..")))
 
-import WilmerAI.Public.modules.mcp_tool_executor as mcp_tool_executor
 # Use absolute import
-from WilmerAI.Public.modules.mcp_service_discoverer import MCPServiceDiscoverer, DEFAULT_MCPO_URL
+from Public.modules import mcp_tool_executor
+# Use absolute import
+from Public.modules.mcp_service_discoverer import MCPServiceDiscoverer, DEFAULT_MCPO_URL
 # Corrected relative import for mcp_prompt_utils
 from .mcp_prompt_utils import _format_mcp_tools_for_llm_prompt, _integrate_tools_into_prompt
 

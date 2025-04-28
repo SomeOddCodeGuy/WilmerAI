@@ -4,6 +4,7 @@ from typing import Dict, Any, Optional, List
 
 import jinja2
 
+from Middleware.utilities.config_utils import get_chat_template_name
 from Middleware.utilities.memory_utils import handle_get_current_summary_from_file, gather_chat_summary_memories
 from Middleware.utilities.prompt_extraction_utils import extract_last_n_turns_as_string
 from Middleware.utilities.prompt_template_utils import (

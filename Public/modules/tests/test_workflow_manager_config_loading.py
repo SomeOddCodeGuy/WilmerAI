@@ -14,7 +14,6 @@ if project_root not in sys.path:
 from Middleware.workflows.managers.workflow_manager import WorkflowManager
 from Middleware.llmapis.llm_api import LlmApiService # Assuming LlmApiService is needed for init
 from Middleware.utilities.sql_lite_utils import SqlLiteUtils # Assuming SqlLiteUtils is needed
-from Middleware.utilities.config_utils import WorkflowPathResolver # Import the resolver
 
 # Configure logging for visibility
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')

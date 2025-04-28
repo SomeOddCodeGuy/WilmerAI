@@ -19,7 +19,6 @@ from Middleware.workflows.managers.workflow_manager import WorkflowManager, Earl
 from Middleware.llmapis.llm_api import LlmApiService
 from Middleware.utilities import api_utils
 from Middleware.utilities.sql_lite_utils import SqlLiteUtils
-from Middleware.utilities.config_utils import WorkflowPathResolver
 from Middleware.utilities import instance_utils
 
 # === START Logging Configuration ===
@@ -27,22 +26,19 @@ log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(me
 console_handler = logging.StreamHandler()
 console_handler.setFormatter(log_formatter)
 
-# Get the root logger and add the handler
-# You might want to target a specific logger if your application uses them (e.g., logging.getLogger('WilmerAI'))
 root_logger = logging.getLogger()
-# Clear existing handlers to avoid duplicate messages if the test runner also configures logging
+
 if root_logger.hasHandlers():
     root_logger.handlers.clear()
 root_logger.addHandler(console_handler)
 root_logger.setLevel(logging.DEBUG) 
-logger = logging.getLogger(__name__) # Optional: Get a logger specific to this test file
-# === END Logging Configuration ===
+logger = logging.getLogger(__name__)
 
 # Adjust import paths 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../WilmerAI")))
 
 # Import the class under test
-from Middleware.workflows.processors.prompt_processor import PromptProcessor # Add this import
+from Middleware.workflows.processors.prompt_processor import PromptProcessor
 
 # Mock LlmHandlerService and its methods if needed by __init__ or _process_section mocks
 class MockLlmHandler:
@@ -56,11 +52,8 @@ class MockLlmHandlerService:
 
     def load_model_from_config(self, *args, **kwargs):
         mock_handler = MagicMock() # Use MagicMock instead of AsyncMock
-        # Set attributes needed by WorkflowManager or handlers
         mock_handler.takes_message_collection = True 
         mock_handler.prompt_template_file_name = "mock_template"
-        # Mock the generate_response method if needed by PromptProcessor
-        # Depending on what handle_conversation_type_node calls
         mock_handler.generate_response.return_value = "Mock LLM Response"
         return mock_handler
 
@@ -76,7 +69,6 @@ def consume_sync_gen(gen: Generator) -> List[Any]:
     return items
 
 # === Test Class for State Propagation ===
-# Removed class-level patches
 class TestWorkflowManagerStatePropagation(unittest.TestCase):
 
     def setUp(self):

@@ -20,7 +20,6 @@ from Middleware.utilities import config_utils
 from mocks import MockLlmHandlerServiceForInit
 from Middleware.llmapis.llm_api import LlmApiService
 from Middleware.utilities.sql_lite_utils import SqlLiteUtils
-from Middleware.utilities.config_utils import WorkflowPathResolver
 from Middleware.utilities import api_utils
 # Disable logging for cleaner test output
 logging.disable(logging.CRITICAL)

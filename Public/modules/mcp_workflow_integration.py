@@ -45,10 +45,10 @@ class MCPToolExecutionError(MCPIntegrationError):
 current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
     sys.path.append(current_dir)
-# Use absolute import
-from WilmerAI.Public.modules import mcp_tool_executor
+    
+from Public.modules import mcp_tool_executor
 # Import DEFAULT_MCPO_URL from the centralized location using absolute import
-from WilmerAI.Public.modules.mcp_service_discoverer import DEFAULT_MCPO_URL
+from Public.modules.mcp_service_discoverer import DEFAULT_MCPO_URL
 
 logger = logging.getLogger(__name__)
 
@@ -277,11 +277,6 @@ class MCPWorkflowHandler:
              logger.warning("Handler initialized with no messages and no original_response.")
              # Don't raise error here, let execute_tools handle it if needed
 
-        # Ensure tool_execution_map is provided (already checked in Invoke, but double-check)
-        if not self.tool_execution_map:
-             logger.error("Handler requires 'tool_execution_map', but it was empty or None.")
-             raise MCPConfigurationError("tool_execution_map is required for execution.")
-
         logger.info("Handler input arguments assigned and validated successfully.")
         logger.info(f"Handler processing {len(self.messages)} messages")
         # (Keep logging)
@@ -326,6 +321,14 @@ class MCPWorkflowHandler:
 
             # Process executor result
             if executor_result.get("has_tool_call"):
+                if not self.tool_execution_map:
+                    error_msg = "MCP Integration Error: Tool calls were detected, but the tool execution map is empty. Cannot execute tools."
+                    logger.error(error_msg)
+                    # You could raise an exception here or return a formatted error string.
+                    # Returning a string might be more resilient in a workflow.
+                    # raise MCPConfigurationError(error_msg)
+                    return error_msg # Return error string
+
                 tool_results = executor_result.get("tool_results", [])
                 logger.info(f"Tool call detected, formatting {len(tool_results)} results")
 

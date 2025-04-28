@@ -2,6 +2,7 @@ import importlib.util
 import os
 import logging
 import traceback
+import sys
 
 # Base exception for errors occurring within dynamically loaded modules
 class DynamicModuleError(Exception):
@@ -36,6 +37,12 @@ def run_dynamic_module(module_path, *args, **kwargs):
     """
     if not os.path.isfile(module_path):
         raise FileNotFoundError(f"No file found at {module_path}")
+
+    # Ensure the project root is in sys.path for the dynamic module
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')) # Assumes this file is in WilmerAI/Middleware/utilities
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+        logger.debug(f"Added project root {project_root} to sys.path for dynamic module execution")
 
     # Load the module dynamically
     spec = importlib.util.spec_from_file_location("dynamic_module", module_path)

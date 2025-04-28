@@ -7,7 +7,7 @@ import ast
 from typing import Dict, List, Any, Optional, Tuple
 
 # Import the aggregation utility using explicit relative import
-from .workflow_utils import aggregate_generator_input
+from Public.modules.workflow_utils import aggregate_generator_input
 
 logger = logging.getLogger(__name__)
 
