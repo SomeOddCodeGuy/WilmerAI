@@ -140,12 +140,7 @@ class PromptCategorizer:
 
         while attempts < 4:
             workflow_result = workflow_manager.run_workflow(user_request, request_id, nonResponder=True, stream=False)
-
-            # Consume generator if necessary to get the final string
-            if hasattr(workflow_result, '__iter__') and not isinstance(workflow_result, str):
-                raw_category_output = "".join(list(workflow_result))
-            else:
-                raw_category_output = workflow_result
+            raw_category_output = workflow_result
 
             # Check if the output is None before attempting to strip
             if raw_category_output is None:
