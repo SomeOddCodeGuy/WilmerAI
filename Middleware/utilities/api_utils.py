@@ -109,9 +109,14 @@ def _extract_content_from_parsed_json(parsed_json: dict) -> str:
     # 1. Try OpenAI format (choices[0].delta.content)
     choices = parsed_json.get('choices', [])
     if choices and isinstance(choices, list) and len(choices) > 0:
+        # First try delta.content (chat completion format)
         delta = choices[0].get('delta', {})
         if isinstance(delta, dict):
             content = delta.get('content', '')
+        
+        # If no content found, try text field (completion format)
+        if not content:
+            content = choices[0].get('text', '')
 
     # 2. If not found, try Ollama format (response)
     if not content:
