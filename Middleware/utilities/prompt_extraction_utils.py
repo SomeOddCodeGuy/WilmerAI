@@ -59,18 +59,21 @@ def extract_last_n_turns(messages: List[Dict[str, str]], n: int, include_sysmes:
 def extract_last_n_turns_as_string(messages: List[Dict[str, Any]], n: int, include_sysmes: bool = True,
                                    remove_all_systems_override=False) -> str:
     """
-    Extracts and formats the last n messages as a single conversational string.
+    Extracts the last n messages as a single string, joining their content.
     Excludes initial system messages unless remove_all_systems_override is True.
-    Formats output as "Role: Content\n".
+    If include_sysmes is False (and remove_all_systems_override is False), 
+    all 'system' role messages are removed (behavior inherited from extract_last_n_turns).
 
     Parameters:
     messages (List[Dict[str, Any]]): The list of messages.
     n (int): The number of messages (turns) to extract.
     include_sysmes (bool, optional): Whether to include non-initial system messages. Defaults to True.
+                                     Passed to extract_last_n_turns.
     remove_all_systems_override (bool, optional): If True, ignore include_sysmes and remove all system messages.
+                                                 Passed to extract_last_n_turns.
 
     Returns:
-    str: The last n messages formatted as a single string.
+    str: The last n messages' content joined as a single string.
     """
     if not messages:
         return ""
@@ -80,17 +83,13 @@ def extract_last_n_turns_as_string(messages: List[Dict[str, Any]], n: int, inclu
         messages, n, include_sysmes, remove_all_systems_override
     )
 
-    # Format the extracted messages
+    # Format the extracted messages by joining their content
     formatted_lines = []
     for message in last_n_messages:
-        role = message.get("role", "unknown").capitalize()
         content = message.get("content", "")
-        # Handle potential existing prefixes from previous steps if needed, 
-        # though ideally the content should be clean here.
-        # For simplicity now, just format Role: Content
-        formatted_lines.append(f"{role}: {content}")
+        formatted_lines.append(content)
 
-    return '\n'.join(formatted_lines)
+    return '\\n'.join(formatted_lines)
 
 
 def extract_discussion_id(messages: List[Dict[str, str]]) -> Optional[str]:
