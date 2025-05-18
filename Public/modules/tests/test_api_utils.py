@@ -29,7 +29,6 @@ class TestExtractTextFromChunk(unittest.TestCase):
         chunk_str = 'data: {"id": "chatcmpl-1", "object": "chat.completion.chunk", "choices": [{"delta": {"content": "Hello"}}]}\n\n'
         self.assertEqual(extract_text_from_chunk(chunk_str), "Hello")
 
-    @unittest.skip("Skipping temporarily - requires investigation")
     def test_extract_openai_completion_content(self):
         chunk_str = 'data: {"id": "cmpl-1", "object": "text_completion", "choices": [{"text": " World"}]}\\n\\n'
         self.assertEqual(extract_text_from_chunk(chunk_str), " World")

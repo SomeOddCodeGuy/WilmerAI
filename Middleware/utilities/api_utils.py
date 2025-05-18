@@ -97,7 +97,8 @@ def build_response_json(
     if additional_fields:
         response.update(additional_fields)
 
-    return json.dumps(response)
+    # Ensure the response is properly encoded for JSON serialization (non-ASCII characters are supported)
+    return json.dumps(response, ensure_ascii=False)
 
 def _extract_content_from_parsed_json(parsed_json: dict) -> str:
     """Extracts text content from a parsed JSON dictionary, checking known formats."""
