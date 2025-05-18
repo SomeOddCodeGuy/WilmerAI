@@ -25,9 +25,7 @@
     "title": "Querying the offline wikipedia api",
     "agentName": "Wikipedia Search Api Agent Three",
     "promptToSearch": "{agent2Output}",
-    "type": "OfflineWikiApiBestFullArticle",
-    "endpointName": "Worker-Endpoint",
-    "preset": "Worker_Preset"
+    "type": "OfflineWikiApiBestFullArticle"
   },
   {
     "title": "Summarizing Wikipedia Article",
