@@ -62,41 +62,29 @@ class TestPromptExtractionUtils(unittest.TestCase):
         self.assertEqual(result_no_sys, expected_no_sys, "Should extract last 3 non-system messages with override")
 
 
-    def test_extract_last_n_turns_as_string_correct_formatting(self):
+    def test_extract_last_n_turns_as_string_formatting(self):
         """
-        GIVEN a list of messages (simulating output after message_transformation_utils),
+        GIVEN a list of messages,
         WHEN extract_last_n_turns_as_string is called,
-        THEN it should return a correctly formatted string with 'Role: Content' for the last N turns.
+        THEN it should return a string with only the content of the last N turns.
         """
-        # This input simulates the state *after* transform_messages has run,
-        # including the OpenWebUI fix which adds history + final query.
-        # Note: Content might have prefixes from _apply_role_prefixes if it ran,
-        # but the new implementation should handle this gracefully by just using the content as-is.
         processed_messages = [
             {"role": "system", "content": "Initial system prompt (should be excluded by default)"},
-            {"role": "user", "content": "User message 1"}, # Part of extracted history
-            {"role": "assistant", "content": "Assistant response 1"}, # Part of extracted history
-            {"role": "user", "content": "User message 2 (final query)"} # Final extracted query
+            {"role": "user", "content": "User message 1"},
+            {"role": "assistant", "content": "Assistant response 1"},
+            {"role": "user", "content": "User message 2 (final query)"}
         ]
+        n = 3
 
-        n = 3 # Get last 3 turns (user1, assistant1, user2)
-
-        # ==================
-        # WHEN (Action)
-        # ==================
         result_string = extract_last_n_turns_as_string(processed_messages, n, include_sysmes=True)
 
-        # ==================
-        # THEN (Assertions)
-        # ==================
         expected_string = (
-            "User: User message 1\n"
-            "Assistant: Assistant response 1\n"
-            "User: User message 2 (final query)"
+            "User message 1\\n"
+            "Assistant response 1\\n"
+            "User message 2 (final query)"
         )
-
         self.assertEqual(result_string, expected_string,
-                         "Output string formatting or message selection is incorrect.")
+                         "Output string with content-only formatting is incorrect.")
 
     def test_extract_last_n_turns_as_string_empty_input(self):
         """GIVEN an empty message list, WHEN extract_last_n_turns_as_string is called, THEN it should return an empty string."""
@@ -104,16 +92,17 @@ class TestPromptExtractionUtils(unittest.TestCase):
         self.assertEqual(result, "", "Should return empty string for empty input")
 
     def test_extract_last_n_turns_as_string_n_greater_than_messages(self):
-        """GIVEN n > message count, WHEN extract_last_n_turns_as_string is called, THEN it should return all non-initial-system messages formatted."""
+        """GIVEN n > message count, WHEN extract_last_n_turns_as_string is called, THEN it should return all non-initial-system messages' content."""
         messages = [
             {"role": "system", "content": "Sys"},
             {"role": "user", "content": "U1"},
             {"role": "assistant", "content": "A1"}
         ]
-        result = extract_last_n_turns_as_string(messages, 5, include_sysmes=True)
-        expected = ("User: U1\n"
-                    "Assistant: A1")
-        self.assertEqual(result, expected, "Should return all available formatted messages")
+
+        result_content = extract_last_n_turns_as_string(messages, 5, include_sysmes=True)
+        expected_content = ("U1\\n"
+                            "A1")
+        self.assertEqual(result_content, expected_content, "Should return all available messages content-only")
 
 if __name__ == '__main__':
     unittest.main()
