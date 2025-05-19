@@ -116,10 +116,6 @@ def Invoke(messages, **kwargs):
             except (ValueError, SyntaxError, MemoryError, TypeError) as e:
                 logger.warning(f"Failed to parse messages string via ast.literal_eval: {e}. Falling back.")
                 messages = None
-        if messages is None:
-             logger.info("Using simple parse_string_messages for the string.")
-             from mcp_workflow_integration import parse_string_messages
-             messages = parse_string_messages(messages)
     else:
         logger.warning(f"Messages argument is of unexpected type: {type(messages)}. Setting to empty list.")
         messages = []
