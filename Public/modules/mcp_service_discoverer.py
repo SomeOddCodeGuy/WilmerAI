@@ -42,7 +42,7 @@ class MCPServiceDiscoverer:
         schema_url = f"{self.mcpo_url}/{service_name}/openapi.json"
         logger.info(f"Fetching schema for service '{service_name}' from {schema_url}")
         try:
-            schema_response = requests.get(schema_url, timeout=5)
+            schema_response = requests.get(schema_url, timeout=30)
             schema_response.raise_for_status() # Check for HTTP errors
             schema_json = schema_response.json()
             logger.info(f"Successfully fetched schema for '{service_name}'.")
