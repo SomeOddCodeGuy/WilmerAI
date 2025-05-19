@@ -51,7 +51,7 @@ def Invoke(messages: List[Dict[str, str]], mcpo_url: str = DEFAULT_MCPO_URL, too
     for message in reversed(messages):
         if message.get("role") == "assistant":
             assistant_message = message.get("content", "")
-            logger.info(f"Found assistant message: {assistant_message[:200]}...")
+            logger.info(f"Found assistant message: {assistant_message[:500]}...")
             break
     
     if not assistant_message:
@@ -108,7 +108,7 @@ def extract_tool_calls(text: str) -> List[Dict]:
     Returns:
         List of tool call dictionaries
     """
-    logger.info("Attempting to extract tool calls from text...")
+    logger.info(f"Attempting to extract tool calls from text below: \n\n\n {text}\n\n\n")
     
     # Skip if text contains unsubstituted variables
     if re.search(r'\{\{[a-zA-Z0-9_]+\}\}', text):
@@ -165,7 +165,7 @@ def extract_tool_calls(text: str) -> List[Dict]:
                      logger.info("Entire text looked like JSON but failed to parse.")
 
     if json_str is None:
-        logger.info("Could not find valid JSON tool call structure.")
+        logger.info(f"Could not find valid JSON tool call structure in the assistant's response: {text[:500]}...")
         return []
 
     try:
@@ -209,7 +209,7 @@ def format_error_response(error: str) -> Dict:
         "timestamp": datetime.datetime.now(datetime.UTC).isoformat()
     }
 
-def _perform_http_request(method: str, url: str, query_params: Dict, body_params: Optional[Dict], timeout: int = 15) -> Dict:
+def _perform_http_request(method: str, url: str, query_params: Dict, body_params: Optional[Dict], timeout: int = 900) -> Dict:
     """
     Performs the actual HTTP request and handles responses/errors.
 
@@ -218,7 +218,7 @@ def _perform_http_request(method: str, url: str, query_params: Dict, body_params
         url: The target URL.
         query_params: Dictionary of query parameters.
         body_params: Optional dictionary of body parameters (used for POST, PUT, PATCH).
-        timeout: Request timeout in seconds.
+        timeout: Request timeout in seconds. Default is 15 minutes, because some tools can take a long time to execute like LLM calls.
 
     Returns:
         A dictionary containing the result (parsed JSON or raw text) or an error structure.
@@ -242,7 +242,7 @@ def _perform_http_request(method: str, url: str, query_params: Dict, body_params
 
         try:
             result_json = response.json()
-            logger.info("Tool executed successfully, received JSON response.")
+            logger.info(f"Tool executed successfully, received JSON response: {result_json[:200]}...")
             return result_json
         except json.JSONDecodeError:
             response_text = response.text
