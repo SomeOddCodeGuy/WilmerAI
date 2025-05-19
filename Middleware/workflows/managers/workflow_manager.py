@@ -6,6 +6,7 @@ import types
 from copy import deepcopy
 from typing import Dict, List
 
+from Middleware.common.constants import VALID_NODE_TYPES
 from Middleware.exceptions.early_termination_exception import EarlyTerminationException
 from Middleware.models.llm_handler import LlmHandler
 from Middleware.services.llm_service import LlmHandlerService
@@ -289,14 +290,7 @@ class WorkflowManager:
         logger.debug("Prompt processor Checkpoint")
         if "type" not in config:
             section_name = config.get("title", "Unknown")
-            valid_types = ["Standard", "ConversationMemory", "FullChatSummary", "RecentMemory", 
-                          "ConversationalKeywordSearchPerformerTool", "MemoryKeywordSearchPerformerTool", 
-                          "RecentMemorySummarizerTool", "ChatSummaryMemoryGatheringTool", "GetCurrentSummaryFromFile", 
-                          "chatSummarySummarizer", "GetCurrentMemoryFromFile", "WriteCurrentSummaryToFileAndReturnIt", 
-                          "SlowButQualityRAG", "QualityMemory", "PythonModule", "OfflineWikiApiFullArticle", 
-                          "OfflineWikiApiBestFullArticle", "OfflineWikiApiTopNFullArticles", "OfflineWikiApiPartialArticle", 
-                          "WorkflowLock", "CustomWorkflow", "ConditionalCustomWorkflow", "GetCustomFile", "ImageProcessor"]
-            logger.warning(f"Config Type: No Type Found for section '{section_name}'. Expected one of: {valid_types}")
+            logger.warning(f"Config Type: No Type Found for section '{section_name}'. Expected one of: {VALID_NODE_TYPES}")
         else:
             logger.info("Config Type: %s", config.get("type"))
         prompt_processor_service = PromptProcessor(self.workflow_variable_service, self.llm_handler)

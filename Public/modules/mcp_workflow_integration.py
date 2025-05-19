@@ -6,6 +6,8 @@ import re
 import sys
 from typing import Dict, List, Any, Union, Optional, Tuple
 
+from Middleware.common.constants import VALID_NODE_TYPES
+
 # Import the base exception from automation_utils
 try:
     # This assumes automation_utils is findable via PYTHONPATH adjustments elsewhere
@@ -83,17 +85,7 @@ def validate_node_type(node_type: str) -> bool:
     Returns:
         bool: True if valid, False otherwise
     """
-    VALID_TYPES = [
-        'Standard', 'ConversationMemory', 'FullChatSummary', 'RecentMemory',
-        'ConversationalKeywordSearchPerformerTool', 'MemoryKeywordSearchPerformerTool',
-        'RecentMemorySummarizerTool', 'ChatSummaryMemoryGatheringTool',
-        'GetCurrentSummaryFromFile', 'chatSummarySummarizer', 'GetCurrentMemoryFromFile',
-        'WriteCurrentSummaryToFileAndReturnIt', 'SlowButQualityRAG', 'QualityMemory',
-        'PythonModule', 'OfflineWikiApiFullArticle', 'OfflineWikiApiBestFullArticle',
-        'OfflineWikiApiTopNFullArticles', 'OfflineWikiApiPartialArticle', 'WorkflowLock',
-        'CustomWorkflow', 'ConditionalCustomWorkflow', 'GetCustomFile', 'ImageProcessor'
-    ]
-    return node_type in VALID_TYPES
+    return node_type in VALID_NODE_TYPES
 
 def _format_single_tool_result(result: Dict) -> str:
     """
@@ -341,7 +333,7 @@ class MCPWorkflowHandler:
 
                 # Return only the formatted results
                 formatted_results = format_results_only(tool_results)
-                logger.info(f"Returning formatted tool results only: {formatted_results[:200]}...")
+                logger.info(f"Returning formatted tool results only: {formatted_results[:300]}...")
                 return formatted_results
             else:
                 # If executor didn't find/execute a tool call, return the original response
