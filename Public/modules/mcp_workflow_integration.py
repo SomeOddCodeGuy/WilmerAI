@@ -43,7 +43,6 @@ class MCPToolExecutionError(MCPIntegrationError):
         # Call the updated MCPIntegrationError constructor
         super().__init__(message, details=details)
 
-# Add the module directory to the path and import our MCP tool executor
 current_dir = os.path.dirname(os.path.abspath(__file__))
 if current_dir not in sys.path:
     sys.path.append(current_dir)
