@@ -7,9 +7,6 @@ from typing import Dict, List, Any, Optional, Tuple, Union, Callable
 import datetime
 import sys
 
-# Adjust import paths
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../..")))
-
 # Use absolute import
 from Public.modules import mcp_tool_executor
 # Use absolute import
@@ -242,7 +239,7 @@ def _perform_http_request(method: str, url: str, query_params: Dict, body_params
 
         try:
             result_json = response.json()
-            logger.info(f"Tool executed successfully, received JSON response: {result_json[:200]}...")
+            logger.info(f"Tool executed successfully, received JSON response: {str(result_json)[:200]}...")
             return result_json
         except json.JSONDecodeError:
             response_text = response.text
