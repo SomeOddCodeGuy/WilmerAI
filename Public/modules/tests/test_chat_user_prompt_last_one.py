@@ -29,30 +29,58 @@ class TestChatUserPromptLastOne(unittest.TestCase):
 
     @staticmethod
     def mock_extract_last_n_turns_as_string(messages, n, include_sysmes=True, remove_all_systems_override=False):
-        filtered_messages = [msg for msg in messages if msg["role"] != "system" and msg["role"] != "images"]
-        return "\n".join(msg["content"] for msg in filtered_messages[-n:])
+        # This mock should only return non-system, non-image messages' content
+        filtered_messages = []
+        for msg in messages:
+            if msg.get("role") not in ["system", "images"]:
+                filtered_messages.append(msg)
+        
+        if not filtered_messages:
+            return ""
+            
+        # Ensure we don't go out of bounds with -n
+        actual_n = min(n, len(filtered_messages))
+        if actual_n == 0:
+            return ""
+
+        return "\\n".join(msg["content"] for msg in filtered_messages[-actual_n:])
 
     @staticmethod
     def mock_get_formatted_last_n_turns_as_string(messages, n, template_file_name, isChatCompletion):
+        # This mock is for a different utility, keeping its simple filter for now
         filtered_messages = [msg for msg in messages if msg["role"] != "system" and msg["role"] != "images"]
-        return "\n".join(msg["content"] for msg in filtered_messages[-n:])
+        return "\\n".join(msg["content"] for msg in filtered_messages[-n:])
 
-    def test_fix_directly(self):
+    @patch('Middleware.utilities.prompt_template_utils.load_template_from_json')
+    @patch('Middleware.workflows.managers.workflow_variable_manager.extract_last_n_turns_as_string')
+    def test_fix_directly(self, mock_wvm_extract_last_n_as_string, mock_load_template_from_json):
         """Test the fix for chat_user_prompt_last_one directly."""
-        # Add mocks before importing to prevent file loading
-        sys.modules['Middleware.utilities.prompt_template_utils'] = MagicMock()
-        sys.modules['Middleware.utilities.prompt_extraction_utils'] = MagicMock()
+        # Configure the mock for load_template_from_json
+        mock_load_template_from_json.return_value = {
+            "promptTemplateUserPrefix": "U:", "promptTemplateUserSuffix": "",
+            "promptTemplateAssistantPrefix": "A:", "promptTemplateAssistantSuffix": "",
+            "promptTemplateSystemPrefix": "S:", "promptTemplateSystemSuffix": "",
+            "promptTemplateEndToken": "<|end|>",
+            "template_type": "chat", 
+            "roles": {"user": "User", "assistant": "Assistant", "system": "System"}
+        }
         
-        # Set up the mocks
-        sys.modules['Middleware.utilities.prompt_extraction_utils'].extract_last_n_turns_as_string = TestChatUserPromptLastOne.mock_extract_last_n_turns_as_string
-        sys.modules['Middleware.utilities.prompt_template_utils'].get_formatted_last_n_turns_as_string = TestChatUserPromptLastOne.mock_get_formatted_last_n_turns_as_string
+        # Assign the class's static mock method to the patched object
+        mock_wvm_extract_last_n_as_string.side_effect = TestChatUserPromptLastOne.mock_extract_last_n_turns_as_string
+
+        # Mock for get_formatted_last_n_turns_as_string if it's imported in workflow_variable_manager
+        # This was previously done via sys.modules, now using a more direct patch if necessary,
+        # but the primary one for chat_user_prompt_last_one is extract_last_n_turns_as_string
+        # For now, let's assume the previous sys.modules mock for this one might still be active or test specific.
+        # If other 'templated_user_prompt_last_x' variables cause issues, this might need revisiting.
+        # Original test had:
+        # sys.modules['Middleware.utilities.prompt_template_utils'].get_formatted_last_n_turns_as_string = TestChatUserPromptLastOne.mock_get_formatted_last_n_turns_as_string
+        # We'll rely on the load_template_from_json mock to prevent file access from the original get_formatted_last_n_turns_as_string
         
         from Middleware.workflows.managers.workflow_variable_manager import WorkflowVariableManager
         
-        # Create a simple class that inherits from WorkflowVariableManager but skips the __init__
         class TestableManager(WorkflowVariableManager):
             def __init__(self):
-                # Skip the parent __init__ to avoid dependencies
                 self.category_list = None
                 self.categoriesSeparatedByOr = None
                 self.category_colon_descriptions = None
@@ -60,19 +88,16 @@ class TestChatUserPromptLastOne(unittest.TestCase):
                 self.categoryNameBulletpoints = None
                 self.category_descriptions = None
                 self.categories = None
-                self.chatPromptTemplate = "default"
+                self.chat_template_name = "default" # Use chat_template_name as in parent
         
-        # Create a mock LLM handler with the required attributes
         class MockLLMHandler:
             def __init__(self):
-                self.takes_message_collection = True
+                self.takes_message_collection = True # This sets include_sysmes=True for the mock
                 self.prompt_template_file_name = "default_template.json"
         
-        # Create a simple instance
         manager = TestableManager()
         mock_llm_handler = MockLLMHandler()
         
-        # Test data
         messages = [
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": "Hello, how are you?"},
@@ -82,36 +107,31 @@ class TestChatUserPromptLastOne(unittest.TestCase):
             {"role": "user", "content": "What time is it in Berlin?"}
         ]
         
-        # Call the method we're testing
         variables = manager.generate_conversation_turn_variables(messages, mock_llm_handler, None)
         
-        # Check results
         errors = []
         
-        # Check for chat_user_prompt_last_one variable
         if "chat_user_prompt_last_one" not in variables:
             errors.append("Variable 'chat_user_prompt_last_one' was not found in the output")
-        
-        # Check for correct content
         elif variables["chat_user_prompt_last_one"] != "What time is it in Berlin?":
             errors.append(f"Expected 'What time is it in Berlin?' but got '{variables['chat_user_prompt_last_one']}'")
         
-        # Test with no user messages
         no_user_messages = [
             {"role": "system", "content": "You are a helpful assistant."}
         ]
+        # When `generate_conversation_turn_variables` calls the mocked `extract_last_n_turns_as_string`
+        # with no_user_messages, `takes_message_collection` is True (so include_sysmes=True for the mock)
+        # The mock `TestChatUserPromptLastOne.mock_extract_last_n_turns_as_string` filters out system roles.
         variables_no_user = manager.generate_conversation_turn_variables(no_user_messages, mock_llm_handler, None)
         
-        # Check that the variable exists
         if "chat_user_prompt_last_one" not in variables_no_user:
             errors.append("Variable 'chat_user_prompt_last_one' was not found in the output for empty user test")
-        
-        # Check that it's an empty string
         elif variables_no_user["chat_user_prompt_last_one"] != "":
+            # This assertion relies on mock_extract_last_n_turns_as_string correctly returning ""
+            # when only system messages are present and it filters them out.
             errors.append(f"Expected empty string for no user messages but got '{variables_no_user['chat_user_prompt_last_one']}'")
         
-        # Assert results
-        self.assertEqual(len(errors), 0, "\n".join(errors))
+        self.assertEqual(len(errors), 0, "\\n".join(errors))
 
 if __name__ == "__main__":
     unittest.main() 

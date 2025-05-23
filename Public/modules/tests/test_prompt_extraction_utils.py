@@ -5,15 +5,17 @@ Unit tests for the prompt extraction utility functions.
 """
 
 import unittest
-import sys
+from unittest.mock import MagicMock
 import os
+import sys
 
 # Adjust import paths to access Middleware modules
-# Assumes the test is run from the project root or the WilmerAI directory structure is accessible
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../WilmerAI")))
 
-# Import the functions under test
-from Middleware.utilities.prompt_extraction_utils import extract_last_n_turns, extract_last_n_turns_as_string
+# Now, WilmerAI should be in the Python path, allowing direct imports
+from Middleware.utilities.prompt_extraction_utils import (
+    extract_last_n_turns_as_string,
+    extract_last_n_turns
+)
 
 class TestPromptExtractionUtils(unittest.TestCase):
 

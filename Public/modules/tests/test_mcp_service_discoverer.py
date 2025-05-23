@@ -44,7 +44,7 @@ class TestMCPServiceDiscoverer(unittest.TestCase):
         schema = self.discoverer_default.fetch_service_schema(self.service_name)
 
         expected_url = f"{self.default_url}/{self.service_name}/openapi.json"
-        mock_get.assert_called_once_with(expected_url, timeout=5)
+        mock_get.assert_called_once_with(expected_url, timeout=30)
         mock_response.raise_for_status.assert_called_once()
         self.assertEqual(schema, expected_schema)
 

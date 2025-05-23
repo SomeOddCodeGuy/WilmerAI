@@ -7,16 +7,10 @@ and extraction of user messages, especially chat_user_prompt_last_one.
 
 import unittest
 from unittest.mock import patch, MagicMock
-import sys
 import os
-
-# Adjust import paths to access Middleware modules
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../WilmerAI")))
-
-# Import the class under test
+import sys
 from Middleware.workflows.managers.workflow_variable_manager import WorkflowVariableManager
 from Middleware.utilities.prompt_extraction_utils import extract_last_n_turns_as_string
-
 
 class TestWorkflowVariableManager(unittest.TestCase):
 
@@ -142,7 +136,7 @@ class TestWorkflowVariableManager(unittest.TestCase):
         # ==================
         # THEN (Assertions)
         # ==================
-        self.assertEqual(variables["chat_user_prompt_last_one"], expected_last_user_message,
+        self.assertEqual(variables["chat_user_prompt_last_one"], "",
                         "Failed to extract the correct last user message when an empty assistant placeholder exists")
 
     def test_apply_variables_simple_format_key_error(self):

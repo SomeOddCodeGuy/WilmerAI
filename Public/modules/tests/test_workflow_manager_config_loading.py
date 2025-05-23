@@ -47,7 +47,7 @@ class TestWorkflowManagerConfigLoading(unittest.TestCase):
         self.discussion_id = "config-disc-1"
         self.frontend_api_type = "openaichatcompletion"
 
-    @unittest.skip("Skipping temporarily - requires investigation")
+    # @unittest.skip("Skipping temporarily - requires investigation") # UNSKIPPED
     def test_run_workflow_with_file_path_succeeds(self): # Remove mock args
         """Test that run_workflow correctly loads config from a file path."""
         # --- GIVEN ---
@@ -60,7 +60,10 @@ class TestWorkflowManagerConfigLoading(unittest.TestCase):
         with patch('Middleware.workflows.managers.workflow_manager.LlmHandlerService') as MockLlmService, \
              patch('Middleware.workflows.managers.workflow_manager.json.load', return_value=mock_workflow_steps) as mock_json_load_patch, \
              patch('builtins.open', mock_open(read_data=json.dumps(mock_workflow_steps))) as mock_open_patch, \
-             patch('Middleware.workflows.managers.workflow_manager.SqlLiteUtils') as MockSqlUtils:
+             patch('Middleware.workflows.managers.workflow_manager.SqlLiteUtils') as MockSqlUtils, \
+             patch('Middleware.utilities.config_utils.get_user_config') as mock_get_user_config_util:
+
+            mock_get_user_config_util.return_value = self.mock_user_config # Configure the mock
 
             manager = WorkflowManager(
                 workflow_config_name=self.workflow_name,
@@ -95,7 +98,6 @@ class TestWorkflowManagerConfigLoading(unittest.TestCase):
             self.assertGreaterEqual(len(results), 1)
             MockSqlUtils.delete_node_locks.assert_called_once()
 
-    @unittest.skip("Skipping temporarily - requires investigation")
     def test_invalid_config_format_raises_error(self): # Remove mock args
         """Test that WorkflowManager handles JSONDecodeError gracefully."""
         # --- GIVEN ---
@@ -107,7 +109,10 @@ class TestWorkflowManagerConfigLoading(unittest.TestCase):
         # Patch dependencies
         with patch('Middleware.workflows.managers.workflow_manager.LlmHandlerService') as MockLlmService, \
              patch('builtins.open', mock_open(read_data=invalid_config_content)) as mock_open_patch, \
-             patch('Middleware.workflows.managers.workflow_manager.json.load', side_effect=json.JSONDecodeError("Invalid format", "", 0)) as mock_json_load_patch:
+             patch('Middleware.workflows.managers.workflow_manager.json.load', side_effect=json.JSONDecodeError("Invalid format", "", 0)) as mock_json_load_patch, \
+             patch('Middleware.utilities.config_utils.get_user_config') as mock_get_user_config_util:
+
+            mock_get_user_config_util.return_value = self.mock_user_config # Configure the mock
 
             manager = WorkflowManager(
                 workflow_config_name=workflow_name_invalid,

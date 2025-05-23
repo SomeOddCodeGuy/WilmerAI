@@ -35,8 +35,6 @@ root_logger.addHandler(console_handler)
 root_logger.setLevel(logging.DEBUG) 
 logger = logging.getLogger(__name__)
 
-# Adjust import paths 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../WilmerAI")))
 
 # Import the class under test
 from Middleware.workflows.processors.prompt_processor import PromptProcessor

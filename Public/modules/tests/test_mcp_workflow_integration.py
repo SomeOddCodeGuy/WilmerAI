@@ -1,14 +1,16 @@
 import json
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, mock_open, call
 import sys
 import os
 from typing import Dict, List
 import requests
 
-# Adjust import paths
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../..")))
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../WilmerAI")))
+# Assuming PYTHONPATH is set, these should work:
+from Middleware.workflows.managers.workflow_manager import WorkflowManager
+from Public.modules.mcp_prompt_utils import _format_mcp_tools_for_llm_prompt, _integrate_tools_into_prompt
+from Public.modules.mcp_service_discoverer import MCPServiceDiscoverer, DEFAULT_MCPO_URL
+from Public.modules.mcp_tool_executor import Invoke as mcp_invoke # Alias to avoid clash if any
 
 import WilmerAI.Public.modules.mcp_workflow_integration as mcp_workflow_integration
 from WilmerAI.Public.modules.mcp_workflow_integration import (
@@ -21,33 +23,18 @@ from WilmerAI.Public.modules.mcp_workflow_integration import (
 from WilmerAI.Public.modules.mcp_tool_executor import DEFAULT_MCPO_URL
 
 # Mock the weather service requests
-def mock_mcp_service_response(*args, **kwargs):
-    response = requests.Response()
-    response.status_code = 200
-    
-    if "weather" in args[0]:
-        response._content = json.dumps({
-            "paths": {
-                "/weather/current": {
-                    "get": {
-                        "operationId": "tool_endpoint_weather_get_current_weather_get",
-                        "description": "Get the current weather"
-                    }
-                }
-            }
-        }).encode()
-    elif "time" in args[0]:
-        response._content = json.dumps({
-            "paths": {
-                "/time/current": {
-                    "get": {
-                        "operationId": "tool_endpoint_time_get_current_time_get",
-                        "description": "Get the current time"
-                    }
-                }
-            }
-        }).encode()
-    return response
+class MockWeatherResponse:
+    def __init__(self, data, status_code):
+        self.json_data = data
+        self.status_code = status_code
+        self.text = json.dumps(data) # Ensure text attribute is present
+
+    def json(self):
+        return self.json_data
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise requests.exceptions.HTTPError(f"Mock HTTP Error {self.status_code}")
 
 class TestMcpWorkflowIntegration(unittest.TestCase):
     

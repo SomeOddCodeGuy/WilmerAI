@@ -13,7 +13,6 @@ import json
 from flask import Flask
 
 # Adjust import paths to access Middleware modules
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../WilmerAI")))
 
 # Import the class under test
 from Middleware.core.open_ai_api import ApiChatAPI, WilmerApi
@@ -23,7 +22,6 @@ from Middleware.utilities.config_utils import get_is_chat_complete_add_user_assi
 # Create dummy app for testing
 app = Flask(__name__)
 app.add_url_rule("/api/chat", view_func=ApiChatAPI.as_view('test_api_chat'))
-
 
 class TestApiChatMessageHandling(unittest.TestCase):
 

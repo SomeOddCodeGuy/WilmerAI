@@ -1,13 +1,10 @@
 import unittest
-from unittest.mock import patch, MagicMock, ANY
-import sys
-import os
+from unittest.mock import patch, MagicMock, AsyncMock, ANY
 import json
+import os
+import sys
 from flask import Flask
 import logging
-
-# Adjust import paths to access Middleware modules
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../WilmerAI")))
 
 # Configure logging for this test file
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -20,7 +17,7 @@ app = Flask(__name__)
 app.add_url_rule("/api/chat", view_func=ApiChatAPI.as_view('test_api_chat'))
 
 
-class TestOpenAiApiEndpoints(unittest.TestCase):
+class TestOpenAIAPI(unittest.TestCase):
 
     def test_tool_extractor_ignores_embedded_history(self):
         """GIVEN messages with embedded history in the last user content AND the updated Step 0 prompt, WHEN Step 0 is processed, THEN the PromptProcessor method should be called with the correct arguments and produce the expected (mocked) output."""
@@ -94,5 +91,6 @@ class TestOpenAiApiEndpoints(unittest.TestCase):
             # ==================
             # Assert status code first
             self.assertEqual(response.status_code, 200)
+
 if __name__ == '__main__':
     unittest.main() 

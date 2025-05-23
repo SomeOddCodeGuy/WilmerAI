@@ -5,12 +5,20 @@ import sys
 import os
 import requests
 
-# Adjust import paths
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../..")))
+# sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../..")))
 
-import WilmerAI.Public.modules.mcp_tool_executor as mcp_tool_executor
-import WilmerAI.Public.modules.ensure_system_prompt as ensure_system_prompt
-from WilmerAI.Public.modules.mcp_service_discoverer import MCPServiceDiscoverer
+from Public.modules.mcp_tool_executor import (
+    Invoke,
+    extract_tool_calls,
+    execute_tool_call,
+    _prepare_request_params,
+    _build_tool_url,
+    _perform_http_request,
+    format_error_response,
+    validate_tool_call_format
+)
+from Public.modules.mcp_service_discoverer import MCPServiceDiscoverer, DEFAULT_MCPO_URL
+from Public.modules import ensure_system_prompt
 
 class TestMcpToolExecutor(unittest.TestCase):
     
@@ -65,7 +73,7 @@ class TestMcpToolExecutor(unittest.TestCase):
         mcpo_url = "http://localhost:8889"
 
         # Call the function with the correct map structure
-        result = mcp_tool_executor.execute_tool_call(self.tool_call, mcpo_url, tool_execution_map)
+        result = execute_tool_call(self.tool_call, mcpo_url, tool_execution_map)
         
         # --- Assertions --- 
         
@@ -76,14 +84,14 @@ class TestMcpToolExecutor(unittest.TestCase):
             url=expected_url,              # Use keyword arg
             params=self.tool_call['parameters'], # query parameters for GET
             json=None,                      # Check for json=None
-            timeout=15                 # Default timeout
+            timeout=900                 # Default timeout
         )
         
         # 2. Verify the final result returned by the function matches the mocked API response
         self.assertEqual(result, self.time_response)
 
-    @patch('WilmerAI.Public.modules.mcp_tool_executor.execute_tool_call')
-    @patch('WilmerAI.Public.modules.mcp_tool_executor.extract_tool_calls')
+    @patch('Public.modules.mcp_tool_executor.execute_tool_call')
+    @patch('Public.modules.mcp_tool_executor.extract_tool_calls')
     def test_invoke_with_tool_call(self, mock_extract, mock_execute):
         # Setup mocks
         # Use the updated tool call name from setUp
@@ -102,7 +110,7 @@ class TestMcpToolExecutor(unittest.TestCase):
         # Call the function, providing the required tool_execution_map
         # The specific map content doesn't matter here as execute_tool_call is mocked
         dummy_tool_map = {self.tool_call["name"]: {"service": "mock"}}
-        result = mcp_tool_executor.Invoke(messages, tool_execution_map=dummy_tool_map)
+        result = Invoke(messages, tool_execution_map=dummy_tool_map)
         
         # Assertions
         self.assertTrue(result["has_tool_call"])
@@ -112,15 +120,15 @@ class TestMcpToolExecutor(unittest.TestCase):
         # Verify mocks were called
         mock_extract.assert_called_once()
         # Assert execute_tool_call was called with the extracted tool_call and the dummy map
-        mock_execute.assert_called_once_with(tool_call_json, mcp_tool_executor.DEFAULT_MCPO_URL, dummy_tool_map)
+        mock_execute.assert_called_once_with(tool_call_json, DEFAULT_MCPO_URL, dummy_tool_map)
 
-    @patch('WilmerAI.Public.modules.mcp_tool_executor.extract_tool_calls')
+    @patch('Public.modules.mcp_tool_executor.extract_tool_calls')
     def test_invoke_with_no_tool_call(self, mock_extract):
         # Setup mock to return no tool calls
         mock_extract.return_value = []
         
         # Call the function - tool_execution_map is not strictly needed if no calls found
-        result = mcp_tool_executor.Invoke(self.messages, tool_execution_map={})
+        result = Invoke(self.messages, tool_execution_map={})
         
         # Assertions
         self.assertFalse(result["has_tool_call"])
@@ -136,7 +144,7 @@ class TestMcpToolExecutor(unittest.TestCase):
         tool_call_data = {"name": "get_current_time", "parameters": {"timezone": "UTC"}}
         content = f'```json\n{{"tool_calls": [{json.dumps(tool_call_data)}]}}\n```'
         
-        tool_calls = mcp_tool_executor.extract_tool_calls(content)
+        tool_calls = extract_tool_calls(content)
         
         # Assert that the function extracts one tool call for this format
         self.assertEqual(len(tool_calls), 1)
@@ -147,7 +155,7 @@ class TestMcpToolExecutor(unittest.TestCase):
         """Test that unsubstituted variables are handled gracefully (returns empty)"""
         # Test with unsubstituted Jinja2 variables
         content = '{"tool_calls": [{"name": "{{ tool_name }}", "parameters": {"timezone": "{{ timezone }}"}}]}'
-        tool_calls = mcp_tool_executor.extract_tool_calls(content)
+        tool_calls = extract_tool_calls(content)
         
         # Updated behavior: The function returns the call with variables intact.
         self.assertEqual(len(tool_calls), 1)
@@ -169,7 +177,7 @@ class TestMcpToolExecutor(unittest.TestCase):
         ]
         for content in test_cases:
              with self.subTest(content=content):
-                 tool_calls = mcp_tool_executor.extract_tool_calls(content)
+                 tool_calls = extract_tool_calls(content)
                  self.assertEqual(len(tool_calls), 0)
 
     def test_validate_tool_call_format(self):
@@ -184,10 +192,10 @@ class TestMcpToolExecutor(unittest.TestCase):
             {"name": "tool_abc", "parameters": []} # Parameters not a dict
         ]
         
-        self.assertTrue(mcp_tool_executor.validate_tool_call_format(valid_call))
+        self.assertTrue(validate_tool_call_format(valid_call))
         for call in invalid_calls:
             with self.subTest(call=call):
-                 self.assertFalse(mcp_tool_executor.validate_tool_call_format(call))
+                 self.assertFalse(validate_tool_call_format(call))
 
     # Patch requests.request, as used by the refactored _perform_http_request
     @patch('requests.request')
@@ -222,7 +230,7 @@ class TestMcpToolExecutor(unittest.TestCase):
         }
 
         # --- Call ---
-        result = mcp_tool_executor.execute_tool_call(tool_call, mcpo_url, tool_execution_map)
+        result = execute_tool_call(tool_call, mcpo_url, tool_execution_map)
 
         # --- Assertions ---
         # 1. Verify the HTTP call was made with body=None (json=None)
@@ -232,7 +240,7 @@ class TestMcpToolExecutor(unittest.TestCase):
             url=expected_url,
             params={}, # No query params defined
             json=None, # <--- Assert body is None
-            timeout=15
+            timeout=900
         )
 
         # 2. Verify an error response was returned due to the 422 from the server
@@ -277,7 +285,7 @@ class TestMcpToolExecutor(unittest.TestCase):
         }
         
         # Call the function under test
-        query_params, body_params, path_params = mcp_tool_executor._prepare_request_params(
+        query_params, body_params, path_params = _prepare_request_params(
             parameters, execution_details
         )
         
@@ -294,10 +302,10 @@ class TestEnsureSystemPrompt(unittest.TestCase):
     def test_ensure_prompt_with_discovery(self):
         """Test ensure_system_prompt.Invoke when system prompt exists and needs tools"""
         # Patch the discoverer CLASS, its __init__ and the target method
-        with patch('WilmerAI.Public.modules.ensure_system_prompt.MCPServiceDiscoverer') as MockDiscoverer, \
-             patch('WilmerAI.Public.modules.ensure_system_prompt.load_default_prompt') as mock_load_default, \
-             patch('WilmerAI.Public.modules.ensure_system_prompt._integrate_tools_into_prompt') as mock_integrate, \
-             patch('WilmerAI.Public.modules.ensure_system_prompt._format_mcp_tools_for_llm_prompt') as mock_format:
+        with patch('Public.modules.ensure_system_prompt.MCPServiceDiscoverer') as MockDiscoverer, \
+             patch('Public.modules.ensure_system_prompt.load_default_prompt') as mock_load_default, \
+             patch('Public.modules.ensure_system_prompt._integrate_tools_into_prompt') as mock_integrate, \
+             patch('Public.modules.ensure_system_prompt._format_mcp_tools_for_llm_prompt') as mock_format:
 
             # --- Mock Setup ---
             # Configure the mock INSTANCE that will be returned when MCPServiceDiscoverer() is called
@@ -334,10 +342,10 @@ class TestEnsureSystemPrompt(unittest.TestCase):
     def test_ensure_prompt_no_tools_found(self):
         """Test ensure_system_prompt.Invoke when no tools are discovered"""
         # Patch the discoverer CLASS
-        with patch('WilmerAI.Public.modules.ensure_system_prompt.MCPServiceDiscoverer') as MockDiscoverer, \
-             patch('WilmerAI.Public.modules.ensure_system_prompt.load_default_prompt') as mock_load_default, \
-             patch('WilmerAI.Public.modules.ensure_system_prompt._integrate_tools_into_prompt') as mock_integrate, \
-             patch('WilmerAI.Public.modules.ensure_system_prompt._format_mcp_tools_for_llm_prompt') as mock_format:
+        with patch('Public.modules.ensure_system_prompt.MCPServiceDiscoverer') as MockDiscoverer, \
+             patch('Public.modules.ensure_system_prompt.load_default_prompt') as mock_load_default, \
+             patch('Public.modules.ensure_system_prompt._integrate_tools_into_prompt') as mock_integrate, \
+             patch('Public.modules.ensure_system_prompt._format_mcp_tools_for_llm_prompt') as mock_format:
 
             # --- Mock Setup ---
             # Configure the mock INSTANCE
@@ -369,10 +377,10 @@ class TestEnsureSystemPrompt(unittest.TestCase):
     def test_ensure_prompt_no_initial_prompt(self):
         """Test ensure_system_prompt.Invoke when no system prompt exists initially"""
         # Patch the discoverer CLASS, load_default_prompt, and other helpers
-        with patch('WilmerAI.Public.modules.ensure_system_prompt.load_default_prompt') as mock_load_default, \
-             patch('WilmerAI.Public.modules.ensure_system_prompt.MCPServiceDiscoverer') as MockDiscoverer, \
-             patch('WilmerAI.Public.modules.ensure_system_prompt._integrate_tools_into_prompt') as mock_integrate, \
-             patch('WilmerAI.Public.modules.ensure_system_prompt._format_mcp_tools_for_llm_prompt') as mock_format:
+        with patch('Public.modules.ensure_system_prompt.load_default_prompt') as mock_load_default, \
+             patch('Public.modules.ensure_system_prompt.MCPServiceDiscoverer') as MockDiscoverer, \
+             patch('Public.modules.ensure_system_prompt._integrate_tools_into_prompt') as mock_integrate, \
+             patch('Public.modules.ensure_system_prompt._format_mcp_tools_for_llm_prompt') as mock_format:
 
             # --- Mock Setup ---
             # Configure the mock INSTANCE
@@ -408,8 +416,8 @@ class TestEnsureSystemPrompt(unittest.TestCase):
             self.assertEqual(result["chat_system_prompt"], mock_integrate.return_value)
             self.assertEqual(result["discovered_tools_map"], mock_discovered_tools)
 
-    @patch('WilmerAI.Public.modules.ensure_system_prompt.MCPServiceDiscoverer.discover_mcp_tools')
-    @patch('WilmerAI.Public.modules.ensure_system_prompt.load_default_prompt')
+    @patch('Public.modules.ensure_system_prompt.MCPServiceDiscoverer.discover_mcp_tools')
+    @patch('Public.modules.ensure_system_prompt.load_default_prompt')
     def test_ensure_prompt_with_generator_input(self, mock_load_prompt, mock_discover_tools):
         """Test ensure_system_prompt handles generator input for user_identified_services."""
         # --- GIVEN ---

@@ -44,7 +44,6 @@ class TestOllamaGenerateApiHandlerSSE(unittest.TestCase):
         # Example: Mock load_config if OllamaGenerateHandler uses it in __init__
         pass # No shared setup needed for this specific test
 
-    @unittest.skip("Skipping temporarily - requires investigation")
     def test_handle_streaming_ollama_generate_sse_format(self):
         """Test that OllamaGenerateHandler.handle_streaming yields chunks in the correct
         Ollama /api/generate SSE format (raw JSON + \n).
@@ -102,7 +101,8 @@ class TestOllamaGenerateApiHandlerSSE(unittest.TestCase):
         with patch('Middleware.utilities.config_utils.load_config') as mock_load_config_patch, \
              patch('Middleware.utilities.api_utils.time.time', return_value=fixed_time) as mock_time_patch, \
              patch('Middleware.utilities.api_utils.time.strftime', return_value=fixed_strftime) as mock_strftime_patch, \
-             patch('Middleware.llmapis.ollama_generate_api_handler.requests.Session') as mock_session_patch:
+             patch('Middleware.llmapis.ollama_generate_api_handler.requests.Session') as mock_session_patch, \
+             patch('Middleware.utilities.instance_utils.API_TYPE', "ollamagenerate") as mock_api_type_for_handler:
             
             # Configure load_config mock side effect
             def load_config_side_effect(config_name, *args, **kwargs):
