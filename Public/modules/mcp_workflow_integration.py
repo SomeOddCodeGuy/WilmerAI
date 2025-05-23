@@ -43,10 +43,6 @@ class MCPToolExecutionError(MCPIntegrationError):
         # Call the updated MCPIntegrationError constructor
         super().__init__(message, details=details)
 
-current_dir = os.path.dirname(os.path.abspath(__file__))
-if current_dir not in sys.path:
-    sys.path.append(current_dir)
-    
 from Public.modules import mcp_tool_executor
 # Import DEFAULT_MCPO_URL from the centralized location using absolute import
 from Public.modules.mcp_service_discoverer import DEFAULT_MCPO_URL
