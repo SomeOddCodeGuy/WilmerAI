@@ -44,7 +44,26 @@ class TestWorkflowManagerConfigLoading(unittest.TestCase):
 
     # @unittest.skip("Skipping temporarily - requires investigation") # UNSKIPPED
     def test_run_workflow_with_file_path_succeeds(self): # Remove mock args
-        """Test that run_workflow correctly loads config from a file path."""
+        """
+        Test that run_workflow correctly loads config from a file path.
+
+        This test verifies the end-to-end process of loading a workflow configuration
+        from a specified file path and ensuring it's properly processed by the WorkflowManager.
+        It uses mocking to simulate file I/O operations and JSON parsing, allowing us to control
+        the input data without relying on actual files.
+
+        Example:
+            - A fake workflow path is defined: '/path/to/workflow/test_config_workflow.json'
+            - Mock workflow steps are created: [{'title': 'Step 1', 'type': 'Standard'}]
+            - The test verifies that:
+              1. The correct file path is used to load the configuration
+              2. The JSON content is properly parsed
+              3. The _process_section method of WorkflowManager is called with the expected config
+              4. The generator returned by run_workflow produces the expected output
+
+        This test ensures that the WorkflowManager can correctly handle file-based configurations,
+        which is crucial for real-world usage where workflows are defined in external files.
+        """
         # --- GIVEN ---
         fake_workflow_path = '/path/to/workflow/test_config_workflow.json'
         mock_workflow_steps = [{'title': 'Step 1', 'type': 'Standard'}]
