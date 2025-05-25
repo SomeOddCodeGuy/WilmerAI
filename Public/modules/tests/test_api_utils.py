@@ -4,11 +4,6 @@ import sys
 import os
 from unittest.mock import patch, MagicMock, call
 
-# Add the project root to the Python path to allow importing Middleware modules
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../WilmerAI'))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
 # Import the public function and the private helper for direct testing
 from Middleware.utilities.api_utils import extract_text_from_chunk, _extract_content_from_parsed_json
 

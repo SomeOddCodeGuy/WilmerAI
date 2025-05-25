@@ -13,11 +13,6 @@ import requests
 # Configure logging for this test file
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-# Add project root to sys.path
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../../WilmerAI'))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
 from Middleware.llmapis.openai_api_handler import OpenAiApiHandler
 # Import the function we need to mock in api_utils
 from Middleware.utilities import api_utils

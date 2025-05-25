@@ -6,7 +6,6 @@ from unittest.mock import patch, MagicMock, ANY, mock_open, AsyncMock
 import logging
 import asyncio
 
-# === START Logging Configuration ===
 log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 console_handler = logging.StreamHandler()
 console_handler.setFormatter(log_formatter)
@@ -18,13 +17,7 @@ if root_logger.hasHandlers():
     root_logger.handlers.clear()
 root_logger.addHandler(console_handler)
 root_logger.setLevel(logging.DEBUG) 
-logger = logging.getLogger(__name__) # Optional: Get a logger specific to this test file
-# === END Logging Configuration ===
-
-# Add project root to sys.path
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../WilmerAI'))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
+logger = logging.getLogger(__name__)
 
 # Import necessary classes
 from Middleware.workflows.managers.workflow_manager import WorkflowManager, EarlyTerminationException

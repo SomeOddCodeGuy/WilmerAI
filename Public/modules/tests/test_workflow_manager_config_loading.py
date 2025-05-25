@@ -5,11 +5,6 @@ import sys
 from unittest.mock import patch, MagicMock, mock_open
 import logging
 
-# Add project root to path
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../WilmerAI'))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
 # Import necessary classes
 from Middleware.workflows.managers.workflow_manager import WorkflowManager
 from Middleware.llmapis.llm_api import LlmApiService # Assuming LlmApiService is needed for init
