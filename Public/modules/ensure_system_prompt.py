@@ -22,11 +22,6 @@ try:
     )
     from Middleware.utilities.config_utils import get_default_tool_prompt_path
 except ImportError:
-    # Fallback if running from a different directory
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    import sys
-    if current_dir not in sys.path:
-        sys.path.append(current_dir)
     # Import the Discoverer class
     from mcp_service_discoverer import MCPServiceDiscoverer
     # Import prompt utils from their module
