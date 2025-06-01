@@ -10,12 +10,8 @@ from typing import Dict, List, Any, Optional, Tuple
 from Public.modules.workflow_utils import aggregate_generator_input
 
 logger = logging.getLogger(__name__)
-
-# Import functions/classes from other MCP modules
 try:
-    # Import the Discoverer class
     from mcp_service_discoverer import MCPServiceDiscoverer
-    # Import prompt utils from their module
     from mcp_prompt_utils import (
         _format_mcp_tools_for_llm_prompt, 
         _integrate_tools_into_prompt
@@ -23,13 +19,7 @@ try:
     from Middleware.utilities.config_utils import get_default_tool_prompt_path
 except ImportError:
     # Import the Discoverer class
-    from mcp_service_discoverer import MCPServiceDiscoverer
-    # Import prompt utils from their module
-    from mcp_prompt_utils import (
-        _format_mcp_tools_for_llm_prompt, 
-        _integrate_tools_into_prompt
-    )
-    from Middleware.utilities.config_utils import get_default_tool_prompt_path
+    raise Exception("Error: can't import mcp modules")
 
 def load_default_prompt(default_prompt_path):
     """
