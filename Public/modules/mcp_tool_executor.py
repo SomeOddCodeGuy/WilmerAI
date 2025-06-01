@@ -8,8 +8,6 @@ import datetime
 import sys
 
 # Use absolute import
-from Public.modules import mcp_tool_executor
-# Use absolute import
 from Public.modules.mcp_service_discoverer import MCPServiceDiscoverer, DEFAULT_MCPO_URL
 # Corrected relative import for mcp_prompt_utils
 from .mcp_prompt_utils import _format_mcp_tools_for_llm_prompt, _integrate_tools_into_prompt
