@@ -12,6 +12,9 @@ from Public.modules.mcp_service_discoverer import MCPServiceDiscoverer, DEFAULT_
 # Corrected relative import for mcp_prompt_utils
 from .mcp_prompt_utils import _format_mcp_tools_for_llm_prompt, _integrate_tools_into_prompt
 
+# Import the MCPConfigurationError from mcp_workflow_integration
+from Public.modules.mcp_workflow_integration import MCPConfigurationError
+
 logger = logging.getLogger(__name__)
 
 def Invoke(messages: List[Dict[str, str]], mcpo_url: str = DEFAULT_MCPO_URL, tool_execution_map: Dict = None) -> Dict:
@@ -37,10 +40,12 @@ def Invoke(messages: List[Dict[str, str]], mcpo_url: str = DEFAULT_MCPO_URL, too
     
     # Note: Service name extraction and discovery are now part of prepare_system_prompt
     # We rely on the tool_execution_map being provided for execution.
-    if not tool_execution_map:
-         logger.warning("Invoke called without a tool_execution_map. Execution will fail if tool calls are present.")
-         # Consider if we should *always* require a map or have a fallback discovery?
-         # For now, we proceed but execution will likely error out if a call needs the map.
+    if tool_execution_map is None:
+        raise MCPConfigurationError(
+            "tool_execution_map is required for execution but was not provided. "
+            "Ensure you're passing a valid tool_execution_map when invoking this function. "
+            "See documentation for proper usage."
+        )
 
     assistant_message = None
     for message in reversed(messages):
