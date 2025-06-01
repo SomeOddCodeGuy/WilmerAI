@@ -5,6 +5,7 @@ import json
 import os
 import sys
 import logging
+from importlib import reload
 
 # Add the parent directory (modules) to sys.path to allow importing MCPServiceDiscoverer
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -31,6 +32,21 @@ class TestMCPServiceDiscoverer(unittest.TestCase):
     def test_init_custom_url(self):
         """Test initializer uses provided custom URL."""
         self.assertEqual(self.discoverer_custom.mcpo_url, self.custom_url)
+
+    @patch('Middleware.utilities.config_utils.get_user_config')
+    def test_mcpo_url_from_config(self, mock_get_user_config):
+        """Test that MCPO_URL is loaded from user configuration file."""
+        # Set up the mock to return a config with MCPO_URL
+        mock_config = {"MCPO_URL": "http://config-mcp.com:9090"}
+        mock_get_user_config.return_value = mock_config
+
+        # Reset DEFAULT_MCPO_URL to ensure it's reloaded from config
+        import mcp_service_discoverer
+        reload(mcp_service_discoverer)
+        from mcp_service_discoverer import DEFAULT_MCPO_URL as new_default_url
+
+        # Verify that the default URL is now from the config
+        self.assertEqual(new_default_url, "http://config-mcp.com:9090")
 
     @patch('requests.get')
     def test_fetch_service_schema_success(self, mock_get):

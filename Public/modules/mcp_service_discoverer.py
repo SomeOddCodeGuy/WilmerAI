@@ -4,10 +4,20 @@ import requests
 import os
 from typing import Dict, List, Optional, Tuple
 
+# Import the config utility to access user configuration
+from Middleware.utilities.config_utils import get_user_config
+
 logger = logging.getLogger(__name__)
 
 # Default MCPO server base URL (used if not provided in constructor)
-DEFAULT_MCPO_URL = os.environ.get("MCPO_URL", "http://localhost:8889")
+# First try to get from user config file, then environment variable, finally fallback to hardcoded value
+try:
+    # Try to load from user configuration first
+    user_config = get_user_config()
+    DEFAULT_MCPO_URL = user_config.get("MCPO_URL", os.environ.get("MCPO_URL", "http://localhost:8889"))
+except Exception as e:
+    logger.warning(f"Failed to load MCPO_URL from user config: {e}. Falling back to environment variable or default.")
+    DEFAULT_MCPO_URL = os.environ.get("MCPO_URL", "http://localhost:8889")
 
 class MCPServiceDiscoverer:
     """
