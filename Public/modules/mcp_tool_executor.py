@@ -230,11 +230,13 @@ def _perform_http_request(method: str, url: str, query_params: Dict, body_params
         if method.lower() not in supported_methods:
             return format_error_response(f"Unsupported HTTP method '{method}'")
 
+        # Only include body_params for POST, PUT, and PATCH methods
+        request_body = body_params if method.upper() in ["POST", "PUT", "PATCH"] else None
         response = requests.request(
             method=method, 
             url=url, 
             params=query_params, 
-            json=body_params, 
+            json=request_body, 
             timeout=timeout
         )
 
