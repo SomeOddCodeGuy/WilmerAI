@@ -89,7 +89,7 @@ def extract_last_n_turns_as_string(messages: List[Dict[str, Any]], n: int, inclu
         content = message.get("content", "")
         formatted_lines.append(content)
 
-    return '\\n'.join(formatted_lines)
+    return '\n'.join(formatted_lines)
 
 
 def extract_discussion_id(messages: List[Dict[str, str]]) -> Optional[str]:
