@@ -32,7 +32,7 @@
         "lastMessagesToSendInsteadOfPrompt": 10,
         "endpointName": "Worker-Endpoint",
         "preset": "Responder_Preset",
-        "maxResponseSizeInTokens": 2000,
+        "maxResponseSizeInTokens": 10000,
         "addUserTurnTemplate": false,
         "jinja2": true
     },
@@ -66,10 +66,10 @@
         "agentName": "Final Responder Agent",
         "type": "Standard",
         "systemPrompt": "You are a helpful AI assistant.",
-        "prompt": "Recent Conversation History (may lack structure):\n{chat_user_prompt_last_ten}\n\nTool Execution Step Outcome:\n{agent5Output}\n\nBased on the conversation history and tool execution outcome above, please formulate the best response to the *final user message*.",
+        "prompt": "Recent Conversation History (may lack structure):\n{chat_user_prompt_last_ten}\n\nTool Execution Step Outcome:\n{agent5Output}\n\nBased on the conversation history and tool execution outcome above, please formulate the best response to the *final user message*. If the user requested to use a tool and the tool execution has failed, STOP and do not attempt to respond to the user. Say that you are unable to fulfill the user's request due to a tool (name of tool) failure.",
         "endpointName": "Worker-Endpoint",
         "preset": "Responder_Preset",
-        "maxResponseSizeInTokens": 500,
+        "maxResponseSizeInTokens": 5000,
         "returnToUser": true
     }
 ]

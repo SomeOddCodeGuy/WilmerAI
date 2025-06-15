@@ -19,7 +19,7 @@
         "lastMessagesToSendInsteadOfPrompt": 25,
         "endpointName": "General-Endpoint",
         "preset": "General_Preset",
-        "maxResponseSizeInTokens": 2000,
+        "maxResponseSizeInTokens": 5000,
         "addUserTurnTemplate": false,
         "addDiscussionIdTimestampsForLLM": false,
         "jinja2": false
