@@ -13,9 +13,9 @@ The integration consists of two main Python modules:
 
 The following configurations have been set up:
 
-1. **Workflow**: `WilmerData/Public/Configs/Workflows/socg-openwebui-norouting-general-offline-mcp/MCPToolsWorkflow.json`
-2. **Endpoint**: `WilmerData/Public/Configs/Endpoints/socg-openwebui-norouting-general-offline-mcp/Worker-Endpoint.json`
-3. **User**: `WilmerData/Public/Configs/Users/socg-openwebui-norouting-general-offline-mcp.json`
+1. **Workflow**: `WilmerData/Public/Configs/Workflows/isevendays-openwebui-norouting-general-offline-mcp/MCPToolsWorkflow.json`
+2. **Endpoint**: `WilmerData/Public/Configs/Endpoints/isevendays-openwebui-norouting-general-offline-mcp/Worker-Endpoint.json`
+3. **User**: `WilmerData/Public/Configs/Users/isevendays-openwebui-norouting-general-offline-mcp.json`
 
 ## How It Works
 
