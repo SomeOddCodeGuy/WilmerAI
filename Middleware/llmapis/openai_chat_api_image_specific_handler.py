@@ -517,13 +517,20 @@ def prep_corrected_conversation(conversation, system_prompt, prompt):
                           file_path = file_path[1:]
                      file_path = file_path.replace('/', '\\') # Convert to backslashes
                 # Other OS might need specific handling if paths aren't standard
-
-                data_uri = convert_to_data_uri(file_path)
-                image_contents.append({
-                    "type": "image_url",
-                    "image_url": {"url": data_uri}
-                })
-                processed = True
+                
+                # Security: Validate that the file is an image based on MIME type
+                mime_type, _ = mimetypes.guess_type(file_path)
+                if mime_type and mime_type.startswith('image/'):
+                    data_uri = convert_to_data_uri(file_path)
+                    image_contents.append({
+                        "type": "image_url",
+                        "image_url": {"url": data_uri}
+                    })
+                    processed = True
+                else:
+                    logger.warning(f"Skipping non-image file specified by file URI: {content}")
+                    # 'processed' remains False, so it will be logged as an unrecognized source later
+                    
             except FileNotFoundError:
                 logger.error(f"File not found for URL: {content}, Path: {file_path}")
             except Exception as e:
