@@ -5,11 +5,15 @@ import traceback
 import base64
 import re
 import os
+import mimetypes
+import binascii
+import io
 from typing import Dict, Generator, List, Optional
 from urllib.parse import urlparse
 from copy import deepcopy
 
 import requests
+from PIL import Image
 
 from Middleware.utilities import api_utils, instance_utils
 from .llm_api_handler import LlmApiHandler
@@ -498,13 +502,34 @@ def prep_corrected_conversation(conversation, system_prompt, prompt):
 
         # Handle raw base64
         elif is_base64_image(content):
-            logger.debug("Converting raw base64 to data URI")
-            content = f"data:image/jpeg;base64,{content}"
-            image_contents.append({
-                "type": "image_url",
-                "image_url": {"url": content}
-            })
-            processed = True
+            logger.debug("Decoding raw base64 to determine image type using Pillow")
+            try:
+                # Decode the base64 string
+                decoded_data = base64.b64decode(content)
+                
+                # Use Pillow to open the image data from bytes
+                image = Image.open(io.BytesIO(decoded_data))
+                
+                # Get the image format (e.g., 'JPEG', 'PNG')
+                image_format = image.format.lower()
+
+                if image_format:
+                    mime_type = f"image/{image_format}"
+                    logger.debug(f"Determined image type: {mime_type}. Creating data URI.")
+                    data_uri = f"data:{mime_type};base64,{content}"
+                    image_contents.append({
+                        "type": "image_url",
+                        "image_url": {"url": data_uri}
+                    })
+                    processed = True
+                else:
+                    logger.warning("Could not determine image type using Pillow. Skipping.")
+
+            except (binascii.Error, ValueError):
+                logger.warning(f"Skipping malformed base64 string during type detection: {content[:50]}...")
+            except Image.UnidentifiedImageError:
+                 logger.warning(f"Pillow could not identify image from base64 data. Skipping.")
+
         # Handle file URLs
         elif content.startswith('file://'):
             try:
