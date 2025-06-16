@@ -384,34 +384,43 @@ def is_file_url(url):
 
 def convert_to_data_uri(file_path, mime_type=None):
     """
-    Convert a file to a data URI.
-    
-    Args:
-        file_path (str): Path to the file
-        mime_type (str, optional): The MIME type. If None, it's guessed from the file extension.
-        
-    Returns:
-        str: The data URI
+    Converts a local file path to a data URI.
     """
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"File not found: {file_path}")
-    
-    if mime_type is None:
-        ext = os.path.splitext(file_path)[1].lower()
-        mime_map = {
-            '.jpg': 'image/jpeg',
-            '.jpeg': 'image/jpeg',
-            '.png': 'image/png',
-            '.gif': 'image/gif',
-            '.webp': 'image/webp',
-            '.bmp': 'image/bmp'
-        }
-        mime_type = mime_map.get(ext, 'application/octet-stream')
-    
-    with open(file_path, 'rb') as f:
-        encoded = base64.b64encode(f.read()).decode('utf-8')
-    
-    return f"data:{mime_type};base64,{encoded}"
+    try:
+        # Normalize the file path
+        actual_path = file_path[7:] if file_path.startswith('file://') else file_path
+        
+        with open(actual_path, "rb") as image_file:
+            encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
+
+        # Try to get mime type from Pillow
+        try:
+            with Image.open(actual_path) as img:
+                image_format = img.format
+                if image_format:
+                    mime_type = f"image/{image_format.lower()}"
+                    logger.debug(f"Determined mime type as {mime_type} using Pillow.")
+        except Exception as e:
+            logger.warning(f"Could not determine image type with Pillow for {actual_path}: {e}. Falling back to mimetypes.")
+
+        # Fallback to mimetypes if Pillow fails or can't determine format
+        if not mime_type:
+            mime_type, _ = mimetypes.guess_type(actual_path)
+            if mime_type:
+                logger.debug(f"Determined mime type as {mime_type} using mimetypes.")
+            else:
+                # Default to jpeg if all else fails
+                mime_type = "image/jpeg"
+                logger.warning(f"Could not determine mime type for {actual_path}. Defaulting to {mime_type}.")
+
+        return f"data:{mime_type};base64,{encoded_string}"
+    except FileNotFoundError:
+        logger.error(f"File not found: {file_path}")
+        return None
+    except Exception as e:
+        logger.error(f"Error converting file to data URI: {e}")
+        logger.error(traceback.format_exc())
+        return None
 
 
 def prep_corrected_conversation(conversation, system_prompt, prompt):
