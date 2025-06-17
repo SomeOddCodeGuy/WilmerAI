@@ -2,6 +2,16 @@
 
 This module provides integration with MCP (Model Context Protocol) services for Wilmer's AI system. It allows LLMs to automatically discover and invoke tools from MCP servers mentioned in the system prompt.
 
+## Important Note on MCP: 
+
+> Wilmer has no way to validate or control what the MCP server or the tools it exposes may do, so please be
+> sure to use only trusted and secure MCP servers. Like a front end, Wilmer can only call the tools; what those
+> tools do is the responsibility of the server exposing them. Take care to ensure that you know exactly what those
+> tools will do before using them.
+
+> This functionality is still new, and may have bugs or other issues that still need to be worked out.
+> Please exercise caution when using it.
+
 ## Overview
 
 The integration consists of two main Python modules:
