@@ -5,7 +5,6 @@ import traceback
 import base64
 import re
 import os
-import mimetypes
 import binascii
 import io
 from typing import Dict, Generator, List, Optional
@@ -340,12 +339,18 @@ class OpenAIApiChatImageSpecificHandler(LlmApiHandler):
                 raise
 
     def set_gen_input(self):
+        """Sets up generation input parameters.
+        Note: max_tokens and modelSupportsThinking are mutually exclusive because
+        thinking mode requires dynamic token budgeting that cannot be predetermined.
+        """
         if self.truncate_property_name:
             self.gen_input[self.truncate_property_name] = self.endpoint_config.get("maxContextTokenSize", None)
         if self.stream_property_name:
             self.gen_input[self.stream_property_name] = self.stream
         if self.max_token_property_name:
-            self.gen_input[self.max_token_property_name] = self.max_tokens
+            model_supports_thinking = self.endpoint_config.get("modelSupportsThinking", False)
+            if not model_supports_thinking:
+                self.gen_input[self.max_token_property_name] = self.max_tokens
 
 
 def is_valid_http_url(url):
@@ -373,66 +378,75 @@ def is_base64_image(s):
 
 def is_file_url(url):
     """
-    Check if the URL is a file URL.
+    Checks if a string is a file URL.
     """
-    try:
-        result = urlparse(url)
-        return result.scheme == 'file'
-    except:
-        return False
+    return url.startswith('file://')
 
 
-def convert_to_data_uri(file_path, mime_type=None):
+def convert_to_data_uri(uri):
     """
-    Converts a local file path to a data URI.
+    Converts a local file URI (e.g., file:///path/to/image.jpg) to a data URI,
+    using Pillow to validate the image. This acts as a security measure to
+    ensure only valid image files are processed. Handles OS-specific path formats.
     """
+    actual_path = ""
     try:
-        # Normalize the file path
-        actual_path = file_path[7:] if file_path.startswith('file://') else file_path
+        parsed_uri = urlparse(uri)
+        if parsed_uri.scheme != 'file':
+            logger.warning(f"URI is not a file URI, cannot convert: {uri}")
+            return None
+
+        # Handle different OS path representations from file URI
+        if os.name == 'nt':  # Windows specific handling
+            if parsed_uri.netloc:  # UNC path like file://server/share/path
+                # Constructs \\server\share\path
+                actual_path = f"\\\\{parsed_uri.netloc}{parsed_uri.path}"
+            else:  # Local file path like file:///C:/path/to/file
+                # Strips leading '/' from /C:/path/to/file to get C:/...
+                actual_path = parsed_uri.path.lstrip('/')
+            # Convert all path separators to backslashes for Windows consistency
+            actual_path = actual_path.replace('/', '\\')
+        else:  # Non-windows
+            actual_path = parsed_uri.path
         
-        with open(actual_path, "rb") as image_file:
-            encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
-
-        # Try to get mime type from Pillow
+        mime_type = None
+        # Use Pillow to validate it's an image and get the format.
         try:
             with Image.open(actual_path) as img:
                 image_format = img.format
                 if image_format:
                     mime_type = f"image/{image_format.lower()}"
-                    logger.debug(f"Determined mime type as {mime_type} using Pillow.")
+                    logger.debug(f"Validated as image. Determined mime type as {mime_type} using Pillow.")
+                else:
+                    logger.warning(f"Pillow could not determine image format for {actual_path}. The file will not be sent.")
+                    return None
+        except Image.UnidentifiedImageError:
+             logger.warning(f"Pillow could not identify file as an image: {actual_path}. File will not be sent for security reasons.")
+             return None
         except Exception as e:
-            logger.warning(f"Could not determine image type with Pillow for {actual_path}: {e}. Falling back to mimetypes.")
+            logger.warning(f"Could not validate image type with Pillow for {actual_path}: {e}. The file will not be sent.")
+            return None
 
-        # Fallback to mimetypes if Pillow fails or can't determine format
-        if not mime_type:
-            mime_type, _ = mimetypes.guess_type(actual_path)
-            if mime_type:
-                logger.debug(f"Determined mime type as {mime_type} using mimetypes.")
-            else:
-                # Default to jpeg if all else fails
-                mime_type = "image/jpeg"
-                logger.warning(f"Could not determine mime type for {actual_path}. Defaulting to {mime_type}.")
+        # If validation is successful, read the file and encode it.
+        if mime_type:
+            with open(actual_path, "rb") as image_file:
+                encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
+            return f"data:{mime_type};base64,{encoded_string}"
+        else:
+            return None
 
-        return f"data:{mime_type};base64,{encoded_string}"
     except FileNotFoundError:
-        logger.error(f"File not found: {file_path}")
+        logger.error(f"File not found for URI: {uri}, attempted path: {actual_path}")
         return None
     except Exception as e:
-        logger.error(f"Error converting file to data URI: {e}")
+        logger.error(f"Error converting file URI to data URI: {e}")
         logger.error(traceback.format_exc())
         return None
 
 
 def prep_corrected_conversation(conversation, system_prompt, prompt):
     """
-    Prepare a corrected conversation for the OpenAI API with enhanced image handling.
-
-    Supports:
-    - HTTP/HTTPS URLs with proper protocol
-    - Base64-encoded images (with or without data URI prefix)
-    - File URLs (converted to data URIs)
-
-    Skips invalid URLs or images that fail processing.
+    Prepares the conversation list with image handling. It processes messages with role "images",
     """
     if conversation is None:
         conversation = []
@@ -543,32 +557,19 @@ def prep_corrected_conversation(conversation, system_prompt, prompt):
         elif content.startswith('file://'):
             try:
                 logger.debug("Converting file URL to data URI")
-                parsed_uri = urlparse(content)
-                file_path = parsed_uri.path # Use urlparse to handle file paths correctly
-                # Handle different OS path representations from file URI
-                if os.name == 'nt': # Windows: file:///C:/path -> /C:/path
-                     if file_path.startswith('/'):
-                          file_path = file_path[1:]
-                     file_path = file_path.replace('/', '\\') # Convert to backslashes
-                # Other OS might need specific handling if paths aren't standard
-                
-                # Security: Validate that the file is an image based on MIME type
-                mime_type, _ = mimetypes.guess_type(file_path)
-                if mime_type and mime_type.startswith('image/'):
-                    data_uri = convert_to_data_uri(file_path)
+                # Security: Validate that the file is an image using Pillow and convert it
+                data_uri = convert_to_data_uri(content)
+                if data_uri:
                     image_contents.append({
                         "type": "image_url",
                         "image_url": {"url": data_uri}
                     })
                     processed = True
                 else:
-                    logger.warning(f"Skipping non-image file specified by file URI: {content}")
-                    # 'processed' remains False, so it will be logged as an unrecognized source later
-                    
-            except FileNotFoundError:
-                logger.error(f"File not found for URL: {content}, Path: {file_path}")
+                    logger.warning(f"Skipping file specified by URI as it could not be validated as an image: {content}")
+                    # 'processed' remains False, and it will be logged as an unrecognized source later
             except Exception as e:
-                logger.error(f"Error converting file URL {content} to data URI: {e}")
+                logger.error(f"Error processing file URL {content}: {e}")
             # If file conversion fails, processed remains False
 
         # Handle HTTP/HTTPS URLs last
