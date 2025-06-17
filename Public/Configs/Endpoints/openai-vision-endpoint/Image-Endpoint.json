@@ -1,0 +1,9 @@
+{
+    "modelNameForDisplayOnly": "OpenAI Vision Model - GPT-4-Vision",
+    "endpoint": "http://llm:8080",
+    "apiTypeConfigFileName": "OpenAIApiChatImageSpecific",
+    "maxContextTokenSize": 8192,
+    "modelNameToSendToAPI": "gpt-4-vision",
+    "promptTemplate": "_chatonly",
+    "addGenerationPrompt": true
+}

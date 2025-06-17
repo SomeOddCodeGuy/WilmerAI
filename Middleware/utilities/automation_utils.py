@@ -1,6 +1,18 @@
 import importlib.util
 import os
+import logging
+import traceback
+import sys
 
+# Base exception for errors occurring within dynamically loaded modules
+class DynamicModuleError(Exception):
+    """Base class for exceptions raised by dynamically loaded workflow modules."""
+    def __init__(self, message, module_name=None, details=None):
+        super().__init__(message)
+        self.module_name = module_name
+        self.details = details # Optional structured details
+
+logger = logging.getLogger(__name__)
 
 def run_dynamic_module(module_path, *args, **kwargs):
     """
@@ -26,6 +38,12 @@ def run_dynamic_module(module_path, *args, **kwargs):
     if not os.path.isfile(module_path):
         raise FileNotFoundError(f"No file found at {module_path}")
 
+    # Ensure the project root is in sys.path for the dynamic module
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')) # Assumes this file is in WilmerAI/Middleware/utilities
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+        logger.debug(f"Added project root {project_root} to sys.path for dynamic module execution")
+
     # Load the module dynamically
     spec = importlib.util.spec_from_file_location("dynamic_module", module_path)
     module = importlib.util.module_from_spec(spec)
@@ -41,5 +59,26 @@ def run_dynamic_module(module_path, *args, **kwargs):
         raise TypeError(f"'Invoke' is not callable")
 
     # Call the function and return the result
-    response = func(*args, **kwargs)
-    return response
+    try:
+        response = func(*args, **kwargs)
+        return response
+    # Handle errors raised by the dynamic module itself
+    except DynamicModuleError as dme:
+        module_name_str = f" '{dme.module_name or os.path.basename(module_path)}'" if dme.module_name or module_path else ""
+        details_str = f". Details: {dme.details}" if dme.details else ""
+        error_message = f"Error in dynamic module{module_name_str}: {dme}{details_str}"
+        logger.error(error_message)
+        # Return a user-friendly error message (potentially including details)
+        return f"Error processing request in module{module_name_str}. {dme}{details_str}"
+
+    # Handle other potential errors during dynamic module execution
+    except FileNotFoundError:
+        raise # Re-raise FileNotFoundError as it indicates a setup issue
+    except (AttributeError, TypeError) as e:
+        logger.error(f"Error setting up or calling 'Invoke' in dynamic module '{os.path.basename(module_path)}': {e}")
+        # Return a user-friendly setup error message
+        return f"Error: Module '{os.path.basename(module_path)}' setup issue. Please check logs."
+    except Exception as e:
+        logger.exception(f"Unexpected error executing 'Invoke' in dynamic module '{os.path.basename(module_path)}': {e}") # Log full traceback
+        # Return a generic user-friendly error message
+        return "Error: An unexpected error occurred while processing your request. Please check system logs."

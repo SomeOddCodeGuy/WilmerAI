@@ -97,53 +97,83 @@ def build_response_json(
     if additional_fields:
         response.update(additional_fields)
 
-    return json.dumps(response)
+    # Ensure the response is properly encoded for JSON serialization (non-ASCII characters are supported)
+    return json.dumps(response, ensure_ascii=False)
 
+def _extract_content_from_parsed_json(parsed_json: dict) -> str:
+    """Extracts text content from a parsed JSON dictionary, checking known formats."""
+    if not isinstance(parsed_json, dict):
+        return ""
+    
+    content = ""
+    # 1. Try OpenAI format (choices[0].delta.content)
+    choices = parsed_json.get('choices', [])
+    if choices and isinstance(choices, list) and len(choices) > 0:
+        # First try delta.content (chat completion format)
+        delta = choices[0].get('delta', {})
+        if isinstance(delta, dict):
+            content = delta.get('content', '')
+        
+        # If no content found, try text field (completion format)
+        if not content:
+            content = choices[0].get('text', '')
 
-def extract_text_from_chunk(chunk: str) -> str:
-    """
-    Extracts the relevant text from a chunk based on the API_TYPE.
+    # 2. If not found, try Ollama format (response)
+    if not content:
+        content = parsed_json.get('response', '')
 
-    Args:
-        chunk (str): The raw chunk string from the stream.
-
-    Returns:
-        str: The extracted text content. Returns an empty string if extraction fails or if the chunk signifies completion.
-    """
-    api_type = instance_utils.API_TYPE
-
-    # Remove 'data:' prefix if present
-    if chunk.startswith('data:'):
-        chunk = chunk[len('data:'):].strip()
-
-    # Handle '[DONE]' signals
-    if chunk in ['[DONE]', '']:
-        return ''
-
+    # 3. If not found, try message format (message.content)
+    if not content:
+        message_data = parsed_json.get('message')
+        if isinstance(message_data, dict):
+            content = message_data.get('content', '')
+            
+    return content
+    
+def extract_text_from_chunk(chunk) -> str:
+    """Extract text content from a chunk, handling various data types."""
+    extracted = ""
     try:
-        response = ""
-        chunk_json = json.loads(chunk)
+        # Handle None
+        if chunk is None:
+            return ""
+            
+        # Handle string chunks (potentially SSE or plain JSON)
+        elif isinstance(chunk, str):
+            parsed_json = None
+            # Handle SSE data format ("data: {...}")
+            if chunk.startswith('data:'):
+                try:
+                    json_content = chunk.replace('data:', '').strip()
+                    if json_content != '[DONE]': # Avoid parsing [DONE]
+                        parsed_json = json.loads(json_content)
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Failed to parse SSE JSON content '{json_content}': {e}")
+            # Handle plain JSON string format ("({...}"))
+            else:
+                try:
+                    # Avoid parsing empty strings which might occur
+                    if chunk.strip(): 
+                         parsed_json = json.loads(chunk.strip()) 
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Failed to parse plain JSON string: {e}")
+            
+            # Extract content using the helper if JSON was parsed
+            if parsed_json is not None:
+                extracted = _extract_content_from_parsed_json(parsed_json)
 
-        if api_type == "ollamagenerate":
-            response = chunk_json.get('response', '')
-
-        elif api_type == "ollamaapichat":
-            response = chunk_json.get('message', {}).get('content', '')
-
-        elif api_type == "openaicompletion":
-            response = chunk_json.get('choices', [])[0].get('text', '')
-
-        elif api_type == "openaichatcompletion":
-            response = chunk_json.get('choices', [])[0].get('delta', {}).get('content', '')
-
-        else:
-            response = ''
-
-        return response
-
-    except json.JSONDecodeError as e:
-        logger.warning(f"Failed to parse JSON: {e}")
-        return ''
+        # Handle dictionary chunks directly
+        elif isinstance(chunk, dict):
+            extracted = _extract_content_from_parsed_json(chunk)
+            
+        # Other types (int, etc.) will result in the default empty string
+            
+    except Exception as e:
+        # Log unexpected errors during processing
+        logger.warning(f"Error processing chunk of type {type(chunk)}: {e}", exc_info=True)
+        extracted = ""
+    
+    return extracted
 
 
 def get_model_name():

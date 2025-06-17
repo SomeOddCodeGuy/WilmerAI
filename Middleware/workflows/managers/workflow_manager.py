@@ -2,17 +2,20 @@ import json
 import logging
 import time
 import uuid
+import types
 from copy import deepcopy
 from typing import Dict, List
 
+from Middleware.common.constants import VALID_NODE_TYPES
 from Middleware.exceptions.early_termination_exception import EarlyTerminationException
 from Middleware.models.llm_handler import LlmHandler
 from Middleware.services.llm_service import LlmHandlerService
 from Middleware.utilities import instance_utils, api_utils
 from Middleware.utilities.config_utils import get_active_conversational_memory_tool_name, \
     get_active_recent_memory_tool_name, get_file_memory_tool_name, \
-    get_chat_template_name, get_discussion_chat_summary_file_path, get_discussion_memory_file_path, get_workflow_path, \
+    get_chat_template_name, get_discussion_chat_summary_file_path, get_discussion_memory_file_path, \
     get_chat_summary_tool_workflow_name
+from Middleware.utilities.config_utils import get_workflow_path as default_get_workflow_path
 from Middleware.utilities.file_utils import read_chunks_with_hashes, load_custom_file
 from Middleware.utilities.instance_utils import INSTANCE_ID
 from Middleware.utilities.memory_utils import gather_chat_summary_memories, \
@@ -96,17 +99,20 @@ class WorkflowManager:
         Initializes the WorkflowManager with the given workflow configuration name and optional parameters.
 
         :param workflow_config_name: The name of the workflow configuration file.
-        :param kwargs: Optional keyword arguments, including 'llm_handler' and 'lookbackStartTurn'.
+        :param kwargs: Optional keyword arguments, including 'llm_handler' and 'lookbackStartTurn', 'path_finder_func'(to allow testing e.g. overriding the default path).
         """
+        # path_finder_func is needed for testing. When not provided, default_get_workflow_path is used (original behavior)
+        self.path_finder_func = kwargs.pop('path_finder_func', default_get_workflow_path)
         self.llm_handler = None
-        self.workflow_variable_service = WorkflowVariableManager(**kwargs)
-        self.workflowConfigName = workflow_config_name
-        self.llm_handler_service = LlmHandlerService()
 
         if 'llm_handler' in kwargs:
             self.llm_handler = kwargs['llm_handler']
         if 'lookbackStartTurn' in kwargs:
             self.lookbackStartTurn = kwargs['lookbackStartTurn']
+        
+        self.workflow_variable_service = WorkflowVariableManager(**kwargs)
+        self.workflowConfigName = workflow_config_name
+        self.llm_handler_service = LlmHandlerService()
 
     def run_workflow(self, messages, request_id, discussionId: str = None, stream: bool = False, nonResponder=None,
                      first_node_system_prompt_override=None, first_node_prompt_override=None):
@@ -133,7 +139,7 @@ class WorkflowManager:
 
         try:
             start_time = time.perf_counter()
-            config_file = get_workflow_path(self.workflowConfigName)
+            config_file = self.path_finder_func(self.workflowConfigName)
 
             with open(config_file) as f:
                 configs = json.load(f)
@@ -179,9 +185,13 @@ class WorkflowManager:
                                 logger.debug("Timestamp is false")
                                 messagesToSend = messages
 
-                            result = self._process_section(config, request_id, workflow_id, discussion_id,
-                                                           messagesToSend,
-                                                           agent_outputs,
+                            result = self._process_section(
+                                config,
+                                request_id,
+                                workflow_id,
+                                discussion_id,
+                                messagesToSend,
+                                agent_outputs,
                                                            stream=stream, addGenerationPrompt=add_generation_prompt)
                             if stream:
                                 text_chunks = []
@@ -213,6 +223,7 @@ class WorkflowManager:
                                                                                            discussion_id,
                                                                                            messages,
                                                                                            agent_outputs,
+                                                                                           stream=False, # it is not a responder, so we don't need to stream
                                                                                            addGenerationPrompt=add_generation_prompt)
                 except EarlyTerminationException:
                     logger.info(f"Unlocking locks for InstanceID: '{INSTANCE_ID}' and workflow ID: '{workflow_id}'")
@@ -237,7 +248,7 @@ class WorkflowManager:
             SqlLiteUtils.delete_node_locks(instance_utils.INSTANCE_ID, workflow_id)
             raise
         except Exception as e:
-            logger.error("An error occurred while processing the workflow: %s", e)
+            logger.exception("An error occurred while processing the workflow: %s", e)
             logger.info(f"Unlocking locks for InstanceID: '{INSTANCE_ID}' and workflow ID: '{workflow_id}'")
             SqlLiteUtils.delete_node_locks(instance_utils.INSTANCE_ID, workflow_id)
 
@@ -279,14 +290,7 @@ class WorkflowManager:
         logger.debug("Prompt processor Checkpoint")
         if "type" not in config:
             section_name = config.get("title", "Unknown")
-            valid_types = ["Standard", "ConversationMemory", "FullChatSummary", "RecentMemory", 
-                          "ConversationalKeywordSearchPerformerTool", "MemoryKeywordSearchPerformerTool", 
-                          "RecentMemorySummarizerTool", "ChatSummaryMemoryGatheringTool", "GetCurrentSummaryFromFile", 
-                          "chatSummarySummarizer", "GetCurrentMemoryFromFile", "WriteCurrentSummaryToFileAndReturnIt", 
-                          "SlowButQualityRAG", "QualityMemory", "PythonModule", "OfflineWikiApiFullArticle", 
-                          "OfflineWikiApiBestFullArticle", "OfflineWikiApiTopNFullArticles", "OfflineWikiApiPartialArticle", 
-                          "WorkflowLock", "CustomWorkflow", "ConditionalCustomWorkflow", "GetCustomFile", "ImageProcessor"]
-            logger.warning(f"Config Type: No Type Found for section '{section_name}'. Expected one of: {valid_types}")
+            logger.warning(f"Config Type: No Type Found for section '{section_name}'. Expected one of: {VALID_NODE_TYPES}")
         else:
             logger.info("Config Type: %s", config.get("type"))
         prompt_processor_service = PromptProcessor(self.workflow_variable_service, self.llm_handler)

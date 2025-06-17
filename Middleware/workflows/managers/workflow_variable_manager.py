@@ -39,6 +39,7 @@ class WorkflowVariableManager:
 
         :param kwargs: Optional keyword arguments to set category-related attributes.
         """
+
         self.category_list = None
         self.categoriesSeparatedByOr = None
         self.category_colon_descriptions = None
@@ -69,6 +70,9 @@ class WorkflowVariableManager:
             variables['messages'] = messages
             return template.render(**variables)
         else:
+            # Add messages to the variables dictionary for standard .format()
+            variables['messages'] = messages
+            # agent_outputs are already merged by generate_variables
             return prompt.format(**variables)
 
     def generate_variables(self, llm_handler: Any, messages: List[Dict[str, str]],
@@ -182,8 +186,13 @@ class WorkflowVariableManager:
             "templated_user_prompt_last_one": get_formatted_last_n_turns_as_string(
                 messages, 1, template_file_name=llm_handler.prompt_template_file_name,
                 isChatCompletion=llm_handler.takes_message_collection),
+            # chat_user_prompt_last_one needs to get the content of the chronologically last message in the conversation,
+            # regardless of its role (user or assistant). This is critical for features like group chat categorization
+            # (e.g., WilmerAI/Public/Configs/Workflows/group-chat-example/CustomCategorizationWorkflow.json)
+            # where an assistant's message (like the name of the next persona to speak) is used to determine workflow routing.
             "chat_user_prompt_last_one": extract_last_n_turns_as_string(messages, 1,
-                                                                        include_sysmes, remove_all_system_override)
+                                                                          include_sysmes,
+                                                                          remove_all_system_override)
         }
 
     @staticmethod

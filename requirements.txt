@@ -3,3 +3,4 @@ urllib3~=2.2.2
 scikit-learn~=1.5.0
 Flask~=3.0.3
 Jinja2~=3.1.4
+Pillow~=10.3.0 # Pillow is used for OpenAI image support

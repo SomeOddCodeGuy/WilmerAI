@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+from typing import List, Optional, Dict, Any
 
 from Middleware.utilities import instance_utils
 
@@ -32,6 +33,9 @@ def load_config(config_file):
 
 
 def get_config_property_if_exists(config_property, config_data):
+    # Handle cases where config_data might be None
+    if config_data is None:
+        return None
     if config_data.get(config_property) and config_data.get(config_property) != "":
         return config_data.get(config_property)
     else:
@@ -354,6 +358,17 @@ def get_template_config_path(template_file_name):
     :return: The full path to the prompt template configuration file.
     """
     return get_config_path('PromptTemplates', template_file_name)
+
+
+def get_default_tool_prompt_path():
+    """
+    Constructs the file path for the default tool prompt file.
+
+    :return: The full path to the default tool prompt file.
+    """
+    config_dir = str(get_root_config_directory())
+    config_file = os.path.join(config_dir, 'default_tool_prompt.txt')
+    return config_file
 
 
 def load_template_from_json(template_file_name):
