@@ -162,8 +162,9 @@ and Open WebUI.
   here?", and if the answer is 'yes' then kick off a wikipedia workflow, or if 'no' then kick off a workflow that just
   hits LLMs.
 
-- **MCP Server Tool Integration using MCPO:** New and experimental support for MCP server tool calling using MCPO, allowing
-  tool use mid-workflow. Information can be found [in the Readme](Public/modules/README_MCP_TOOLS.md). 
+- **MCP Server Tool Integration using MCPO:** New and experimental support for MCP
+  server tool calling using MCPO, allowing tool use mid-workflow. Big thank you to [iSevenDays](https://github.com/iSevenDays)
+  for the amazing work on this feature. More info can be found in the [ReadMe](Public/modules/README_MCP_TOOLS.md) .
 
 ## Maintainer's Note:
 
