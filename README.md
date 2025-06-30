@@ -6,6 +6,28 @@
 > This project and any expressed views, methodologies, etc found within are the result of contributions by the
 > maintainer and any contributors in their free time, and should not reflect upon any of their employers.
 
+## Maintainer's Note UPDATED 2025-06-29
+
+> IMPORTANT: Wilmer now more gracefully handles reasoning models, and can strip out thinking blocks of many types
+> both mid-workflow, and when returning/streaming to the user. This is a significant improvement for the
+> modern LLM landscape. Peek down at the endpoint configs section of the readme for more info. -Socg
+
+> Until September 2025, WilmerAI will not be accepting any new Pull Requests that modify anything within the
+> Middleware modules; some exceptions may apply. Updates to iSevenDays' new MCP tool calling feature, or adding new 
+> custom users or prompt templates within the Public directory, are still welcome.
+> 
+> Reasoning behind this:
+> - I am going to be doing a large scale refactor of the core Workflow and LLM handler modules to clean them up,
+>   make them testable, and make them make sense to others. I started on those files early on, before I had either
+>   learned python properly or had Wilmer actually running to help me. Today, my situation is completely different;
+>   I have a better understanding of the language, a better grasp on what Wilmer's architecture looks like and I
+>   have a pretty extensive Wilmer setup to help me. I will also be redoing the example users.
+> - I expect to be exceptionally busy at work for the next few months. I expect this to calm down significantly in 
+>   the Fall, but until then I won't have any time during weekdays, and only a little on weekends, to devote to this 
+>   project.
+> 
+>   -Socg
+
 ## What is WilmerAI?
 
 WilmerAI sits between your LLM APIs and whatever app is calling them, whether it be a front end like
@@ -541,7 +563,12 @@ file, `SmallModelEndpoint.json`, defines an endpoint:
   "maxContextTokenSize": 8192,
   "modelNameToSendToAPI": "",
   "promptTemplate": "chatml",
-  "addGenerationPrompt": true
+  "addGenerationPrompt": true,
+  "trimBeginningAndEndLineBreaks": true,
+  "dontIncludeModel": false,
+  "removeThinking": false,
+  "thinkTagText": "think",
+  "expectOnlyClosingThinkTag": false
 }
 ```
 
@@ -559,6 +586,26 @@ file, `SmallModelEndpoint.json`, defines an endpoint:
 - **addGenerationPrompt**: This boolean is for Text Completion endpoints to specify whether the model expects a
   final "assistant" tag at the very end. Not all models do. If you're unsure about this, just set it to
   "false"
+- **trimBeginningAndEndLineBreaks**: This boolean will run a trim at the start and end of your prompt, to remove
+  any spaces or linebreaks before or after the prompt. Some LLMs don't handle those extra spaces/lines well.
+- **dontIncludeModel**: This will NOT send the model name you specify in your endpoint config to the LLM api
+  endpoint. Generally, sending that model will tell systems like MLX, Llama.cpp server and Ollama to load the model
+  with that name. You may have a reason why you don't want it to do that, and instead have just the model you already
+  loaded on that port be used. Setting this to true will stop the model name from being sent, thus not changing
+  the loaded model.
+- **removeThinking**: This boolean is for reasoning models. By setting this to true, it will completely strip out the
+  thinking text from responses coming from LLMs, both for streaming and non-streaming. This is a major fix for Wilmer
+  using reasoning models for things like internal, inter-node processing. Socg keeps this on constantly. (NOTE: When
+  streaming, this buffers the response to you until thinking is done. That means it looks like the LLM isn't sending
+  you anything, but in actuality it's thinking. The moment the thinking is done, this will remove the thinking block
+  and starting sending you the LLM's response. So as a user, it just looks like the time to first token is FAR longer
+  than it is.)
+- **thinkTagText**: Allows you to set custom think tags. Some LLMs do things like <reasoning> or <thinking> as opposed
+  to <think>. With this, each endpoint can account for the specific type of tag it expects
+- **expectOnlyClosingThinkTag**: This is for models like Qwen3, which sometimes don't send their opening <think> tag,
+  and instead just start thinking. This will continue to buffer responses until </think> (or your custom tag) appears,
+  at which point it removes everything before that and sends it to you. If no closing tag appears, you will get a dump
+  of the whole response at once.
 
 #### ApiTypes
 
