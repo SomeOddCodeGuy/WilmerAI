@@ -43,7 +43,11 @@ class OpenAiApiHandler(LlmApiHandler):
         corrected_conversation = prep_corrected_conversation(conversation, system_prompt, prompt)
 
         url = f"{self.base_url}/v1/chat/completions"
-        data = {"model": self.model_name, "messages": corrected_conversation, **(self.gen_input or {})}
+        data = {
+            **({"model": self.model_name} if not self.dont_include_model else {}),
+            "messages": corrected_conversation,
+            **(self.gen_input or {})
+        }
 
         add_user_assistant = get_is_chat_complete_add_user_assistant()
         add_missing_assistant = get_is_chat_complete_add_missing_assistant()
@@ -173,7 +177,11 @@ class OpenAiApiHandler(LlmApiHandler):
         corrected_conversation = prep_corrected_conversation(conversation, system_prompt, prompt)
 
         url = f"{self.base_url}/v1/chat/completions"
-        data = {"model": self.model_name, "stream": False, "messages": corrected_conversation, **(self.gen_input or {})}
+        data = {
+            **({"model": self.model_name} if not self.dont_include_model else {}),
+            "messages": corrected_conversation,
+            **(self.gen_input or {})
+        }
 
         retries: int = 3
         for attempt in range(retries):

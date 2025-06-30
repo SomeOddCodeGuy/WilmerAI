@@ -87,7 +87,7 @@ class OpenAIApiChatImageSpecificHandler(LlmApiHandler):
 
         url = f"{self.base_url}/v1/chat/completions"
         data = {
-            "model": self.model_name,
+            **({"model": self.model_name} if not self.dont_include_model else {}),
             "messages": corrected_conversation,
             "stream": True,
             **(self.gen_input or {})
@@ -291,7 +291,7 @@ class OpenAIApiChatImageSpecificHandler(LlmApiHandler):
 
         url = f"{self.base_url}/v1/chat/completions"
         data = {
-            "model": self.model_name,
+            **({"model": self.model_name} if not self.dont_include_model else {}),
             "messages": corrected_conversation,
             "stream": False,
             **(self.gen_input or {})
