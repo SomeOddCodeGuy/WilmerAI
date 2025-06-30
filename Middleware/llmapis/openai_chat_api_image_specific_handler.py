@@ -1,20 +1,22 @@
-import json
-import logging
-import time
-import traceback
 import base64
-import re
-import os
 import binascii
 import io
+import json
+import logging
+import os
+import re
+import time
+import traceback
+from copy import deepcopy
 from typing import Dict, Generator, List, Optional
 from urllib.parse import urlparse
-from copy import deepcopy
 
 import requests
 from PIL import Image
 
 from Middleware.utilities import api_utils, instance_utils
+# New Imports for abstracted logic
+from Middleware.utilities.streaming_utils import StreamingThinkRemover, remove_thinking_from_text
 from .llm_api_handler import LlmApiHandler
 from ..utilities.config_utils import get_current_username, get_is_chat_complete_add_user_assistant, \
     get_is_chat_complete_add_missing_assistant
@@ -36,25 +38,15 @@ class OpenAIApiChatImageSpecificHandler(LlmApiHandler):
     ) -> Generator[str, None, None]:
         """
         Handle streaming response for OpenAI API with image support.
-
-        Args:
-            conversation (Optional[List[Dict[str, str]]]): A list of messages in the conversation.
-            system_prompt (Optional[str]): The system prompt to use.
-            prompt (Optional[str]): The user prompt to use.
-
-        Returns:
-            Generator[str, None, None]: A generator yielding chunks of the response.
         """
         self.set_gen_input()
 
         try:
             corrected_conversation = prep_corrected_conversation(conversation, system_prompt, prompt)
-            
-            # Log the formatted conversation for debugging (excluding actual image data)
+
             logger.debug("Formatted conversation with images:")
             for msg in corrected_conversation:
                 if isinstance(msg.get("content"), list):
-                    # This is a message with images
                     logger.debug(f"Message role: {msg['role']}")
                     text_items = [item for item in msg['content'] if item.get('type') == 'text']
                     logger.debug(f"Text content: {text_items}")
@@ -65,24 +57,21 @@ class OpenAIApiChatImageSpecificHandler(LlmApiHandler):
         except Exception as e:
             logger.error(f"Error preprocessing images: {e}")
             logger.error(traceback.format_exc())
-            
-            # Use a simplified conversation without images
+            # Create a fallback conversation if preprocessing fails
             corrected_conversation = []
             if system_prompt:
                 corrected_conversation.append({"role": "system", "content": system_prompt})
-            
-            # Add non-image messages from the original conversation
+
             if conversation:
                 for msg in conversation:
                     if msg["role"] != "images":
                         corrected_conversation.append(msg)
-            
-            # Add the prompt if provided, or an error message
+
             if prompt:
                 corrected_conversation.append({"role": "user", "content": prompt})
             elif not any(msg["role"] == "user" for msg in corrected_conversation):
                 corrected_conversation.append({
-                    "role": "user", 
+                    "role": "user",
                     "content": "There was an error processing the image. Please provide assistance without the image and state that you are unable to process the image."
                 })
 
@@ -102,13 +91,10 @@ class OpenAIApiChatImageSpecificHandler(LlmApiHandler):
         output_format = instance_utils.API_TYPE
 
         def generate_sse_stream():
+            # Instantiate the remover class to handle thinking block logic
+            remover = StreamingThinkRemover(self.endpoint_config)
+
             try:
-                logger.info(f"Streaming flow!")
-                logger.info(f"URL: {url}")
-                logger.debug("Headers: ")
-                logger.debug(json.dumps(self.headers, indent=2))
-                logger.debug("Data: ")
-                logger.debug(data)
                 with self.session.post(url, headers=self.headers, json=data, stream=True) as r:
                     logger.info(f"Response status code: {r.status_code}")
                     r.encoding = "utf-8"
@@ -133,48 +119,44 @@ class OpenAIApiChatImageSpecificHandler(LlmApiHandler):
                                     break
                                 chunk_data = json.loads(data_str)
                                 for choice in chunk_data.get("choices", []):
-                                    if "delta" in choice:
-                                        content = choice["delta"].get("content", "")
-                                        finish_reason = choice.get("finish_reason", "")
+                                    content_delta = choice.get("delta", {}).get("content", "")
+                                    finish_reason = choice.get("finish_reason", "")
 
+                                    # Process delta through the remover
+                                    content_to_yield = remover.process_delta(content_delta)
+
+                                    if content_to_yield:
                                         if not first_chunk_processed:
-                                            first_chunk_buffer += content
+                                            first_chunk_buffer += content_to_yield
 
                                             if self.strip_start_stop_line_breaks:
                                                 first_chunk_buffer = first_chunk_buffer.lstrip()
 
                                             if add_user_assistant and add_missing_assistant:
-                                                # Check for "Assistant:" in the full buffer
                                                 if "Assistant:" in first_chunk_buffer:
-                                                    # If it starts with "Assistant:", strip it
                                                     first_chunk_buffer = api_utils.remove_assistant_prefix(
                                                         first_chunk_buffer)
-                                                    # Mark as processed since we've handled the prefix
                                                     first_chunk_processed = True
                                                     content = first_chunk_buffer
                                                 elif len(first_chunk_buffer) > max_buffer_length or finish_reason:
-                                                    # If buffer is too large or stream finishes, pass it as is
                                                     first_chunk_processed = True
                                                     content = first_chunk_buffer
                                                 else:
-                                                    # Keep buffering until we have more tokens
                                                     continue
                                             elif len(first_chunk_buffer) > max_buffer_length or finish_reason:
-                                                # If buffer is too large or stream finishes, pass it as is
                                                 first_chunk_processed = True
                                                 content = first_chunk_buffer
                                             else:
-                                                # Keep buffering until we have more tokens
                                                 continue
+                                        else:
+                                            content = content_to_yield
 
                                         total_tokens += len(content.split())
-
                                         completion_json = api_utils.build_response_json(
                                             token=content,
-                                            finish_reason=None,  # Don't add "stop" or "done" yet
+                                            finish_reason=None,
                                             current_username=get_current_username()
                                         )
-
                                         yield api_utils.sse_format(completion_json, output_format)
 
                                 if chunk_data.get("done_reason") == "stop" or chunk_data.get("done"):
@@ -185,50 +167,49 @@ class OpenAIApiChatImageSpecificHandler(LlmApiHandler):
                                 continue
                             except Exception as e:
                                 logger.error(f"Error during streaming processing: {e}", exc_info=True)
-                                # Yield a formatted error message
                                 error_token = f"Error during streaming processing: {e}"
                                 error_json = api_utils.build_response_json(
-                                    token=error_token,
-                                    finish_reason="stop",
-                                    current_username=get_current_username()
+                                    token=error_token, finish_reason="stop", current_username=get_current_username()
                                 )
                                 yield api_utils.sse_format(error_json, output_format)
-                                # Stop processing after yielding the error
-                                raise StopIteration # Use StopIteration to signal generator end cleanly after error
+                                raise StopIteration
+
+                    # After loop, finalize the remover to flush any remaining buffer
+                    final_content = remover.finalize()
+                    if final_content:
+                        # Run final content through the first_chunk logic if nothing has been processed yet
+                        if not first_chunk_processed:
+                            content = (first_chunk_buffer + final_content).lstrip()
+                        else:
+                            content = final_content
+                        completion_json = api_utils.build_response_json(
+                            token=content, finish_reason=None, current_username=get_current_username()
+                        )
+                        yield api_utils.sse_format(completion_json, output_format)
 
                     total_duration = int((time.time() - start_time) * 1e9)
-
-                    # Send the final payload with "done" and "stop"
                     final_completion_json = api_utils.build_response_json(
-                        token="",
-                        finish_reason="stop",
-                        current_username=get_current_username(),
+                        token="", finish_reason="stop", current_username=get_current_username()
                     )
                     logger.debug("Total duration: %s", total_duration)
                     yield api_utils.sse_format(final_completion_json, output_format)
 
-                    # Always send [DONE] for OpenAI API format
                     logger.info("End of stream reached, sending [DONE] signal.")
                     yield api_utils.sse_format("[DONE]", output_format)
 
             except requests.RequestException as e:
                 logger.warning(f"Request failed: {e}")
                 raise
-            # Add a general exception catch block here
             except Exception as e:
                 logger.error(f"Unexpected error during streaming request setup or iteration: {e}", exc_info=True)
-                # Yield a formatted error message if possible
                 try:
                     error_token = f"Error during streaming processing: {e}"
                     error_json = api_utils.build_response_json(
-                        token=error_token,
-                        finish_reason="stop",
-                        current_username=get_current_username()
+                        token=error_token, finish_reason="stop", current_username=get_current_username()
                     )
                     yield api_utils.sse_format(error_json, output_format)
                 except Exception as inner_e:
                     logger.error(f"Failed to yield formatted error message: {inner_e}")
-                # Stop the generator cleanly after yielding the error (or attempting to)
                 raise StopIteration from e
 
         return generate_sse_stream()
@@ -241,20 +222,12 @@ class OpenAIApiChatImageSpecificHandler(LlmApiHandler):
     ) -> str:
         """
         Handle non-streaming response for OpenAI API with image support.
-
-        Args:
-            conversation (Optional[List[Dict[str, str]]]): A list of messages in the conversation.
-            system_prompt (Optional[str]): The system prompt to use.
-            prompt (Optional[str]): The user prompt to use.
-
-        Returns:
-            str: The complete response as a string.
         """
         self.set_gen_input()
 
         try:
             corrected_conversation = prep_corrected_conversation(conversation, system_prompt, prompt)
-            
+
             # Log the formatted conversation for debugging (excluding actual image data)
             logger.debug("Formatted conversation with images:")
             for msg in corrected_conversation:
@@ -270,24 +243,19 @@ class OpenAIApiChatImageSpecificHandler(LlmApiHandler):
         except Exception as e:
             logger.error(f"Error preprocessing images: {e}")
             logger.error(traceback.format_exc())
-            
-            # Use a simplified conversation without images
+            # Create a fallback conversation
             corrected_conversation = []
             if system_prompt:
                 corrected_conversation.append({"role": "system", "content": system_prompt})
-            
-            # Add non-image messages from the original conversation
             if conversation:
                 for msg in conversation:
                     if msg["role"] != "images":
                         corrected_conversation.append(msg)
-            
-            # Add the prompt if provided, or an error message
             if prompt:
                 corrected_conversation.append({"role": "user", "content": prompt})
             elif not any(msg["role"] == "user" for msg in corrected_conversation):
                 corrected_conversation.append({
-                    "role": "user", 
+                    "role": "user",
                     "content": "There was an error processing the image. Please provide assistance without the image and state that you are unable to process the image."
                 })
 
@@ -305,20 +273,15 @@ class OpenAIApiChatImageSpecificHandler(LlmApiHandler):
         for attempt in range(retries):
             try:
                 logger.info(f"OpenAI Chat Completions with Image Non-Streaming flow! Attempt: {attempt + 1}")
-                logger.info(f"URL: {url}")
-                logger.debug("Headers: ")
-                logger.debug(json.dumps(self.headers, indent=2))
-                logger.debug("Data: ")
-                logger.debug(data)
                 response = self.session.post(url, headers=self.headers, json=data, timeout=14400)
-                logger.debug("Response:")
-                logger.debug(response.text)
                 response.raise_for_status()
                 payload = response.json()
-                result_text = ""
-                
+
                 if 'choices' in payload and payload['choices'] and 'message' in payload['choices'][0]:
                     result_text = payload['choices'][0]['message'].get('content', '')
+
+                    # Replaced complex logic with a single call to the abstracted function
+                    result_text = remove_thinking_from_text(result_text, self.endpoint_config)
 
                     if self.strip_start_stop_line_breaks:
                         result_text = result_text.lstrip()
@@ -343,10 +306,7 @@ class OpenAIApiChatImageSpecificHandler(LlmApiHandler):
                 raise
 
     def set_gen_input(self):
-        """Sets up generation input parameters.
-        Note: max_tokens and modelSupportsThinking are mutually exclusive because
-        thinking mode requires dynamic token budgeting that cannot be predetermined.
-        """
+        """Sets up generation input parameters."""
         if self.truncate_property_name:
             self.gen_input[self.truncate_property_name] = self.endpoint_config.get("maxContextTokenSize", None)
         if self.stream_property_name:
@@ -374,8 +334,7 @@ def is_base64_image(s):
     """
     if s.startswith('data:image/'):
         return True
-    
-    # Check for base64 pattern
+
     base64_pattern = r'^[A-Za-z0-9+/]+={0,2}$'
     return bool(re.match(base64_pattern, s))
 
@@ -400,21 +359,16 @@ def convert_to_data_uri(uri):
             logger.warning(f"URI is not a file URI, cannot convert: {uri}")
             return None
 
-        # Handle different OS path representations from file URI
-        if os.name == 'nt':  # Windows specific handling
-            if parsed_uri.netloc:  # UNC path like file://server/share/path
-                # Constructs \\server\share\path
+        if os.name == 'nt':
+            if parsed_uri.netloc:
                 actual_path = f"\\\\{parsed_uri.netloc}{parsed_uri.path}"
-            else:  # Local file path like file:///C:/path/to/file
-                # Strips leading '/' from /C:/path/to/file to get C:/...
+            else:
                 actual_path = parsed_uri.path.lstrip('/')
-            # Convert all path separators to backslashes for Windows consistency
             actual_path = actual_path.replace('/', '\\')
-        else:  # Non-windows
+        else:
             actual_path = parsed_uri.path
-        
+
         mime_type = None
-        # Use Pillow to validate it's an image and get the format.
         try:
             with Image.open(actual_path) as img:
                 image_format = img.format
@@ -422,16 +376,18 @@ def convert_to_data_uri(uri):
                     mime_type = f"image/{image_format.lower()}"
                     logger.debug(f"Validated as image. Determined mime type as {mime_type} using Pillow.")
                 else:
-                    logger.warning(f"Pillow could not determine image format for {actual_path}. The file will not be sent.")
+                    logger.warning(
+                        f"Pillow could not determine image format for {actual_path}. The file will not be sent.")
                     return None
         except Image.UnidentifiedImageError:
-             logger.warning(f"Pillow could not identify file as an image: {actual_path}. File will not be sent for security reasons.")
-             return None
+            logger.warning(
+                f"Pillow could not identify file as an image: {actual_path}. File will not be sent for security reasons.")
+            return None
         except Exception as e:
-            logger.warning(f"Could not validate image type with Pillow for {actual_path}: {e}. The file will not be sent.")
+            logger.warning(
+                f"Could not validate image type with Pillow for {actual_path}: {e}. The file will not be sent.")
             return None
 
-        # If validation is successful, read the file and encode it.
         if mime_type:
             with open(actual_path, "rb") as image_file:
                 encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
@@ -455,49 +411,39 @@ def prep_corrected_conversation(conversation, system_prompt, prompt):
     if conversation is None:
         conversation = []
 
-    # Create a deep copy to avoid modifying the original list
     current_conversation = deepcopy(conversation)
 
-    # Add system prompt and user prompt to the copied conversation if provided
     if system_prompt:
         current_conversation.append({"role": "system", "content": system_prompt})
     if prompt:
         current_conversation.append({"role": "user", "content": prompt})
 
-    # Collect all image contents and filter them with enhanced processing
     image_contents = []
-    image_messages_present = False # Flag to track if 'images' role existed
+    image_messages_present = False
 
-    # Process image messages separately first
     potential_images = []
     temp_conversation = []
     for msg in current_conversation:
         if msg["role"] == "images":
             image_messages_present = True
             content = msg.get("content", "")
-            if isinstance(content, str): # Handle potential list content safely
+            if isinstance(content, str):
                 potential_images.extend(content.split())
             elif isinstance(content, list):
-                 # If content is already a list (e.g., from previous processing?), extract strings
-                 for item in content:
-                      if isinstance(item, str):
-                           potential_images.extend(item.split())
-                      # Silently ignore non-string items in list for now
-            # else: Silently ignore non-string/non-list content
+                for item in content:
+                    if isinstance(item, str):
+                        potential_images.extend(item.split())
         else:
             temp_conversation.append(msg)
 
-    # Update conversation to remove the original 'images' role messages
     current_conversation = temp_conversation
 
-    # Process the collected potential image strings
     for image_url_or_data in potential_images:
         content = image_url_or_data.strip()
         if not content:
             continue
 
         processed = False
-        # Handle data URIs first
         if content.startswith('data:image/'):
             logger.debug("Processing data URI image")
             image_contents.append({
@@ -505,39 +451,30 @@ def prep_corrected_conversation(conversation, system_prompt, prompt):
                 "image_url": {"url": content}
             })
             processed = True
-        # Handle base64 that might need prefix
         elif ';base64,' in content:
             if not content.startswith('data:'):
                 logger.debug("Adding data URI prefix to base64 image data")
                 try:
-                     # Extract actual base64 part after the first ;base64,
-                     b64_data = content.split(';base64,', 1)[1]
-                     # Simple check if it resembles base64
-                     if is_base64_image(b64_data): # Check the data part
-                          content = f"data:image/jpeg;base64,{b64_data}"
-                          image_contents.append({
-                               "type": "image_url",
-                               "image_url": {"url": content}
-                          })
-                          processed = True
-                     else:
-                          logger.warning(f"Skipping invalid base64 data after ';base64,': {content[:50]}...")
+                    b64_data = content.split(';base64,', 1)[1]
+                    if is_base64_image(b64_data):
+                        content = f"data:image/jpeg;base64,{b64_data}"
+                        image_contents.append({
+                            "type": "image_url",
+                            "image_url": {"url": content}
+                        })
+                        processed = True
+                    else:
+                        logger.warning(f"Skipping invalid base64 data after ';base64,': {content[:50]}...")
                 except IndexError:
-                     logger.warning(f"Skipping malformed base64 string: {content[:50]}...")
-            else: # Already has data: prefix but wasn't image?
-                 logger.warning(f"Skipping non-image data URI: {content[:50]}...")
+                    logger.warning(f"Skipping malformed base64 string: {content[:50]}...")
+            else:
+                logger.warning(f"Skipping non-image data URI: {content[:50]}...")
 
-        # Handle raw base64
         elif is_base64_image(content):
             logger.debug("Decoding raw base64 to determine image type using Pillow")
             try:
-                # Decode the base64 string
                 decoded_data = base64.b64decode(content)
-                
-                # Use Pillow to open the image data from bytes
                 image = Image.open(io.BytesIO(decoded_data))
-                
-                # Get the image format (e.g., 'JPEG', 'PNG')
                 image_format = image.format.lower()
 
                 if image_format:
@@ -555,13 +492,11 @@ def prep_corrected_conversation(conversation, system_prompt, prompt):
             except (binascii.Error, ValueError):
                 logger.warning(f"Skipping malformed base64 string during type detection: {content[:50]}...")
             except Image.UnidentifiedImageError:
-                 logger.warning(f"Pillow could not identify image from base64 data. Skipping.")
+                logger.warning(f"Pillow could not identify image from base64 data. Skipping.")
 
-        # Handle file URLs
         elif content.startswith('file://'):
             try:
                 logger.debug("Converting file URL to data URI")
-                # Security: Validate that the file is an image using Pillow and convert it
                 data_uri = convert_to_data_uri(content)
                 if data_uri:
                     image_contents.append({
@@ -570,15 +505,12 @@ def prep_corrected_conversation(conversation, system_prompt, prompt):
                     })
                     processed = True
                 else:
-                    logger.warning(f"Skipping file specified by URI as it could not be validated as an image: {content}")
-                    # 'processed' remains False, and it will be logged as an unrecognized source later
+                    logger.warning(
+                        f"Skipping file specified by URI as it could not be validated as an image: {content}")
             except Exception as e:
                 logger.error(f"Error processing file URL {content}: {e}")
-            # If file conversion fails, processed remains False
 
-        # Handle HTTP/HTTPS URLs last
         if not processed and is_valid_http_url(content):
-            # Use the already validated content as the URL
             image_url = content
             logger.debug(f"Adding HTTP image URL: {image_url}")
             image_contents.append({
@@ -586,15 +518,10 @@ def prep_corrected_conversation(conversation, system_prompt, prompt):
                 "image_url": {"url": image_url}
             })
             processed = True
-            # Removed the potentially problematic auto-prefixing logic
-            # else:
-            #     logger.warning(f"Invalid or non-HTTP/S image URL skipped: {content}")
 
-        # If after all checks, it wasn't processed, log a warning
         if not processed:
             logger.warning(f"Skipping unrecognized image source: {content[:100]}...")
 
-    # Now, modify the *last* user message to include the *valid* images, if any
     if image_contents:
         last_user_msg_index = -1
         for i in range(len(current_conversation) - 1, -1, -1):
@@ -605,62 +532,46 @@ def prep_corrected_conversation(conversation, system_prompt, prompt):
         if last_user_msg_index != -1:
             user_msg = current_conversation[last_user_msg_index]
             if isinstance(user_msg["content"], str):
-                # Convert content to a list with text as the first item
                 user_msg["content"] = [
                     {"type": "text", "text": user_msg["content"]},
-                    *image_contents # Add only the valid images
+                    *image_contents
                 ]
             elif isinstance(user_msg["content"], list):
-                 # If already a list, assume it might have text/image structure,
-                 # append new valid images carefully.
-                 # This assumes the original list structure is [{'type':'text', ...}, ...]
-                 # Filter out any pre-existing image_url types before adding new ones
-                 # to avoid duplicates if function is called multiple times?
-                 # For simplicity now, just append if not already present by URL.
-                 existing_urls = {item['image_url']['url'] for item in user_msg['content'] if item.get('type') == 'image_url'}
-                 for img_item in image_contents:
-                      if img_item['image_url']['url'] not in existing_urls:
-                           user_msg['content'].append(img_item)
-            # else: handle case where content is neither str nor list? (ignore for now)
-
+                existing_urls = {item['image_url']['url'] for item in user_msg['content'] if
+                                 item.get('type') == 'image_url'}
+                for img_item in image_contents:
+                    if img_item['image_url']['url'] not in existing_urls:
+                        user_msg['content'].append(img_item)
         else:
-            # If no user message found, add one with the images
             current_conversation.append({
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": "Please describe the image(s)."}, # Generic text
+                    {"type": "text", "text": "Please describe the image(s)."},
                     *image_contents
                 ]
             })
     elif image_messages_present and not image_contents:
-         # If original message had 'images' role but none were valid,
-         # ensure the last user message content remains a simple string.
-         # This addresses the test failures where they expected string content.
-         last_user_msg_index = -1
-         for i in range(len(current_conversation) - 1, -1, -1):
-             if current_conversation[i]["role"] == "user":
-                 last_user_msg_index = i
-                 break
-         if last_user_msg_index != -1:
-              user_msg = current_conversation[last_user_msg_index]
-              if isinstance(user_msg.get("content"), list):
-                   # Find the text part and revert content to just that string
-                   text_content = ""
-                   for item in user_msg["content"]:
-                        if item.get("type") == "text":
-                             text_content = item.get("text", "")
-                             break
-                   user_msg["content"] = text_content
-                   logger.debug(f"Reverted user message content to string as no valid images were found.")
+        last_user_msg_index = -1
+        for i in range(len(current_conversation) - 1, -1, -1):
+            if current_conversation[i]["role"] == "user":
+                last_user_msg_index = i
+                break
+        if last_user_msg_index != -1:
+            user_msg = current_conversation[last_user_msg_index]
+            if isinstance(user_msg.get("content"), list):
+                text_content = ""
+                for item in user_msg["content"]:
+                    if item.get("type") == "text":
+                        text_content = item.get("text", "")
+                        break
+                user_msg["content"] = text_content
+                logger.debug(f"Reverted user message content to string as no valid images were found.")
 
-    # Final pass for role conversion and cleanup
     final_conversation = []
     for msg in current_conversation:
-        # Convert systemMes role
         if msg["role"] == "systemMes":
             msg["role"] = "system"
-        # Skip empty assistant messages at the end
         if not (msg == current_conversation[-1] and msg["role"] == "assistant" and not msg.get("content")):
-             final_conversation.append(msg)
+            final_conversation.append(msg)
 
-    return final_conversation 
+    return final_conversation

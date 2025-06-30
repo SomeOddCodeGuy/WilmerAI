@@ -11,6 +11,8 @@ from Middleware.utilities.config_utils import (
     get_is_chat_complete_add_user_assistant,
     get_is_chat_complete_add_missing_assistant, get_current_username
 )
+# New Imports for abstracted logic
+from Middleware.utilities.streaming_utils import StreamingThinkRemover, remove_thinking_from_text
 from Middleware.utilities.text_utils import return_brackets_in_string
 from .llm_api_handler import LlmApiHandler
 
@@ -30,15 +32,6 @@ class OllamaGenerateHandler(LlmApiHandler):
     ) -> Generator[str, None, None]:
         """
         Handle streaming response for Ollama API.
-
-        Args:
-            conversation (Optional[List[Dict[str, str]]]): A list of messages in the conversation.
-                Not used in this API; prompt is constructed from system_prompt and prompt.
-            system_prompt (Optional[str]): The system prompt to use.
-            prompt (Optional[str]): The user prompt to use.
-
-        Returns:
-            Generator[str, None, None]: A generator yielding chunks of the response.
         """
         self.set_gen_input()
 
@@ -59,6 +52,9 @@ class OllamaGenerateHandler(LlmApiHandler):
         output_format = instance_utils.API_TYPE
 
         def generate_sse_stream():
+            # Instantiate the remover class to handle all thinking block logic
+            remover = StreamingThinkRemover(self.endpoint_config)
+
             try:
                 with self.session.post(url, headers=self.headers, json=data, stream=True) as r:
                     logger.info(f"Response status code: {r.status_code}")
@@ -70,73 +66,77 @@ class OllamaGenerateHandler(LlmApiHandler):
 
                     for line in r.iter_lines(decode_unicode=True):
                         if not line.strip():
-                            continue  # Skip empty lines
+                            continue
 
                         try:
                             chunk_data = json.loads(line.strip())
-                            token = ""
-                            finish_reason = None  # Default to None for intermediate payloads
-
-                            # Extract token and finish_reason
-                            if 'response' in chunk_data:
-                                token = chunk_data['response']
+                            token_from_llm = chunk_data.get('response', '')
                             finish_reason = chunk_data.get("done")
 
+                            # Process the raw token through the remover
+                            content_to_process = remover.process_delta(token_from_llm)
+
+                            if not content_to_process and not finish_reason:
+                                continue
+
+                            # Feed the processed content into the prefix-stripping logic
+                            token = ""
                             if not first_chunk_processed:
-                                first_chunk_buffer += token
+                                first_chunk_buffer += content_to_process
 
                                 if self.strip_start_stop_line_breaks:
                                     first_chunk_buffer = first_chunk_buffer.lstrip()
 
                                 if add_user_assistant and add_missing_assistant:
-                                    # Check for "Assistant:" in the full buffer
                                     if "Assistant:" in first_chunk_buffer:
-                                        # If it starts with "Assistant:", strip it
-                                        first_chunk_buffer = api_utils.remove_assistant_prefix(
-                                            first_chunk_buffer)
-                                        # Mark as processed since we've handled the prefix
+                                        first_chunk_buffer = api_utils.remove_assistant_prefix(first_chunk_buffer)
                                         first_chunk_processed = True
                                         token = first_chunk_buffer
                                     elif len(first_chunk_buffer) > max_buffer_length or finish_reason:
-                                        # If buffer is too large or stream finishes, pass it as is
                                         first_chunk_processed = True
                                         token = first_chunk_buffer
                                     else:
-                                        # Keep buffering until we have more tokens
                                         continue
                                 elif len(first_chunk_buffer) > max_buffer_length or finish_reason:
-                                    # If buffer is too large or stream finishes, pass it as is
                                     first_chunk_processed = True
                                     token = first_chunk_buffer
                                 else:
-                                    # Keep buffering until we have more tokens
                                     continue
+                            else:
+                                token = content_to_process
 
-                            # Handle stripping newlines
                             if self.strip_start_stop_line_breaks and not finish_reason:
                                 token = token.rstrip("\n")
 
                             total_tokens += len(token.split())
-
-                            # Generate response using ResponseBuilder
                             completion_json = api_utils.build_response_json(
                                 token=token,
-                                finish_reason=None,  # Intermediate payloads don't include "stop" or "done"
+                                finish_reason=None,
                                 current_username=get_current_username()
                             )
-
                             yield api_utils.sse_format(completion_json, output_format)
 
                         except json.JSONDecodeError as e:
                             logger.warning(f"Failed to parse JSON: {e}")
                             continue
 
-                    # Final message signaling end of stream
-                    total_duration = int((time.time() - start_time) * 1e9)
+                    # After loop, finalize the remover to flush any remaining buffer
+                    final_content = remover.finalize()
+                    if final_content:
+                        if not first_chunk_processed:
+                            content = (first_chunk_buffer + final_content).lstrip()
+                        else:
+                            content = final_content
+                        completion_json = api_utils.build_response_json(
+                            token=content, finish_reason=None, current_username=get_current_username()
+                        )
+                        yield api_utils.sse_format(completion_json, output_format)
 
+                    # Standard end-of-stream payloads
+                    total_duration = int((time.time() - start_time) * 1e9)
                     final_completion_json = api_utils.build_response_json(
                         token="",
-                        finish_reason="stop",  # Final payload explicitly includes "stop"
+                        finish_reason="stop",
                         current_username=get_current_username()
                     )
                     logger.debug("Total duration: {}", total_duration)
@@ -160,15 +160,6 @@ class OllamaGenerateHandler(LlmApiHandler):
     ) -> str:
         """
         Handle non-streaming response for Ollama API.
-
-        Args:
-            conversation (Optional[List[Dict[str, str]]]): A list of messages in the conversation.
-                Not used in this API; prompt is constructed from system_prompt and prompt.
-            system_prompt (Optional[str]): The system prompt to use.
-            prompt (Optional[str]): The user prompt to use.
-
-        Returns:
-            str: The complete response as a string.
         """
         self.set_gen_input()
 
@@ -196,6 +187,9 @@ class OllamaGenerateHandler(LlmApiHandler):
 
                 if 'response' in payload:
                     result_text = payload['response']
+
+                    # Replaced complex logic with a single call to the abstracted function
+                    result_text = remove_thinking_from_text(result_text, self.endpoint_config)
 
                     if self.strip_start_stop_line_breaks:
                         result_text = result_text.lstrip()

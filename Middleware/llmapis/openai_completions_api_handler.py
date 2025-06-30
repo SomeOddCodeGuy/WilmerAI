@@ -11,6 +11,8 @@ from Middleware.utilities.config_utils import (
     get_is_chat_complete_add_user_assistant,
     get_is_chat_complete_add_missing_assistant, get_current_username
 )
+# New Imports for abstracted logic
+from Middleware.utilities.streaming_utils import StreamingThinkRemover, remove_thinking_from_text
 from Middleware.utilities.text_utils import return_brackets_in_string
 from .llm_api_handler import LlmApiHandler
 
@@ -30,15 +32,6 @@ class OpenAiCompletionsApiHandler(LlmApiHandler):
     ) -> Generator[str, None, None]:
         """
         Handle streaming response for OpenAI Completions API.
-
-        Args:
-            conversation (Optional[List[Dict[str, str]]]): A list of messages in the conversation.
-                Not used in this API; prompt is constructed from system_prompt and prompt.
-            system_prompt (Optional[str]): The system prompt to use.
-            prompt (Optional[str]): The user prompt to use.
-
-        Returns:
-            Generator[str, None, None]: A generator yielding chunks of the response.
         """
         self.set_gen_input()
 
@@ -58,6 +51,9 @@ class OpenAiCompletionsApiHandler(LlmApiHandler):
         output_format = instance_utils.API_TYPE
 
         def generate_sse_stream():
+            # Instantiate the remover class to handle all thinking block logic
+            remover = StreamingThinkRemover(self.endpoint_config)
+
             try:
                 with self.session.post(url, headers=self.headers, json=data, stream=True) as r:
                     logger.info(f"Response status code: {r.status_code}")
@@ -68,9 +64,6 @@ class OpenAiCompletionsApiHandler(LlmApiHandler):
                     max_buffer_length = 20
                     start_time = time.time()
                     total_tokens = 0
-
-                    # Variables to track the current event type
-                    current_event = None
 
                     for chunk in r.iter_content(chunk_size=1024, decode_unicode=True):
                         buffer += chunk
@@ -86,16 +79,20 @@ class OpenAiCompletionsApiHandler(LlmApiHandler):
 
                                 try:
                                     chunk_data = json.loads(data_str)
-                                    token = ""
+                                    token_delta = ""
                                     finish_reason = None
 
-                                    # Extract token and finish_reason
                                     if 'choices' in chunk_data:
                                         choice = chunk_data['choices'][0]
                                         if "text" in choice:
-                                            token = choice["text"]
+                                            token_delta = choice["text"]
                                         finish_reason = choice.get("finish_reason")
 
+                                    # Process the raw delta through the remover
+                                    content_to_yield = remover.process_delta(token_delta)
+
+                                    # The rest of the logic operates on the cleaned content
+                                    token = content_to_yield
                                     if not first_chunk_processed:
                                         first_chunk_buffer += token
 
@@ -103,43 +100,33 @@ class OpenAiCompletionsApiHandler(LlmApiHandler):
                                             first_chunk_buffer = first_chunk_buffer.lstrip()
 
                                         if add_user_assistant and add_missing_assistant:
-                                            # Check for "Assistant:" in the full buffer
                                             if "Assistant:" in first_chunk_buffer:
-                                                # If it starts with "Assistant:", strip it
                                                 first_chunk_buffer = api_utils.remove_assistant_prefix(
                                                     first_chunk_buffer)
-                                                # Mark as processed since we've handled the prefix
                                                 first_chunk_processed = True
                                                 token = first_chunk_buffer
                                             elif len(first_chunk_buffer) > max_buffer_length or finish_reason:
-                                                # If buffer is too large or stream finishes, pass it as is
                                                 first_chunk_processed = True
                                                 token = first_chunk_buffer
                                             else:
-                                                # Keep buffering until we have more tokens
                                                 continue
                                         elif len(first_chunk_buffer) > max_buffer_length or finish_reason:
-                                            # If buffer is too large or stream finishes, pass it as is
                                             first_chunk_processed = True
                                             token = first_chunk_buffer
                                         else:
-                                            # Keep buffering until we have more tokens
                                             continue
 
-                                    # Handle stripping newlines
                                     if self.strip_start_stop_line_breaks and not finish_reason:
                                         token = token.rstrip("\n")
 
-                                    total_tokens += len(token.split())
-
-                                    # Generate response using ResponseBuilder
-                                    completion_json = api_utils.build_response_json(
-                                        token=token,
-                                        finish_reason=None,  # Intermediate payloads don't include "stop" or "done"
-                                        current_username=get_current_username()
-                                    )
-
-                                    yield api_utils.sse_format(completion_json, output_format)
+                                    if token:
+                                        total_tokens += len(token.split())
+                                        completion_json = api_utils.build_response_json(
+                                            token=token,
+                                            finish_reason=None,
+                                            current_username=get_current_username()
+                                        )
+                                        yield api_utils.sse_format(completion_json, output_format)
 
                                     if finish_reason == "stop":
                                         break
@@ -148,12 +135,23 @@ class OpenAiCompletionsApiHandler(LlmApiHandler):
                                     logger.warning(f"Failed to parse JSON: {e}")
                                     continue
 
-                    # Final message signaling end of stream
-                    total_duration = int((time.time() - start_time) * 1e9)
+                    # After loop, finalize the remover to flush any remaining buffer
+                    final_content = remover.finalize()
+                    if final_content:
+                        if not first_chunk_processed:
+                            content = (first_chunk_buffer + final_content).lstrip()
+                        else:
+                            content = final_content
+                        completion_json = api_utils.build_response_json(
+                            token=content, finish_reason=None, current_username=get_current_username()
+                        )
+                        yield api_utils.sse_format(completion_json, output_format)
 
+                    # Standard end-of-stream payloads
+                    total_duration = int((time.time() - start_time) * 1e9)
                     final_completion_json = api_utils.build_response_json(
                         token="",
-                        finish_reason="stop",  # Final payload explicitly includes "stop"
+                        finish_reason="stop",
                         current_username=get_current_username()
                     )
                     logger.debug("Total duration: {}", total_duration)
@@ -177,15 +175,6 @@ class OpenAiCompletionsApiHandler(LlmApiHandler):
     ) -> str:
         """
         Handle non-streaming response for OpenAI Completions API.
-
-        Args:
-            conversation (Optional[List[Dict[str, str]]]): A list of messages in the conversation.
-                Not used in this API; prompt is constructed from system_prompt and prompt.
-            system_prompt (Optional[str]): The system prompt to use.
-            prompt (Optional[str]): The user prompt to use.
-
-        Returns:
-            str: The complete response as a string.
         """
         self.set_gen_input()
 
@@ -208,25 +197,29 @@ class OpenAiCompletionsApiHandler(LlmApiHandler):
 
                 payload = response.json()
 
-                if 'choices' in payload and payload['choices'][0] and 'text' in payload['choices'][0]:
+                result_text = ""
+                if 'choices' in payload and payload['choices'] and 'text' in payload['choices'][0]:
                     result_text = payload['choices'][0]['text']
-
-                    if self.strip_start_stop_line_breaks:
-                        result_text = result_text.lstrip()
-
-                    if "Assistant:" in result_text:
-                        result_text = api_utils.remove_assistant_prefix(result_text)
-
-                    logger.info("\n\n*****************************************************************************\n")
-                    logger.info("\n\nOutput from the LLM: %s", result_text)
-                    logger.info("\n*****************************************************************************\n\n")
-
-                    return result_text
                 elif 'content' in payload:
                     result_text = payload['content']
-                    return result_text
                 else:
                     return ''
+
+                # Replaced complex logic with a single call to the abstracted function
+                result_text = remove_thinking_from_text(result_text, self.endpoint_config)
+
+                if self.strip_start_stop_line_breaks:
+                    result_text = result_text.lstrip()
+
+                if "Assistant:" in result_text:
+                    result_text = api_utils.remove_assistant_prefix(result_text)
+
+                logger.info("\n\n*****************************************************************************\n")
+                logger.info("\n\nOutput from the LLM: %s", result_text)
+                logger.info("\n*****************************************************************************\n\n")
+
+                return result_text
+
             except requests.exceptions.RequestException as e:
                 logger.error(f"Attempt {attempt + 1} failed with error: {e}")
                 traceback.print_exc()
@@ -236,6 +229,7 @@ class OpenAiCompletionsApiHandler(LlmApiHandler):
                 logger.error("Unexpected error: %s", e)
                 traceback.print_exc()
                 raise
+        return ""  # Should be unreachable
 
     def set_gen_input(self):
         if self.truncate_property_name:

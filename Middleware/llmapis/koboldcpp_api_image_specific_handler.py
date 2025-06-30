@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import time
 import traceback
 from typing import Dict, Generator, List, Optional
@@ -11,6 +12,8 @@ from Middleware.utilities.config_utils import (
     get_is_chat_complete_add_user_assistant,
     get_is_chat_complete_add_missing_assistant, get_current_username
 )
+# New Imports for abstracted logic
+from Middleware.utilities.streaming_utils import StreamingThinkRemover, remove_thinking_from_text
 from Middleware.utilities.text_utils import return_brackets_in_string
 from .llm_api_handler import LlmApiHandler
 
@@ -30,14 +33,6 @@ class KoboldCppImageSpecificApiHandler(LlmApiHandler):
     ) -> Generator[str, None, None]:
         """
         Handle streaming response for KoboldCpp API.
-
-        Args:
-            conversation (Optional[List[Dict[str, str]]]): A list of messages in the conversation.
-            system_prompt (Optional[str]): The system prompt to use.
-            prompt (Optional[str]): The user prompt to use.
-
-        Returns:
-            Generator[str, None, None]: A generator yielding chunks of the response.
         """
         self.set_gen_input()
 
@@ -57,17 +52,19 @@ class KoboldCppImageSpecificApiHandler(LlmApiHandler):
         output_format = instance_utils.API_TYPE
 
         def generate_sse_stream():
+            # Instantiate the remover class to handle thinking block logic
+            remover = StreamingThinkRemover(self.endpoint_config)
+
             try:
                 with self.session.post(url, headers=self.headers, json=data, stream=True) as r:
                     logger.info(f"Response status code: {r.status_code}")
+                    r.encoding = "utf-8"
                     buffer = ""
                     first_chunk_buffer = ""
                     first_chunk_processed = False
                     max_buffer_length = 20
                     start_time = time.time()
                     total_tokens = 0
-
-                    # Variables to track the current event type
                     current_event = None
 
                     for chunk in r.iter_content(chunk_size=1024, decode_unicode=True):
@@ -77,9 +74,8 @@ class KoboldCppImageSpecificApiHandler(LlmApiHandler):
                             line = line.strip()
 
                             if line.startswith("event:"):
-                                # Extract the event type
                                 current_event = line[len("event:"):].strip()
-                                continue  # Move to the next line
+                                continue
 
                             if line.startswith("data:"):
                                 data_str = line[len("data:"):].strip()
@@ -88,49 +84,51 @@ class KoboldCppImageSpecificApiHandler(LlmApiHandler):
                                         if data_str == '[DONE]':
                                             break
                                         chunk_data = json.loads(data_str)
-
-                                        token = chunk_data.get("token", "")
+                                        content_delta = chunk_data.get("token", "")
                                         finish_reason = chunk_data.get("finish_reason", "")
 
+                                        # Process the delta through the remover
+                                        token_to_process = remover.process_delta(content_delta)
+
+                                        if not token_to_process:
+                                            if finish_reason == "stop":
+                                                break
+                                            else:
+                                                continue
+
                                         if not first_chunk_processed:
-                                            first_chunk_buffer += token
+                                            first_chunk_buffer += token_to_process
 
                                             if self.strip_start_stop_line_breaks:
                                                 first_chunk_buffer = first_chunk_buffer.lstrip()
 
                                             if add_user_assistant and add_missing_assistant:
-                                                # Check for "Assistant:" in the full buffer
                                                 if "Assistant:" in first_chunk_buffer:
-                                                    # If it starts with "Assistant:", strip it
                                                     first_chunk_buffer = api_utils.remove_assistant_prefix(
                                                         first_chunk_buffer)
-                                                    # Mark as processed since we've handled the prefix
                                                     first_chunk_processed = True
                                                     token = first_chunk_buffer
                                                 elif len(first_chunk_buffer) > max_buffer_length or finish_reason:
-                                                    # If buffer is too large or stream finishes, pass it as is
                                                     first_chunk_processed = True
                                                     token = first_chunk_buffer
                                                 else:
-                                                    # Keep buffering until we have more tokens
                                                     continue
                                             elif len(first_chunk_buffer) > max_buffer_length or finish_reason:
-                                                # If buffer is too large or stream finishes, pass it as is
                                                 first_chunk_processed = True
                                                 token = first_chunk_buffer
                                             else:
-                                                # Keep buffering until we have more tokens
                                                 continue
+                                        else:
+                                            token = token_to_process
 
-                                        total_tokens += len(token.split())
-
-                                        completion_json = api_utils.build_response_json(
-                                            token=token,
-                                            finish_reason=None,  # Don't add "stop" or "done" yet
-                                            current_username=get_current_username()
-                                        )
-
-                                        yield api_utils.sse_format(completion_json, output_format)
+                                        if token:
+                                            total_tokens += len(token.split())
+                                            completion_json = api_utils.build_response_json(
+                                                token=token,
+                                                finish_reason=None,
+                                                current_username=get_current_username()
+                                            )
+                                            yield api_utils.sse_format(completion_json, output_format)
 
                                         if finish_reason == "stop":
                                             break
@@ -139,15 +137,26 @@ class KoboldCppImageSpecificApiHandler(LlmApiHandler):
                                         logger.warning(f"Failed to parse JSON: {e}")
                                         continue
 
-                    total_duration = int((time.time() - start_time) * 1e9)
+                    # After loop, finalize the remover to flush any remaining buffer
+                    final_content = remover.finalize()
+                    if final_content:
+                        if not first_chunk_processed:
+                            content = (first_chunk_buffer + final_content).lstrip()
+                        else:
+                            content = final_content
+                        completion_json = api_utils.build_response_json(
+                            token=content, finish_reason=None, current_username=get_current_username()
+                        )
+                        yield api_utils.sse_format(completion_json, output_format)
 
-                    # Send the final payload with "done" and "stop"
+                    # Standard end-of-stream payloads
+                    total_duration = int((time.time() - start_time) * 1e9)
                     final_completion_json = api_utils.build_response_json(
                         token="",
                         finish_reason="stop",
                         current_username=get_current_username(),
                     )
-                    logger.debug("Total duration: {}", total_duration)
+                    logger.debug("Total duration: %s", total_duration)
                     yield api_utils.sse_format(final_completion_json, output_format)
 
                     if output_format not in ('ollamagenerate', 'ollamaapichat'):
@@ -168,14 +177,6 @@ class KoboldCppImageSpecificApiHandler(LlmApiHandler):
     ) -> str:
         """
         Handle non-streaming response for KoboldCpp API.
-
-        Args:
-            conversation (Optional[List[Dict[str, str]]]): A list of messages in the conversation.
-            system_prompt (Optional[str]): The system prompt to use.
-            prompt (Optional[str]): The user prompt to use.
-
-        Returns:
-            str: The complete response as a string.
         """
         self.set_gen_input()
 
@@ -202,6 +203,9 @@ class KoboldCppImageSpecificApiHandler(LlmApiHandler):
 
                 if 'results' in payload and len(payload['results']) > 0 and 'text' in payload['results'][0]:
                     result_text = payload['results'][0]['text']
+
+                    # Replaced complex logic with a single call to the abstracted function
+                    result_text = remove_thinking_from_text(result_text, self.endpoint_config)
 
                     if self.strip_start_stop_line_breaks:
                         result_text = result_text.lstrip()
@@ -238,17 +242,19 @@ class KoboldCppImageSpecificApiHandler(LlmApiHandler):
         if conversation is None:
             conversation = []
 
-        # Collect all image contents and filter them
         image_contents = [msg["content"] for msg in conversation if msg["role"] == "images"]
-
-        # Include the images in the presets
-        self.gen_input["images"] = image_contents
+        if image_contents:
+            self.gen_input["images"] = image_contents
 
         if system_prompt is None:
             system_prompt = next((item["content"] for item in conversation if item["role"] == "system"), None)
         if prompt is None:
             prompt = next((item["content"] for item in conversation if item["role"] == "user"), None)
-        full_prompt = (system_prompt + prompt).strip()
+
+        system_prompt = system_prompt or ""
+        prompt = prompt or ""
+
+        full_prompt = (system_prompt + "\n" + prompt).strip()
         full_prompt = return_brackets_in_string(full_prompt)
         full_prompt = full_prompt.strip()
 

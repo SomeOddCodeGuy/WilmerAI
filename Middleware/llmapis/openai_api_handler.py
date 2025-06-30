@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import time
 import traceback
 from typing import Dict, Generator, List, Optional
@@ -11,6 +12,8 @@ from Middleware.utilities.config_utils import (
     get_is_chat_complete_add_user_assistant,
     get_is_chat_complete_add_missing_assistant, get_current_username
 )
+# New Imports for abstracted logic
+from Middleware.utilities.streaming_utils import StreamingThinkRemover, remove_thinking_from_text
 from .llm_api_handler import LlmApiHandler
 from ..utilities.text_utils import return_brackets
 
@@ -30,14 +33,6 @@ class OpenAiApiHandler(LlmApiHandler):
     ) -> Generator[str, None, None]:
         """
         Handle streaming response for OpenAI API.
-
-        Args:
-            conversation (Optional[List[Dict[str, str]]]): A list of messages in the conversation.
-            system_prompt (Optional[str]): The system prompt to use.
-            prompt (Optional[str]): The user prompt to use.
-
-        Returns:
-            Generator[str, None, None]: A generator yielding chunks of the response.
         """
         self.set_gen_input()
 
@@ -60,6 +55,9 @@ class OpenAiApiHandler(LlmApiHandler):
         output_format = instance_utils.API_TYPE
 
         def generate_sse_stream():
+            # Instantiate the remover class to handle thinking block logic
+            remover = StreamingThinkRemover(self.endpoint_config)
+
             try:
                 with self.session.post(url, headers=self.headers, json=data, stream=True) as r:
                     logger.info(f"Response status code: {r.status_code}")
@@ -85,48 +83,44 @@ class OpenAiApiHandler(LlmApiHandler):
                                     break
                                 chunk_data = json.loads(data_str)
                                 for choice in chunk_data.get("choices", []):
-                                    if "delta" in choice:
-                                        content = choice["delta"].get("content", "")
-                                        finish_reason = choice.get("finish_reason", "")
+                                    content_delta = choice["delta"].get("content", "")
+                                    finish_reason = choice.get("finish_reason", "")
 
+                                    # Process delta through the remover
+                                    content_to_yield = remover.process_delta(content_delta)
+
+                                    if content_to_yield:
                                         if not first_chunk_processed:
-                                            first_chunk_buffer += content
+                                            first_chunk_buffer += content_to_yield
 
                                             if self.strip_start_stop_line_breaks:
                                                 first_chunk_buffer = first_chunk_buffer.lstrip()
 
                                             if add_user_assistant and add_missing_assistant:
-                                                # Check for "Assistant:" in the full buffer
                                                 if "Assistant:" in first_chunk_buffer:
-                                                    # If it starts with "Assistant:", strip it
                                                     first_chunk_buffer = api_utils.remove_assistant_prefix(
                                                         first_chunk_buffer)
-                                                    # Mark as processed since we've handled the prefix
                                                     first_chunk_processed = True
                                                     content = first_chunk_buffer
                                                 elif len(first_chunk_buffer) > max_buffer_length or finish_reason:
-                                                    # If buffer is too large or stream finishes, pass it as is
                                                     first_chunk_processed = True
                                                     content = first_chunk_buffer
                                                 else:
-                                                    # Keep buffering until we have more tokens
                                                     continue
                                             elif len(first_chunk_buffer) > max_buffer_length or finish_reason:
-                                                # If buffer is too large or stream finishes, pass it as is
                                                 first_chunk_processed = True
                                                 content = first_chunk_buffer
                                             else:
-                                                # Keep buffering until we have more tokens
                                                 continue
+                                        else:
+                                            content = content_to_yield
 
                                         total_tokens += len(content.split())
-
                                         completion_json = api_utils.build_response_json(
                                             token=content,
-                                            finish_reason=None,  # Don't add "stop" or "done" yet
+                                            finish_reason=None,
                                             current_username=get_current_username()
                                         )
-
                                         yield api_utils.sse_format(completion_json, output_format)
 
                                 if chunk_data.get("done_reason") == "stop" or chunk_data.get("done"):
@@ -136,13 +130,23 @@ class OpenAiApiHandler(LlmApiHandler):
                                 logger.warning(f"Failed to parse JSON: {e}")
                                 continue
 
-                    total_duration = int((time.time() - start_time) * 1e9)
+                    # After loop, finalize the remover to flush any remaining buffer
+                    final_content = remover.finalize()
+                    if final_content:
+                        # Run final content through the first_chunk logic if nothing has been processed yet
+                        if not first_chunk_processed:
+                            content = (first_chunk_buffer + final_content).lstrip()
+                        else:
+                            content = final_content
+                        completion_json = api_utils.build_response_json(
+                            token=content, finish_reason=None, current_username=get_current_username()
+                        )
+                        yield api_utils.sse_format(completion_json, output_format)
 
-                    # Send the final payload with "done" and "stop"
+                    # Standard end-of-stream payloads
+                    total_duration = int((time.time() - start_time) * 1e9)
                     final_completion_json = api_utils.build_response_json(
-                        token="",
-                        finish_reason="stop",
-                        current_username=get_current_username(),
+                        token="", finish_reason="stop", current_username=get_current_username()
                     )
                     logger.debug("Total duration: %s", total_duration)
                     yield api_utils.sse_format(final_completion_json, output_format)
@@ -165,14 +169,6 @@ class OpenAiApiHandler(LlmApiHandler):
     ) -> str:
         """
         Handle non-streaming response for OpenAI API.
-
-        Args:
-            conversation (Optional[List[Dict[str, str]]]): A list of messages in the conversation.
-            system_prompt (Optional[str]): The system prompt to use.
-            prompt (Optional[str]): The user prompt to use.
-
-        Returns:
-            str: The complete response as a string.
         """
         self.set_gen_input()
 
@@ -190,10 +186,6 @@ class OpenAiApiHandler(LlmApiHandler):
             try:
                 logger.info(f"OpenAI Chat Completions Non-Streaming flow! Attempt: {attempt + 1}")
                 logger.info(f"URL: {url}")
-                logger.debug("Headers:")
-                logger.debug(json.dumps(self.headers, indent=2))
-                logger.debug("Data:")
-                logger.debug(json.dumps(data, indent=2))
                 response = self.session.post(url, headers=self.headers, json=data, timeout=14400)
                 response.raise_for_status()
                 payload = response.json()
@@ -202,6 +194,9 @@ class OpenAiApiHandler(LlmApiHandler):
                     result_text = payload['choices'][0]['message']['content']
                     if result_text is None or result_text == '':
                         result_text = payload.get('content', '')
+
+                    # Replaced complex logic with a single call to the abstracted function
+                    result_text = remove_thinking_from_text(result_text, self.endpoint_config)
 
                     if self.strip_start_stop_line_breaks:
                         result_text = result_text.lstrip()
