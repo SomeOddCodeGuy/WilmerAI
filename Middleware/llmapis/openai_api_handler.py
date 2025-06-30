@@ -62,6 +62,7 @@ class OpenAiApiHandler(LlmApiHandler):
             try:
                 with self.session.post(url, headers=self.headers, json=data, stream=True) as r:
                     logger.info(f"Response status code: {r.status_code}")
+                    r.encoding = "utf-8"
                     buffer = ""
                     first_chunk_buffer = ""
                     first_chunk_processed = False
