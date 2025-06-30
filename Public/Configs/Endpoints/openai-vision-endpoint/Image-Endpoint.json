@@ -5,5 +5,10 @@
     "maxContextTokenSize": 8192,
     "modelNameToSendToAPI": "gpt-4-vision",
     "promptTemplate": "_chatonly",
-    "addGenerationPrompt": true
+    "addGenerationPrompt": true,
+  "trimBeginningAndEndLineBreaks": true,
+  "dontIncludeModel": false,
+  "removeThinking": false,
+  "thinkTagText": "think",
+  "expectOnlyClosingThinkTag": false
 }

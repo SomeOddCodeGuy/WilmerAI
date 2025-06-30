@@ -6,5 +6,10 @@
     "maxContextTokenSize": 32000,
     "modelNameToSendToAPI": "mistral-small-24b-instruct",
     "promptTemplate": "mistral-small-2501",
-    "addGenerationPrompt": true
+    "addGenerationPrompt": true,
+  "trimBeginningAndEndLineBreaks": true,
+  "dontIncludeModel": false,
+  "removeThinking": false,
+  "thinkTagText": "think",
+  "expectOnlyClosingThinkTag": false
 }

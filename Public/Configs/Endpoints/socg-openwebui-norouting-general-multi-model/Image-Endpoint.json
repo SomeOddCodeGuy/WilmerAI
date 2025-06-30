@@ -5,5 +5,10 @@
   "maxContextTokenSize": 8192,
   "modelNameToSendToAPI": "x/llama3.2-vision:11b-instruct-q8_0",
   "promptTemplate": "_chatonly",
-  "addGenerationPrompt": true
+  "addGenerationPrompt": true,
+  "trimBeginningAndEndLineBreaks": true,
+  "dontIncludeModel": false,
+  "removeThinking": false,
+  "thinkTagText": "think",
+  "expectOnlyClosingThinkTag": false
 }
