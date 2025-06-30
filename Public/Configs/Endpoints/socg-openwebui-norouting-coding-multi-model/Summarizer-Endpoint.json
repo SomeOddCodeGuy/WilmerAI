@@ -5,5 +5,10 @@
   "maxContextTokenSize": 16384,
   "modelNameToSendToAPI": "phi4:14b-q8_0",
   "promptTemplate": "_chatOnly",
-  "addGenerationPrompt": true
+  "addGenerationPrompt": true,
+  "trimBeginningAndEndLineBreaks": true,
+  "dontIncludeModel": false,
+  "removeThinking": false,
+  "thinkTagText": "think",
+  "expectOnlyClosingThinkTag": false
 }

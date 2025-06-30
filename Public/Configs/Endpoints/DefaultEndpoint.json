@@ -5,5 +5,10 @@
   "maxContextTokenSize": 16384,
   "modelNameToSendToAPI": "",
   "promptTemplate": "alpaca",
-  "addGenerationPrompt": true
+  "addGenerationPrompt": true,
+  "trimBeginningAndEndLineBreaks": true,
+  "dontIncludeModel": false,
+  "removeThinking": false,
+  "thinkTagText": "think",
+  "expectOnlyClosingThinkTag": false
 }

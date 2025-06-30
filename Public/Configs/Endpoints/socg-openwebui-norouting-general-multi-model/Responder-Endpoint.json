@@ -5,5 +5,10 @@
   "maxContextTokenSize": 16384,
   "modelNameToSendToAPI": "mistral-small:24b",
   "promptTemplate": "_chatOnly",
-  "addGenerationPrompt": true
+  "addGenerationPrompt": true,
+  "trimBeginningAndEndLineBreaks": true,
+  "dontIncludeModel": false,
+  "removeThinking": false,
+  "thinkTagText": "think",
+  "expectOnlyClosingThinkTag": false
 }
