@@ -23,7 +23,8 @@ class LlmApiHandler:
             stream: bool,
             api_type_config,
             endpoint_config,
-            max_tokens
+            max_tokens,
+            dont_include_model: bool = False,
     ):
         """
         Initialize the handler with common API configuration.
@@ -53,6 +54,7 @@ class LlmApiHandler:
         self.truncate_property_name = get_config_property_if_exists("truncateLengthPropertyName", api_type_config)
         self.stream_property_name = get_config_property_if_exists("streamPropertyName", api_type_config)
         self.max_token_property_name = get_config_property_if_exists("maxNewTokensPropertyName", api_type_config)
+        self.dont_include_model = dont_include_model
 
     def handle_streaming(
             self,

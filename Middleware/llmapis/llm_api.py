@@ -60,6 +60,7 @@ class LlmApiService:
         self.endpoint_url = self.endpoint_file["endpoint"]
         self.model_name = self.endpoint_file.get("modelNameToSendToAPI", "")
         self.strip_start_stop_line_breaks = self.endpoint_file.get("trimBeginningAndEndLineBreaks", False)
+        self.dont_include_model = self.endpoint_file.get("dontIncludeModel", False)
         self.is_busy_flag: bool = False
 
         self._gen_input = preset
@@ -90,7 +91,8 @@ class LlmApiService:
                 stream=self.stream,
                 api_type_config=self.api_type_config,
                 endpoint_config=self.endpoint_file,
-                max_tokens=self.max_tokens
+                max_tokens=self.max_tokens,
+                dont_include_model=self.dont_include_model
             )
         elif self.llm_type == "koboldCppGenerate":
             return KoboldCppApiHandler(
@@ -181,7 +183,8 @@ class LlmApiService:
                  stream=self.stream,
                  api_type_config=self.api_type_config,
                  endpoint_config=self.endpoint_file,
-                 max_tokens=self.max_tokens
+                 max_tokens=self.max_tokens,
+                dont_include_model=self.dont_include_model
              )
         else:
             raise ValueError(f"Unsupported LLM type: {self.llm_type}")
