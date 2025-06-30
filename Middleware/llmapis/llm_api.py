@@ -11,6 +11,7 @@ from Middleware.utilities.config_utils import (
     get_api_type_config,
 )
 from .koboldcpp_api_handler import KoboldCppApiHandler
+from .koboldcpp_api_image_specific_handler import KoboldCppImageSpecificApiHandler
 from .llm_api_handler import LlmApiHandler
 from .ollama_chat_api_handler import OllamaChatHandler
 from .ollama_chat_api_image_specific_handler import OllamaApiChatImageSpecificHandler
@@ -93,6 +94,19 @@ class LlmApiService:
             )
         elif self.llm_type == "koboldCppGenerate":
             return KoboldCppApiHandler(
+                base_url=self.endpoint_url,
+                api_key=self.api_key,
+                gen_input=self._gen_input,
+                model_name=self.model_name,
+                headers=self.headers,
+                strip_start_stop_line_breaks=self.strip_start_stop_line_breaks,
+                stream=self.stream,
+                api_type_config=self.api_type_config,
+                endpoint_config=self.endpoint_file,
+                max_tokens=self.max_tokens
+            )
+        elif self.llm_type == "koboldCppGenerateImageSpecific":
+            return KoboldCppImageSpecificApiHandler(
                 base_url=self.endpoint_url,
                 api_key=self.api_key,
                 gen_input=self._gen_input,

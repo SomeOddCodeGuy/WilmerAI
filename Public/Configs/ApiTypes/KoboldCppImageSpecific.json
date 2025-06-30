@@ -1,0 +1,8 @@
+{
+  "nameForDisplayOnly": "KoboldCpp Api Specifically to Use For Image Endpoints",
+  "type": "koboldCppGenerateImageSpecific",
+  "presetType": "KoboldCpp",
+  "truncateLengthPropertyName": "max_context_length",
+  "maxNewTokensPropertyName": "max_length",
+  "streamPropertyName": "stream"
+}

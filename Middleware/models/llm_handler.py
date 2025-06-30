@@ -6,12 +6,14 @@ class LlmHandler:
         self.add_generation_prompt = add_generation_prompt
         self.api_key = api_key
 
-        if llm_type == "openAIV1Completion" or llm_type == "koboldCppGenerate" or llm_type == "ollamaApiGenerate":
+        if (llm_type == "openAIV1Completion" or llm_type == "koboldCppGenerate" or llm_type == "ollamaApiGenerate"
+                or llm_type == "koboldCppGenerateImageSpecific"):
             self.takes_message_collection = False
         else:
             self.takes_message_collection = True
 
-        if llm_type == "ollamaApiChatImageSpecific" or llm_type == "openAIApiChatImageSpecific":
+        if (llm_type == "ollamaApiChatImageSpecific" or llm_type == "openAIApiChatImageSpecific"
+                or llm_type == "koboldCppGenerateImageSpecific"):
             self.takes_image_collection = True
         else:
             self.takes_image_collection = False
