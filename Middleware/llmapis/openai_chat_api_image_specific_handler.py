@@ -18,6 +18,7 @@ from Middleware.utilities import api_utils, instance_utils
 from .llm_api_handler import LlmApiHandler
 from ..utilities.config_utils import get_current_username, get_is_chat_complete_add_user_assistant, \
     get_is_chat_complete_add_missing_assistant
+from ..utilities.text_utils import return_brackets
 
 logger = logging.getLogger(__name__)
 
@@ -289,6 +290,8 @@ class OpenAIApiChatImageSpecificHandler(LlmApiHandler):
                     "role": "user", 
                     "content": "There was an error processing the image. Please provide assistance without the image and state that you are unable to process the image."
                 })
+
+        return_brackets(corrected_conversation)
 
         url = f"{self.base_url}/v1/chat/completions"
         data = {

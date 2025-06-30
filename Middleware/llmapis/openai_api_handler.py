@@ -12,6 +12,7 @@ from Middleware.utilities.config_utils import (
     get_is_chat_complete_add_missing_assistant, get_current_username
 )
 from .llm_api_handler import LlmApiHandler
+from ..utilities.text_utils import return_brackets
 
 logger = logging.getLogger(__name__)
 
@@ -252,6 +253,8 @@ def prep_corrected_conversation(conversation, system_prompt, prompt):
 
     if corrected_conversation:
         corrected_conversation = [item for item in corrected_conversation if item["role"] != "images"]
+
+    return_brackets(corrected_conversation)
 
     full_prompt = "\n".join(msg["content"] for msg in corrected_conversation)
     logger.info("\n\n*****************************************************************************\n")
