@@ -598,7 +598,7 @@ file, `SmallModelEndpoint.json`, defines an endpoint:
   using reasoning models for things like internal, inter-node processing. Socg keeps this on constantly. (NOTE: When
   streaming, this buffers the response to you until thinking is done. That means it looks like the LLM isn't sending
   you anything, but in actuality it's thinking. The moment the thinking is done, this will remove the thinking block
-  and starting sending you the LLM's response. So as a user, it just looks like the time to first token is FAR longer
+  and start sending you the LLM's response. So as a user, it just looks like the time to first token is FAR longer
   than it is.)
 - **thinkTagText**: Allows you to set custom think tags. Some LLMs do things like <reasoning> or <thinking> as opposed
   to <think>. With this, each endpoint can account for the specific type of tag it expects
