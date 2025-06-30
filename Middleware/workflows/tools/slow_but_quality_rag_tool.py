@@ -141,7 +141,6 @@ class SlowButQualityRAGTool:
         Processes new memory chunks by performing RAG on them and updating the memory file.
         """
         rag_tool = SlowButQualityRAGTool()
-        chunks.reverse()
 
         all_chunks = "--ChunkBreak--".join(chunks)
         logger.debug("Processing chunks: %s", all_chunks)
@@ -149,10 +148,8 @@ class SlowButQualityRAGTool:
         result = rag_tool.perform_rag_on_memory_chunk(rag_system_prompt, rag_prompt, all_chunks, workflow, messages,
                                                       discussionId, "--rag_break--", chunks_per_memory)
         results = result.split("--rag_break--")
-        results.reverse()
         logger.debug("Total results: %s", len(results))
         logger.debug("Total chunks: %s", len(hash_chunks))
-        hash_chunks.reverse()
 
         replaced = [(summary, hash_code) for summary, (_, hash_code) in zip(results, hash_chunks)]
 
@@ -162,7 +159,6 @@ class SlowButQualityRAGTool:
         existing_chunks = read_chunks_with_hashes(filepath)
 
         logger.debug("Existing chunks before reverse: %s", str(existing_chunks))
-        replaced.reverse()
 
         # Append new chunks at the end
         updated_chunks = existing_chunks + replaced
@@ -220,13 +216,17 @@ class SlowButQualityRAGTool:
             if len(messages_to_process) == 0:
                 return
 
+            new_messages_to_evaluate = extract_last_n_turns(messages_to_process, number_of_messages_to_pull,
+                                                            remove_all_systems_override=True)
+
             if (rough_estimate_token_length(
-                    '\n'.join(value for content in messages_to_process for value in content.values())) > chunk_size) \
+                    '\n'.join(
+                        value for content in new_messages_to_evaluate for value in content.values())) > chunk_size) \
                     or number_of_messages_to_pull > max_messages_between_chunks:
 
                 logger.debug("number_of_messages_to_pull is: %s", str(number_of_messages_to_pull))
-                trimmed_discussion_pairs = extract_last_n_turns(messages_to_process, number_of_messages_to_pull,
-                                                                remove_all_systems_override=True)
+
+                trimmed_discussion_pairs = new_messages_to_evaluate
                 if (len(trimmed_discussion_pairs) == 0):
                     return
 
@@ -239,6 +239,8 @@ class SlowButQualityRAGTool:
                 trimmed_discussion_chunks = chunk_messages_with_hashes(trimmed_discussion_pairs, chunk_size,
                                                                        max_messages_before_chunk=max_messages_between_chunks)
                 logger.debug("Past chunk messages with hashes")
+
+                trimmed_discussion_chunks.reverse()
 
                 if len(trimmed_discussion_chunks) >= 1:
                     pass_chunks = extract_text_blocks_from_hashed_chunks(trimmed_discussion_chunks)
@@ -273,20 +275,30 @@ class SlowButQualityRAGTool:
                                       message["role"] not in {"system", "images", "systemMes"}]
 
         chunk_size = workflow_config.get('chunkEstimatedTokenSize', 1500)
-        max_messages_between_chunks = workflow_config.get('maxMessagesBetweenChunks', 0)
         chunk_hashes = chunk_messages_with_hashes(filtered_messages_to_chunk, chunk_size,
-                                                  max_messages_before_chunk=max_messages_between_chunks)
+                                                  max_messages_before_chunk=0)
         chunk_hashes.reverse()  # Reverse chunks to maintain correct order
 
         logger.debug("Past chunking hashes")
 
         pass_chunks = extract_text_blocks_from_hashed_chunks(chunk_hashes)
-        pass_chunks.reverse()  # Ensure correct order for chunk processing
+
+        # Order is correct here
+        logger.debug("Pass_chunks: %s", "\n".join(pass_chunks))
+        logger.debug("\n\n*******************************\n\n")
 
         BATCH_SIZE = 10
         for i in range(0, len(chunk_hashes), BATCH_SIZE):
             batch_chunk_hashes = chunk_hashes[i:i + BATCH_SIZE]
             batch_pass_chunks = pass_chunks[i:i + BATCH_SIZE]
+
+            # Order is correct here
+            logger.debug("Batch chunk hashes: %s", str(batch_chunk_hashes))
+            logger.debug("\n\n*******************************\n\n")
+
+            # Order is correct here
+            logger.debug("Batch pass chunk hashes: %s", "\n".join(batch_pass_chunks))
+            logger.debug("\n\n*******************************\n\n")
 
             self.process_new_memory_chunks(batch_pass_chunks, batch_chunk_hashes, rag_system_prompt, rag_prompt,
                                            workflow_config, discussionId, messages)
