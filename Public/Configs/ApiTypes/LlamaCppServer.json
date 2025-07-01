@@ -1,7 +1,7 @@
 {
   "nameForDisplayOnly": "LlamaCpp Server Example",
   "type": "openAIChatCompletion",
-  "presetType": "Open-AI-API",
+  "presetType": "OpenAiCompatibleApis",
   "truncateLengthPropertyName": "truncation_length",
   "maxNewTokensPropertyName": "n_predict",
   "streamPropertyName": "stream"
