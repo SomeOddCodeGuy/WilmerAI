@@ -82,7 +82,7 @@ model.
 
 A zero-shot to an LLM may not give great results, but follow-up questions will often improve them. If you
 regularly
-perform [the same follow-up questions when doing tasks like software development](https://www.reddit.com/r/LocalLLaMA/comments/1cvw3s5/my_personal_guide_for_developing_software_with_ai/),
+perform [the same follow-up questions when doing tasks like software development](https://github.com/SomeOddCodeGuy/SomeOddCodeGuy/blob/main/Github_Images/My%20personal%20guide%20for%20developing%20software%20with%20AI%20assistance%20r_LocalLLaMA.png),
 creating a workflow to
 automate those steps can have great results.
 
@@ -103,8 +103,6 @@ With workflows, you can have as many LLMs available to work together in a single
 For example, if you have old machines lying around that can run 3-8b models? You can put them to use as worker LLMs in 
 various nodes. The more LLM APIs that you have available to you, either on your own home hardware or via proprietary 
 APIs, the more powerful you can make your workflow network.
-
-This can allow for [somewhat unorthodox layouts](https://www.reddit.com/r/LocalLLaMA/comments/1i1kz1c/sharing_my_unorthodox_home_setup_and_how_i_use/) when it comes to LLM setups.
 
 ## Wilmer API Endpoints
 
