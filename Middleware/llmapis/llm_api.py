@@ -10,15 +10,15 @@ from Middleware.utilities.config_utils import (
     get_endpoint_config,
     get_api_type_config,
 )
-from .koboldcpp_api_handler import KoboldCppApiHandler
-from .koboldcpp_api_image_specific_handler import KoboldCppImageSpecificApiHandler
-from .llm_api_handler import LlmApiHandler
-from .ollama_chat_api_handler import OllamaChatHandler
-from .ollama_chat_api_image_specific_handler import OllamaApiChatImageSpecificHandler
-from .openai_chat_api_image_specific_handler import OpenAIApiChatImageSpecificHandler
-from .ollama_generate_api_handler import OllamaGenerateHandler
-from .openai_api_handler import OpenAiApiHandler
-from .openai_completions_api_handler import OpenAiCompletionsApiHandler
+from Middleware.llmapis.handlers.impl.koboldcpp_api_handler import KoboldCppApiHandler
+from Middleware.llmapis.handlers.impl.koboldcpp_api_image_specific_handler import KoboldCppImageSpecificApiHandler
+from Middleware.llmapis.handlers.base.base_llm_api_handler import LlmApiHandler
+from Middleware.llmapis.handlers.impl.ollama_chat_api_handler import OllamaChatHandler
+from Middleware.llmapis.handlers.impl.ollama_chat_api_image_specific_handler import OllamaApiChatImageSpecificHandler
+from Middleware.llmapis.handlers.impl.openai_chat_api_image_specific_handler import OpenAIApiChatImageSpecificHandler
+from Middleware.llmapis.handlers.impl.ollama_generate_api_handler import OllamaGenerateApiHandler
+from Middleware.llmapis.handlers.impl.openai_api_handler import OpenAiApiHandler
+from Middleware.llmapis.handlers.impl.openai_completions_api_handler import OpenAiCompletionsApiHandler
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,6 @@ class LlmApiService:
             presetname (str): The name of the preset file containing API parameters.
             max_tokens (int): The max number of tokens to generate.
             stream (bool): Whether to use streaming or not.
-            llm_type (str): The LLM type to use.
         """
         self.max_tokens = max_tokens
         self.endpoint_file = get_endpoint_config(endpoint)
@@ -147,7 +146,7 @@ class LlmApiService:
                 max_tokens=self.max_tokens
             )
         elif self.llm_type == "ollamaApiGenerate":
-            return OllamaGenerateHandler(
+            return OllamaGenerateApiHandler(
                 base_url=self.endpoint_url,
                 api_key=self.api_key,
                 gen_input=self._gen_input,
@@ -173,19 +172,19 @@ class LlmApiService:
                 max_tokens=self.max_tokens
             )
         elif self.llm_type == "openAIApiChatImageSpecific":
-             return OpenAIApiChatImageSpecificHandler(
-                 base_url=self.endpoint_url,
-                 api_key=self.api_key,
-                 gen_input=self._gen_input,
-                 model_name=self.model_name,
-                 headers=self.headers,
-                 strip_start_stop_line_breaks=self.strip_start_stop_line_breaks,
-                 stream=self.stream,
-                 api_type_config=self.api_type_config,
-                 endpoint_config=self.endpoint_file,
-                 max_tokens=self.max_tokens,
+            return OpenAIApiChatImageSpecificHandler(
+                base_url=self.endpoint_url,
+                api_key=self.api_key,
+                gen_input=self._gen_input,
+                model_name=self.model_name,
+                headers=self.headers,
+                strip_start_stop_line_breaks=self.strip_start_stop_line_breaks,
+                stream=self.stream,
+                api_type_config=self.api_type_config,
+                endpoint_config=self.endpoint_file,
+                max_tokens=self.max_tokens,
                 dont_include_model=self.dont_include_model
-             )
+            )
         else:
             raise ValueError(f"Unsupported LLM type: {self.llm_type}")
 
@@ -207,15 +206,14 @@ class LlmApiService:
         Returns:
             Union[Generator[str, None, None], str]: A generator yielding chunks of the response if streaming, otherwise the complete response.
         """
+        self.is_busy_flag = True
         try:
             conversation_copy = deepcopy(conversation) if conversation else None
 
-            self.is_busy_flag = True
             logger.debug("llm_api - Stream is: %s", self.stream)
             logger.debug("llm_api - System prompt: %s", system_prompt)
             logger.debug("llm_api - Prompt: %s", prompt)
 
-            # Handle the presence of images in the conversation based on LLM capability
             if not llm_takes_images:
                 logger.debug("llm_api does not take images. Removing images from the collection.")
                 if conversation_copy:
@@ -226,23 +224,32 @@ class LlmApiService:
                 logger.debug("llm_api takes images. Leaving images in place.")
 
             if self.stream:
-                return self._api_handler.handle_streaming(
-                    conversation=conversation_copy,
-                    system_prompt=system_prompt,
-                    prompt=prompt
-                )
+                def stream_wrapper() -> Generator[str, None, None]:
+                    try:
+                        yield from self._api_handler.handle_streaming(
+                            conversation=conversation_copy,
+                            system_prompt=system_prompt,
+                            prompt=prompt,
+                        )
+                    finally:
+                        self.is_busy_flag = False
+
+                return stream_wrapper()
+
             else:
-                return self._api_handler.handle_non_streaming(
+                response = self._api_handler.handle_non_streaming(
                     conversation=conversation_copy,
                     system_prompt=system_prompt,
-                    prompt=prompt
+                    prompt=prompt,
                 )
+                self.is_busy_flag = False
+                return response
+
         except Exception as e:
+            self.is_busy_flag = False  # Ensure flag is reset on any error
             logger.error("Exception in get_response_from_llm: %s", e)
             traceback.print_exc()
             raise
-        finally:
-            self.is_busy_flag = False
 
     def is_busy(self) -> bool:
         """

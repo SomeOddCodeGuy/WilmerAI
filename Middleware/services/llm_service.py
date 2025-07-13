@@ -15,7 +15,7 @@ class LlmHandlerService:
 
     def initialize_llm_handler(self, config_data, preset, endpoint, stream, truncate_length, max_tokens,
                                addGenerationPrompt=None):
-        logger.info("Initialize llm hander config_data: {}".format(config_data))
+        logger.info("Initialize llm handler config_data: {}".format(config_data))
         if (addGenerationPrompt is None):
             logger.debug("Add generation prompt is None")
             add_generation_prompt = config_data.get("addGenerationPrompt", False)
