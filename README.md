@@ -566,7 +566,14 @@ file, `SmallModelEndpoint.json`, defines an endpoint:
   "dontIncludeModel": false,
   "removeThinking": false,
   "thinkTagText": "think",
-  "expectOnlyClosingThinkTag": false
+  "expectOnlyClosingThinkTag": false,
+  "addTextToStartOfSystem": true,
+  "textToAddToStartOfSystem": "/no_think ",
+  "addTextToStartOfPrompt": false,
+  "textToAddToStartOfPrompt": "/no_think",
+  "addTextToStartOfCompletion": false,
+  "textToAddToStartOfCompletion": "<think>\n\n</think>\n\n",
+  "ensureTextAddedToAssistantWhenChatCompletion": false
 }
 ```
 
@@ -598,12 +605,41 @@ file, `SmallModelEndpoint.json`, defines an endpoint:
   you anything, but in actuality it's thinking. The moment the thinking is done, this will remove the thinking block
   and start sending you the LLM's response. So as a user, it just looks like the time to first token is FAR longer
   than it is.)
-- **thinkTagText**: Allows you to set custom think tags. Some LLMs do things like <reasoning> or <thinking> as opposed
+- **thinkTagText**: Allows you to set custom think tags. Some LLMs do things like \<reasoning> or \<thinking> as opposed
   to <think>. With this, each endpoint can account for the specific type of tag it expects
-- **expectOnlyClosingThinkTag**: This is for models like Qwen3, which sometimes don't send their opening <think> tag,
-  and instead just start thinking. This will continue to buffer responses until </think> (or your custom tag) appears,
+- **expectOnlyClosingThinkTag**: This is for models like Qwen3, which sometimes don't send their opening \<think> tag,
+  and instead just start thinking. This will continue to buffer responses until \</think> (or your custom tag) appears,
   at which point it removes everything before that and sends it to you. If no closing tag appears, you will get a dump
   of the whole response at once.
+- **addTextToStartOfSystem**: This will add whatever text you put in textToAddToStartOfSystem to the start of the system 
+  prompt. Made specifically for the Qwen3 hybrid-thinkers that accept "/no_think ". This will make every prompt run by this
+  specific endpoint add that text. In chat/completion, will add it to the first system prompt message.
+- **textToAddToStartOfSystem**: The text to add if addTextToStartOfSystem is true. Can be any text you want, probably.
+- **addTextToStartOfPrompt**: Same as the one for system, but this adds it to the beginning of the last user 
+  message in chat/completion, or the beginning of the whole user prompt in v1/Completion.
+- **textToAddToStartOfPrompt**: The text to add if addTextToStartOfPrompt is true.
+- **addTextToStartOfCompletion**: This is meant to seed the start of the AI speaking. The intention was for reasoning
+  models that don't use "/no_think", so that you can just forcefully add opening and closing think tags. However, you can
+  also use it to force the llm to respond certain ways. Like the old trick of having the LLM always start with
+  "Absolutely! Here is your answer: " in case it wasn't answering you properly.
+- **textToAddToStartOfCompletion**: The text to add if addTextToStartOfCompletion is true.
+- **ensureTextAddedToAssistantWhenChatCompletion**: This should create an assistant message if none exists at the end
+  of the conversation to seed the response on to. Some inference APIs may not appreciate this. If not, you may not be
+  able to use the message seeding feature, and might need to swap to v1/Completion. This does appear to work fine for me
+  in llama.cpp server atm.
+
+##### Amusing Example of Completion Seeding
+
+As a final quick test of addTextToStartOfCompletion before getting this commit ready, I ran the below test having my
+workflow describe a picture of a cat that I sent it. The response amused me.
+
+```json
+  "addTextToStartOfCompletion": true,
+  "textToAddToStartOfCompletion": "Roses are red, violets are blue,  ",
+  "ensureTextAddedToAssistantWhenChatCompletion": true
+```
+
+![Completion Seeding: Roses Are Red...](Docs/Examples/Images/Completion_Seed_Roses_Red.png)
 
 #### ApiTypes
 
