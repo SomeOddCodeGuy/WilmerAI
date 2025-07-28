@@ -1,3 +1,5 @@
+# middleware/llmapis/llm_api.py
+
 import json
 import logging
 import os
@@ -5,20 +7,20 @@ import traceback
 from copy import deepcopy
 from typing import Dict, Generator, List, Optional, Union
 
+from Middleware.llmapis.handlers.base.base_llm_api_handler import LlmApiHandler
+from Middleware.llmapis.handlers.impl.koboldcpp_api_handler import KoboldCppApiHandler
+from Middleware.llmapis.handlers.impl.koboldcpp_api_image_specific_handler import KoboldCppImageSpecificApiHandler
+from Middleware.llmapis.handlers.impl.ollama_chat_api_handler import OllamaChatHandler
+from Middleware.llmapis.handlers.impl.ollama_chat_api_image_specific_handler import OllamaApiChatImageSpecificHandler
+from Middleware.llmapis.handlers.impl.ollama_generate_api_handler import OllamaGenerateApiHandler
+from Middleware.llmapis.handlers.impl.openai_api_handler import OpenAiApiHandler
+from Middleware.llmapis.handlers.impl.openai_chat_api_image_specific_handler import OpenAIApiChatImageSpecificHandler
+from Middleware.llmapis.handlers.impl.openai_completions_api_handler import OpenAiCompletionsApiHandler
 from Middleware.utilities.config_utils import (
     get_openai_preset_path,
     get_endpoint_config,
     get_api_type_config,
 )
-from Middleware.llmapis.handlers.impl.koboldcpp_api_handler import KoboldCppApiHandler
-from Middleware.llmapis.handlers.impl.koboldcpp_api_image_specific_handler import KoboldCppImageSpecificApiHandler
-from Middleware.llmapis.handlers.base.base_llm_api_handler import LlmApiHandler
-from Middleware.llmapis.handlers.impl.ollama_chat_api_handler import OllamaChatHandler
-from Middleware.llmapis.handlers.impl.ollama_chat_api_image_specific_handler import OllamaApiChatImageSpecificHandler
-from Middleware.llmapis.handlers.impl.openai_chat_api_image_specific_handler import OpenAIApiChatImageSpecificHandler
-from Middleware.llmapis.handlers.impl.ollama_generate_api_handler import OllamaGenerateApiHandler
-from Middleware.llmapis.handlers.impl.openai_api_handler import OpenAiApiHandler
-from Middleware.llmapis.handlers.impl.openai_completions_api_handler import OpenAiCompletionsApiHandler
 
 logger = logging.getLogger(__name__)
 
@@ -202,6 +204,7 @@ class LlmApiService:
             conversation (Optional[List[Dict[str, str]]]): A list of dictionaries containing the conversation with roles and content.
             system_prompt (Optional[str]): The system prompt to send to the LLM.
             prompt (Optional[str]): The user prompt to send to the LLM.
+            llm_takes_images (bool): Flag indicating if the LLM can process images.
 
         Returns:
             Union[Generator[str, None, None], str]: A generator yielding chunks of the response if streaming, otherwise the complete response.
@@ -209,10 +212,25 @@ class LlmApiService:
         self.is_busy_flag = True
         try:
             conversation_copy = deepcopy(conversation) if conversation else None
+            system_prompt_to_pass = system_prompt
+            prompt_to_pass = prompt
+
+            # Get config flags and text for prompt modifications
+            add_start_system = self.endpoint_file.get("addTextToStartOfSystem", False)
+            text_start_system = self.endpoint_file.get("textToAddToStartOfSystem", "")
+            add_start_prompt = self.endpoint_file.get("addTextToStartOfPrompt", False)
+            text_start_prompt = self.endpoint_file.get("textToAddToStartOfPrompt", "")
+
+            # Apply modifications to the start of string-based prompts
+            if add_start_system and text_start_system:
+                system_prompt_to_pass = text_start_system + (system_prompt_to_pass or "")
+
+            if add_start_prompt and text_start_prompt:
+                prompt_to_pass = text_start_prompt + (prompt_to_pass or "")
 
             logger.debug("llm_api - Stream is: %s", self.stream)
-            logger.debug("llm_api - System prompt: %s", system_prompt)
-            logger.debug("llm_api - Prompt: %s", prompt)
+            logger.debug("llm_api - System prompt: %s", system_prompt_to_pass)
+            logger.debug("llm_api - Prompt: %s", prompt_to_pass)
 
             if not llm_takes_images:
                 logger.debug("llm_api does not take images. Removing images from the collection.")
@@ -228,8 +246,8 @@ class LlmApiService:
                     try:
                         yield from self._api_handler.handle_streaming(
                             conversation=conversation_copy,
-                            system_prompt=system_prompt,
-                            prompt=prompt,
+                            system_prompt=system_prompt_to_pass,
+                            prompt=prompt_to_pass,
                         )
                     finally:
                         self.is_busy_flag = False
@@ -239,8 +257,8 @@ class LlmApiService:
             else:
                 response = self._api_handler.handle_non_streaming(
                     conversation=conversation_copy,
-                    system_prompt=system_prompt,
-                    prompt=prompt,
+                    system_prompt=system_prompt_to_pass,
+                    prompt=prompt_to_pass,
                 )
                 self.is_busy_flag = False
                 return response

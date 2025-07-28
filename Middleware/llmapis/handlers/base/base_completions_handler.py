@@ -1,4 +1,5 @@
 # middleware/llmapis/handlers/base/base_completions_handler.py
+
 import json
 import logging
 from typing import Dict, Optional, List
@@ -32,6 +33,19 @@ class BaseCompletionsHandler(LlmApiHandler):
 
         full_prompt = self._build_prompt_from_conversation(system_prompt, prompt)
 
+        # Get config for appending text to the end of the final prompt
+        add_completion_text = self.endpoint_config.get("addTextToStartOfCompletion", False)
+        completion_text = self.endpoint_config.get("textToAddToStartOfCompletion", "")
+
+        # Append the text if configured. This happens at the last possible moment.
+        if add_completion_text and completion_text:
+            full_prompt += completion_text
+
+        # Log the final, fully-formed prompt before creating the payload
+        logger.info("\n\n*****************************************************************************\n")
+        logger.info("\n\nFormatted_Prompt: %s", full_prompt)
+        logger.info("\n*****************************************************************************\n\n")
+
         payload = {
             "prompt": full_prompt,
             **(self.gen_input or {})
@@ -57,11 +71,10 @@ class BaseCompletionsHandler(LlmApiHandler):
         if prompt is None:
             prompt = ""
 
+        # The logic from LlmApiService for adding text to the start of prompts has already run
         full_prompt = (system_prompt + prompt).strip()
         full_prompt = return_brackets_in_string(full_prompt)
         full_prompt = full_prompt.strip()
 
-        logger.info("\n\n*****************************************************************************\n")
-        logger.info("\n\nFormatted_Prompt: %s", full_prompt)
-        logger.info("\n*****************************************************************************\n\n")
+        # Logging was moved to _prepare_payload to show the final prompt
         return full_prompt

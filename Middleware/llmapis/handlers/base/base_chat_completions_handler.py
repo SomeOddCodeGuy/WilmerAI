@@ -3,8 +3,8 @@ import json
 import logging
 from typing import Dict, Optional, List
 
-from .base_llm_api_handler import LlmApiHandler
 from Middleware.utilities.text_utils import return_brackets
+from .base_llm_api_handler import LlmApiHandler
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +66,54 @@ class BaseChatCompletionsHandler(LlmApiHandler):
             {**msg, "role": "system" if msg["role"] == "systemMes" else msg["role"]}
             for msg in conversation
         ]
+
+        # Get all config flags and text for prompt modifications
+        add_start_system = self.endpoint_config.get("addTextToStartOfSystem", False)
+        text_start_system = self.endpoint_config.get("textToAddToStartOfSystem", "")
+        add_start_prompt = self.endpoint_config.get("addTextToStartOfPrompt", False)
+        text_start_prompt = self.endpoint_config.get("textToAddToStartOfPrompt", "")
+
+        add_completion_text = self.endpoint_config.get("addTextToStartOfCompletion", False)
+        completion_text = self.endpoint_config.get("textToAddToStartOfCompletion", "")
+        ensure_assistant = self.endpoint_config.get("ensureTextAddedToAssistantWhenChatCompletion", False)
+
+        # 1. Apply text to start of the system message
+        if add_start_system and text_start_system:
+            system_msg_found = False
+            for msg in corrected_conversation:
+                if msg.get("role") == "system":
+                    msg["content"] = text_start_system + msg.get("content", "")
+                    system_msg_found = True
+                    break
+            if not system_msg_found:
+                corrected_conversation.insert(0, {"role": "system", "content": text_start_system})
+
+        # 2. Apply text to start of the last user message
+        if add_start_prompt and text_start_prompt:
+            last_user_idx = -1
+            for i, msg in enumerate(corrected_conversation):
+                if msg.get("role") == "user":
+                    last_user_idx = i
+            if last_user_idx != -1:
+                corrected_conversation[last_user_idx]["content"] = text_start_prompt + corrected_conversation[
+                    last_user_idx].get("content", "")
+            else:
+                corrected_conversation.append({"role": "user", "content": text_start_prompt})
+
+        # 3. Apply text to the very end of the context (start of completion)
+        if add_completion_text and completion_text:
+            if not corrected_conversation:
+                # If list is somehow empty, add an assistant message with the text
+                corrected_conversation.append({"role": "assistant", "content": completion_text})
+            elif ensure_assistant:
+                # Override is ON: must end with an assistant turn.
+                if corrected_conversation[-1].get("role") == "assistant":
+                    corrected_conversation[-1]["content"] += completion_text
+                else:
+                    corrected_conversation.append({"role": "assistant", "content": completion_text})
+            else:
+                # Override is OFF: append to the content of the very last message.
+                corrected_conversation[-1]["content"] += completion_text
 
         if corrected_conversation and corrected_conversation[-1]["role"] == "assistant" and corrected_conversation[-1][
             "content"] == "":
