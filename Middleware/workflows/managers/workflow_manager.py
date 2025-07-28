@@ -455,9 +455,10 @@ class WorkflowManager:
             add_as_user_message = config.get("addAsUserMessage", False)
             if (add_as_user_message):
                 message = config.get("message",
-                                     f"[SYSTEM: The user recently added images to the conversation. "
+                                     f"[SYSTEM: The user recently added one or more images to the conversation. "
                                      f"The images have been analyzed by an advanced vision AI, which has described them"
-                                     f" in detail. The descriptions of the images can be found below:```\n[IMAGE_BLOCK]]\n```]")
+                                     f" in detail. The descriptions of the images can be found below:\n\n"
+                                     f"<vision_llm_response>\n[IMAGE_BLOCK]\n</vision_llm_response>]")
                 message = self.workflow_variable_service.apply_variables(
                     message,
                     self.llm_handler,

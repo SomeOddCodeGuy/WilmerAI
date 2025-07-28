@@ -125,126 +125,138 @@ class PromptProcessor:
         """
         return self.slow_but_quality_rag_service.handle_discussion_id_flow(discussion_id, messages)
 
-    def handle_conversation_type_node(self, config: Dict, messages: List[Dict[str, str]],
-                                      agent_outputs: Optional[Dict] = None) -> Any:
+    def _prepare_and_dispatch_to_llm(
+            self,
+            config: Dict,
+            messages: List[Dict[str, str]],
+            agent_outputs: Optional[Dict],
+            image_message: Optional[Dict] = None
+    ) -> Any:
         """
-        Handles a conversation type node by applying variables to the prompt and obtaining a response from the LLM.
+        A helper to prepare inputs and call the LLM, handling both chat and completion APIs.
 
-        :param config: The configuration dictionary containing the prompt and other parameters.
-        :param messages: The list of messages in the conversation.
-        :param agent_outputs: Optional dictionary containing previous agent outputs (default: None).
+        :param config: The workflow node configuration.
+        :param messages: The conversation history for variable replacement.
+        :param agent_outputs: Outputs from previous workflow nodes.
+        :param image_message: An optional image message to include in the call.
         :return: The response from the LLM.
         """
         message_copy = deepcopy(messages)
+        llm_takes_images = self.llm_handler.takes_image_collection
 
-        if not self.llm_handler.takes_message_collection:
-            # Current logic for building system_prompt and prompt
-            system_prompt = self.workflow_variable_service.apply_variables(
-                prompt=config.get("systemPrompt", ""),
+        # 1. Get and apply variables to base prompts from the node config
+        system_prompt = self.workflow_variable_service.apply_variables(
+            prompt=config.get("systemPrompt", ""),
+            llm_handler=self.llm_handler,
+            messages=message_copy,
+            agent_outputs=agent_outputs,
+            config=config
+        )
+        prompt = config.get("prompt", "")
+        if prompt:
+            prompt = self.workflow_variable_service.apply_variables(
+                prompt=prompt,
                 llm_handler=self.llm_handler,
                 messages=message_copy,
                 agent_outputs=agent_outputs,
                 config=config
             )
+            use_last_n_messages = False
+        else:
+            use_last_n_messages = True
 
-            prompt = config.get("prompt", "")
-            if prompt:
-                prompt = self.workflow_variable_service.apply_variables(
-                    prompt=config.get("prompt", ""),
-                    llm_handler=self.llm_handler,
-                    messages=message_copy,
-                    agent_outputs=agent_outputs,
-                    config=config
-                )
-
-                logger.debug("Config: ")
-                logger.debug(config)
-                if "addUserTurnTemplate" in config:
-                    add_user_turn_template = config["addUserTurnTemplate"]
-                    logger.debug(f"Adding user turn template {add_user_turn_template}")
-                else:
-                    add_user_turn_template = False
-
-                if "addOpenEndedAssistantTurnTemplate" in config:
-                    add_open_ended_assistant_turn_template = config.get("addOpenEndedAssistantTurnTemplate", False)
-                    logger.debug("Adding open-ended assistant turn template")
-                else:
-                    add_open_ended_assistant_turn_template = False
-
-                if add_user_turn_template:
-                    logger.debug("Adding user turn")
-                    prompt = format_user_turn_with_template(
-                        prompt,
-                        self.llm_handler.prompt_template_file_name,
-                        isChatCompletion=self.llm_handler.takes_message_collection
-                    )
-                if add_open_ended_assistant_turn_template:
-                    logger.debug("Adding open ended assistant turn")
-                    prompt = format_assistant_turn_with_template(
-                        prompt,
-                        self.llm_handler.prompt_template_file_name,
-                        isChatCompletion=self.llm_handler.takes_message_collection
-                    )
-            else:
-                # Extracting with template because this is v1/completions
+        # 2. Prepare inputs and call LLM based on API type
+        if not self.llm_handler.takes_message_collection:
+            # === COMPLETIONS API (e.g., v1/completions) LOGIC ===
+            if use_last_n_messages:
                 last_messages_to_send = config.get("lastMessagesToSendInsteadOfPrompt", 5)
                 prompt = get_formatted_last_n_turns_as_string(
                     message_copy, last_messages_to_send + 1,
                     template_file_name=self.llm_handler.prompt_template_file_name,
-                    isChatCompletion=self.llm_handler.takes_message_collection
+                    isChatCompletion=False
                 )
 
+            # Apply prompt templates for completion-style APIs
+            if config.get("addUserTurnTemplate"):
+                prompt = format_user_turn_with_template(prompt, self.llm_handler.prompt_template_file_name, False)
+            if config.get("addOpenEndedAssistantTurnTemplate"):
+                prompt = format_assistant_turn_with_template(prompt, self.llm_handler.prompt_template_file_name, False)
             if self.llm_handler.add_generation_prompt:
-                logger.debug("Entering add generation prompt")
-                prompt = add_assistant_end_token_to_user_turn(
-                    prompt,
-                    self.llm_handler.prompt_template_file_name,
-                    isChatCompletion=self.llm_handler.takes_message_collection
-                )
-            else:
-                logger.debug("Did not enter add generation prompt")
+                prompt = add_assistant_end_token_to_user_turn(prompt, self.llm_handler.prompt_template_file_name, False)
 
-            system_prompt = format_system_prompt_with_template(
-                system_prompt,
-                self.llm_handler.prompt_template_file_name,
-                isChatCompletion=self.llm_handler.takes_message_collection
+            system_prompt = format_system_prompt_with_template(system_prompt,
+                                                               self.llm_handler.prompt_template_file_name, False)
+
+            # Pass the image via the `conversation` argument, which image-specific completion handlers will use
+            conversation_arg = [image_message] if image_message else None
+
+            return self.llm_handler.llm.get_response_from_llm(
+                conversation=conversation_arg,
+                system_prompt=system_prompt,
+                prompt=prompt,
+                llm_takes_images=llm_takes_images
             )
-
-            return self.llm_handler.llm.get_response_from_llm(system_prompt=system_prompt, prompt=prompt,
-                                                              llm_takes_images=self.llm_handler.takes_image_collection)
         else:
-            # New workflow for takes_message_collection = True
+            # === CHAT API (e.g., chat/completions) LOGIC ===
             collection = []
-
-            system_prompt = self.workflow_variable_service.apply_variables(
-                prompt=config.get("systemPrompt", ""),
-                llm_handler=self.llm_handler,
-                messages=message_copy,
-                agent_outputs=agent_outputs,
-                config=config
-            )
             if system_prompt:
                 collection.append({"role": "system", "content": system_prompt})
 
-            prompt = config.get("prompt", "")
-            prompt = self.workflow_variable_service.apply_variables(
-                prompt=config.get("prompt", ""),
-                llm_handler=self.llm_handler,
-                messages=message_copy,
-                agent_outputs=agent_outputs,
-                config=config
-            )
-            if prompt:
-                collection.append({"role": "user", "content": prompt})
-            else:
-                # Extracting without template because this is for chat/completions
+            if use_last_n_messages:
                 last_messages_to_send = config.get("lastMessagesToSendInsteadOfPrompt", 5)
-                last_n_turns = extract_last_n_turns(message_copy, last_messages_to_send,
-                                                    self.llm_handler.takes_message_collection)
+                last_n_turns = extract_last_n_turns(message_copy, last_messages_to_send, True)
                 collection.extend(last_n_turns)
+            else:
+                collection.append({"role": "user", "content": prompt})
 
-            return self.llm_handler.llm.get_response_from_llm(collection,
-                                                              llm_takes_images=self.llm_handler.takes_image_collection)
+            if image_message:
+                collection.append(image_message)
+
+            return self.llm_handler.llm.get_response_from_llm(
+                conversation=collection,
+                llm_takes_images=llm_takes_images
+            )
+
+    def handle_conversation_type_node(self, config: Dict, messages: List[Dict[str, str]],
+                                      agent_outputs: Optional[Dict] = None) -> Any:
+        """
+        Handles a conversation type node by preparing inputs and obtaining a response from the LLM.
+        """
+        return self._prepare_and_dispatch_to_llm(
+            config=config,
+            messages=messages,
+            agent_outputs=agent_outputs,
+            image_message=None  # No image in this node
+        )
+
+    def handle_image_processor_node(
+            self,
+            config: Dict,
+            messages: List[Dict[str, str]],
+            agent_outputs: Optional[Dict] = None
+    ) -> str:
+        """
+        Handles an 'image_processor' node by sending each image to the LLM for processing.
+        """
+        image_messages = [msg for msg in messages if msg.get("role") == "images"]
+        if not image_messages:
+            return "No images found in the conversation."
+
+        # The image processor node should always have a prompt defined in its config.
+        # It does not use the "last N messages" logic. The helper handles this.
+        llm_responses = []
+        for img_msg in image_messages:
+            logger.debug(f"Sending image to LLM... Image size: {len(img_msg.get('content', ''))} chars.")
+            response = self._prepare_and_dispatch_to_llm(
+                config=config,
+                messages=messages,  # Full history for variable substitution
+                agent_outputs=agent_outputs,
+                image_message=img_msg  # The specific image for this call
+            )
+            llm_responses.append(response)
+
+        final_response = "\n-------------\n".join(filter(None, llm_responses))
+        return final_response
 
     def handle_process_chat_summary(self, config: Dict, messages: List[Dict[str, str]],
                                     agent_outputs: Dict[str, str], discussion_id: str) -> Any:
@@ -542,58 +554,3 @@ class PromptProcessor:
         update_chunks_with_hashes(chunks, filepath, "overwrite")
 
         return summary
-
-    def handle_image_processor_node(
-            self,
-            config: Dict,
-            messages: List[Dict[str, str]],
-            agent_outputs: Optional[Dict] = None
-    ) -> str:
-        """
-        Handles an `image_processor` node by extracting all base64-encoded images (role="images")
-        and sending each one (plus systemPrompt, prompt) to the LLM for processing.
-
-        :param config: The workflow node config (should include 'systemPrompt', 'prompt', etc.).
-        :param messages: A list of message dicts; images will have role="images".
-        :param agent_outputs: A dictionary of any prior outputs from the workflow.
-        :return: The concatenated result of the LLM outputs for each image.
-        """
-
-        image_messages = [msg for msg in messages if msg.get("role") == "images"]
-        if not image_messages:
-            return "No images found in the conversation."
-
-        system_prompt = self.workflow_variable_service.apply_variables(
-            prompt=config.get("systemPrompt", ""),
-            llm_handler=self.llm_handler,
-            messages=messages,
-            agent_outputs=agent_outputs,
-            config=config
-        )
-        prompt = self.workflow_variable_service.apply_variables(
-            prompt=config.get("prompt", ""),
-            llm_handler=self.llm_handler,
-            messages=messages,
-            agent_outputs=agent_outputs,
-            config=config
-        )
-
-        llm_responses = []
-        for img_msg in image_messages:
-            collection = []
-            if system_prompt:
-                collection.append({"role": "system", "content": system_prompt})
-            if prompt:
-                collection.append({"role": "user", "content": prompt})
-
-            collection.append({"role": "images", "content": img_msg["content"]})
-
-            logger.debug(
-                f"Sending image to LLM. Prompt length: {len(prompt)}. Image size: {len(img_msg['content'])} chars.")
-            response = self.llm_handler.llm.get_response_from_llm(collection,
-                                                                  llm_takes_images=self.llm_handler.takes_image_collection)
-            llm_responses.append(response)
-
-        final_response = "\n-------------\n".join(llm_responses)
-
-        return final_response

@@ -214,7 +214,7 @@ class LlmApiHandler(ABC):
                     if not processed_data:
                         continue
 
-                    content_delta = processed_data.get("token", "")
+                    content_delta = processed_data.get("token") or ""
                     finish_reason = processed_data.get("finish_reason")
                     content_to_yield = remover.process_delta(content_delta)
 
