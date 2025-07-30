@@ -274,7 +274,7 @@ class ChatCompletionsAPI(MethodView):
         # Check if the last message is not from assistant and add an assistant message if needed
         if add_missing_assistant:
             if add_user_assistant and messages and messages[-1]["role"] != "assistant":
-                transformed_messages.append({"role": "assistant", "content": "Assistant: "})
+                transformed_messages.append({"role": "assistant", "content": "Assistant:"})
             elif messages and messages[-1]["role"] != "assistant":
                 transformed_messages.append({"role": "assistant", "content": ""})
 
@@ -440,7 +440,7 @@ class ApiChatAPI(MethodView):
         # Add assistant response if necessary
         if add_user_assistant:
             if transformed_messages and transformed_messages[-1]["role"] != "assistant":
-                transformed_messages.append({"role": "assistant", "content": "Assistant: "})
+                transformed_messages.append({"role": "assistant", "content": "Assistant:"})
         elif add_missing_assistant:
             if transformed_messages and transformed_messages[-1]["role"] != "assistant":
                 transformed_messages.append({"role": "assistant", "content": ""})
