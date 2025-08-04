@@ -1,4 +1,4 @@
-# In a new file, or below the previous class in koboldcpp_api_handler.py
+# middleware/llmapis/handlers/impl/koboldcpp_api_image_specific_handler.py
 from typing import List, Optional, Dict
 
 from Middleware.llmapis.handlers.impl.koboldcpp_api_handler import KoboldCppApiHandler

@@ -1,8 +1,7 @@
-# middleware/llmapis/openai_chat_api_image_specific_handler.py
+# middleware/llmapis/handlers/impl/openai_chat_api_image_specific_handler.py
 import base64
 import binascii
 import io
-import json
 import logging
 import os
 import re

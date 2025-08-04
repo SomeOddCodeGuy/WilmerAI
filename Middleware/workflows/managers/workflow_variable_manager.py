@@ -5,7 +5,7 @@ from typing import Dict, Any, Optional, List
 import jinja2
 
 from Middleware.utilities.config_utils import get_chat_template_name
-from Middleware.utilities.memory_utils import handle_get_current_summary_from_file, gather_chat_summary_memories
+from Middleware.services.memory_service import MemoryService
 from Middleware.utilities.prompt_extraction_utils import extract_last_n_turns_as_string
 from Middleware.utilities.prompt_template_utils import (
     format_system_prompts, format_templated_prompt, get_formatted_last_n_turns_as_string
@@ -18,11 +18,18 @@ class WorkflowVariableManager:
     @staticmethod
     def process_conversation_turn_variables(prompt_configurations: Dict[str, str], llm_handler: Any) -> Dict[str, str]:
         """
-        Applies prompt templates to the user turn variables generated, based on the prompt configurations.
+        Applies prompt templates to the user turn variables generated.
 
-        :param prompt_configurations: A dictionary containing prompt configurations.
-        :param llm_handler: The LLM (Language Model Manager) handler.
-        :return: A dictionary containing processed prompts.
+        This method iterates through a dictionary of prompt configurations and
+        applies the appropriate chat or completions template to each prompt
+        string based on the provided LLM handler.
+
+        Args:
+            prompt_configurations (Dict[str, str]): A dictionary containing prompt configurations.
+            llm_handler (Any): The LLM handler containing information about the model and its capabilities.
+
+        Returns:
+            Dict[str, str]: A dictionary containing the processed and formatted prompts.
         """
         processed_prompts = {}
         for key, text in prompt_configurations.items():
@@ -35,9 +42,14 @@ class WorkflowVariableManager:
 
     def __init__(self, **kwargs):
         """
-        Initializes the WorkflowVariableManager with optional category-related attributes.
+        Initializes the WorkflowVariableManager.
 
-        :param kwargs: Optional keyword arguments to set category-related attributes.
+        This manager is responsible for generating and managing variables used
+        in workflow prompts. It can be initialized with various category-related
+        attributes via keyword arguments.
+
+        Args:
+            **kwargs: Optional keyword arguments to set category-related attributes.
         """
 
         self.category_list = None
@@ -49,19 +61,30 @@ class WorkflowVariableManager:
         self.categories = None
         self.chatPromptTemplate = get_chat_template_name()
         self.set_categories_from_kwargs(**kwargs)
+        self.memory_service = MemoryService()
 
     def apply_variables(self, prompt: str, llm_handler: Any, messages: List[Dict[str, str]],
                         agent_outputs: Optional[Dict[str, Any]] = None,
                         remove_all_system_override=None,
                         config: Dict = None) -> str:
         """
-        Applies the generated variables to the prompt and formats it using the specified template.
+        Applies generated variables to the prompt and formats it.
 
-        :param prompt: The original prompt string.
-        :param llm_handler: The LLM handler.
-        :param messages: A list of message dictionaries.
-        :param agent_outputs: A dictionary of outputs from agent processing.
-        :return: The formatted prompt string.
+        This method first generates a set of variables from the conversation
+        history and agent outputs. It then uses either a Jinja2 template engine
+        or standard Python string formatting to inject these variables into
+        the provided prompt string.
+
+        Args:
+            prompt (str): The original prompt string, potentially containing format placeholders.
+            llm_handler (Any): The LLM handler.
+            messages (List[Dict[str, str]]): A list of conversation turns.
+            agent_outputs (Optional[Dict[str, Any]]): A dictionary of outputs from agent processing.
+            remove_all_system_override (Optional[Any]): A flag to override system message removal.
+            config (Dict): A dictionary containing configuration settings, including whether to use jinja2.
+
+        Returns:
+            str: The formatted prompt string with all variables applied.
         """
         variables = self.generate_variables(llm_handler, messages, agent_outputs, remove_all_system_override)
         if config is not None and config.get('jinja2', False):
@@ -79,12 +102,20 @@ class WorkflowVariableManager:
                            agent_outputs: Optional[Dict[str, Any]] = None, remove_all_system_override=None) -> Dict[
         str, Any]:
         """
-        Generates all the variables utilized by the workflow prompts.
+        Generates all variables for the workflow prompts.
 
-        :param llm_handler: The LLM handler.
-        :param messages: A list of message dictionaries.
-        :param agent_outputs: A dictionary of outputs from agent processing.
-        :return: A dictionary of generated variables.
+        This is a core method that orchestrates the creation of all variables
+        required for a workflow prompt. It combines variables from conversation
+        turns, system prompts, agent outputs, and instance attributes.
+
+        Args:
+            llm_handler (Any): The LLM handler.
+            messages (List[Dict[str, str]]): A list of conversation turns.
+            agent_outputs (Optional[Dict[str, Any]]): A dictionary of outputs from agent processing.
+            remove_all_system_override (Optional[Any]): A flag to override system message removal.
+
+        Returns:
+            Dict[str, Any]: A dictionary of all generated variables.
         """
         variables = {}
 
@@ -105,9 +136,14 @@ class WorkflowVariableManager:
 
     def extract_additional_attributes(self) -> Dict[str, Any]:
         """
-        Extracts additional attributes from the instance that may be used in variable generation.
+        Extracts additional attributes from the instance.
 
-        :return: A dictionary of additional attributes.
+        This method pulls specific, pre-defined attributes from the manager
+        instance and returns them as a dictionary. These attributes often
+        relate to prompt categorization.
+
+        Returns:
+            Dict[str, Any]: A dictionary of additional attributes.
         """
         attributes = {}
         attribute_list = ["category_list", "category_descriptions", "category_colon_descriptions",
@@ -120,9 +156,13 @@ class WorkflowVariableManager:
 
     def set_categories_from_kwargs(self, **kwargs: Any):
         """
-        Sets category-related attributes based on the provided keyword arguments.
+        Sets category-related attributes based on keyword arguments.
 
-        :param kwargs: A dictionary of keyword arguments.
+        This method is used during initialization to configure the manager
+        with specific category-related data, such as descriptions or lists.
+
+        Args:
+            **kwargs (Any): A dictionary of keyword arguments.
         """
         if 'category_descriptions' in kwargs:
             self.category_descriptions = kwargs['category_descriptions']
@@ -143,11 +183,19 @@ class WorkflowVariableManager:
                                              remove_all_system_override) -> Dict[
         str, str]:
         """
-        Generates a dictionary of variables based on the conversation turns in the unaltered prompt.
+        Generates variables for conversation turns.
 
-        :param originalMessages: The conversation turns.
-        :param llm_handler: The LLM handler.
-        :return: A dictionary of variables for user prompts at different turn lengths.
+        This static method creates a dictionary of variables, each representing a
+        different slice of the conversation history. It provides both templated
+        and raw string versions for various numbers of turns (e.g., last 1, 5, 10 turns).
+
+        Args:
+            originalMessages (List[Dict[str, str]]): The conversation turns.
+            llm_handler (Any): The LLM handler.
+            remove_all_system_override (Any): A flag to override system message removal.
+
+        Returns:
+            Dict[str, str]: A dictionary of variables for user prompts at different turn lengths.
         """
         include_sysmes = llm_handler.takes_message_collection
 
@@ -195,17 +243,23 @@ class WorkflowVariableManager:
                                                                           remove_all_system_override)
         }
 
-    @staticmethod
-    def generate_chat_summary_variables(messages, discussion_id) -> Dict[str, str]:
+    def generate_chat_summary_variables(self, messages, discussion_id) -> Dict[str, str]:
         """
-        Generates the variables used for pulling the chat summary.
+        Generates variables related to the chat summary.
 
-        :param originalMessages: The conversation turns.
-        :param llm_handler: The LLM handler.
-        :return: A dictionary of variables for user prompts at different turn lengths.
+        This method retrieves and formats the conversation summary and
+        newest chat summary memories from the MemoryService, making them
+        available as variables for a prompt.
+
+        Args:
+            messages (List[Dict[str, str]]): The conversation turns.
+            discussion_id (str): The unique identifier for the conversation.
+
+        Returns:
+            Dict[str, str]: A dictionary containing variables for memories and summary.
         """
         return {
-            "newest_chat_summary_memories": gather_chat_summary_memories(messages,
+            "newest_chat_summary_memories": self.memory_service.get_chat_summary_memories(messages,
                                                                          discussion_id),
-            "current_chat_summary": handle_get_current_summary_from_file(discussion_id)
+            "current_chat_summary": self.memory_service.get_current_summary(discussion_id)
         }

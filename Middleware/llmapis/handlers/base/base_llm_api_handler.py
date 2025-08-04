@@ -9,7 +9,8 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3 import Retry
 
-from Middleware.utilities import instance_utils, api_utils
+from Middleware.common import instance_global_variables
+from Middleware.api import api_helpers
 from Middleware.utilities.config_utils import (
     get_config_property_if_exists, get_current_username,
     get_is_chat_complete_add_user_assistant, get_is_chat_complete_add_missing_assistant
@@ -168,7 +169,7 @@ class LlmApiHandler(ABC):
         """
         payload = self._prepare_payload(conversation, system_prompt, prompt)
         url = self._get_api_endpoint_url()
-        output_format = instance_utils.API_TYPE
+        output_format = instance_global_variables.API_TYPE
         remover = StreamingThinkRemover(self.endpoint_config)
         start_time = time.time()
         add_user_assistant = get_is_chat_complete_add_user_assistant()
@@ -229,7 +230,7 @@ class LlmApiHandler(ABC):
                             condition_to_process = len(first_chunk_buffer) > max_buffer_length or finish_reason
 
                             if add_user_assistant and add_missing_assistant and "Assistant:" in first_chunk_buffer:
-                                first_chunk_buffer = api_utils.remove_assistant_prefix(first_chunk_buffer)
+                                first_chunk_buffer = api_helpers.remove_assistant_prefix(first_chunk_buffer)
                                 first_chunk_processed = True
                                 final_content_for_this_chunk = first_chunk_buffer
                             elif condition_to_process:
@@ -239,12 +240,12 @@ class LlmApiHandler(ABC):
                             final_content_for_this_chunk = content_to_yield
 
                         if final_content_for_this_chunk is not None:
-                            completion_json = api_utils.build_response_json(
+                            completion_json = api_helpers.build_response_json(
                                 token=final_content_for_this_chunk,
                                 finish_reason=None,
                                 current_username=get_current_username()
                             )
-                            yield api_utils.sse_format(completion_json, output_format)
+                            yield api_helpers.sse_format(completion_json, output_format)
 
                     if finish_reason == 'stop':
                         break
@@ -253,16 +254,16 @@ class LlmApiHandler(ABC):
                 if final_content:
                     content = (
                             first_chunk_buffer + final_content).lstrip() if not first_chunk_processed else final_content
-                    completion_json = api_utils.build_response_json(token=content, finish_reason=None,
-                                                                    current_username=get_current_username())
-                    yield api_utils.sse_format(completion_json, output_format)
-
-                final_completion_json = api_utils.build_response_json(token="", finish_reason="stop",
+                    completion_json = api_helpers.build_response_json(token=content, finish_reason=None,
                                                                       current_username=get_current_username())
-                yield api_utils.sse_format(final_completion_json, output_format)
+                    yield api_helpers.sse_format(completion_json, output_format)
+
+                final_completion_json = api_helpers.build_response_json(token="", finish_reason="stop",
+                                                                        current_username=get_current_username())
+                yield api_helpers.sse_format(final_completion_json, output_format)
 
                 if output_format not in ('ollamagenerate', 'ollamaapichat'):
-                    yield api_utils.sse_format("[DONE]", output_format)
+                    yield api_helpers.sse_format("[DONE]", output_format)
 
         except requests.RequestException as e:
             logger.error(f"Request failed in {self.__class__.__name__}: {e}")
@@ -305,7 +306,7 @@ class LlmApiHandler(ABC):
                 if self.strip_start_stop_line_breaks:
                     result_text = result_text.lstrip()
                 if "Assistant:" in result_text:
-                    result_text = api_utils.remove_assistant_prefix(result_text)
+                    result_text = api_helpers.remove_assistant_prefix(result_text)
 
                 logger.info("\n\n*****************************************************************************\n")
                 logger.info("\n\nOutput from the LLM: %s", result_text)

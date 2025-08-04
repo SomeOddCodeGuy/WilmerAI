@@ -1,3 +1,5 @@
+# /Middleware/services/prompt_categorization_service.py
+
 import json
 import string
 
@@ -5,7 +7,7 @@ from Middleware.utilities.config_utils import get_active_categorization_workflow
 from Middleware.workflows.managers.workflow_manager import WorkflowManager, logger
 
 
-class PromptCategorizer:
+class PromptCategorizationService:
     """
     A class to categorize incoming prompts and route them to the appropriate workflow.
     """

@@ -1,3 +1,5 @@
+# /Middleware/utilities/streaming_utils.py
+
 import logging
 import re
 from typing import Dict
@@ -6,7 +8,30 @@ logger = logging.getLogger(__name__)
 
 
 class StreamingThinkRemover:
+    """
+    A stateful class to remove "thinking" blocks from a streaming LLM response.
+
+    This class processes text chunks from a streaming API response in real-time.
+    It identifies and removes content enclosed within specified thinking tags
+    (e.g., `<think>...</think>`) based on rules defined in the endpoint
+    configuration. It supports multiple modes, such as removing content only after a
+    closing tag or removing a complete tag pair found within an initial grace
+    period. This allows the LLM to include internal monologue or reasoning in its
+    generation that is hidden from the end-user.
+    """
     def __init__(self, endpoint_config: Dict):
+        """
+        Initializes the StreamingThinkRemover instance.
+
+        This constructor sets up the remover based on the endpoint configuration. It
+        configures settings like whether to remove thinking blocks, the specific tags
+        to look for, the mode of operation (e.g., only looking for a closing tag),
+        and pre-compiles the necessary regular expressions.
+
+        Args:
+            endpoint_config (Dict): The configuration dictionary for the LLM endpoint,
+                                    containing settings for thinking block removal.
+        """
         self.remove_thinking = endpoint_config.get("removeThinking", False)
         self.think_tag = endpoint_config.get("thinkTagText", "think")
         self.expect_only_closing = endpoint_config.get("expectOnlyClosingThinkTag", False)
@@ -30,6 +55,22 @@ class StreamingThinkRemover:
         self._consumed_open_tag = ""
 
     def process_delta(self, delta: str) -> str:
+        """
+        Processes a chunk of a streaming response to remove thinking blocks.
+
+        This method takes a new chunk of text (`delta`) from the LLM stream,
+        appends it to an internal buffer, and applies the configured logic to
+        identify and remove content within thinking tags. It handles different
+        modes, such as waiting for an opening tag within a grace period or only
+        looking for a closing tag.
+
+        Args:
+            delta (str): The incoming chunk of text from the LLM stream.
+
+        Returns:
+            str: The processed chunk of text, with thinking blocks removed, ready
+                 to be sent to the user.
+        """
         if not self.remove_thinking:
             return delta
 
@@ -96,6 +137,18 @@ class StreamingThinkRemover:
         return content_to_yield
 
     def finalize(self) -> str:
+        """
+        Finalizes the stream and returns any remaining buffered text.
+
+        This method is called after the stream has ended to process any remaining
+        text in the internal buffer. This is crucial for handling cases where the
+        stream ends mid-thought or with an unterminated thinking block. Depending
+        on the state and configuration, it might flush the buffer, discard it, or
+        return a portion of it.
+
+        Returns:
+            str: Any remaining text from the buffer after final processing.
+        """
         if not self.remove_thinking:
             return ""
 
@@ -120,6 +173,24 @@ class StreamingThinkRemover:
 
 
 def remove_thinking_from_text(text: str, endpoint_config: Dict) -> str:
+    """
+    Removes a thinking block from a complete, non-streamed string.
+
+    This function processes a complete block of text to find and remove content
+    enclosed in thinking tags (e.g., `<think>...</think>`). It operates on a
+    non-streaming basis, supporting different modes based on the endpoint
+    configuration, such as removing all text before a closing tag or removing
+    a full open/close tag pair found near the beginning of the text.
+
+    Args:
+        text (str): The complete input text from the LLM.
+        endpoint_config (Dict): The configuration dictionary for the LLM endpoint,
+                                which contains settings for thinking block removal.
+
+    Returns:
+        str: The text with the thinking block removed, or the original text if no
+             thinking block was found and removed according to the rules.
+    """
     if not endpoint_config.get("removeThinking", False):
         return text
 

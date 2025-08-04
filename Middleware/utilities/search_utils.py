@@ -1,3 +1,5 @@
+# /Middleware/utilities/search_utils.py
+
 import re
 from collections import defaultdict
 from itertools import combinations
@@ -10,13 +12,18 @@ from Middleware.utilities.text_utils import tokenize
 
 def build_inverted_index(lines: List[str]) -> Dict[str, List[int]]:
     """
-    Build an inverted index from a list of text lines.
+    Builds an inverted index from a list of text lines.
 
-    Parameters:
-    lines (List[str]): A list of strings to be indexed.
+    This function processes a list of strings, tokenizes each line, and
+    creates a mapping from each token to a list of line numbers where that
+    token appears. This index is used for efficient text searching.
+
+    Args:
+        lines (List[str]): A list of strings to be indexed.
 
     Returns:
-    Dict[str, List[int]]: A dictionary where each key is a token and each value is a list of line numbers where the token appears.
+        Dict[str, List[int]]: A dictionary where each key is a token and each
+        value is a list of line numbers where the token appears.
     """
     index = defaultdict(list)
     for line_number, line in enumerate(lines):
@@ -29,15 +36,21 @@ def build_inverted_index(lines: List[str]) -> Dict[str, List[int]]:
 
 def calculate_line_scores(lines: List[str], index: Dict[str, List[int]], query_tokens: List[str]) -> Dict[int, int]:
     """
-    Calculate scores for each line based on the occurrence of query tokens.
+    Calculates scores for each line based on the occurrence of query tokens.
 
-    Parameters:
-    lines (List[str]): The list of lines to score.
-    index (Dict[str, List[int]]): The inverted index built from the lines.
-    query_tokens (List[str]): The list of tokens to search for in the lines.
+    This function iterates through the query tokens and uses the inverted index
+    to find which lines contain them. It assigns a score to each line,
+    typically representing the count of query tokens found in that line.
+
+    Args:
+        lines (List[str]): The list of original text lines that were indexed.
+        index (Dict[str, List[int]]): The inverted index mapping tokens to line
+            numbers, created by `build_inverted_index`.
+        query_tokens (List[str]): A list of tokens from the user's search query.
 
     Returns:
-    Dict[int, int]: A dictionary where each key is a line number and each value is the score for that line.
+        Dict[int, int]: A dictionary where each key is a line number and the
+        value is the calculated score for that line.
     """
     line_scores = defaultdict(int)
     for token in query_tokens:
@@ -51,16 +64,23 @@ def calculate_line_scores(lines: List[str], index: Dict[str, List[int]], query_t
 def apply_proximity_filter(lines: List[str], line_scores: Dict[int, int], tokens: List[str], proximity_limit: int) -> \
 Dict[int, int]:
     """
-    Apply a proximity filter to the line scores, considering the distance between tokens.
+    Applies a proximity filter to line scores, boosting lines with close tokens.
 
-    Parameters:
-    lines (List[str]): The list of lines to filter.
-    line_scores (Dict[int, int]): The dictionary of line scores.
-    tokens (List[str]): The list of tokens to consider for proximity.
-    proximity_limit (int): The maximum distance between tokens to consider them relevant.
+    This function refines search results by analyzing the distance between
+    query tokens within each line. If tokens appear within the specified
+    proximity limit, the score for that line is increased, improving the
+    relevance of the final results.
+
+    Args:
+        lines (List[str]): The list of original text lines to analyze.
+        line_scores (Dict[int, int]): A dictionary of the current line scores to be updated.
+        tokens (List[str]): The list of query tokens to check for proximity.
+        proximity_limit (int): The maximum distance (in words) between tokens
+            to be considered proximate.
 
     Returns:
-    Dict[int, int]: A dictionary with updated line scores based on token proximity.
+        Dict[int, int]: A dictionary with updated line scores after applying
+        the proximity filter.
     """
     new_scores = defaultdict(int)
     token_positions = defaultdict(list)
@@ -86,15 +106,20 @@ Dict[int, int]:
 
 def search_in_chunks(chunks: List[str], query: str, max_hits: int = 0) -> List[str]:
     """
-    Search for a query within chunks of text and return the relevant chunks.
+    Performs a basic search for a query within a list of text chunks.
 
-    Parameters:
-    chunks (List[str]): A list of text chunks to search through.
-    query (str): The query string to search for.
-    max_hits (int, optional): The maximum number of relevant chunks to return. Defaults to 0 (no limit).
+    This function filters a list of text chunks, returning only those that
+    contain at least one of the tokens from the search query. It provides a
+    simple and fast way to find potentially relevant chunks without scoring.
+
+    Args:
+        chunks (List[str]): A list of text chunks to search through.
+        query (str): The query string to search for.
+        max_hits (int, optional): The maximum number of matching chunks to
+            return. Defaults to 0, which returns all matches.
 
     Returns:
-    List[str]: A list of chunks that contain the query tokens.
+        List[str]: A list of text chunks that contain one or more query tokens.
     """
     query_tokens = set(token.lower() for token in tokenize(query))
     relevant_chunks = [chunk for chunk in chunks if any(
@@ -105,16 +130,23 @@ def search_in_chunks(chunks: List[str], query: str, max_hits: int = 0) -> List[s
 def advanced_search_in_chunks(chunks: List[str], query: str, max_excerpts: int = 40, proximity_limit: int = 5) -> List[
     str]:
     """
-    Perform an advanced search within chunks of text, applying scoring and proximity filters.
+    Performs an advanced search within text chunks using scoring and proximity.
 
-    Parameters:
-    chunks (List[str]): A list of text chunks to search through.
-    query (str): The query string to search for.
-    max_excerpts (int, optional): The maximum number of excerpts to return. Defaults to 40.
-    proximity_limit (int, optional): The maximum distance between tokens to consider them relevant. Defaults to 5.
+    This function implements a comprehensive search pipeline. It builds an
+    inverted index of the chunks, calculates scores based on token frequency,
+    optionally applies a proximity filter to boost relevance, and returns the
+    top-scoring chunks.
+
+    Args:
+        chunks (List[str]): A list of text chunks to search through.
+        query (str): The query string to search for.
+        max_excerpts (int, optional): The maximum number of top-scoring chunks
+            (excerpts) to return. Defaults to 40.
+        proximity_limit (int, optional): The maximum distance between tokens for
+            the proximity filter. Defaults to 5.
 
     Returns:
-    List[str]: A list of the top-scoring chunks based on the query and proximity limit.
+        List[str]: A sorted list of the most relevant chunks based on scoring.
     """
     index = build_inverted_index(chunks)
     query_tokens = tokenize(query)
@@ -130,14 +162,19 @@ def advanced_search_in_chunks(chunks: List[str], query: str, max_excerpts: int =
 
 def filter_keywords_by_speakers(messages: List[Dict[str, str]], keywords: str) -> str:
     """
-    Filter out keywords that match any speaker names found in the messages.
+    Filters speaker names from a keyword search string.
 
-    Parameters:
-    messages (List[Dict[str, str]]): The list of messages containing the conversation with speaker names.
-    keywords (str): The keywords to filter, potentially containing speaker names.
+    This function inspects a list of conversation messages to identify speaker
+    names (e.g., "User:", "WilmerAI:"). It then removes these names from a
+    given keyword string to prevent them from interfering with search logic.
+
+    Args:
+        messages (List[Dict[str, str]]): A list of role/content message pairs
+            representing a conversation.
+        keywords (str): The keyword string to filter.
 
     Returns:
-    str: The filtered keywords with speaker names removed.
+        str: The filtered keyword string with speaker names removed.
     """
     # Extract speakers from the messages
     speakers = set()
@@ -162,14 +199,19 @@ def filter_keywords_by_speakers(messages: List[Dict[str, str]], keywords: str) -
 
 def calculate_tfidf_scores(chunks: List[str], query: str) -> List[float]:
     """
-    Calculate the TF-IDF scores for each chunk against the query.
+    Calculates TF-IDF scores for each text chunk against a query.
 
-    Parameters:
-    chunks (List[str]): A list of text chunks to score.
-    query (str): The query string to compare against the chunks.
+    This function uses the Term Frequency-Inverse Document Frequency (TF-IDF)
+    algorithm to evaluate the relevance of each chunk in a list to a given
+    query string. It returns a score for each chunk indicating its relevance.
+
+    Args:
+        chunks (List[str]): A list of text chunks (documents) to score.
+        query (str): The query string to use for comparison.
 
     Returns:
-    List[float]: A list of TF-IDF scores for each chunk.
+        List[float]: A list of TF-IDF scores, where each score corresponds to a
+        chunk at the same index.
     """
     vectorizer = TfidfVectorizer()
     tfidf_matrix = vectorizer.fit_transform(chunks)
@@ -180,17 +222,24 @@ def calculate_tfidf_scores(chunks: List[str], query: str) -> List[float]:
 def advanced_search(lines: List[str], index: Dict[str, List[int]], query: str, max_excerpts: int = 5,
                     proximity_limit: int = 5) -> List[str]:
     """
-    Perform an advanced search across lines of text, applying scoring and proximity filters.
+    Performs an advanced search using a pre-built inverted index.
 
-    Parameters:
-    lines (List[str]): The list of lines to search through.
-    index (Dict[str, List[int]]): The inverted index built from the lines.
-    query (str): The query string to search for.
-    max_excerpts (int, optional): The maximum number of excerpts to return. Defaults to 5.
-    proximity_limit (int, optional): The maximum distance between tokens to consider them relevant. Defaults to 5.
+    This function executes a search query against a list of text lines. It
+    leverages a provided inverted index for efficiency, calculates line scores,
+    applies a proximity filter to refine results, and returns a list of the
+    top-scoring lines.
+
+    Args:
+        lines (List[str]): The list of lines to search through.
+        index (Dict[str, List[int]]): A pre-built inverted index for the lines.
+        query (str): The query string to search for.
+        max_excerpts (int, optional): The maximum number of top-scoring lines
+            (excerpts) to return. Defaults to 5.
+        proximity_limit (int, optional): The maximum distance between tokens for
+            the proximity filter. Defaults to 5.
 
     Returns:
-    List[str]: A list of the top-scoring excerpts.
+        List[str]: A sorted list of the most relevant lines (excerpts).
     """
     query_tokens = tokenize(query)
     line_scores = calculate_line_scores(lines, index, query_tokens)

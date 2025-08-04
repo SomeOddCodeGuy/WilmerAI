@@ -1,3 +1,5 @@
+# Middleware/workflows/tools/parallel_llm_processing_tool.py
+
 import logging
 import traceback
 from queue import Queue, Empty
@@ -15,16 +17,21 @@ logger = logging.getLogger(__name__)
 
 class ParallelLlmProcessingTool:
     """
-    Tool for processing a large block of text using multiple LLMs in parallel.
-    The text is divided into chunks, and each LLM processes a chunk concurrently.
+    A tool for parallel text processing using multiple LLMs.
+
+    This class divides a large text block into chunks and processes each
+    chunk concurrently using a separate LLM handler in a dedicated thread.
+    This is useful for tasks like summarization, translation, or
+    sentiment analysis on large documents.
     """
 
     def __init__(self, config):
         """
-        Initializes the ParallelLlmProcessingTool with the given configuration.
+        Initializes the ParallelLlmProcessingTool.
 
-        Parameters:
-        config (dict): Configuration dictionary containing model and endpoint information.
+        Args:
+            config (dict): The configuration dictionary for the tool. This includes
+                           details on the LLMs to be used.
         """
         self.llm_handlers = None
         self.workflow_config = None
@@ -32,10 +39,15 @@ class ParallelLlmProcessingTool:
 
     def initialize_language_models(self, config):
         """
-        Initializes language model handlers based on the provided configuration.
+        Initializes the LLM handlers based on the provided configuration.
 
-        Parameters:
-        config (dict): Configuration that includes model information.
+        The method iterates through a list of endpoints defined in the
+        `multiModelList` of the workflow configuration. It retrieves the
+        specific endpoint configuration for each and initializes an
+        `LlmHandler` for each LLM.
+
+        Args:
+            config (dict): The workflow configuration dictionary.
         """
         self.workflow_config = config
         llm_handler_service = LlmHandlerService()
@@ -44,26 +56,35 @@ class ParallelLlmProcessingTool:
         self.llm_handlers = []
         for endpoint in config['multiModelList']:
             endpoint_data = get_endpoint_config(endpoint["endpointName"])
+            # Each call to initialize_llm_handler creates a new, independent handler for an endpoint.
             handler = llm_handler_service.initialize_llm_handler(endpoint_data,
                                                                  config['preset'],
                                                                  endpoint['endpointName'],
-                                                                 False,
+                                                                 False,  # stream is always False for this tool
                                                                  endpoint.get("maxContextTokenSize", 4096),
                                                                  config.get("maxResponseSizeInTokens", 400))
             self.llm_handlers.append(handler)
 
     def process_prompt_chunks(self, chunks, workflow_prompt, workflow_system_prompt, messages, custom_delimiter=""):
         """
-        Processes each prompt chunk in parallel using threads.
+        Processes a list of text chunks in parallel using multiple threads.
 
-        Parameters:
-        chunks (list): Tokenized chunks of the original prompt.
-        workflow_prompt (str): The prompt used in processing.
-        workflow_system_prompt (str): The system prompt used in processing.
-        custom_delimiter (str): Delimiter for joining the processed chunks. Default is an empty string.
+        Each thread is assigned an LLM handler and a queue of chunks to process.
+        The results from each thread are collected and assembled into a
+        single output string.
+
+        Args:
+            chunks (list): A list of strings, where each string is a chunk of the
+                           original text to be processed.
+            workflow_prompt (str): The user prompt template to be applied to each chunk.
+            workflow_system_prompt (str): The system prompt template to be applied to each chunk.
+            messages (List[Dict[str,str]]): A list of dictionaries representing the
+                                             conversation history, with 'role' and 'content' keys.
+            custom_delimiter (str, optional): The delimiter to use when joining the
+                                              processed chunks. Defaults to an empty string.
 
         Returns:
-        str: The assembled result from all processed chunks.
+            str: The assembled result from all processed chunks.
         """
         chunks_queue = Queue()
         results_queue = Queue()
@@ -86,14 +107,20 @@ class ParallelLlmProcessingTool:
     def chunk_processing_worker(self, handler, chunks_queue, workflow_prompt, workflow_system_prompt, results_queue,
                                 messages):
         """
-        Worker method for processing chunks; intended to run in a thread.
+        A worker function for processing chunks in a dedicated thread.
 
-        Parameters:
-        handler (LlmHandlerService): A single handler assigned to this worker.
-        chunks_queue (Queue): Queue of chunks waiting to be processed.
-        workflow_prompt (str): The prompt used in processing.
-        workflow_system_prompt (str): The system prompt used in processing.
-        results_queue (Queue): Queue where results are placed after processing.
+        This function continuously retrieves chunks from the `chunks_queue`,
+        processes them using the assigned `handler`, and places the results
+        in the `results_queue`. It terminates when the queue is empty.
+
+        Args:
+            handler (LlmHandler): An initialized LLM handler wrapper object assigned to this worker.
+            chunks_queue (Queue): The queue containing text chunks to be processed.
+            workflow_prompt (str): The prompt template to use for processing.
+            workflow_system_prompt (str): The system prompt template to use for processing.
+            results_queue (Queue): The queue where processed results are stored.
+            messages (List[Dict[str,str]]): A list of dictionaries representing the
+                                             conversation history.
         """
         index = 0
         if chunks_queue.qsize() == 0:
@@ -123,20 +150,27 @@ class ParallelLlmProcessingTool:
     def process_single_chunk(chunk, index, llm_handler, workflow_prompt, workflow_system_prompt, results_queue,
                              messages):
         """
-        Processes a single chunk using the specified LLM handler.
+        Processes a single text chunk using the specified LLM handler.
 
-        Parameters:
-        chunk (str): The text chunk to be processed.
-        index (int): The index of the chunk in the original text.
-        llm_handler (LlmHandlerService): The handler for processing the chunk.
-        workflow_prompt (str): The prompt used in processing.
-        workflow_system_prompt (str): The system prompt used in processing.
-        results_queue (Queue): Queue where the result is placed after processing.
+        This method formats the prompt and system prompt with variables,
+        replaces the '[TextChunk]' placeholder, and sends the request to
+        the LLM via the handler. The result is then placed into the
+        `results_queue` along with its original index.
+
+        Args:
+            chunk (str): The text chunk to be processed.
+            index (int): The original index of the chunk in the list.
+            llm_handler (LlmHandler): The LLM handler wrapper to use for processing. This object is
+                                      expected to have an `.llm` attribute containing an `LlmApiService` instance.
+            workflow_prompt (str): The user prompt template.
+            workflow_system_prompt (str): The system prompt template.
+            results_queue (Queue): The queue to place the result in.
+            messages (List[Dict[str,str]]): The conversation history.
         """
         workflow_variable_service = WorkflowVariableManager()
         formatted_prompt = workflow_variable_service.apply_variables(workflow_prompt, llm_handler, messages)
         formatted_system_prompt = workflow_variable_service.apply_variables(workflow_system_prompt, llm_handler,
-                                                                            messages)
+                                                                              messages)
 
         formatted_prompt = formatted_prompt.replace('[TextChunk]', chunk)
         formatted_system_prompt = formatted_system_prompt.replace('[TextChunk]', chunk)
@@ -150,6 +184,7 @@ class ParallelLlmProcessingTool:
         formatted_system_prompt = remove_discussion_id_tag_from_string(formatted_system_prompt)
         formatted_prompt = remove_discussion_id_tag_from_string(formatted_prompt)
 
+        # The `llm_handler` object wraps the `LlmApiService` instance, which is accessed via the `.llm` attribute.
         if not llm_handler.takes_message_collection:
             result = llm_handler.llm.get_response_from_llm(system_prompt=formatted_system_prompt,
                                                            prompt=formatted_prompt,
@@ -172,13 +207,18 @@ class ParallelLlmProcessingTool:
         """
         Assembles the processed chunks into a single result string.
 
-        Parameters:
-        chunks (list): The original list of chunks.
-        results_queue (Queue): Queue containing the processed results.
-        custom_delimiter (str): Delimiter for joining the processed chunks. Default is an empty string.
+        This method retrieves all processed chunks from the `results_queue`
+        and reconstructs the full text in the correct order, using the
+        original chunk indices.
+
+        Args:
+            chunks (list): The original list of chunks.
+            results_queue (Queue): A queue containing tuples of `(index, result_text)`.
+            custom_delimiter (str, optional): The delimiter to use when joining the
+                                              processed chunks. Defaults to an empty string.
 
         Returns:
-        str: The assembled result from all processed chunks.
+            str: The assembled result string.
         """
         processed_chunks = [''] * len(chunks)
         while not results_queue.empty():
