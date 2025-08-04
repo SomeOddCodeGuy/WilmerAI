@@ -5,12 +5,18 @@
 >
 > This project and any expressed views, methodologies, etc found within are the result of contributions by the
 > maintainer and any contributors in their free time, and should not reflect upon any of their employers.
+> 
+> As the maintainer has a full time job, any updates can only be made late in the evening or on weekends. Sometimes
+> work can get particularly busy, so if you don't hear back for a week or two, apologies in
+> advance, and that's why.
 
-## Maintainer's Note UPDATED 2025-06-29
+## Maintainer's Note UPDATED 2025-08-03
 
 > IMPORTANT: Wilmer now more gracefully handles reasoning models, and can strip out thinking blocks of many types
-> both mid-workflow, and when returning/streaming to the user. This is a significant improvement for the
-> modern LLM landscape. Peek down at the endpoint configs section of the readme for more info. -Socg
+> both mid-workflow, and when returning/streaming to the user. It can also inject text into various parts of the prompt
+> at the endpoint level; meaning, for example, you can inject thinking tags for every prompt to R1 0528, turning it into
+> a slightly updated V3 0324. This is a significant improvement for the modern LLM landscape. Peek down at the endpoint 
+> configs section of the readme for more info. -Socg
 
 > Until September 2025, WilmerAI will not be accepting any new Pull Requests that modify anything within the
 > Middleware modules; some exceptions may apply. Updates to iSevenDays' new MCP tool calling feature, or adding new 
@@ -26,54 +32,41 @@
 >   the Fall, but until then I won't have any time during weekdays, and only a little on weekends, to devote to this 
 >   project.
 > 
+> Additionally, I plan to completely redo many of the example users. The prompting strategy I use in them is very
+> outdated, and I've employed many new prompt strategies that work far better, for everything from categorization to
+> coding.
+> 
+> I apologize in advance for any bugs I introduce during this period. I will do my best to minimize impact.
+> 
 >   -Socg
 
 ## What is WilmerAI?
 
-WilmerAI sits between your LLM APIs and whatever app is calling them, whether it be a front end like
-Open WebUI or SillyTavern, or a python app or an agent. Wilmer can use a prompt router and workflows to allow
-you to send a single prompt, conversation, etc through as many LLMs across as many computers as you have access
-to, and get back a single response. It can be extended with custom python scripts, meaning you can add whatever
-functionality you need to it, even if it isn't currently supported.
+Wilmer is an application that sits between your front end (or any other LLM calling program) and the LLM APIs you're 
+sending your prompts to.
 
-Wilmer exposes OpenAI and Ollama compatible endpoints, so it should be connectible to most tools and front ends.
+To connect to it, Wilmer exposes OpenAI and Ollama compatible API endpoints, and on the backend it can connect to LLM 
+APIs like OpenAI, KoboldCpp, and Ollama. 
+
+To visualize: you type a prompt into your front end, which is connected to Wilmer. The prompt gets sent to Wilmer first,
+which runs it through a series of workflows. Each workflow may make calls to multiple LLMs, after which the final 
+response comes backs to you. 
+
+From your perspective, it looked like a (likely long running) one shot call to an LLM. But in reality, 
+it could be many LLM and even tools doing complex work.
 
 ### What Does WilmerAI Stand For?
 
 WilmerAI stands for **"What If Language Models Expertly Routed All Inference?"**
 
-### Youtube Videos
-
-[WilmerAI Setup Tutorial](https://www.youtube.com/watch?v=v2xYQCHZwJM)
-
-This 40 minute video shows:
-
-- A walkthrough of downloading and setting up Wilmer
-- Running Wilmer and sending a cURL command to it
-- A walkthrough of the wikipedia workflow
-- A brief talk of the new Socg users
-
-[WilmerAI Tutorial Youtube PlayList](https://www.youtube.com/playlist?list=PLjIfeYFu5Pl7J7KGJqVmHM4HU56nByb4X)
-
-This 3 hour video series shows:
-
-- A more in-depth walkthrough of Wilmer and what it is
-- An explanation of some of the workflows, as well as the custom python script module
-- Explaining Socg's personal setup
-- Setting up and running an example user
-- Showing a run of a workflow on an RTX 4090 that utilizes Ollama's ability to hotswap multiple 14b models,
-  allowing a 24GB video card to run as many models that would fit individually on the card as you have hard
-  drive space for.
-
 ## The Power of Workflows
 
-### RAG injection wherever you need it
+### Semi-Autonomous Workflows Allow You Determine What Tools and When
 
 The below shows Open WebUI connected to 2 instances of Wilmer. The first instance just hits Mistral Small 3 24b
 directly, and then the second instance makes a call to
 the [Offline Wikipedia API](https://github.com/SomeOddCodeGuy/OfflineWikipediaTextApi) before making the call to the
-same
-model.
+same model.
 
 ![No-RAG vs RAG](Docs/Gifs/Search-Gif.gif)
 *Click the image to play gif if it doesn't start automatically*
@@ -86,52 +79,31 @@ perform [the same follow-up questions when doing tasks like software development
 creating a workflow to
 automate those steps can have great results.
 
-The below is the result of running a single zero-shot workflow that has QwQ-32b, Mistral Small 3, and Qwen2.5 32b coder
-working together on a result.
-
-`Can you give me a pygame script that shows a ball bouncing inside a spinning hexagon. The ball should be affected by
-gravity and friction, and it must bounce off the rotating walls realistically. The ball should be confined inside the
-hexagon.`
-
-
-![Ball With Physics](Docs/Gifs/Wilmer-Coding-Workflow-Zero-Shot.gif)
-*Click the image to play gif if it doesn't start automatically*
-
 ### Distributed LLMs
 
 With workflows, you can have as many LLMs available to work together in a single call as you have computers to support.
 For example, if you have old machines lying around that can run 3-8b models? You can put them to use as worker LLMs in 
 various nodes. The more LLM APIs that you have available to you, either on your own home hardware or via proprietary 
-APIs, the more powerful you can make your workflow network.
+APIs, the more powerful you can make your workflow network. A single prompt to Wilmer could reach out to 5+ computers,
+including proprietary APIs, depending on how you build your workflow.
 
-## Wilmer API Endpoints
+## Some (Not So Pretty) Pictures to Help People Visualize What It Can Do
 
-### How Do You Connect To Wilmer?
+#### Example of A Simple Assistant Workflow Using the Prompt Router
 
-Wilmer exposes several different APIs on the front end, allowing you to connect most applications in the LLM space
-to it.
+![Single Assistant Routing to Multiple LLMs](Docs/Examples/Images/Wilmer-Assistant-Workflow-Example.jpg)
 
-Wilmer exposes the following APIs that other apps can connect to it with:
+#### Example of How Routing Might Be Used
 
-- OpenAI Compatible v1/completions (*requires [Wilmer Prompt Template](Public/Configs/PromptTemplates/wilmerai.json)*)
-- OpenAI Compatible chat/completions
-- Ollama Compatible api/generate (*requires [Wilmer Prompt Template](Public/Configs/PromptTemplates/wilmerai.json)*)
-- Ollama Compatible api/chat
+![Prompt Routing Example](Docs/Examples/Images/Wilmer-Categorization-Workflow-Example.png)
 
-### What Wilmer Can Connect To
+#### Group Chat to Different LLMs
 
-On the backend, Wilmer is capable to connecting to various APIs, where it will send its prompts to LLMs. Wilmer
-currently is capable of connecting to the following API types:
+![Groupchat to Different LLMs](Docs/Examples/Images/Wilmer-Groupchat-Workflow-Example.png)
 
-- OpenAI Compatible v1/completions
-- OpenAI Compatible chat/completions
-- Ollama Compatible api/generate
-- Ollama Compatible api/chat
-- KoboldCpp Compatible api/v1/generate (*non-streaming generate*)
-- KoboldCpp Compatible /api/extra/generate/stream (*streaming generate*)
+#### Example of a UX Workflow Where A User Asks for a Website
 
-Wilmer supports both streaming and non-streaming connections, and has been tested using both Sillytavern
-and Open WebUI.
+![Oversimplified Example Coding Workflow](Docs/Examples/Images/Wilmer-Simple-Coding-Workflow-Example.jpg)
 
 ## Key Features
 
@@ -182,9 +154,76 @@ and Open WebUI.
   here?", and if the answer is 'yes' then kick off a wikipedia workflow, or if 'no' then kick off a workflow that just
   hits LLMs.
 
+
 - **MCP Server Tool Integration using MCPO:** New and experimental support for MCP
   server tool calling using MCPO, allowing tool use mid-workflow. Big thank you to [iSevenDays](https://github.com/iSevenDays)
-  for the amazing work on this feature. More info can be found in the [ReadMe](Public/modules/README_MCP_TOOLS.md) .
+  for the amazing work on this feature. More info can be found in the [ReadMe](Public/modules/README_MCP_TOOLS.md)
+
+
+## Why Make WilmerAI?
+
+Wilmer was kicked off in late 2023, during the Llama 2 era, to make maximum use of fine-tunes through routing.
+The routers that existed at the time didn't handle semantic routing well- often categorizing was based on a single 
+word and the last message only; but sometimes a single word isn't enough to describe a category, and the last 
+message may have too much inferred speech or lack too much context to appropriately categorize on.
+
+Almost immediately after Wilmer was started, it became apparent that just routing wasn't enough: the finetunes were ok,
+but nowhere near as smart as proprietary LLMs. However, when the LLMs were forced to iterate on the same task over and 
+over, the quality of their responses tended to improve (as long as the prompt was well written). This meant that the
+optimal result wasn't routing just to have a single LLM one-shot the response, but rather sending the prompt to something
+more complex.
+
+Instead of relying on unreliable autonomous agents, Wilmer became focused on semi-autonomous Workflows, giving the 
+user granular control of the path the LLMs take, and allow maximum use of the user's own domain knowledge and 
+experience. This also meant that multiple LLMs could work together, orchestrated by the workflow itself,
+to come up with a single solution. 
+
+Rather than routing to a single LLM, Wilmer routes to many via a whole workflow.
+
+This has allowed Wilmer's categorization to be far more complex and customizable than most routers. Categorization is 
+handled by user defined workflows, with as many nodes and LLMs involved as the user wants, to break down the 
+conversation and determine exactly what the user is asking for. This means the user can experiment with different
+prompting styles to try to make the router get the best result. Additionally, the routes are more than just keywords, 
+but rather full descriptions of what the route entails. Little is left to the LLM's "imagination". The goal is that 
+any weakness in Wilmer's categorization can be corrected by simply modifying the categorization workflow. And once 
+that category is chosen? It goes to another workflow.
+
+Eventually Wilmer became more about Workflows than routing, and an optional bypass was made to skip routing entirely.
+Because of the small footprint, this means that users can run multiple instances of Wilmer- some hitting a workflow
+directly, while others use categorization and routing.
+
+While Wilmer may have been the first of its kind, many other semantic routers have since appeared; some of which are 
+likely faster and better. But this project will continue to be maintained for a long time to come, as the maintainer
+of the project still uses it as his daily driver, and has many more plans for it.
+
+## Wilmer API Endpoints
+
+### How Do You Connect To Wilmer?
+
+Wilmer exposes several different APIs on the front end, allowing you to connect most applications in the LLM space
+to it.
+
+Wilmer exposes the following APIs that other apps can connect to it with:
+
+- OpenAI Compatible v1/completions (*requires [Wilmer Prompt Template](Public/Configs/PromptTemplates/wilmerai.json)*)
+- OpenAI Compatible chat/completions
+- Ollama Compatible api/generate (*requires [Wilmer Prompt Template](Public/Configs/PromptTemplates/wilmerai.json)*)
+- Ollama Compatible api/chat
+
+### What Wilmer Can Connect To
+
+On the backend, Wilmer is capable to connecting to various APIs, where it will send its prompts to LLMs. Wilmer
+currently is capable of connecting to the following API types:
+
+- OpenAI Compatible v1/completions
+- OpenAI Compatible chat/completions
+- Ollama Compatible api/generate
+- Ollama Compatible api/chat
+- KoboldCpp Compatible api/v1/generate (*non-streaming generate*)
+- KoboldCpp Compatible /api/extra/generate/stream (*streaming generate*)
+
+Wilmer supports both streaming and non-streaming connections, and has been tested using both Sillytavern
+and Open WebUI.
 
 ## Maintainer's Note:
 
@@ -198,28 +237,6 @@ and Open WebUI.
 > won't have the ability to even look at the issue until the following Friday or Saturday.
 >
 > -Socg
-
-## Some (Not So Pretty) Pictures to Help People Visualize What It Can Do
-
-#### Single Assistant Routing to Multiple LLMs
-
-![Single Assistant Routing to Multiple LLMs](Docs/Examples/Images/Wilmer_Example_Flow_1.png)
-
-#### Silly Tavern Groupchat to Different LLMs
-
-![Silly Tavern Groupchat to Different LLMs](Docs/Examples/Images/Wilmer_Example_Flow_2.png)
-
-#### An Oversimplified Example Coding Workflow
-
-![Oversimplified Example Coding Workflow](Docs/Examples/Images/Wilmer_Workflow_Example.png)
-
-#### An Oversimplified Conversation/Roleplay Workflow
-
-![Oversimplified Conversation/Roleplay Workflow](Docs/Examples/Images/Wilmer_Workflow_Example_2.png)
-
-#### An Oversimplified Python Caller Workflow
-
-![Oversimplified Python Caller Workflow](Docs/Examples/Images/Wilmer_Workflow_Example_3.png)
 
 ## IMPORTANT:
 
@@ -235,6 +252,29 @@ and Open WebUI.
 > entirely dependent on the connected LLMs and their responses. If you connect Wilmer to a model that produces lower
 > quality outputs, or if your presets or prompt template have flaws, then Wilmer's overall quality will be much lower
 > quality as well. It's not much different than agentic workflows in that way.
+
+### Youtube Videos
+
+[WilmerAI Setup Tutorial](https://www.youtube.com/watch?v=v2xYQCHZwJM)
+
+This 40 minute video shows:
+
+- A walkthrough of downloading and setting up Wilmer
+- Running Wilmer and sending a cURL command to it
+- A walkthrough of the wikipedia workflow
+- A brief talk of the new Socg users
+
+[WilmerAI Tutorial Youtube PlayList](https://www.youtube.com/playlist?list=PLjIfeYFu5Pl7J7KGJqVmHM4HU56nByb4X)
+
+This 3 hour video series shows:
+
+- A more in-depth walkthrough of Wilmer and what it is
+- An explanation of some of the workflows, as well as the custom python script module
+- Explaining Socg's personal setup
+- Setting up and running an example user
+- Showing a run of a workflow on an RTX 4090 that utilizes Ollama's ability to hotswap multiple 14b models,
+  allowing a 24GB video card to run as many models that would fit individually on the card as you have hard
+  drive space for.
 
 ### Connecting in SillyTavern
 
@@ -572,7 +612,7 @@ file, `SmallModelEndpoint.json`, defines an endpoint:
   "addTextToStartOfPrompt": false,
   "textToAddToStartOfPrompt": "/no_think",
   "addTextToStartOfCompletion": false,
-  "textToAddToStartOfCompletion": "<think>\n\n</think>\n\n",
+  "textToAddToStartOfCompletion": "<think>\n</think>\n",
   "ensureTextAddedToAssistantWhenChatCompletion": false
 }
 ```

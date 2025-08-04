@@ -1,4 +1,5 @@
-# WilmerAI/Middleware/common/constants.py
+# Middleware/common/constants.py
+
 VALID_NODE_TYPES = [
     "Standard", "ConversationMemory", "FullChatSummary", "RecentMemory",
     "ConversationalKeywordSearchPerformerTool", "MemoryKeywordSearchPerformerTool",

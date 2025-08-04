@@ -3,17 +3,17 @@ from copy import deepcopy
 from typing import List, Dict
 
 from Middleware.services.llm_service import LlmHandlerService
-from Middleware.utilities import memory_utils
+from Middleware.services.memory_service import MemoryService
 from Middleware.utilities.config_utils import get_discussion_memory_file_path, load_config, \
     get_discussion_id_workflow_path, get_endpoint_config
 from Middleware.utilities.file_utils import read_chunks_with_hashes, \
     update_chunks_with_hashes
+from Middleware.utilities.hashing_utils import extract_text_blocks_from_hashed_chunks, find_last_matching_hash_message, \
+    chunk_messages_with_hashes
 from Middleware.utilities.prompt_extraction_utils import extract_last_n_turns, \
     remove_discussion_id_tag_from_string
 from Middleware.utilities.prompt_template_utils import format_user_turn_with_template, \
     format_system_prompt_with_template, add_assistant_end_token_to_user_turn
-from Middleware.utilities.prompt_utils import chunk_messages_with_hashes, \
-    extract_text_blocks_from_hashed_chunks, find_last_matching_hash_message
 from Middleware.utilities.search_utils import filter_keywords_by_speakers, advanced_search_in_chunks, search_in_chunks
 from Middleware.utilities.text_utils import get_message_chunks, clear_out_user_assistant_from_chunks, \
     rough_estimate_token_length
@@ -25,20 +25,37 @@ logger = logging.getLogger(__name__)
 
 class SlowButQualityRAGTool:
     """
-    A very slow but more thorough RAG tool that utilizes LLMs to parse through
-    large chunks of text to find the appropriate context
+    A tool that uses Large Language Models (LLMs) to perform a slow but thorough
+    Retrieval-Augmented Generation (RAG) search on large chunks of text
+    to find appropriate context.
     """
 
     def __init__(self):
-        pass
+        self.memory_service = MemoryService()
 
     def perform_keyword_search(self, keywords: str, target, llm_handler, discussion_id, **kwargs):
         """
-        :param keywords: A string representing the keywords to search for.
-        :param target: The target object to perform the keyword search on.
-        :param kwargs: Additional keyword arguments.
-        :return: The result of the keyword search.
+        Performs a keyword-based search on either the current conversation or
+        recent memory files.
 
+        This method determines the search target based on the 'target' parameter
+        and delegates the keyword search to the appropriate handler method.
+
+        Args:
+            keywords (str): A string containing keywords to search for.
+            target (str): The target of the search. Can be "CurrentConversation"
+                          or "RecentMemories".
+            llm_handler: The LLM handler to be used for processing.
+            discussion_id (str): The unique identifier for the current discussion.
+            **kwargs: Additional keyword arguments.
+                      - messages (List[Dict[str,str]]): A collection of messages
+                                                        representing the conversation.
+                      - lookbackStartTurn (int): The number of turns back to start
+                                                 the search.
+
+        Returns:
+            str: The result of the keyword search, or an error message if the
+                 search cannot be performed.
         """
         if target == "CurrentConversation":
             if 'lookbackStartTurn' in kwargs:
@@ -61,15 +78,21 @@ class SlowButQualityRAGTool:
 
     def perform_conversation_search(self, keywords: str, messagesOriginal, llm_handler, lookbackStartTurn=0):
         """
-        Perform a conversation search based on given keywords and user prompt.
+        Performs a keyword search on the current conversation messages.
+
+        This function retrieves conversation turns, filters them, and performs
+        an advanced search based on the provided keywords.
 
         Args:
-            keywords (str): A string containing keywords to search for.
-            messagesOriginal (list): A collection representing the user's prompt for the conversation search.
-            lookbackStartTurn (int, optional): How many turns back from the most recent to begin our search. Defaults to 0.
+            keywords (str): A string of keywords to search for.
+            messagesOriginal (List[Dict[str,str]]): The list of conversation messages.
+            llm_handler: The LLM handler to determine message collection compatibility.
+            lookbackStartTurn (int, optional): The number of turns back from the
+                                               most recent message to begin the search.
+                                               Defaults to 0.
 
         Returns:
-            str: A string representing the search result chunks joined by '--ChunkBreak--'.
+            str: The search result chunks, joined by '--ChunkBreak--'.
         """
         logger.debug("Entering perform_conversation_search")
 
@@ -99,14 +122,19 @@ class SlowButQualityRAGTool:
 
     def perform_memory_file_keyword_search(self, keywords: str, messagesOriginal, llm_handler, discussion_id):
         """
-        Perform a memory file keyword search based on given keywords and user prompt.
+        Performs a keyword search on the memory file associated with a discussion.
+
+        This function reads the memory file, extracts text chunks, and performs
+        a search based on the provided keywords.
 
         Args:
-            keywords (str): A string containing keywords to search for.
-            messagesOriginal (list): A collection representing the user's prompt for the conversation search.
+            keywords (str): A string of keywords to search for.
+            messagesOriginal (List[Dict[str,str]]): The list of conversation messages.
+            llm_handler: The LLM handler to determine message collection compatibility.
+            discussion_id (str): The unique identifier for the current discussion.
 
         Returns:
-            str: A string representing the search result chunks joined by '--ChunkBreak--'.
+            str: The search result chunks, joined by newline characters.
         """
         logger.debug("Entering perform_memory_file_keyword_search")
         filepath = get_discussion_memory_file_path(discussion_id)
@@ -139,6 +167,21 @@ class SlowButQualityRAGTool:
                                   discussionId, messages, chunks_per_memory=3):
         """
         Processes new memory chunks by performing RAG on them and updating the memory file.
+
+        This function takes a list of new chunks, uses RAG to summarize them,
+        and appends the summaries to the existing memory file.
+
+        Args:
+            chunks (List[str]): A list of text chunks to be processed.
+            hash_chunks (List[Tuple[str, str]]): A list of tuples containing
+                                                 the text and hash for each chunk.
+            rag_system_prompt (str): The system prompt for the RAG process.
+            rag_prompt (str): The user prompt for the RAG process.
+            workflow (dict): The workflow configuration dictionary.
+            discussionId (str): The unique identifier for the current discussion.
+            messages (List[Dict[str,str]]): The conversation messages.
+            chunks_per_memory (int, optional): The number of chunks to process
+                                               per memory. Defaults to 3.
         """
         rag_tool = SlowButQualityRAGTool()
 
@@ -169,7 +212,15 @@ class SlowButQualityRAGTool:
 
     def handle_discussion_id_flow(self, discussionId: str, messagesOriginal: List[Dict[str, str]]) -> None:
         """
-        Handle the discussion flow based on the discussion ID and messages provided.
+        Manages the memory creation flow for a specific discussion ID.
+
+        This function checks if new memories need to be generated based on
+        the length of the conversation and the existing memory file. It
+        then initiates the appropriate memory processing flow.
+
+        Args:
+            discussionId (str): The unique identifier for the current discussion.
+            messagesOriginal (List[Dict[str, str]]): The conversation messages.
         """
         if len(messagesOriginal) < 3:
             logger.debug("Less than 3 messages, no memory will be generated.")
@@ -257,8 +308,18 @@ class SlowButQualityRAGTool:
     def process_full_discussion_flow(self, messages: List[Dict[str, str]], rag_system_prompt: str, rag_prompt: str,
                                      workflow_config: dict, discussionId: str) -> None:
         """
-        Process the entire discussion flow if no previous chunks are available or if the
-        last chunk is outdated.
+        Processes the entire discussion history to create a new set of memory chunks.
+
+        This function is used when there are no existing memory chunks or when
+        the memory file needs to be completely rebuilt. It chunks the conversation
+        and processes each chunk in batches to create new memory summaries.
+
+        Args:
+            messages (List[Dict[str, str]]): The conversation messages.
+            rag_system_prompt (str): The system prompt for the RAG process.
+            rag_prompt (str): The user prompt for the RAG process.
+            workflow_config (dict): The workflow configuration dictionary.
+            discussionId (str): The unique identifier for the current discussion.
         """
         if len(messages) < 3:
             logger.debug("Less than 3 messages, no memory will be generated.")
@@ -303,39 +364,37 @@ class SlowButQualityRAGTool:
             self.process_new_memory_chunks(batch_pass_chunks, batch_chunk_hashes, rag_system_prompt, rag_prompt,
                                            workflow_config, discussionId, messages)
 
-    @staticmethod
-    def perform_rag_on_conversation_chunk(rag_system_prompt: str, rag_prompt: str, text_chunk: str, config: dict,
-                                          custom_delimiter: str = "") -> str:
-        """
-        Perform Retrieval-Augmented Generation (RAG) on a given chunk of conversation.
-
-        Args:
-            rag_system_prompt (str): The system prompt for the RAG process.
-            rag_prompt (str): The prompt used for RAG processing.
-            text_chunk (str): The chunk of text to process.
-            config (dict): Configuration parameters for the RAG process.
-            custom_delimiter (str, optional): Custom delimiter to separate chunks. Defaults to "".
-
-        Returns:
-            List[str]: The processed chunks of text.
-        """
-        chunks = text_chunk.split('--ChunkBreak--')
-        parallel_llm_processing_service = ParallelLlmProcessingTool(config)
-        return parallel_llm_processing_service.process_prompt_chunks(chunks, rag_prompt, rag_system_prompt,
-                                                                     custom_delimiter)
-
-    @staticmethod
-    def perform_rag_on_memory_chunk(rag_system_prompt: str, rag_prompt: str, text_chunk: str, config: dict,
+    def perform_rag_on_memory_chunk(self, rag_system_prompt: str, rag_prompt: str, text_chunk: str, config: dict,
                                     messages, discussionId: str, custom_delimiter: str = "",
                                     chunks_per_memory: int = 3) -> str:
         """
-        Perform RAG on a given chunk of conversation.
+        Performs RAG on a given chunk of a conversation and updates memory.
+
+        This function processes a text chunk by retrieving relevant conversation
+        history and chat summaries, and then using an LLM to generate a
+        summarized result.
+
+        Args:
+            rag_system_prompt (str): The system prompt for the RAG process.
+            rag_prompt (str): The user prompt for the RAG process.
+            text_chunk (str): The chunk of text to process, separated by
+                              '--ChunkBreak--'.
+            config (dict): The workflow configuration dictionary.
+            messages (List[Dict[str,str]]): The conversation messages.
+            discussionId (str): The unique identifier for the current discussion.
+            custom_delimiter (str, optional): A custom delimiter to separate
+                                              the output chunks. Defaults to "".
+            chunks_per_memory (int, optional): The number of memory chunks to
+                                               consider for context. Defaults to 3.
+
+        Returns:
+            str: The processed chunks joined by the custom delimiter.
         """
         chunks = text_chunk.split('--ChunkBreak--')
 
         discussion_chunks = read_chunks_with_hashes(get_discussion_memory_file_path(discussionId))
         memory_chunks = extract_text_blocks_from_hashed_chunks(discussion_chunks)
-        chat_summary = memory_utils.handle_get_current_summary_from_file(discussionId)
+        chat_summary = self.memory_service.get_current_summary(discussionId)
 
         endpoint_data = get_endpoint_config(config['endpointName'])
         llm_handler_service = LlmHandlerService()
@@ -375,18 +434,51 @@ class SlowButQualityRAGTool:
         return custom_delimiter.join(result_chunks)
 
     @staticmethod
+    def perform_rag_on_conversation_chunk(rag_system_prompt: str, rag_prompt: str, text_chunk: str, config: dict,
+                                          custom_delimiter: str = "") -> str:
+        """
+        Performs Retrieval-Augmented Generation (RAG) on a given chunk of conversation.
+
+        This static method splits a conversation chunk into sub-chunks and uses
+        a parallel processing tool to run RAG on them.
+
+        Args:
+            rag_system_prompt (str): The system prompt for the RAG process.
+            rag_prompt (str): The user prompt for the RAG process.
+            text_chunk (str): The chunk of text to process.
+            config (dict): A dictionary containing configuration parameters,
+                           including the endpoint and preset settings.
+            custom_delimiter (str, optional): A custom delimiter to separate
+                                              the output chunks. Defaults to "".
+
+        Returns:
+            str: The processed chunks of text joined by the custom delimiter.
+        """
+        chunks = text_chunk.split('--ChunkBreak--')
+        parallel_llm_processing_service = ParallelLlmProcessingTool(config)
+        return parallel_llm_processing_service.process_prompt_chunks(chunks, rag_prompt, rag_system_prompt,
+                                                                     custom_delimiter)
+
+    @staticmethod
     def process_single_chunk(chunk, llm_handler, workflow_prompt, workflow_system_prompt,
                              messages, config):
         """
-        Processes a single chunk using the specified LLM handler.
+        Processes a single text chunk using the specified LLM handler.
 
-        Parameters:
-        chunk (str): The text chunk to be processed.
-        index (int): The index of the chunk in the original text.
-        llm_handler (LlmHandlerService): The handler for processing the chunk.
-        workflow_prompt (str): The prompt used in processing.
-        workflow_system_prompt (str): The system prompt used in processing.
-        results_queue (Queue): Queue where the result is placed after processing.
+        This static method formats prompts, handles message collection, and
+        dispatches the request to the LLM handler to get a response for a
+        single chunk.
+
+        Args:
+            chunk (str): The text chunk to be processed.
+            llm_handler: The handler for processing the chunk.
+            workflow_prompt (str): The user prompt to be used in processing.
+            workflow_system_prompt (str): The system prompt to be used in processing.
+            messages (List[Dict[str,str]]): The conversation messages.
+            config (dict): The workflow configuration dictionary.
+
+        Returns:
+            str: The response from the LLM handler.
         """
 
         workflow_variable_service = WorkflowVariableManager()

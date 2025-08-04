@@ -1,6 +1,7 @@
+# /Middleware/utilities/prompt_extraction_utils.py
+
 import logging
 import re
-from copy import deepcopy
 from typing import Dict, Tuple, List, Optional, Any
 
 logger = logging.getLogger(__name__)
@@ -21,15 +22,29 @@ discussion_identifiers = {
 def extract_last_n_turns(messages: List[Dict[str, str]], n: int, include_sysmes: bool = True,
                          remove_all_systems_override=False) -> List[Dict[str, str]]:
     """
-    Extract the last n messages, including system messages if include_sysmes is True.
-    When include_sysmes is True, only system messages at the very beginning of the list are excluded.
+    Extracts the last n messages from a list, with options to handle system messages.
 
-    Parameters:
-    messages (List[Dict[str, str]]): The list of messages.
-    n (int): The number of messages to extract.
-    include_sysmes (bool, optional): Whether to include system messages that are not at the start of the list. Defaults to True.
+    This function extracts a subset of messages from a conversation, ensuring
+    that the system messages are handled according to the provided flags.
+    It can be configured to include or exclude all system messages, or to
+    only exclude leading system messages.
+
+    Args:
+        messages (List[Dict[str, str]]): The list of conversation messages. Each message
+                                         is a dictionary with a 'role' and 'content'.
+        n (int): The number of messages (turns) to extract from the end of the list.
+        include_sysmes (bool, optional): If `True`, includes system messages in the
+                                         extracted list, excluding only those at the
+                                         very beginning of the conversation. If `False`,
+                                         all system messages are excluded. Defaults to `True`.
+        remove_all_systems_override (bool, optional): If `True`, overrides the
+                                                      `include_sysmes` parameter and
+                                                      removes all system messages.
+                                                      Defaults to `False`.
+
     Returns:
-    List[Dict[str, str]]: The last n messages, with system messages included as specified.
+        List[Dict[str, str]]: A list containing the last `n` messages based on the
+                              specified system message handling rules.
     """
 
     if not messages:
@@ -59,21 +74,26 @@ def extract_last_n_turns(messages: List[Dict[str, str]], n: int, include_sysmes:
 def extract_last_n_turns_as_string(messages: List[Dict[str, Any]], n: int, include_sysmes: bool = True,
                                    remove_all_systems_override=False) -> str:
     """
-    Extracts the last n messages as a single string, joining their content.
-    Excludes initial system messages unless remove_all_systems_override is True.
-    If include_sysmes is False (and remove_all_systems_override is False), 
-    all 'system' role messages are removed (behavior inherited from extract_last_n_turns).
+    Extracts and joins the content of the last n messages into a single string.
 
-    Parameters:
-    messages (List[Dict[str, Any]]): The list of messages.
-    n (int): The number of messages (turns) to extract.
-    include_sysmes (bool, optional): Whether to include non-initial system messages. Defaults to True.
-                                     Passed to extract_last_n_turns.
-    remove_all_systems_override (bool, optional): If True, ignore include_sysmes and remove all system messages.
-                                                 Passed to extract_last_n_turns.
+    This function leverages `extract_last_n_turns` to get a filtered list of
+    messages and then concatenates their content into a single string,
+    separated by newlines. The handling of system messages is delegated
+    to the helper function.
+
+    Args:
+        messages (List[Dict[str, Any]]): The list of conversation messages.
+                                         Each message is a dictionary with a 'role' and 'content'.
+        n (int): The number of messages (turns) to extract.
+        include_sysmes (bool, optional): Controls the inclusion of system messages.
+                                         See `extract_last_n_turns` for details. Defaults to `True`.
+        remove_all_systems_override (bool, optional): If `True`, all system messages
+                                                      are removed. See `extract_last_n_turns`
+                                                      for details. Defaults to `False`.
 
     Returns:
-    str: The last n messages' content joined as a single string.
+        str: The content of the last `n` messages joined as a single string.
+             Returns an empty string if the input messages list is empty.
     """
     if not messages:
         return ""
@@ -94,16 +114,18 @@ def extract_last_n_turns_as_string(messages: List[Dict[str, Any]], n: int, inclu
 
 def extract_discussion_id(messages: List[Dict[str, str]]) -> Optional[str]:
     """
-    Extracts the discussion ID from the input messages.
+    Extracts the discussion ID from a list of messages.
 
-    This function searches for the discussion ID enclosed within specific start and end tags
-    and returns the numeric ID.
+    This function iterates through a list of messages to find a specific
+    discussion ID enclosed within predefined start and end tags. It returns
+    the first ID found.
 
-    Parameters:
-    messages (List[Dict[str, str]]): The list of messages containing the discussion ID.
+    Args:
+        messages (List[Dict[str, str]]): The list of messages, where each message
+                                         is a dictionary containing a 'content' key.
 
     Returns:
-    Optional[str]: The extracted numeric discussion ID, or None if not found.
+        Optional[str]: The extracted discussion ID as a string if found, otherwise `None`.
     """
     pattern = f'{re.escape(discussion_identifiers["discussion_id_start"])}(.*?){re.escape(discussion_identifiers["discussion_id_end"])}'
     for message in messages:
@@ -115,16 +137,19 @@ def extract_discussion_id(messages: List[Dict[str, str]]) -> Optional[str]:
 
 def remove_discussion_id_tag(messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
     """
-    Removes the discussion ID tag from the input messages.
+    Removes the discussion ID tag from the content of all messages in a list.
 
-    This function identifies and removes the discussion ID and its surrounding tags
-    from the content of each message.
+    This function iterates through each message in the provided list and
+    removes the discussion ID and its surrounding tags from the message's
+    'content' string.
 
-    Parameters:
-    messages (List[Dict[str, str]]): The list of messages containing the discussion ID tag.
+    Args:
+        messages (List[Dict[str, str]]): The list of messages that may contain
+                                         the discussion ID tag.
 
     Returns:
-    List[Dict[str, str]]: The list of messages with the discussion ID tag removed.
+        List[Dict[str, str]]: The original list of messages with the discussion
+                              ID tag removed from their content.
     """
     for message in messages:
         message['content'] = remove_discussion_id_tag_from_string(message['content'])
@@ -135,14 +160,15 @@ def remove_discussion_id_tag_from_string(message: str) -> str:
     """
     Removes the discussion ID tag from a single message string.
 
-    This function identifies and removes the discussion ID and its surrounding tags
-    from the content of the message.
+    This function uses a regular expression to find and remove the
+    discussion ID and its surrounding tags from a given string.
 
-    Parameters:
-    message (str): The message string containing the discussion ID tag.
+    Args:
+        message (str): The string content of a message that may contain the
+                       discussion ID tag.
 
     Returns:
-    str: The message string with the discussion ID tag removed.
+        str: The message string with the discussion ID tag removed.
     """
     pattern = f'{re.escape(discussion_identifiers["discussion_id_start"])}.*?{re.escape(discussion_identifiers["discussion_id_end"])}'
     return re.sub(pattern, '', message)
@@ -151,14 +177,30 @@ def remove_discussion_id_tag_from_string(message: str) -> str:
 def separate_messages(messages: List[Dict[str, str]], separate_sysmes: bool = False) -> Tuple[
     str, List[Dict[str, str]]]:
     """
-    Processes a list of messages to extract system prompts and organize the conversation.
+    Separates a list of messages into a system prompt and a conversation list.
 
-    Parameters:
-    - messages (List[Dict[str, str]]): A list of messages with roles ('system', 'user', 'assistant') and content.
-    - separate_sysmes (bool, optional): If True, only the system messages at the start of the messages list are extracted into the system prompt. Subsequent system messages are included in the conversation. If False, all system messages are extracted into the system prompt, and other roles are included in the conversation. Defaults to False.
+    This function processes a list of messages, extracting content with the
+    'system' role into a single system prompt string and placing all
+    other messages into a separate conversation list. The behavior for
+    system messages is conditional on the `separate_sysmes` flag.
+
+    Args:
+        messages (List[Dict[str, str]]): A list of messages, where each message
+                                         is a dictionary with a 'role' and 'content'.
+        separate_sysmes (bool, optional): If `True`, only initial system messages
+                                         are extracted into the system prompt. Subsequent
+                                         system messages are treated as part of the
+                                         conversation. If `False`, all system messages
+                                         are concatenated into the system prompt.
+                                         Defaults to `False`.
 
     Returns:
-    - Tuple[str, List[Dict[str, str]]]: A tuple containing the system prompt and the remaining conversation messages.
+        Tuple[str, List[Dict[str, str]]]: A tuple containing:
+                                          - `str`: The concatenated system prompt.
+                                          - `List[Dict[str, str]]`: The remaining conversation messages.
+
+    Raises:
+        ValueError: If a message in the input list is missing the 'role' or 'content' key.
     """
     system_prompt_list = []
     conversation = []
@@ -177,10 +219,15 @@ def separate_messages(messages: List[Dict[str, str]], separate_sysmes: bool = Fa
 
 def parse_conversation(input_string: str) -> List[Dict[str, str]]:
     """
-    Parses a conversation string into a list of messages with roles and content.
+    Parses a conversation string with custom tags into a list of messages.
 
-    Parameters:
-        input_string (str): The input string containing the conversation.
+    This function uses a regular expression to identify and extract messages
+    from a string formatted with specific tags (e.g., `[Beg_Sys]`, `[Beg_User]`).
+    It then organizes the extracted content into a list of dictionaries, where
+    each dictionary represents a message with a 'role' and 'content'.
+
+    Args:
+        input_string (str): The string containing the tagged conversation content.
 
     Returns:
         List[Dict[str, str]]: The parsed list of messages.
@@ -216,14 +263,23 @@ def parse_conversation(input_string: str) -> List[Dict[str, str]]:
 
 def extract_initial_system_prompt(input_string: str, begin_sys: str) -> Tuple[str, str]:
     """
-    Extracts the initial system prompt from the input string.
+    Extracts the initial system prompt and the rest of the string.
 
-    Parameters:
-    input_string (str): The input string containing the system prompt.
-    begin_sys (str): The starting tag of the system prompt.
+    This function searches for a specific system prompt tag at the beginning of
+    a string. If found, it separates the system prompt content from the rest of
+    the string and returns both parts.
+
+    Args:
+        input_string (str): The full input string, potentially containing a
+                            system prompt.
+        begin_sys (str): The starting tag that marks the beginning of the
+                         system prompt.
 
     Returns:
-    Tuple[str, str]: The extracted system prompt and the remaining string.
+        Tuple[str, str]: A tuple containing:
+                         - `str`: The extracted system prompt content.
+                         - `str`: The remaining part of the string after the
+                                  system prompt and its tag have been removed.
     """
     start_index = input_string.find(begin_sys)
     if start_index != -1:
@@ -237,13 +293,17 @@ def extract_initial_system_prompt(input_string: str, begin_sys: str) -> Tuple[st
 
 def process_remaining_string(remaining_string: str, template: Dict[str, str]) -> str:
     """
-    Processes the remaining string by removing the initial system prompt tag.
+    Removes the initial system prompt tag from a string.
 
-    Parameters:
-    remaining_string (str): The remaining string after extracting the system prompt.
-    template (Dict[str, str]): The template containing the tags.
+    This is a helper function that specifically removes the `Begin_Sys` tag
+    from the beginning of a given string.
+
+    Args:
+        remaining_string (str): The string to process, from which the tag
+                                should be removed.
+        template (Dict[str, str]): A dictionary containing the tag definitions.
 
     Returns:
-    str: The processed remaining string.
+        str: The processed string with the `Begin_Sys` tag removed.
     """
     return remaining_string.replace(template["Begin_Sys"], "", 1).strip()

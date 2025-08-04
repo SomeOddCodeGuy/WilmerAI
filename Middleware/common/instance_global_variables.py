@@ -1,3 +1,5 @@
+# Middleware/common/instance_global_variables
+
 import uuid
 
 INSTANCE_ID = str(uuid.uuid4())

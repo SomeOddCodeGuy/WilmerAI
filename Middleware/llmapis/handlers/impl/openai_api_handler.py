@@ -1,7 +1,7 @@
 # middleware/llmapis/handlers/impl/openai_api_handler.py
 import json
 import logging
-from typing import Dict, Optional, Any, List
+from typing import Dict, Optional, Any
 
 from Middleware.llmapis.handlers.base.base_chat_completions_handler import BaseChatCompletionsHandler
 
