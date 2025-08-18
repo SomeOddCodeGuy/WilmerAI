@@ -1,35 +1,39 @@
 ## DISCLAIMER:
 
-> This is a personal project under heavy development. It could, and likely does, contain bugs, incomplete code,  
+> This is a personal project under heavy development. It could, and likely does, contain bugs, incomplete code, 
 > or other unintended issues. As such, the software is provided as-is, without warranty of any kind.
 >
-> This project and any expressed views, methodologies, etc., found within are the result of contributions by the  
+> This project and any expressed views, methodologies, etc., found within are the result of contributions by the 
 > maintainer and any contributors in their free time, and should not reflect upon any of their employers.
+
+---
 
 ## What is WilmerAI?
 
-Wilmer is an application that sits between your front end (or any other LLM-calling program) and the LLM APIs you're  
+Wilmer is an application that sits between your front end (or any other LLM-calling program) and the LLM APIs you're
 sending your prompts to.
 
-To connect to it, Wilmer exposes OpenAI- and Ollama-compatible API endpoints, and on the backend it can connect to LLM  
+To connect to it, Wilmer exposes OpenAI- and Ollama-compatible API endpoints, and on the backend it can connect to LLM
 APIs like OpenAI, KoboldCpp, and Ollama.
 
 To visualize: you type a prompt into your front end, which is connected to Wilmer. The prompt gets sent to Wilmer
-first, which runs it through a series of workflows. Each workflow may make calls to multiple LLMs, after which the final  
+first, which runs it through a series of workflows. Each workflow may make calls to multiple LLMs, after which the final
 response comes back to you.
 
-From your perspective, it looks like a (likely long-running) one-shot call to an LLM. But in reality,  
-it could involve many LLMs—and even tools—performing complex work.
+From your perspective, it looks like a (likely long-running) one-shot call to an LLM. But in reality, it could involve many
+LLMs—and even tools—performing complex work.
 
 ### What Does WilmerAI Stand For?
 
 WilmerAI stands for **"What If Language Models Expertly Routed All Inference?"**
 
+---
+
 ## Maintainer's Note — UPDATED 2025-08-17
 
 > **IMPORTANT:**  
-> Until October 2025, WilmerAI will not accept any new Pull Requests that modify anything within the  
-> Middleware modules; some exceptions may apply. Updates to iSevenDays' new MCP tool-calling feature, or adding new  
+> Until October 2025, WilmerAI will not accept any new Pull Requests that modify anything within the
+> Middleware modules; some exceptions may apply. Updates to iSevenDays' new MCP tool-calling feature, or adding new
 > custom users or prompt templates within the Public directory, are still welcome.
 >
 > **Roadmap to Complete Before New PRs Accepted**
@@ -43,15 +47,15 @@ WilmerAI stands for **"What If Language Models Expertly Routed All Inference?"**
 > * Second Round Refactoring for Unit Tests
 > * Full Unit Test Coverage of Primary Functions
 >
-> During this time, there are very likely to be new bugs introduced. I really don’t have the ability  
-> to work on this project during the week at all, so it’s a heads-down code-a-thon on weekends whenever  
+> During this time, there are very likely to be new bugs introduced. I really don’t have the ability
+> to work on this project during the week at all, so it’s a heads-down code-a-thon on weekends whenever
 > I can. Please bear with me if I break stuff along the way over the next few weeks.
 >
-> To help reduce the pain of this, I’ve finally set up tags/releases, with major checkpoints from the past  
+> To help reduce the pain of this, I’ve finally set up tags/releases, with major checkpoints from the past
 > few months chosen so you can grab earlier, better-working versions.
 >
-> PS: Please bear with me if one of my documents says something dumb. When time is short, documentation usually  
-> suffers the most, so I’m relying heavily on LLMs right now. Normally I would do it by hand or at least  
+> PS: Please bear with me if one of my documents says something dumb. When time is short, documentation usually
+> suffers the most, so I’m relying heavily on LLMs right now. Normally I would do it by hand or at least
 > proofread it better—so I apologize in advance. I’ll clean that up soon-ish.
 >
 > — Socg
