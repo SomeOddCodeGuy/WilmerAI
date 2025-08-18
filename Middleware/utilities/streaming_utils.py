@@ -10,43 +10,35 @@ logger = logging.getLogger(__name__)
 class StreamingThinkRemover:
     """
     A stateful class to remove "thinking" blocks from a streaming LLM response.
-
-    This class processes text chunks from a streaming API response in real-time.
-    It identifies and removes content enclosed within specified thinking tags
-    (e.g., `<think>...</think>`) based on rules defined in the endpoint
-    configuration. It supports multiple modes, such as removing content only after a
-    closing tag or removing a complete tag pair found within an initial grace
-    period. This allows the LLM to include internal monologue or reasoning in its
-    generation that is hidden from the end-user.
     """
+
     def __init__(self, endpoint_config: Dict):
         """
-        Initializes the StreamingThinkRemover instance.
-
-        This constructor sets up the remover based on the endpoint configuration. It
-        configures settings like whether to remove thinking blocks, the specific tags
-        to look for, the mode of operation (e.g., only looking for a closing tag),
-        and pre-compiles the necessary regular expressions.
+        Initializes the StreamingThinkRemover.
 
         Args:
-            endpoint_config (Dict): The configuration dictionary for the LLM endpoint,
-                                    containing settings for thinking block removal.
+            endpoint_config (Dict): The configuration dictionary for the LLM endpoint.
         """
         self.remove_thinking = endpoint_config.get("removeThinking", False)
-        self.think_tag = endpoint_config.get("thinkTagText", "think")
+
+        self.start_think_tag = endpoint_config.get("startThinkTag", "")
+        self.end_think_tag = endpoint_config.get("endThinkTag", "")
+
         self.expect_only_closing = endpoint_config.get("expectOnlyClosingThinkTag", False)
-        self.opening_tag_window = endpoint_config.get("openingTagGracePeriod", 50)
+        self.opening_tag_window = endpoint_config.get("openingTagGracePeriod", 100)
 
         if self.remove_thinking:
-            logger.debug(
-                f"StreamingThinkRemover initialized. Mode: {'ClosingTagOnly' if self.expect_only_closing else 'Standard'}. "
-                f"Tag: '{self.think_tag}', Grace Period: {self.opening_tag_window} chars."
-            )
-
-        self.close_tag_re = re.compile(
-            f"^\\s*</{re.escape(self.think_tag)}>" r"\s*(\n|$)", re.IGNORECASE | re.MULTILINE
-        )
-        self.open_tag_re = re.compile(f"<{re.escape(self.think_tag)}\\b[^>]*>", re.IGNORECASE)
+            if not self.start_think_tag or not self.end_think_tag:
+                logger.warning(
+                    "removeThinking is true, but 'startThinkTag' or 'endThinkTag' is missing in config. Disabling feature.")
+                self.remove_thinking = False
+            else:
+                logger.debug(
+                    f"StreamingThinkRemover initialized. Mode: {'ClosingTagOnly' if self.expect_only_closing else 'Standard'}. "
+                    f"Start Tag: '{self.start_think_tag}', End Tag: '{self.end_think_tag}'"
+                )
+                self.open_tag_re = re.compile(re.escape(self.start_think_tag), re.IGNORECASE)
+                self.close_tag_re = re.compile(re.escape(self.end_think_tag), re.IGNORECASE)
 
         self._buffer = ""
         self._in_think_block = False
@@ -56,20 +48,13 @@ class StreamingThinkRemover:
 
     def process_delta(self, delta: str) -> str:
         """
-        Processes a chunk of a streaming response to remove thinking blocks.
-
-        This method takes a new chunk of text (`delta`) from the LLM stream,
-        appends it to an internal buffer, and applies the configured logic to
-        identify and remove content within thinking tags. It handles different
-        modes, such as waiting for an opening tag within a grace period or only
-        looking for a closing tag.
+        Processes a single chunk of text from a streaming response.
 
         Args:
-            delta (str): The incoming chunk of text from the LLM stream.
+            delta (str): The incoming text chunk from the LLM stream.
 
         Returns:
-            str: The processed chunk of text, with thinking blocks removed, ready
-                 to be sent to the user.
+            str: The processed text chunk, with thinking blocks removed as they are detected.
         """
         if not self.remove_thinking:
             return delta
@@ -86,7 +71,7 @@ class StreamingThinkRemover:
                 if match:
                     logger.debug("Closing tag found in 'expectOnlyClosing' mode. Discarding preceding content.")
                     self._thinking_handled = True
-                    content_to_yield = self._buffer[match.end():]
+                    content_to_yield = self._buffer[match.end():]  # type: ignore
                     self._buffer = ""
         else:
             while True:
@@ -97,7 +82,7 @@ class StreamingThinkRemover:
                         logger.debug("Closing think tag found. Resuming normal stream output.")
                         self._in_think_block = False
                         self._consumed_open_tag = ""
-                        self._buffer = self._buffer[match.end():]
+                        self._buffer = self._buffer[match.end():]  # type: ignore
                     else:
                         break
                 else:
@@ -108,23 +93,22 @@ class StreamingThinkRemover:
 
                     match = self.open_tag_re.search(self._buffer)
                     if match:
-                        if match.start() <= self.opening_tag_window:
+                        if not self._opening_tag_check_complete and match.start() <= self.opening_tag_window:  # type: ignore
                             logger.debug("Opening think tag found within grace period. Entering think block.")
+                            content_to_yield += self._buffer[:match.start()]  # type: ignore
                             self._in_think_block = True
-                            self._consumed_open_tag = match.group(0)
-                            self._buffer = self._buffer[match.end():]
+                            self._consumed_open_tag = match.group(0)  # type: ignore
+                            self._buffer = self._buffer[match.end():]  # type: ignore
                         else:
                             logger.debug(
-                                "Opening tag found but it's outside the grace period. Disabling further checks."
-                            )
+                                "Opening tag found but it's outside the grace period. Disabling further checks.")
                             self._opening_tag_check_complete = True
                             content_to_yield += self._buffer
                             self._buffer = ""
                             break
-                    elif len(self._buffer) > self.opening_tag_window:
+                    elif len(self._buffer) > self.opening_tag_window and not self._opening_tag_check_complete:
                         logger.debug(
-                            f"Grace period of {self.opening_tag_window} chars exceeded without finding opening tag."
-                        )
+                            f"Grace period of {self.opening_tag_window} chars exceeded without finding opening tag.")
                         self._opening_tag_check_complete = True
                         content_to_yield += self._buffer
                         self._buffer = ""
@@ -138,18 +122,20 @@ class StreamingThinkRemover:
 
     def finalize(self) -> str:
         """
-        Finalizes the stream and returns any remaining buffered text.
+        Finalizes the stream, processing any remaining buffered text.
 
-        This method is called after the stream has ended to process any remaining
-        text in the internal buffer. This is crucial for handling cases where the
-        stream ends mid-thought or with an unterminated thinking block. Depending
-        on the state and configuration, it might flush the buffer, discard it, or
-        return a portion of it.
+        This should be called after the stream has ended to flush any remaining
+        content, especially in cases of unterminated thinking blocks.
 
         Returns:
-            str: Any remaining text from the buffer after final processing.
+            str: The final, cleaned-up text remaining in the buffer.
         """
         if not self.remove_thinking:
+            return self._buffer
+
+        if self.expect_only_closing and not self._thinking_handled:
+            logger.warning(
+                "Finalizing stream in 'expectOnlyClosing' mode without ever finding a closing tag. Discarding buffer.")
             return ""
 
         if self._in_think_block:
@@ -161,14 +147,6 @@ class StreamingThinkRemover:
             logger.warning("Finalizing stream while in an unterminated think block. Flushing buffer as-is.")
             return self._consumed_open_tag + self._buffer
 
-        if self.expect_only_closing and not self._thinking_handled:
-            logger.warning(
-                "Finalizing stream in 'expectOnlyClosing' mode without ever finding a closing tag. Discarding buffer."
-            )
-            return ""
-
-        if self._buffer:
-            logger.debug("Finalizing stream, flushing remaining buffer.")
         return self._buffer
 
 
@@ -176,54 +154,106 @@ def remove_thinking_from_text(text: str, endpoint_config: Dict) -> str:
     """
     Removes a thinking block from a complete, non-streamed string.
 
-    This function processes a complete block of text to find and remove content
-    enclosed in thinking tags (e.g., `<think>...</think>`). It operates on a
-    non-streaming basis, supporting different modes based on the endpoint
-    configuration, such as removing all text before a closing tag or removing
-    a full open/close tag pair found near the beginning of the text.
-
     Args:
-        text (str): The complete input text from the LLM.
-        endpoint_config (Dict): The configuration dictionary for the LLM endpoint,
-                                which contains settings for thinking block removal.
+        text (str): The complete LLM response text.
+        endpoint_config (Dict): The configuration dictionary for the LLM endpoint.
 
     Returns:
-        str: The text with the thinking block removed, or the original text if no
-             thinking block was found and removed according to the rules.
+        str: The text with the thinking block removed, or the original text if
+             the removal conditions are not met.
     """
-    if not endpoint_config.get("removeThinking", False):
+    if not endpoint_config.get("removeThinking", False) or not text:
         return text
 
-    think_tag = endpoint_config.get("thinkTagText", "think")
-    logger.debug(f"Processing non-streaming text to remove thinking block with tag: '{think_tag}'.")
+    start_think_tag = endpoint_config.get("startThinkTag", "")
+    end_think_tag = endpoint_config.get("endThinkTag", "")
+    expect_only_closing = endpoint_config.get("expectOnlyClosingThinkTag", False)
+    grace_period = endpoint_config.get("openingTagGracePeriod", 100)
 
-    close_tag_re = re.compile(
-        f"^\\s*</{re.escape(think_tag)}>" r"\s*(\n|$)", re.IGNORECASE | re.MULTILINE
-    )
+    if not start_think_tag or not end_think_tag:
+        return text
 
-    if endpoint_config.get("expectOnlyClosingThinkTag", False):
+    close_tag_re = re.compile(re.escape(end_think_tag), re.IGNORECASE)
+
+    if expect_only_closing:
         match = close_tag_re.search(text)
         if match:
             logger.debug("Non-streaming 'ClosingTagOnly' mode: Found closing tag, removing preceding text.")
-            return text[match.end():]
+            return text[match.end():]  # type: ignore
         else:
-            logger.debug(
-                "Non-streaming 'ClosingTagOnly' mode: No closing tag found, returning empty string as per logic."
-            )
+            logger.debug("Non-streaming 'ClosingTagOnly' mode: No closing tag found, returning empty string.")
             return ""
     else:
-        open_tag_re = re.compile(f"<{re.escape(think_tag)}\\b[^>]*>", re.IGNORECASE)
-        opening_tag_window = endpoint_config.get("openingTagGracePeriod", 50)
-
-        open_match = open_tag_re.search(text, 0, opening_tag_window)
+        open_tag_re = re.compile(re.escape(start_think_tag), re.IGNORECASE)
+        open_match = open_tag_re.search(text, 0, min(len(text), grace_period))
         if not open_match:
             logger.debug("Non-streaming: No opening tag found in grace period. Returning original text.")
             return text
 
-        close_match = close_tag_re.search(text, open_match.end())
+        close_match = close_tag_re.search(text, open_match.end())  # type: ignore
         if not close_match:
             logger.debug("Non-streaming: Found opening tag but no closing tag. Returning original text as-is.")
             return text
 
         logger.debug("Non-streaming: Found and removed full thinking block.")
-        return text[close_match.end():]
+        return text[:open_match.start()] + text[close_match.end():]  # type: ignore
+
+
+def post_process_llm_output(text: str, endpoint_config: Dict, workflow_node_config: Dict) -> str:
+    """
+    Cleans and formats a complete, non-streamed LLM output string.
+
+    This function applies a series of sequential cleaning rules, such as removing
+    thinking tags, custom prefixes, and standard boilerplate text.
+
+    Args:
+        text (str): The raw, complete LLM response.
+        endpoint_config (Dict): The configuration for the LLM endpoint.
+        workflow_node_config (Dict): The configuration for the specific workflow node.
+
+    Returns:
+        str: The cleaned and formatted output text.
+    """
+    from Middleware.api import api_helpers
+    from Middleware.utilities.config_utils import get_is_chat_complete_add_user_assistant, \
+        get_is_chat_complete_add_missing_assistant
+
+    processed_text = remove_thinking_from_text(text, endpoint_config)
+    content = processed_text.lstrip()
+
+    if workflow_node_config.get("removeCustomTextFromResponseStart", False):
+        custom_texts = workflow_node_config.get("responseStartTextToRemove", [])
+        if isinstance(custom_texts, str):
+            custom_texts = [custom_texts]
+
+        for custom_text in custom_texts:
+            if custom_text and content.startswith(custom_text):
+                content = content[len(custom_text):].lstrip()
+                break
+
+    if endpoint_config.get("removeCustomTextFromResponseStartEndpointWide", False):
+        custom_texts_endpoint = endpoint_config.get("responseStartTextToRemoveEndpointWide", [])
+        if isinstance(custom_texts_endpoint, str):
+            custom_texts_endpoint = [custom_texts_endpoint]
+
+        for custom_text in custom_texts_endpoint:
+            if custom_text and content.startswith(custom_text):
+                content = content[len(custom_text):].lstrip()
+                break
+
+    if workflow_node_config.get("addDiscussionIdTimestampsForLLM", False):
+        timestamp_text = "[Sent less than a minute ago]"
+        if content.startswith(timestamp_text + " "):
+            content = content[len(timestamp_text) + 1:].lstrip()
+        elif content.startswith(timestamp_text):
+            content = content[len(timestamp_text):].lstrip()
+
+    should_remove_assistant = (get_is_chat_complete_add_user_assistant() and
+                               get_is_chat_complete_add_missing_assistant())
+    if should_remove_assistant and content.startswith("Assistant:"):
+        content = api_helpers.remove_assistant_prefix(content)
+
+    if endpoint_config.get("trimBeginningAndEndLineBreaks", False):
+        return content.strip()
+
+    return content

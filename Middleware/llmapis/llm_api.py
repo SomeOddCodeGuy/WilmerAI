@@ -1,11 +1,11 @@
-# middleware/llmapis/llm_api.py
+# /Middleware/llmapis/llm_api.py
 
 import json
 import logging
 import os
 import traceback
 from copy import deepcopy
-from typing import Dict, Generator, List, Optional, Union
+from typing import Dict, Generator, List, Optional, Union, Any
 
 from Middleware.llmapis.handlers.base.base_llm_api_handler import LlmApiHandler
 from Middleware.llmapis.handlers.impl.koboldcpp_api_handler import KoboldCppApiHandler
@@ -27,18 +27,24 @@ logger = logging.getLogger(__name__)
 
 class LlmApiService:
     """
-    A generic service class for interacting with multiple LLM backends.
+    Orchestrates interactions with various LLM API backends.
+
+    This service loads endpoint and preset configurations to instantiate a specific
+    API handler, which is then used to send requests and receive responses.
     """
 
     def __init__(self, endpoint: str, presetname: str, max_tokens: int, stream: bool = False):
         """
-        Initialize the LlmApiService with common configuration.
+        Initializes the LlmApiService instance.
+
+        Loads configurations, sets up connection parameters, and instantiates the
+        appropriate API handler based on the endpoint configuration.
 
         Args:
-            endpoint (str): The API endpoint name (key to look up in config).
-            presetname (str): The name of the preset file containing API parameters.
-            max_tokens (int): The max number of tokens to generate.
-            stream (bool): Whether to use streaming or not.
+            endpoint (str): The name of the endpoint configuration to use.
+            presetname (str): The name of the generation preset to apply.
+            max_tokens (int): The maximum number of tokens to generate.
+            stream (bool): A flag indicating whether to use streaming responses.
         """
         self.max_tokens = max_tokens
         self.endpoint_file = get_endpoint_config(endpoint)
@@ -60,7 +66,6 @@ class LlmApiService:
         self.api_key = self.endpoint_file.get("apiKey", "")
         self.endpoint_url = self.endpoint_file["endpoint"]
         self.model_name = self.endpoint_file.get("modelNameToSendToAPI", "")
-        self.strip_start_stop_line_breaks = self.endpoint_file.get("trimBeginningAndEndLineBreaks", False)
         self.dont_include_model = self.endpoint_file.get("dontIncludeModel", False)
         self.is_busy_flag: bool = False
 
@@ -76,117 +81,42 @@ class LlmApiService:
 
     def create_api_handler(self) -> LlmApiHandler:
         """
-        Create the API-specific handler based on llm_type.
+        Creates and returns the appropriate API handler based on the configuration.
+
+        This method acts as a factory, selecting the correct handler class based
+        on the 'llm_type' specified in the API type configuration file.
 
         Returns:
-            LlmApiHandler: An instance of the appropriate API handler.
+            LlmApiHandler: An instance of a concrete handler for the specified LLM type.
         """
+        common_args = {
+            "base_url": self.endpoint_url,
+            "api_key": self.api_key,
+            "gen_input": self._gen_input,
+            "model_name": self.model_name,
+            "headers": self.headers,
+            "stream": self.stream,
+            "api_type_config": self.api_type_config,
+            "endpoint_config": self.endpoint_file,
+            "max_tokens": self.max_tokens,
+        }
+
         if self.llm_type == "openAIChatCompletion":
-            return OpenAiApiHandler(
-                base_url=self.endpoint_url,
-                api_key=self.api_key,
-                gen_input=self._gen_input,
-                model_name=self.model_name,
-                headers=self.headers,
-                strip_start_stop_line_breaks=self.strip_start_stop_line_breaks,
-                stream=self.stream,
-                api_type_config=self.api_type_config,
-                endpoint_config=self.endpoint_file,
-                max_tokens=self.max_tokens,
-                dont_include_model=self.dont_include_model
-            )
+            return OpenAiApiHandler(**common_args, dont_include_model=self.dont_include_model)
         elif self.llm_type == "koboldCppGenerate":
-            return KoboldCppApiHandler(
-                base_url=self.endpoint_url,
-                api_key=self.api_key,
-                gen_input=self._gen_input,
-                model_name=self.model_name,
-                headers=self.headers,
-                strip_start_stop_line_breaks=self.strip_start_stop_line_breaks,
-                stream=self.stream,
-                api_type_config=self.api_type_config,
-                endpoint_config=self.endpoint_file,
-                max_tokens=self.max_tokens
-            )
+            return KoboldCppApiHandler(**common_args)
         elif self.llm_type == "koboldCppGenerateImageSpecific":
-            return KoboldCppImageSpecificApiHandler(
-                base_url=self.endpoint_url,
-                api_key=self.api_key,
-                gen_input=self._gen_input,
-                model_name=self.model_name,
-                headers=self.headers,
-                strip_start_stop_line_breaks=self.strip_start_stop_line_breaks,
-                stream=self.stream,
-                api_type_config=self.api_type_config,
-                endpoint_config=self.endpoint_file,
-                max_tokens=self.max_tokens
-            )
+            return KoboldCppImageSpecificApiHandler(**common_args)
         elif self.llm_type == "openAIV1Completion":
-            return OpenAiCompletionsApiHandler(
-                base_url=self.endpoint_url,
-                api_key=self.api_key,
-                gen_input=self._gen_input,
-                model_name=self.model_name,
-                headers=self.headers,
-                strip_start_stop_line_breaks=self.strip_start_stop_line_breaks,
-                stream=self.stream,
-                api_type_config=self.api_type_config,
-                endpoint_config=self.endpoint_file,
-                max_tokens=self.max_tokens
-            )
+            return OpenAiCompletionsApiHandler(**common_args)
         elif self.llm_type == "ollamaApiChat":
-            return OllamaChatHandler(
-                base_url=self.endpoint_url,
-                api_key=self.api_key,
-                gen_input=self._gen_input,
-                model_name=self.model_name,
-                headers=self.headers,
-                strip_start_stop_line_breaks=self.strip_start_stop_line_breaks,
-                stream=self.stream,
-                api_type_config=self.api_type_config,
-                endpoint_config=self.endpoint_file,
-                max_tokens=self.max_tokens
-            )
+            return OllamaChatHandler(**common_args)
         elif self.llm_type == "ollamaApiGenerate":
-            return OllamaGenerateApiHandler(
-                base_url=self.endpoint_url,
-                api_key=self.api_key,
-                gen_input=self._gen_input,
-                model_name=self.model_name,
-                headers=self.headers,
-                strip_start_stop_line_breaks=self.strip_start_stop_line_breaks,
-                stream=self.stream,
-                api_type_config=self.api_type_config,
-                endpoint_config=self.endpoint_file,
-                max_tokens=self.max_tokens
-            )
+            return OllamaGenerateApiHandler(**common_args)
         elif self.llm_type == "ollamaApiChatImageSpecific":
-            return OllamaApiChatImageSpecificHandler(
-                base_url=self.endpoint_url,
-                api_key=self.api_key,
-                gen_input=self._gen_input,
-                model_name=self.model_name,
-                headers=self.headers,
-                strip_start_stop_line_breaks=self.strip_start_stop_line_breaks,
-                stream=self.stream,
-                api_type_config=self.api_type_config,
-                endpoint_config=self.endpoint_file,
-                max_tokens=self.max_tokens
-            )
+            return OllamaApiChatImageSpecificHandler(**common_args)
         elif self.llm_type == "openAIApiChatImageSpecific":
-            return OpenAIApiChatImageSpecificHandler(
-                base_url=self.endpoint_url,
-                api_key=self.api_key,
-                gen_input=self._gen_input,
-                model_name=self.model_name,
-                headers=self.headers,
-                strip_start_stop_line_breaks=self.strip_start_stop_line_breaks,
-                stream=self.stream,
-                api_type_config=self.api_type_config,
-                endpoint_config=self.endpoint_file,
-                max_tokens=self.max_tokens,
-                dont_include_model=self.dont_include_model
-            )
+            return OpenAIApiChatImageSpecificHandler(**common_args, dont_include_model=self.dont_include_model)
         else:
             raise ValueError(f"Unsupported LLM type: {self.llm_type}")
 
@@ -196,18 +126,19 @@ class LlmApiService:
             system_prompt: Optional[str] = None,
             prompt: Optional[str] = None,
             llm_takes_images: bool = False,
-    ) -> Union[Generator[str, None, None], str]:
+    ) -> Union[Generator[Dict[str, Any], None, None], str]:
         """
-        Sends a prompt or conversation to the LLM and returns the response.
+        Sends a prompt or conversation to the LLM and returns the raw response.
 
         Args:
-            conversation (Optional[List[Dict[str, str]]]): A list of dictionaries containing the conversation with roles and content.
-            system_prompt (Optional[str]): The system prompt to send to the LLM.
-            prompt (Optional[str]): The user prompt to send to the LLM.
+            conversation (Optional[List[Dict[str, str]]]): The conversation history.
+            system_prompt (Optional[str]): The system prompt.
+            prompt (Optional[str]): The user prompt.
             llm_takes_images (bool): Flag indicating if the LLM can process images.
 
         Returns:
-            Union[Generator[str, None, None], str]: A generator yielding chunks of the response if streaming, otherwise the complete response.
+            Union[Generator[Dict[str, Any], None, None], str]: A generator yielding raw data
+            dictionaries if streaming, otherwise the complete raw response string.
         """
         self.is_busy_flag = True
         try:
@@ -215,16 +146,13 @@ class LlmApiService:
             system_prompt_to_pass = system_prompt
             prompt_to_pass = prompt
 
-            # Get config flags and text for prompt modifications
             add_start_system = self.endpoint_file.get("addTextToStartOfSystem", False)
             text_start_system = self.endpoint_file.get("textToAddToStartOfSystem", "")
             add_start_prompt = self.endpoint_file.get("addTextToStartOfPrompt", False)
             text_start_prompt = self.endpoint_file.get("textToAddToStartOfPrompt", "")
 
-            # Apply modifications to the start of string-based prompts
             if add_start_system and text_start_system:
                 system_prompt_to_pass = text_start_system + (system_prompt_to_pass or "")
-
             if add_start_prompt and text_start_prompt:
                 prompt_to_pass = text_start_prompt + (prompt_to_pass or "")
 
@@ -235,14 +163,12 @@ class LlmApiService:
             if not llm_takes_images:
                 logger.debug("llm_api does not take images. Removing images from the collection.")
                 if conversation_copy:
-                    conversation_copy = [
-                        message for message in conversation_copy if message.get("role") != "images"
-                    ]
+                    conversation_copy = [msg for msg in conversation_copy if msg.get("role") != "images"]
             else:
                 logger.debug("llm_api takes images. Leaving images in place.")
 
             if self.stream:
-                def stream_wrapper() -> Generator[str, None, None]:
+                def stream_wrapper() -> Generator[Dict[str, Any], None, None]:
                     try:
                         yield from self._api_handler.handle_streaming(
                             conversation=conversation_copy,
@@ -253,7 +179,6 @@ class LlmApiService:
                         self.is_busy_flag = False
 
                 return stream_wrapper()
-
             else:
                 response = self._api_handler.handle_non_streaming(
                     conversation=conversation_copy,
@@ -262,18 +187,17 @@ class LlmApiService:
                 )
                 self.is_busy_flag = False
                 return response
-
         except Exception as e:
-            self.is_busy_flag = False  # Ensure flag is reset on any error
+            self.is_busy_flag = False
             logger.error("Exception in get_response_from_llm: %s", e)
             traceback.print_exc()
             raise
 
     def is_busy(self) -> bool:
         """
-        Check if the service is busy.
+        Checks if the service is currently processing a request.
 
         Returns:
-            bool: True if busy, False otherwise.
+            bool: True if a request is in progress, otherwise False.
         """
         return self.is_busy_flag

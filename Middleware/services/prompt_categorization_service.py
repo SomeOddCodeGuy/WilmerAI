@@ -2,6 +2,7 @@
 
 import json
 import string
+from typing import List, Dict, Union, Generator
 
 from Middleware.utilities.config_utils import get_active_categorization_workflow_name, get_categories_config
 from Middleware.workflows.managers.workflow_manager import WorkflowManager, logger
@@ -9,41 +10,52 @@ from Middleware.workflows.managers.workflow_manager import WorkflowManager, logg
 
 class PromptCategorizationService:
     """
-    A class to categorize incoming prompts and route them to the appropriate workflow.
+    Categorizes incoming prompts to route them to the appropriate workflow.
     """
 
     @staticmethod
-    def conversational_method(prompt, request_id, discussion_id: str = None, stream=False):
+    def conversational_method(messages: List[Dict[str, str]], request_id: str, discussion_id: str = None,
+                              stream: bool = False) -> Union[
+        Generator[str, None, None], str, None]:
         """
-        Run the default conversational workflow.
+        Runs the default conversational workflow.
 
         Args:
-            prompt (str): The input prompt to categorize.
-            stream (bool): Whether to stream the output. Default is False.
+            messages (List[Dict[str, str]]): The list of messages in the conversation.
+            request_id (str): The unique identifier for the request.
+            discussion_id (str): The identifier for the conversation.
+            stream (bool): Flag indicating if the output should be streamed.
 
         Returns:
-            str: The result of the workflow execution.
+            Union[Generator[str, None, None], str, None]: The result of the workflow execution.
         """
-        return WorkflowManager(workflow_config_name='_DefaultWorkflow').run_workflow(prompt, request_id,
-                                                                                     discussionId=discussion_id,
-                                                                                     stream=stream)
+        return WorkflowManager.run_custom_workflow(
+            workflow_name='_DefaultWorkflow',
+            request_id=request_id,
+            discussion_id=discussion_id,
+            messages=messages,
+            is_streaming=stream
+        )
 
     @staticmethod
-    def _configure_workflow_manager(category_data):
+    def _configure_workflow_manager(category_data: Dict) -> WorkflowManager:
         """
-        Configure a WorkflowManager with the active categorization workflow name and category data.
+        Configures a WorkflowManager with categorization data.
+
+        This direct instantiation is necessary to inject category variables
+        into the workflow via keyword arguments.
 
         Args:
-            category_data (dict): The category data to pass to the WorkflowManager.
+            category_data (Dict): The category data to be injected.
 
         Returns:
-            WorkflowManager: Configured WorkflowManager instance.
+            WorkflowManager: A configured instance of the WorkflowManager.
         """
         return WorkflowManager(workflow_config_name=get_active_categorization_workflow_name(), **category_data)
 
     def __init__(self):
         """
-        Initialize a PromptCategorizer instance.
+        Initializes the PromptCategorizationService instance.
         """
         self.routes = {}
         self.categories = {}
@@ -51,7 +63,7 @@ class PromptCategorizationService:
 
     def initialize(self):
         """
-        Initialize the categorizer with categories from the configuration file.
+        Loads and initializes routing categories from the configuration file.
         """
         try:
             routing_config = get_categories_config()
@@ -66,35 +78,41 @@ class PromptCategorizationService:
             logger.warning("Error decoding JSON from routing configuration file.")
             raise
 
-    def get_prompt_category(self, prompt, stream, request_id, discussion_id: str = None):
+    def get_prompt_category(self, messages: List[Dict[str, str]], request_id: str, discussion_id: str = None,
+                            stream: bool = False) -> \
+            Union[Generator[str, None, None], str, None]:
         """
-        Get the category of the prompt and run the appropriate workflow.
+        Gets the prompt category and executes the corresponding workflow.
 
         Args:
-            prompt: The input prompt to categorize.
-            stream: Whether to stream the output. Default is False.
+            messages (List[Dict[str, str]]): The conversation history to be categorized.
+            request_id (str): The unique identifier for the request.
+            discussion_id (str): The identifier for the conversation.
+            stream (bool): Flag indicating if the output should be streamed.
 
         Returns:
-            str: The result of the workflow execution.
+            Union[Generator[str, None, None], str, None]: The result of the routed workflow execution.
         """
-        category = self._categorize_request(prompt, request_id)
+        category = self._categorize_request(messages, request_id)
         logger.info("Category: %s", category)
 
         if category in self.categories:
             logger.debug("Response initiated")
             workflow_name = self.categories[category]['workflow']
             workflow = WorkflowManager(workflow_config_name=workflow_name)
-            return workflow.run_workflow(prompt, request_id, discussionId=discussion_id, stream=stream)
+            return workflow.run_workflow(messages=messages, request_id=request_id, discussionId=discussion_id,
+                                         stream=stream)
         else:
             logger.debug("Default response initiated")
-            return self.conversational_method(prompt, request_id, discussion_id, stream)
+            return self.conversational_method(messages, request_id, discussion_id, stream)
 
-    def _initialize_categories(self):
+    def _initialize_categories(self) -> Dict[str, Union[str, List[str]]]:
         """
-        Initialize and return the category data.
+        Prepares category data for dynamic injection into workflow prompts.
 
         Returns:
-            dict: A dictionary containing category descriptions and lists.
+            Dict[str, Union[str, List[str]]]: A dictionary of formatted strings and lists
+            derived from the loaded category configurations.
         """
         category_colon_description = [f"{cat}: {info['description']}" for cat, info in self.categories.items()]
         category_descriptions = [info['description'] for info in self.categories.values()]
@@ -109,15 +127,15 @@ class PromptCategorizationService:
             'category_descriptions': category_descriptions
         }
 
-    def _match_category(self, processed_input):
+    def _match_category(self, processed_input: str) -> Union[str, None]:
         """
-        Match the processed input to a category.
+        Matches a processed string output from an LLM to a configured category.
 
         Args:
-            processed_input (str): The processed input string.
+            processed_input (str): The cleaned output string from the categorization LLM.
 
         Returns:
-            str or None: The matched category or None if no match is found.
+            Union[str, None]: The matched category key, or None if no match is found.
         """
         for word in processed_input.split():
             for key in self.categories.keys():
@@ -125,15 +143,19 @@ class PromptCategorizationService:
                     return key
         return None
 
-    def _categorize_request(self, user_request, request_id):
+    def _categorize_request(self, messages: List[Dict[str, str]], request_id: str) -> str:
         """
-        Categorize the user's request by running the categorization workflow.
+        Determines the request category by executing the categorization workflow.
+
+        This method runs the categorization workflow, processes the LLM's output,
+        and attempts to match it to a known category, retrying on failure.
 
         Args:
-            user_request (str): The user's request to categorize.
+            messages (List[Dict[str, str]]): The conversation history to be categorized.
+            request_id (str): The unique identifier for the request.
 
         Returns:
-            str: The matched category or 'UNKNOWN' if no match is found.
+            str: The matched category name, or 'UNKNOWN' if no match is found after retries.
         """
         logger.info("Categorizing request")
         category_data = self._initialize_categories()
@@ -141,22 +163,25 @@ class PromptCategorizationService:
         attempts = 0
 
         while attempts < 4:
-            workflow_result = workflow_manager.run_workflow(user_request, request_id, nonResponder=True, stream=False)
+            workflow_result = workflow_manager.run_workflow(
+                messages=messages,
+                request_id=request_id,
+                nonResponder=True,
+                stream=False
+            )
             raw_category_output = workflow_result
 
-            # Check if the output is None before attempting to strip
             if raw_category_output is None:
                 logger.warning("Categorization workflow returned None. Assigning empty string.")
-                category = "UNKNOWN" 
+                category = "UNKNOWN"
             else:
                 category = raw_category_output.strip()
-            
-            logger.info(
-                "\n\n*****************************************************************************\n")
+
+            logger.info("\n\n*****************************************************************************\n")
             logger.info("\n\nOutput from the LLM: %s", category)
-            logger.info(
-                "\n*****************************************************************************\n\n")
+            logger.info("\n*****************************************************************************\n\n")
             logger.debug(self.categories)
+
             category = category.translate(str.maketrans('', '', string.punctuation))
             matched_category = self._match_category(category)
 
@@ -166,13 +191,13 @@ class PromptCategorizationService:
 
         return "UNKNOWN"
 
-    def _add_category(self, category, workflow_name, description):
+    def _add_category(self, category: str, workflow_name: str, description: str):
         """
-        Add a category to the categorizer.
+        Adds a new category and its associated workflow and description.
 
         Args:
-            category (str): The category name.
-            workflow_name (str): The workflow associated with the category.
-            description (str): The description of the category.
+            category (str): The name of the category.
+            workflow_name (str): The workflow to be run for this category.
+            description (str): The category's description, used in prompts.
         """
         self.categories[category] = {"workflow": workflow_name, "description": description}

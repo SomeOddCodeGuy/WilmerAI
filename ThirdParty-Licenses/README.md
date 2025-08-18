@@ -47,3 +47,11 @@ _Last Updated: 2024-08-17_
 * License Type: `BSD 3-Clause "New" or "Revised" License`
 * Code: https://github.com/pallets/jinja
 * License: https://github.com/pallets/jinja/blob/main/LICENSE.txt
+
+### pillow:
+
+_Last Updated: 2025-08-17_
+
+* License Type: `MIT-CMU`
+* Code: https://github.com/python-pillow/Pillow/
+* License: https://github.com/python-pillow/Pillow/

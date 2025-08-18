@@ -124,36 +124,29 @@ def chunk_messages_by_token_size(messages: List[Dict[str, str]], chunk_size: int
     current_chunk_size = 0
     logger.debug("Chunk size: %s", str(chunk_size))
 
-    # Iterate through the messages in reverse order (starting from the bottom)
+    # Iterate through the messages in reverse order (from newest to oldest)
     for message in reversed(messages):
-        message_token_count = rough_estimate_token_length(message['content'])
-        logger.debug("message_token_count: %s", str(message_token_count))
+        message_token_count = rough_estimate_token_length(message.get('content', ''))
 
-        if current_chunk_size + message_token_count <= chunk_size * 0.8:
-            logger.debug("Adding message to current chunk")
+        # If current chunk is empty or the new message fits, add it.
+        # The use of insert(0,...) correctly maintains the chronological order within the chunk.
+        if not current_chunk or (current_chunk_size + message_token_count <= chunk_size * 0.8):
             current_chunk.insert(0, message)
             current_chunk_size += message_token_count
-            continue
-        elif current_chunk:
-            logger.debug("Adding current chunk to chunks and then adding message to current chunk")
-            logger.debug("Current chunk would have been: %s", str(current_chunk_size + message_token_count))
-            current_chunk.reverse()
+        else:
+            # The current chunk is full. Finalize it and start a new one.
+            logger.debug("Finalizing chunk. Size: %s", str(current_chunk_size))
             chunks.insert(0, current_chunk)
 
-            current_chunk = []
-            current_chunk_size = 0
-            current_chunk_size += message_token_count
-            current_chunk.insert(0, message)
-            continue
+            # Start the new chunk with the current message.
+            current_chunk = [message]
+            current_chunk_size = message_token_count
 
-    logger.debug("Checking if current chunk is empty")
+    # After the loop, add the last remaining chunk if it's not empty.
     if current_chunk:
-        logger.debug("Current chunk is not empty")
-        logger.debug("Length of current chunk: %s", str(len(current_chunk)))
-        logger.debug("Max messages before chunk: %s", str(max_messages_before_chunk))
-        if (len(current_chunk) > max_messages_before_chunk):
-            logger.debug("Adding chunk")
-            current_chunk.reverse()
+        logger.debug("Adding final remaining chunk.")
+        # The logic for `max_messages_before_chunk` applies to the final, potentially smaller chunk.
+        if max_messages_before_chunk == 0 or len(current_chunk) >= max_messages_before_chunk:
             chunks.insert(0, current_chunk)
 
     return chunks

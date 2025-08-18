@@ -2,14 +2,14 @@
 
 import json
 import logging
-import time
-import uuid
 from typing import Dict, Any, Optional
 
 from Middleware.common import instance_global_variables
+from Middleware.services.response_builder_service import ResponseBuilderService
 from Middleware.utilities.config_utils import get_current_username
 
 logger = logging.getLogger(__name__)
+response_builder = ResponseBuilderService()
 
 
 def build_response_json(
@@ -19,88 +19,30 @@ def build_response_json(
         additional_fields: Optional[Dict[str, Any]] = None
 ) -> str:
     """
-    Constructs the response JSON payload based on the API type.
-
-    This function generates a JSON string formatted to match the expected
-    response structure of different LLM API types, such as Ollama and OpenAI.
-    It handles both chat and completion formats.
+    Constructs a response JSON payload based on the API type using the ResponseBuilderService.
 
     Args:
         token (str): The text content (token) to include in the response.
-        finish_reason (str, optional): The reason for the response termination (e.g., 'stop').
-                                       Defaults to None.
-        current_username (str, optional): The current username, used for model identification.
-                                          Defaults to None, in which case it is fetched.
-        additional_fields (Dict[str, Any], optional): A dictionary of extra fields to merge
-                                                      into the final JSON response. Defaults to None.
+        finish_reason (Optional[str]): The reason for the response termination (e.g., 'stop').
+        current_username (Optional[str]): Deprecated and not used.
+        additional_fields (Optional[Dict[str, Any]]): Extra fields to merge into the final JSON response.
 
     Returns:
         str: A JSON string representing the formatted response payload.
     """
-    if current_username is None:
-        current_username = get_current_username()
-
     api_type = instance_global_variables.API_TYPE
-    timestamp = int(time.time())
-    created_at_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-
     response = {}
 
     if api_type == "ollamagenerate":
-        response = {
-            "model": get_model_name(),
-            "created_at": created_at_iso,
-            "response": token,
-            "done": finish_reason == "stop"
-        }
-
+        response = response_builder.build_ollama_generate_chunk(token, finish_reason)
     elif api_type == "ollamaapichat":
-        response = {
-            "model": get_model_name(),
-            "created_at": created_at_iso,
-            "message": {
-                "role": "assistant",
-                "content": token
-            },
-            "done": finish_reason == "stop"
-        }
-
+        response = response_builder.build_ollama_chat_chunk(token, finish_reason)
     elif api_type == "openaicompletion":
-        response = {
-            "id": f"cmpl-{uuid.uuid4()}",
-            "object": "text_completion",
-            "created": timestamp,
-            "choices": [
-                {
-                    "text": token,
-                    "index": 0,
-                    "logprobs": None,
-                    "finish_reason": finish_reason if finish_reason else None
-                }
-            ],
-            "model": get_model_name(),
-            "system_fingerprint": "fp_44709d6fcb",
-        }
-
+        response = response_builder.build_openai_completion_chunk(token, finish_reason)
     elif api_type == "openaichatcompletion":
-        response = {
-            "id": f"chatcmpl-{uuid.uuid4()}",
-            "object": "chat.completion.chunk",
-            "created": timestamp,
-            "model": get_model_name(),
-            "system_fingerprint": "fp_44709d6fcb",
-            "choices": [
-                {
-                    "index": 0,
-                    "delta": {"content": token},
-                    "logprobs": None,
-                    "finish_reason": finish_reason if finish_reason else None
-                }
-            ]
-        }
-
+        response = response_builder.build_openai_chat_completion_chunk(token, finish_reason)
     else:
-        raise ValueError(f"Unsupported API type: {api_type}")
+        raise ValueError(f"Unsupported API type for streaming: {api_type}")
 
     if additional_fields:
         response.update(additional_fields)
@@ -111,10 +53,6 @@ def build_response_json(
 def _extract_content_from_parsed_json(parsed_json: dict) -> str:
     """
     Extracts text content from a parsed JSON dictionary.
-
-    This is a helper function that attempts to find the content string
-    within a JSON object by checking for known formats (OpenAI, Ollama chat,
-    and Ollama generate).
 
     Args:
         parsed_json (dict): The parsed JSON dictionary from a streaming chunk.
@@ -155,18 +93,11 @@ def extract_text_from_chunk(chunk) -> str:
     """
     Extracts text content from a streaming response chunk.
 
-    This function handles various chunk formats, including plain strings,
-    Server-Sent Events (SSE) formatted strings, and dictionaries. It
-    parses the chunk and calls `_extract_content_from_parsed_json` to
-    get the actual text content.
-
     Args:
-        chunk: The incoming data chunk, which can be a string, dictionary,
-               or other type.
+        chunk: The incoming data chunk, which can be a string, dictionary, or other type.
 
     Returns:
-        str: The extracted text content from the chunk, or an empty string
-             if the chunk is invalid or content is not found.
+        str: The extracted text content from the chunk.
     """
     extracted = ""
     try:
@@ -201,8 +132,6 @@ def extract_text_from_chunk(chunk) -> str:
         elif isinstance(chunk, dict):
             extracted = _extract_content_from_parsed_json(chunk)
 
-        # Other types (int, etc.) will fall through and result in the default empty string
-
     except Exception as e:
         # Log unexpected errors during processing
         logger.warning(f"Error processing chunk of type {type(chunk)}: {e}", exc_info=True)
@@ -225,14 +154,9 @@ def sse_format(data: str, output_format: str) -> str:
     """
     Formats a data string for Server-Sent Events (SSE).
 
-    This function applies the correct SSE prefix based on the API type.
-    Ollama APIs do not use the 'data:' prefix, while OpenAI-compatible
-    APIs do.
-
     Args:
         data (str): The data string to format.
-        output_format (str): The format of the API response (e.g., 'ollamagenerate',
-                             'openaichatcompletion').
+        output_format (str): The format of the API response (e.g., 'ollamagenerate').
 
     Returns:
         str: The formatted SSE string.
@@ -247,15 +171,11 @@ def remove_assistant_prefix(response_text: str) -> str:
     """
     Removes the 'Assistant:' prefix from a response string.
 
-    This function is used to clean up LLM responses that may
-    inadvertently include a role prefix. It handles leading
-    whitespace.
-
     Args:
         response_text (str): The response text to be processed.
 
     Returns:
-        str: The cleaned response text without the 'Assistant:' prefix.
+        str: The cleaned response text.
     """
     # Strip leading whitespace first to normalize
     response_text = response_text.lstrip()

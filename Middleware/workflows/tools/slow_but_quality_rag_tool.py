@@ -1,524 +1,483 @@
+import json
 import logging
+import re
 from copy import deepcopy
-from typing import List, Dict
+from typing import List, Dict, Any
 
 from Middleware.services.llm_service import LlmHandlerService
 from Middleware.services.memory_service import MemoryService
-from Middleware.utilities.config_utils import get_discussion_memory_file_path, load_config, \
-    get_discussion_id_workflow_path, get_endpoint_config
+from Middleware.utilities import vector_db_utils
+from Middleware.utilities.config_utils import get_discussion_memory_file_path, get_endpoint_config, load_config, \
+    get_discussion_id_workflow_path
 from Middleware.utilities.file_utils import read_chunks_with_hashes, \
     update_chunks_with_hashes
 from Middleware.utilities.hashing_utils import extract_text_blocks_from_hashed_chunks, find_last_matching_hash_message, \
-    chunk_messages_with_hashes
-from Middleware.utilities.prompt_extraction_utils import extract_last_n_turns, \
-    remove_discussion_id_tag_from_string
-from Middleware.utilities.prompt_template_utils import format_user_turn_with_template, \
-    format_system_prompt_with_template, add_assistant_end_token_to_user_turn
+    chunk_messages_with_hashes, hash_single_message
+from Middleware.utilities.prompt_extraction_utils import extract_last_n_turns
 from Middleware.utilities.search_utils import filter_keywords_by_speakers, advanced_search_in_chunks, search_in_chunks
 from Middleware.utilities.text_utils import get_message_chunks, clear_out_user_assistant_from_chunks, \
     rough_estimate_token_length
-from Middleware.workflows.managers.workflow_variable_manager import WorkflowVariableManager
-from Middleware.workflows.tools.parallel_llm_processing_tool import ParallelLlmProcessingTool
+from Middleware.workflows.models.execution_context import ExecutionContext
 
 logger = logging.getLogger(__name__)
 
 
 class SlowButQualityRAGTool:
     """
-    A tool that uses Large Language Models (LLMs) to perform a slow but thorough
-    Retrieval-Augmented Generation (RAG) search on large chunks of text
-    to find appropriate context.
+    Handles the creation and storage of long-term conversational memories.
+
+    This tool uses Large Language Models (LLMs) to perform Retrieval-Augmented
+    Generation (RAG) on text chunks, generating summarized memories. It supports
+    both file-based and vector-based memory storage and can be triggered via
+    workflows to automatically process conversation history.
     """
 
     def __init__(self):
         self.memory_service = MemoryService()
 
-    def perform_keyword_search(self, keywords: str, target, llm_handler, discussion_id, **kwargs):
+    @staticmethod
+    def _parse_llm_json_output(llm_output: str) -> Any:
         """
-        Performs a keyword-based search on either the current conversation or
-        recent memory files.
-
-        This method determines the search target based on the 'target' parameter
-        and delegates the keyword search to the appropriate handler method.
+        Parses JSON from an LLM's output, accommodating markdown code blocks.
 
         Args:
-            keywords (str): A string containing keywords to search for.
-            target (str): The target of the search. Can be "CurrentConversation"
-                          or "RecentMemories".
-            llm_handler: The LLM handler to be used for processing.
-            discussion_id (str): The unique identifier for the current discussion.
-            **kwargs: Additional keyword arguments.
-                      - messages (List[Dict[str,str]]): A collection of messages
-                                                        representing the conversation.
-                      - lookbackStartTurn (int): The number of turns back to start
-                                                 the search.
+            llm_output (str): The raw string output from the LLM.
 
         Returns:
-            str: The result of the keyword search, or an error message if the
-                 search cannot be performed.
+            Any: The parsed Python dictionary or list, or None if parsing fails.
         """
+        if not llm_output:
+            logger.warning("Received empty or None output to parse for JSON.")
+            return None
+        # Regex to find JSON in a markdown block or a raw object/array
+        match = re.search(r'```json\s*([\s\S]*?)\s*```|(\{[\s\S]*\}|\[[\s\S]*\])', llm_output)
+        if match:
+            # Prioritize the content of the markdown block if present
+            json_str = match.group(1) if match.group(1) else match.group(2)
+            try:
+                return json.loads(json_str)
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to decode extracted JSON string: {json_str}. Error: {e}")
+                return None
+        else:
+            logger.warning(f"Could not find a JSON block or object in the LLM output.")
+            return None
+
+    def generate_and_store_vector_memories(self, text_chunks: List[str], config: Dict, context: ExecutionContext):
+        """
+        Generates and stores structured vector memories from text chunks.
+
+        This method processes text chunks, generates structured JSON metadata using
+        an LLM or a sub-workflow, and stores the resulting memory and metadata
+        in the discussion-specific vector database.
+
+        Args:
+            text_chunks (List[str]): A list of conversation text chunks to process.
+            config (Dict): The configuration dictionary for this memory operation.
+            context (ExecutionContext): The current workflow execution context.
+        """
+        rag_system_prompt = "You are an expert AI assistant that analyzes text and outputs a structured JSON object..."
+        rag_prompt = """Analyze the following memory text and generate a JSON object...
+Memory Text:
+[TextChunk]
+JSON Output:"""
+
+        endpoint_name = config.get('vectorMemoryEndpointName', config.get('endpointName'))
+        preset_name = config.get('vectorMemoryPreset', config.get('preset'))
+        max_tokens = config.get("vectorMemoryMaxResponseSizeInTokens", 1024)
+        endpoint_data = get_endpoint_config(endpoint_name)
+        llm_handler_service = LlmHandlerService()
+        llm_handler = llm_handler_service.initialize_llm_handler(
+            endpoint_data, preset_name, endpoint_name, False,
+            endpoint_data.get("maxContextTokenSize", 4096), max_tokens
+        )
+
+        # Create a temporary context for the specific LLM handler needed for this task
+        temp_llm_context = deepcopy(context)
+        temp_llm_context.llm_handler = llm_handler
+        temp_llm_context.config = config  # Ensure the correct node config is used
+
+        vector_workflow_name = config.get('vectorMemoryWorkflowName')
+
+        for chunk in text_chunks:
+            if not chunk.strip():
+                continue
+
+            json_string_output = None
+            if vector_workflow_name:
+                logger.info(f"Using workflow '{vector_workflow_name}' to generate vector memory.")
+                scoped_inputs = [chunk]
+                json_string_output = context.workflow_manager.run_custom_workflow(
+                    workflow_name=vector_workflow_name,
+                    request_id=context.request_id,
+                    discussion_id=context.discussion_id,
+                    messages=context.messages,
+                    non_responder=True,
+                    scoped_inputs=scoped_inputs
+                )
+            else:
+                json_string_output = self.process_single_chunk(
+                    chunk, rag_prompt, rag_system_prompt, temp_llm_context
+                )
+
+            if json_string_output:
+                parsed_json = self._parse_llm_json_output(json_string_output)
+
+                memories_to_process = []
+                if isinstance(parsed_json, dict):
+                    memories_to_process.append(parsed_json)
+                elif isinstance(parsed_json, list):
+                    memories_to_process = parsed_json
+
+                successful_adds = 0
+                for memory_metadata in memories_to_process:
+                    if isinstance(memory_metadata, dict):
+                        required_keys = ['title', 'summary', 'entities', 'key_phrases']
+                        if all(k in memory_metadata for k in required_keys):
+                            memory_summary = memory_metadata['summary']
+                            vector_db_utils.add_memory_to_vector_db(
+                                context.discussion_id,
+                                memory_summary,
+                                json.dumps(memory_metadata)
+                            )
+                            successful_adds += 1
+
+                if successful_adds > 0:
+                    logger.info(
+                        f"Successfully generated and stored {successful_adds} vector memory/memories for discussion {context.discussion_id}.")
+                else:
+                    logger.error(f"Received empty response from LLM/workflow for vector memory generation.")
+
+    def perform_keyword_search(self, keywords: str, target: str, context: ExecutionContext):
+        """
+        Routes a keyword search to the appropriate target data source.
+
+        Args:
+            keywords (str): The keywords to search for.
+            target (str): The target location to search ("CurrentConversation" or "RecentMemories").
+            context (ExecutionContext): The current workflow execution context.
+
+        Returns:
+            str: The search results, formatted as a string.
+        """
+        lookback_start_turn = context.config.get("lookbackStartTurn", 0)
         if target == "CurrentConversation":
-            if 'lookbackStartTurn' in kwargs:
-                lookbackStartTurn = kwargs['lookbackStartTurn']
-            else:
-                lookbackStartTurn = 0
-            if 'messages' in kwargs:
-                messages = kwargs['messages']
-                result = self.perform_conversation_search(keywords, messages, llm_handler, lookbackStartTurn)
-                return result
-            else:
+            if not context.messages:
                 logger.error("Fatal Workflow Error: cannot perform keyword search; no user prompt")
+                return ""
+            return self.perform_conversation_search(keywords, context, lookback_start_turn)
         elif target == "RecentMemories":
-            if 'messages' in kwargs:
-                messages = kwargs['messages']
-                logger.debug("In recent memories")
-                logger.debug(messages)
-                result = self.perform_memory_file_keyword_search(keywords, messages, llm_handler, discussion_id)
-                return result
+            return self.perform_memory_file_keyword_search(keywords, context)
+        return ""
 
-    def perform_conversation_search(self, keywords: str, messagesOriginal, llm_handler, lookbackStartTurn=0):
+    def perform_conversation_search(self, keywords: str, context: ExecutionContext, lookbackStartTurn=0):
         """
-        Performs a keyword search on the current conversation messages.
-
-        This function retrieves conversation turns, filters them, and performs
-        an advanced search based on the provided keywords.
+        Performs a keyword search within the current conversation history.
 
         Args:
-            keywords (str): A string of keywords to search for.
-            messagesOriginal (List[Dict[str,str]]): The list of conversation messages.
-            llm_handler: The LLM handler to determine message collection compatibility.
-            lookbackStartTurn (int, optional): The number of turns back from the
-                                               most recent message to begin the search.
-                                               Defaults to 0.
+            keywords (str): The keywords to search for.
+            context (ExecutionContext): The current workflow execution context.
+            lookbackStartTurn (int): The turn number to start the search from.
 
         Returns:
-            str: The search result chunks, joined by '--ChunkBreak--'.
+            str: The search results, formatted as a string with "--ChunkBreak--" delimiters.
         """
-        logger.debug("Entering perform_conversation_search")
-
-        # If we have fewer pairs than lookbackStartTurn, we can stop here
-        if len(messagesOriginal) <= lookbackStartTurn:
+        if len(context.messages) <= lookbackStartTurn:
             return 'There are no memories. This conversation has not gone long enough for there to be memories.'
-
-        message_copy = deepcopy(messagesOriginal)
-
+        message_copy = deepcopy(context.messages)
         pair_chunks = get_message_chunks(message_copy, lookbackStartTurn, 400)
-
-        # In case the LLM designated the speakers as keywords, we want to remove them
-        # The speakers would trigger tons of erroneous hits
-        last_n_turns = extract_last_n_turns(message_copy, 10, llm_handler.takes_message_collection)
+        last_n_turns = extract_last_n_turns(message_copy, 10, context.llm_handler.takes_message_collection)
         keywords = filter_keywords_by_speakers(last_n_turns, keywords)
-        logger.info("Keywords: %s", str(keywords))
-
         search_result_chunks = advanced_search_in_chunks(pair_chunks, keywords, 10)
         search_result_chunks = clear_out_user_assistant_from_chunks(search_result_chunks)
         filtered_chunks = [s for s in search_result_chunks if s]
-
-        logger.info("******** BEGIN SEARCH RESULT CHUNKS ************")
-        logger.info("Search result chunks: %s", '\n\n'.join(filtered_chunks))
-        logger.info("******** END SEARCH RESULT CHUNKS ************")
-
         return '--ChunkBreak--'.join(filtered_chunks)
 
-    def perform_memory_file_keyword_search(self, keywords: str, messagesOriginal, llm_handler, discussion_id):
+    def perform_memory_file_keyword_search(self, keywords: str, context: ExecutionContext):
         """
-        Performs a keyword search on the memory file associated with a discussion.
-
-        This function reads the memory file, extracts text chunks, and performs
-        a search based on the provided keywords.
+        Performs a keyword search within the persisted file-based memories.
 
         Args:
-            keywords (str): A string of keywords to search for.
-            messagesOriginal (List[Dict[str,str]]): The list of conversation messages.
-            llm_handler: The LLM handler to determine message collection compatibility.
-            discussion_id (str): The unique identifier for the current discussion.
+            keywords (str): The keywords to search for.
+            context (ExecutionContext): The current workflow execution context.
 
         Returns:
-            str: The search result chunks, joined by newline characters.
+            str: The search results, formatted as a string with newline delimiters.
         """
-        logger.debug("Entering perform_memory_file_keyword_search")
-        filepath = get_discussion_memory_file_path(discussion_id)
-
-        message_copy = deepcopy(messagesOriginal)
-
+        filepath = get_discussion_memory_file_path(context.discussion_id)
         hash_chunks = read_chunks_with_hashes(filepath)
         pair_chunks = extract_text_blocks_from_hashed_chunks(hash_chunks)
-
         if len(pair_chunks) > 3:
             pair_chunks = pair_chunks[:-3]
-
-        # In case the LLM designated the speakers as keywords, we want to remove them
-        # The speakers would trigger tons of erroneous hits
-        last_n_turns = extract_last_n_turns(message_copy, 10, llm_handler.takes_message_collection)
+        last_n_turns = extract_last_n_turns(deepcopy(context.messages), 10,
+                                            context.llm_handler.takes_message_collection)
         keywords = filter_keywords_by_speakers(last_n_turns, keywords)
-        logger.info("Keywords: %s", str(keywords))
-
         search_result_chunks = search_in_chunks(pair_chunks, keywords, 10)
         search_result_chunks = clear_out_user_assistant_from_chunks(search_result_chunks)
         filtered_chunks = [s for s in search_result_chunks if s]
-
-        logger.info("******** BEGIN SEARCH RESULT CHUNKS ************")
-        logger.info("Search result chunks: %s", '\n\n'.join(filtered_chunks))
-        logger.info("******** END SEARCH RESULT CHUNKS ************")
-
         return '\n\n'.join(filtered_chunks)
 
-    def process_new_memory_chunks(self, chunks, hash_chunks, rag_system_prompt, rag_prompt, workflow,
-                                  discussionId, messages, chunks_per_memory=3):
+    def handle_discussion_id_flow(self, context: ExecutionContext) -> None:
         """
-        Processes new memory chunks by performing RAG on them and updating the memory file.
+        Handles the automatic generation of long-term memories for a conversation.
 
-        This function takes a list of new chunks, uses RAG to summarize them,
-        and appends the summaries to the existing memory file.
+        This is the main entry point for automatic memory creation. It checks if
+        new messages have been added since the last run and, if certain thresholds
+        are met, triggers the generation of either vector or file-based memories.
 
         Args:
-            chunks (List[str]): A list of text chunks to be processed.
-            hash_chunks (List[Tuple[str, str]]): A list of tuples containing
-                                                 the text and hash for each chunk.
-            rag_system_prompt (str): The system prompt for the RAG process.
-            rag_prompt (str): The user prompt for the RAG process.
-            workflow (dict): The workflow configuration dictionary.
-            discussionId (str): The unique identifier for the current discussion.
-            messages (List[Dict[str,str]]): The conversation messages.
-            chunks_per_memory (int, optional): The number of chunks to process
-                                               per memory. Defaults to 3.
+            context (ExecutionContext): The current workflow execution context.
         """
-        rag_tool = SlowButQualityRAGTool()
-
-        all_chunks = "--ChunkBreak--".join(chunks)
-        logger.debug("Processing chunks: %s", all_chunks)
-
-        result = rag_tool.perform_rag_on_memory_chunk(rag_system_prompt, rag_prompt, all_chunks, workflow, messages,
-                                                      discussionId, "--rag_break--", chunks_per_memory)
-        results = result.split("--rag_break--")
-        logger.debug("Total results: %s", len(results))
-        logger.debug("Total chunks: %s", len(hash_chunks))
-
-        replaced = [(summary, hash_code) for summary, (_, hash_code) in zip(results, hash_chunks)]
-
-        filepath = get_discussion_memory_file_path(discussionId)
-
-        # Read existing chunks from the file
-        existing_chunks = read_chunks_with_hashes(filepath)
-
-        logger.debug("Existing chunks before reverse: %s", str(existing_chunks))
-
-        # Append new chunks at the end
-        updated_chunks = existing_chunks + replaced
-        logger.debug("Updated chunks: %s", str(updated_chunks))
-
-        # Save updated chunks to the file
-        update_chunks_with_hashes(updated_chunks, filepath, mode="overwrite")
-
-    def handle_discussion_id_flow(self, discussionId: str, messagesOriginal: List[Dict[str, str]]) -> None:
-        """
-        Manages the memory creation flow for a specific discussion ID.
-
-        This function checks if new memories need to be generated based on
-        the length of the conversation and the existing memory file. It
-        then initiates the appropriate memory processing flow.
-
-        Args:
-            discussionId (str): The unique identifier for the current discussion.
-            messagesOriginal (List[Dict[str, str]]): The conversation messages.
-        """
-        if len(messagesOriginal) < 3:
+        if len(context.messages) < 3:
             logger.debug("Less than 3 messages, no memory will be generated.")
             return
 
-        filepath = get_discussion_memory_file_path(discussionId)
-        messages_copy = deepcopy(messagesOriginal)
+        messages_copy = deepcopy(context.messages)
+        # This method uses a specific, separate config file to govern its behavior.
+        discussion_id_workflow_config = load_config(get_discussion_id_workflow_path())
+        use_vector_memory = discussion_id_workflow_config.get('useVectorForQualityMemory', False)
 
-        logger.debug("Entering discussionId Workflow")
-        discussion_id_workflow_filepath = get_discussion_id_workflow_path()
-        discussion_id_workflow_config = load_config(discussion_id_workflow_filepath)
-
-        rag_system_prompt = discussion_id_workflow_config['systemPrompt']
-        rag_prompt = discussion_id_workflow_config['prompt']
-        messages_from_most_recent_to_skip = discussion_id_workflow_config['lookbackStartTurn']
-        if not messages_from_most_recent_to_skip or messages_from_most_recent_to_skip < 1:
-            messages_from_most_recent_to_skip = 3
-        logger.debug("Skipping most recent messages. Number of most recent messages to skip: %s", str(
-            messages_from_most_recent_to_skip))
-
-        chunk_size = discussion_id_workflow_config.get('chunkEstimatedTokenSize', 1000)
-        max_messages_between_chunks = discussion_id_workflow_config.get('maxMessagesBetweenChunks', 0)
-
-        discussion_chunks = read_chunks_with_hashes(filepath)
-        discussion_chunks.reverse()  # Reverse to maintain correct chronological order when processing
-
-        if len(discussion_chunks) == 0:
-            logger.debug("No discussion chunks")
-            self.process_full_discussion_flow(messages_copy, rag_system_prompt, rag_prompt,
-                                              discussion_id_workflow_config, discussionId)
-        else:
-            number_of_messages_to_pull = find_last_matching_hash_message(messages_copy, discussion_chunks,
-                                                                         turns_to_skip_looking_back=messages_from_most_recent_to_skip)
-            if (number_of_messages_to_pull > messages_from_most_recent_to_skip):
-                number_of_messages_to_pull = number_of_messages_to_pull - messages_from_most_recent_to_skip
-            else:
-                number_of_messages_to_pull = 0
-
-            logger.info("Number of messages since last memory chunk update: %s", number_of_messages_to_pull)
-
-            messages_to_process = messages_copy[:-messages_from_most_recent_to_skip] if len(
-                messages_copy) > messages_from_most_recent_to_skip else messages_copy
-            logger.debug("Messages to process: %s", messages_to_process)
-            if len(messages_to_process) == 0:
+        if use_vector_memory:
+            vector_db_utils.initialize_vector_db(context.discussion_id)
+            logger.debug("Running vector memory check.")
+            new_message_content_to_process = []
+            last_processed_message_for_hash_update = None
+            lookback_turns = discussion_id_workflow_config.get('vectorMemoryLookBackTurns', 3)
+            if len(messages_copy) <= lookback_turns:
                 return
 
-            new_messages_to_evaluate = extract_last_n_turns(messages_to_process, number_of_messages_to_pull,
-                                                            remove_all_systems_override=True)
+            eligible_messages = messages_copy[:-lookback_turns]
+            last_checked_hash = vector_db_utils.get_last_vector_check_hash(context.discussion_id)
 
-            if (rough_estimate_token_length(
-                    '\n'.join(
-                        value for content in new_messages_to_evaluate for value in content.values())) > chunk_size) \
-                    or number_of_messages_to_pull > max_messages_between_chunks:
+            if not last_checked_hash:
+                new_message_content_to_process = eligible_messages
+            else:
+                start_index = -1
+                for i in range(len(eligible_messages) - 1, -1, -1):
+                    if hash_single_message(eligible_messages[i]) == last_checked_hash:
+                        start_index = i + 1
+                        break
+                if start_index != -1:
+                    new_message_content_to_process = eligible_messages[start_index:]
+                else:
+                    logger.warning(
+                        f"Vector memory hash for {context.discussion_id} not found. Reprocessing all eligible messages.")
+                    new_message_content_to_process = eligible_messages
 
-                logger.debug("number_of_messages_to_pull is: %s", str(number_of_messages_to_pull))
+            if new_message_content_to_process:
+                last_processed_message_for_hash_update = new_message_content_to_process[-1]
+                logger.info("Threshold met. Generating new vector memories.")
+                chunk_size = discussion_id_workflow_config.get('vectorMemoryChunkEstimatedTokenSize', 1000)
+                max_messages = discussion_id_workflow_config.get('vectorMemoryMaxMessagesBetweenChunks', 5)
+                hashed_chunks = chunk_messages_with_hashes(new_message_content_to_process, chunk_size,
+                                                           max_messages_before_chunk=max_messages)
+                text_chunks = extract_text_blocks_from_hashed_chunks(hashed_chunks)
+                logger.info("Using new vector memory creation flow.")
+                self.generate_and_store_vector_memories(text_chunks, discussion_id_workflow_config, context)
+                if last_processed_message_for_hash_update:
+                    new_hash = hash_single_message(last_processed_message_for_hash_update)
+                    vector_db_utils.update_last_vector_check_hash(context.discussion_id, new_hash)
+        else:
+            # This is the file-based memory path
+            logger.debug("Running file-based memory check.")
+            filepath = get_discussion_memory_file_path(context.discussion_id)
+            discussion_chunks = read_chunks_with_hashes(filepath)
+            lookback_turns = discussion_id_workflow_config.get('lookbackStartTurn', 3)
+            new_message_content_to_process = []
+            if not discussion_chunks:
+                if len(messages_copy) > lookback_turns:
+                    new_message_content_to_process = messages_copy[:-lookback_turns]
+            else:
+                num_new_messages = find_last_matching_hash_message(
+                    messages_copy,
+                    discussion_chunks,
+                    turns_to_skip_looking_back=lookback_turns
+                )
+                if num_new_messages > 0:
+                    end_index = len(messages_copy) - lookback_turns
+                    start_index = end_index - num_new_messages
+                    new_message_content_to_process = messages_copy[max(0, start_index):end_index]
 
-                trimmed_discussion_pairs = new_messages_to_evaluate
-                if (len(trimmed_discussion_pairs) == 0):
-                    return
+            if not new_message_content_to_process:
+                logger.debug("No new messages to process for memories.")
+                return
 
-                trimmed_discussion_pairs.reverse()  # Reverse to process in chronological order
-                logger.debug("Retrieved number of trimmed_discussion_pairs: %s", str(len(trimmed_discussion_pairs)))
+            logger.info(f"Found {len(new_message_content_to_process)} new messages to consider for memory generation.")
+            chunk_size = discussion_id_workflow_config.get('chunkEstimatedTokenSize', 1000)
+            max_messages = discussion_id_workflow_config.get('maxMessagesBetweenChunks', 5)
+            token_count = rough_estimate_token_length(
+                '\n'.join(m['content'] for m in new_message_content_to_process if 'content' in m)
+            )
+            file_exists = bool(discussion_chunks)
+            trigger_by_tokens = token_count > chunk_size
+            trigger_by_messages = file_exists and len(new_message_content_to_process) > max_messages
 
-                logger.debug("Trimmed discussion pairs:%s", str(trimmed_discussion_pairs))
+            if trigger_by_tokens or trigger_by_messages:
+                logger.info("Threshold met. Generating new memories.")
+                hashed_chunks = chunk_messages_with_hashes(new_message_content_to_process, chunk_size,
+                                                           max_messages_before_chunk=max_messages)
+                text_chunks = extract_text_blocks_from_hashed_chunks(hashed_chunks)
+                if len(hashed_chunks) >= 1:
+                    logger.info("Using original file-based memory creation flow.")
+                    rag_system_prompt = discussion_id_workflow_config.get('systemPrompt', '')
+                    rag_prompt = discussion_id_workflow_config.get('prompt', '')
+                    self.process_new_memory_chunks(text_chunks, hashed_chunks, rag_system_prompt, rag_prompt,
+                                                   discussion_id_workflow_config, context)
+            else:
+                logger.info("Thresholds not met. No new memories will be generated this time.")
 
-                logger.debug("Before chunk messages with hashes")
-                trimmed_discussion_chunks = chunk_messages_with_hashes(trimmed_discussion_pairs, chunk_size,
-                                                                       max_messages_before_chunk=max_messages_between_chunks)
-                logger.debug("Past chunk messages with hashes")
-
-                trimmed_discussion_chunks.reverse()
-
-                if len(trimmed_discussion_chunks) >= 1:
-                    pass_chunks = extract_text_blocks_from_hashed_chunks(trimmed_discussion_chunks)
-
-                    logger.info("Processing new memories")
-                    self.process_new_memory_chunks(pass_chunks, trimmed_discussion_chunks, rag_system_prompt,
-                                                   rag_prompt,
-                                                   discussion_id_workflow_config, discussionId, messages_copy)
-
-            elif max_messages_between_chunks == -1:
-                self.process_full_discussion_flow(messages_copy, rag_system_prompt, rag_prompt,
-                                                  discussion_id_workflow_config, discussionId)
-
-    def process_full_discussion_flow(self, messages: List[Dict[str, str]], rag_system_prompt: str, rag_prompt: str,
-                                     workflow_config: dict, discussionId: str) -> None:
+    def process_new_memory_chunks(self, chunks, hash_chunks, rag_system_prompt, rag_prompt, workflow_config,
+                                  context: ExecutionContext, chunks_per_memory=3):
         """
-        Processes the entire discussion history to create a new set of memory chunks.
-
-        This function is used when there are no existing memory chunks or when
-        the memory file needs to be completely rebuilt. It chunks the conversation
-        and processes each chunk in batches to create new memory summaries.
+        Processes new text chunks to generate and store file-based memories.
 
         Args:
-            messages (List[Dict[str, str]]): The conversation messages.
-            rag_system_prompt (str): The system prompt for the RAG process.
-            rag_prompt (str): The user prompt for the RAG process.
-            workflow_config (dict): The workflow configuration dictionary.
-            discussionId (str): The unique identifier for the current discussion.
+            chunks (List[str]): The new text chunks to summarize into memories.
+            hash_chunks (List[Tuple[str, str]]): Tuples of (text_chunk, hash) for the new chunks.
+            rag_system_prompt (str): The system prompt for the summarization LLM call.
+            rag_prompt (str): The user prompt for the summarization LLM call.
+            workflow_config (Dict): The configuration for this memory operation.
+            context (ExecutionContext): The current workflow execution context.
+            chunks_per_memory (int): The number of chunks to process per memory generation.
         """
-        if len(messages) < 3:
-            logger.debug("Less than 3 messages, no memory will be generated.")
-            return
+        all_chunks = "--ChunkBreak--".join(chunks)
+        result = self.perform_rag_on_memory_chunk(rag_system_prompt, rag_prompt, all_chunks, context, workflow_config,
+                                                  "--rag_break--", chunks_per_memory)
+        results = result.split("--rag_break--")
+        replaced = [(summary, hash_code) for summary, (_, hash_code) in zip(results, hash_chunks)]
+        filepath = get_discussion_memory_file_path(context.discussion_id)
+        existing_chunks = read_chunks_with_hashes(filepath)
+        updated_chunks = existing_chunks + replaced
+        update_chunks_with_hashes(updated_chunks, filepath, mode="overwrite")
 
-        logger.debug("Beginning full discussion flow")
-
-        new_messages = deepcopy(messages)
-        if len(new_messages) > 3:
-            new_messages = new_messages[:-3]  # Exclude the last 3 messages
-
-        new_messages.reverse()  # Reverse for chronological processing
-        filtered_messages_to_chunk = [message for message in new_messages if
-                                      message["role"] not in {"system", "images", "systemMes"}]
-
-        chunk_size = workflow_config.get('chunkEstimatedTokenSize', 1500)
-        chunk_hashes = chunk_messages_with_hashes(filtered_messages_to_chunk, chunk_size,
-                                                  max_messages_before_chunk=0)
-        chunk_hashes.reverse()  # Reverse chunks to maintain correct order
-
-        logger.debug("Past chunking hashes")
-
-        pass_chunks = extract_text_blocks_from_hashed_chunks(chunk_hashes)
-
-        # Order is correct here
-        logger.debug("Pass_chunks: %s", "\n".join(pass_chunks))
-        logger.debug("\n\n*******************************\n\n")
-
-        BATCH_SIZE = 10
-        for i in range(0, len(chunk_hashes), BATCH_SIZE):
-            batch_chunk_hashes = chunk_hashes[i:i + BATCH_SIZE]
-            batch_pass_chunks = pass_chunks[i:i + BATCH_SIZE]
-
-            # Order is correct here
-            logger.debug("Batch chunk hashes: %s", str(batch_chunk_hashes))
-            logger.debug("\n\n*******************************\n\n")
-
-            # Order is correct here
-            logger.debug("Batch pass chunk hashes: %s", "\n".join(batch_pass_chunks))
-            logger.debug("\n\n*******************************\n\n")
-
-            self.process_new_memory_chunks(batch_pass_chunks, batch_chunk_hashes, rag_system_prompt, rag_prompt,
-                                           workflow_config, discussionId, messages)
-
-    def perform_rag_on_memory_chunk(self, rag_system_prompt: str, rag_prompt: str, text_chunk: str, config: dict,
-                                    messages, discussionId: str, custom_delimiter: str = "",
-                                    chunks_per_memory: int = 3) -> str:
+    def perform_rag_on_conversation_chunk(self, rag_system_prompt: str, rag_prompt: str, text_chunk: str,
+                                          context: ExecutionContext) -> str:
         """
-        Performs RAG on a given chunk of a conversation and updates memory.
-
-        This function processes a text chunk by retrieving relevant conversation
-        history and chat summaries, and then using an LLM to generate a
-        summarized result.
+        Performs RAG on a single chunk from the current conversation.
 
         Args:
-            rag_system_prompt (str): The system prompt for the RAG process.
-            rag_prompt (str): The user prompt for the RAG process.
-            text_chunk (str): The chunk of text to process, separated by
-                              '--ChunkBreak--'.
-            config (dict): The workflow configuration dictionary.
-            messages (List[Dict[str,str]]): The conversation messages.
-            discussionId (str): The unique identifier for the current discussion.
-            custom_delimiter (str, optional): A custom delimiter to separate
-                                              the output chunks. Defaults to "".
-            chunks_per_memory (int, optional): The number of memory chunks to
-                                               consider for context. Defaults to 3.
+            rag_system_prompt (str): The system prompt for the summarization LLM call.
+            rag_prompt (str): The user prompt for the summarization LLM call.
+            text_chunk (str): The raw text chunk from the conversation to process.
+            context (ExecutionContext): The current workflow execution context.
 
         Returns:
-            str: The processed chunks joined by the custom delimiter.
+            str: The generated summary string.
+        """
+        return self.perform_rag_on_memory_chunk(
+            rag_system_prompt, rag_prompt, text_chunk, context, context.config,
+            custom_delimiter="", chunks_per_memory=context.config.get('chunksPerMemory', 3)
+        )
+
+    def perform_rag_on_memory_chunk(self, rag_system_prompt: str, rag_prompt: str, text_chunk: str,
+                                    context: ExecutionContext, workflow_config: Dict, custom_delimiter: str = "",
+                                    chunks_per_memory: int = 3) -> str:
+        """
+        Performs RAG on text chunks to generate file-based memory summaries.
+
+        This can operate using a direct LLM call or by executing a specified
+        sub-workflow for more complex summarization logic.
+
+        Args:
+            rag_system_prompt (str): The system prompt for the summarization LLM call.
+            rag_prompt (str): The user prompt for the summarization LLM call.
+            text_chunk (str): A string containing one or more text chunks, delimited by '--ChunkBreak--'.
+            context (ExecutionContext): The current workflow execution context.
+            workflow_config (Dict): The specific configuration for this memory generation task.
+            custom_delimiter (str): The delimiter to join the resulting summaries.
+            chunks_per_memory (int): The number of chunks to process per memory generation.
+
+        Returns:
+            str: A string of the generated summaries, joined by the custom delimiter.
         """
         chunks = text_chunk.split('--ChunkBreak--')
-
-        discussion_chunks = read_chunks_with_hashes(get_discussion_memory_file_path(discussionId))
+        discussion_chunks = read_chunks_with_hashes(get_discussion_memory_file_path(context.discussion_id))
         memory_chunks = extract_text_blocks_from_hashed_chunks(discussion_chunks)
-        chat_summary = self.memory_service.get_current_summary(discussionId)
+        chat_summary = self.memory_service.get_current_summary(context.discussion_id)
 
-        endpoint_data = get_endpoint_config(config['endpointName'])
+        endpoint_name = workflow_config.get('endpointName')
+        preset_name = workflow_config.get('preset')
+        max_tokens = workflow_config.get("maxResponseSizeInTokens", 400)
+        endpoint_data = get_endpoint_config(endpoint_name)
         llm_handler_service = LlmHandlerService()
-        llm_handler = llm_handler_service.initialize_llm_handler(endpoint_data,
-                                                                 config['preset'],
-                                                                 config['endpointName'],
-                                                                 False,
-                                                                 endpoint_data.get("maxContextTokenSize", 4096),
-                                                                 config.get("maxResponseSizeInTokens", 400))
+        llm_handler = llm_handler_service.initialize_llm_handler(
+            endpoint_data, preset_name, endpoint_name, False,
+            endpoint_data.get("maxContextTokenSize", 4096), max_tokens
+        )
 
+        # Create a temporary context with the correct, newly created llm_handler
+        temp_llm_context = deepcopy(context)
+        temp_llm_context.llm_handler = llm_handler
+        # Also ensure the config in the temp context is the correct one for *this* task
+        temp_llm_context.config = workflow_config
+
+        # Note: The 'fileMemoryWorkflowName' should be in 'workflow_config', not 'context.config'
+        file_workflow_name = workflow_config.get('fileMemoryWorkflowName')
         result_chunks = []
         for chunk in chunks:
-            current_memories = '\n--------------\n'.join(memory_chunks[-3:]) if len(
-                memory_chunks) >= 3 else '\n--------------\n'.join(memory_chunks)
-            if current_memories is None:
-                current_memories = ""
-
+            current_memories = '\n--------------\n'.join(memory_chunks[-3:])
             full_memories = '\n--------------\n'.join(memory_chunks)
-            if full_memories is None:
-                full_memories = ""
+            result_chunk = ""
+            if file_workflow_name:
+                logger.info(f"Using workflow '{file_workflow_name}' to generate file-based memory.")
+                scoped_inputs = [chunk, current_memories.strip(), full_memories.strip(), chat_summary.strip()]
+                result_chunk = context.workflow_manager.run_custom_workflow(
+                    workflow_name=file_workflow_name, request_id=context.request_id,
+                    discussion_id=context.discussion_id, messages=context.messages,
+                    non_responder=True, scoped_inputs=scoped_inputs
+                )
+            else:
+                system_prompt = rag_system_prompt.replace('[Memory_file]', current_memories.strip()).replace(
+                    '[Full_Memory_file]', full_memories.strip()).replace('[Chat_Summary]', chat_summary.strip())
+                prompt = rag_prompt.replace('[Memory_file]', current_memories.strip()).replace(
+                    '[Full_Memory_file]', full_memories.strip()).replace('[Chat_Summary]', chat_summary.strip())
+                result_chunk = self.process_single_chunk(chunk, prompt, system_prompt, temp_llm_context)
 
-            logger.debug("Processing memory chunk")
-            system_prompt = rag_system_prompt.replace('[Memory_file]', current_memories.strip())
-            prompt = rag_prompt.replace('[Memory_file]', current_memories.strip())
-
-            system_prompt = system_prompt.replace('[Full_Memory_file]', full_memories.strip())
-            prompt = prompt.replace('[Full_Memory_file]', full_memories.strip())
-
-            system_prompt = system_prompt.replace('[Chat_Summary]', chat_summary.strip())
-            prompt = prompt.replace('[Chat_Summary]', chat_summary.strip())
-
-            result_chunk = SlowButQualityRAGTool.process_single_chunk(chunk, llm_handler, prompt, system_prompt,
-                                                                      messages, config)
             result_chunks.append(result_chunk)
             memory_chunks.append(result_chunk)
-
         return custom_delimiter.join(result_chunks)
 
     @staticmethod
-    def perform_rag_on_conversation_chunk(rag_system_prompt: str, rag_prompt: str, text_chunk: str, config: dict,
-                                          custom_delimiter: str = "") -> str:
+    def process_single_chunk(chunk: str, workflow_prompt: str, workflow_system_prompt: str,
+                             context: ExecutionContext) -> str:
         """
-        Performs Retrieval-Augmented Generation (RAG) on a given chunk of conversation.
-
-        This static method splits a conversation chunk into sub-chunks and uses
-        a parallel processing tool to run RAG on them.
+        Processes a single text chunk using a direct LLM call.
 
         Args:
-            rag_system_prompt (str): The system prompt for the RAG process.
-            rag_prompt (str): The user prompt for the RAG process.
-            text_chunk (str): The chunk of text to process.
-            config (dict): A dictionary containing configuration parameters,
-                           including the endpoint and preset settings.
-            custom_delimiter (str, optional): A custom delimiter to separate
-                                              the output chunks. Defaults to "".
+            chunk (str): The raw text chunk to send to the LLM.
+            workflow_prompt (str): The user prompt template.
+            workflow_system_prompt (str): The system prompt template.
+            context (ExecutionContext): The execution context containing the LLM handler and variables.
 
         Returns:
-            str: The processed chunks of text joined by the custom delimiter.
+            str: The raw string response from the LLM.
         """
-        chunks = text_chunk.split('--ChunkBreak--')
-        parallel_llm_processing_service = ParallelLlmProcessingTool(config)
-        return parallel_llm_processing_service.process_prompt_chunks(chunks, rag_prompt, rag_system_prompt,
-                                                                     custom_delimiter)
+        llm_handler = context.llm_handler
+        if not llm_handler or not llm_handler.llm:  # Added a check for the internal llm object
+            logger.error("LLM handler or its internal llm is not available in the context for process_single_chunk.")
+            return ""
 
-    @staticmethod
-    def process_single_chunk(chunk, llm_handler, workflow_prompt, workflow_system_prompt,
-                             messages, config):
-        """
-        Processes a single text chunk using the specified LLM handler.
-
-        This static method formats prompts, handles message collection, and
-        dispatches the request to the LLM handler to get a response for a
-        single chunk.
-
-        Args:
-            chunk (str): The text chunk to be processed.
-            llm_handler: The handler for processing the chunk.
-            workflow_prompt (str): The user prompt to be used in processing.
-            workflow_system_prompt (str): The system prompt to be used in processing.
-            messages (List[Dict[str,str]]): The conversation messages.
-            config (dict): The workflow configuration dictionary.
-
-        Returns:
-            str: The response from the LLM handler.
-        """
-
-        workflow_variable_service = WorkflowVariableManager()
-        formatted_prompt = workflow_variable_service.apply_variables(workflow_prompt, llm_handler, messages,
-                                                                     remove_all_system_override=True,
-                                                                     config=config)
-        formatted_system_prompt = workflow_variable_service.apply_variables(workflow_system_prompt, llm_handler,
-                                                                            messages, remove_all_system_override=True,
-                                                                            config=config)
+        formatted_prompt = context.workflow_variable_service.apply_variables(workflow_prompt, context,
+                                                                             remove_all_system_override=True)
+        formatted_system_prompt = context.workflow_variable_service.apply_variables(workflow_system_prompt, context,
+                                                                                    remove_all_system_override=True)
 
         formatted_prompt = formatted_prompt.replace('[TextChunk]', chunk)
         formatted_system_prompt = formatted_system_prompt.replace('[TextChunk]', chunk)
 
-        formatted_prompt = format_user_turn_with_template(formatted_prompt, llm_handler.prompt_template_file_name,
-                                                          llm_handler.takes_message_collection)
-        formatted_system_prompt = format_system_prompt_with_template(formatted_system_prompt,
-                                                                     llm_handler.prompt_template_file_name,
-                                                                     llm_handler.takes_message_collection)
-
-        formatted_system_prompt = remove_discussion_id_tag_from_string(formatted_system_prompt)
-        formatted_prompt = remove_discussion_id_tag_from_string(formatted_prompt)
-
-        if llm_handler.add_generation_prompt:
-            formatted_prompt = add_assistant_end_token_to_user_turn(formatted_prompt,
-                                                                    llm_handler.prompt_template_file_name,
-                                                                    isChatCompletion=llm_handler.takes_message_collection)
-
         if not llm_handler.takes_message_collection:
-            result = llm_handler.llm.get_response_from_llm(system_prompt=formatted_system_prompt,
-                                                           prompt=formatted_prompt,
-                                                           llm_takes_images=llm_handler.takes_image_collection)
+            return llm_handler.llm.get_response_from_llm(
+                system_prompt=formatted_system_prompt,
+                prompt=formatted_prompt,
+                llm_takes_images=llm_handler.takes_image_collection
+            )
         else:
             collection = []
             if formatted_system_prompt:
                 collection.append({"role": "system", "content": formatted_system_prompt})
             if formatted_prompt:
                 collection.append({"role": "user", "content": formatted_prompt})
-
-            result = llm_handler.llm.get_response_from_llm(collection,
-                                                           llm_takes_images=llm_handler.takes_image_collection)
-
-        if result:
-            return result
+            return llm_handler.llm.get_response_from_llm(
+                collection,
+                llm_takes_images=llm_handler.takes_image_collection
+            )

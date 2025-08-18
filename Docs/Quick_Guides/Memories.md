@@ -1,117 +1,203 @@
 ## Quick Guide to Understanding Memories in WilmerAI
 
-### What are the memories?
+Memories in WilmerAI have gotten a major upgrade\! They are now more powerful and allow for much smarter and more
+relevant context. Let's break down how they work now.
 
-Wilmer memories, at the time of this writing (2024-11-30), are primarily made up of two components:
+-----
 
-* A memory file, which takes your conversation, breaks it into chunks, and writes summaries of it
-* A chat summary file, which takes the memories above and summarizes those into a small story-form summary
-  of everything that has been said up to now.
+### \#\# What are the memories?
 
-### How do you create the memories?
+Wilmer's memory system now has three key components that work together:
 
-In order for Wilmer memories to be triggered, somewhere in your discussion must be a [DiscussionId].
-You can read more about DiscussionId tags
-[on this quick guide](SillyTavern.md#step-6-you-should-be-good-to-go-but-if-you-want-memoriessummaries-read-this) and
-on the [main readme here](../../README.md#understanding-memories).
+* **Long-Term Memory File (`<id>_memories.jsonl`)**: This is the classic memory file. It still takes your conversation,
+  breaks it into chunks, and an LLM writes a summary of each chunk. Think of it as a detailed, chronological diary of
+  your chat.
+* **Rolling Chat Summary (`<id>_summary.jsonl`)**: This file takes the summarized chunks from the Long-Term Memory file
+  and weaves them into a single, continuously updated story of your conversation. It gives the AI a high-level overview
+  of everything that has happened so far.
+* **Searchable Vector Memory (`<id>_vector_memory.db`)**: This is the exciting new part\! 🧠 It's a dedicated, smart
+  database for your discussion. When a memory is created, it can be saved here with extra metadata like a **title,
+  summary, entities, and key phrases**. This makes your memories highly searchable, allowing the AI to perform a "smart
+  search" to find the *most relevant* pieces of information about a specific topic, rather than just looking at the last
+  few things you said.
 
-When Wilmer find a DiscussionId tag, that activates a whole line of options within Wilmer. It will next
-look for certain nodes in the workflow to trigger them. Right now, the main node to do this is the [Chat
-Summary node](../../README.md#full-chat-summary-node), which triggers the generation of memories and a chat summary,
-and then returns the summary. You can also pull the memories, without triggering them to be written, with the
-[recent memory summarizer node](../../README.md#recent-memory-summarizer-tool).
+-----
 
-### Why do some nodes make memories, and some nodes just pull them?
+### \#\# How do you use memories in a workflow?
 
-Why would you want one node to trigger generating memories and one not to? The answer comes down to managing
-response performance.
+The core idea is the same: you must have a **`[DiscussionId]`** tag in your chat to activate persistent memories. Once
+activated, you can use specific nodes in your workflow to interact with the memory system.
 
-Wilmer has a concept of "Workflow Locks". You can [read more about them here](../../README.md#workflow-lock), but
-the short version is that if you have a workflow with a lock on it, the workflow will engage the lock when the lock
-is reached. If you then try sending another prompt to the same workflow, if that lock is still engaged then the workflow
-won't go past that point.
+The system is now split into "Creator" nodes (which do the heavy lifting of writing memories) and "Retriever" nodes (
+which just read them).
 
-Lets consider an
-[example workflow](../../Public/Configs/Workflows/convo-roleplay-dual-model/FullCustomWorkflow-ChatSummary-WorkflowLocked.json).
-The steps of this workflow are (as of 2024-11-30):
+#### **The Memory Creator**
 
-* Get the chat summary without generating or updating the chat summary file
-* Respond to the user using the chat summary file
-* Workflow lock
-* Update the memories and chat summary
+* **`QualityMemory`**: This is the main node for **creating and updating** all your memory files. You place this in your
+  workflow where you want the memory generation to happen (usually at the end, after a workflow lock). It's the engine
+  that powers the whole system.
 
-Now, part of this user being "dual model" is to give you the option of having each model on a different computer. Why?
-One model is the "responder" and the other writes memories.
+  *Example Config:*
 
-So say you send a prompt to this workflow. It will pull the summary, Model #1 will respond to you, the lock will engage,
-and Model #2 will begin working on writing memories and chat summaries.
-
-If you then send another prompt right after, while Model #2 is still working? You'll get the chat summary, Model #1 will
-respond to the user... and the workflow will stop.
-
-This means that you can keep chatting away with Model #1, while Model #2 works quietly in the background to keep your
-memories and chat summary up to date.
-
-### Understanding the memory and chat summary files
-
-If you peek inside the files, you'll notice that they are a json format that contains 1 or more pairs of text, looking
-something like this:
-
-```json
-[
+  ```json
   {
-    "text_block": "This is a memory",
-    "hash": "This is the hash of the last message in the chunk tied to the memory"
+    "id": "create_memories_node",
+    "type": "QualityMemory",
+    "name": "Create/Update Memories"
   }
-]
-```
+  ```
 
-A memory is basically a summary of a chunk of messages. So if there are 10 messages, a memory might be made up of 5 of
-those. The LLM is given the messages, as well as the prompt specified in the
-"_DiscussionId-MemoryFile-Workflow-Settings" json file in your workflow folder, and it summarizes those messages.
-Wilmer then writes the memory to the text_block file, and will then hash message #5 and put that hash alongside
-the memory.
+#### **The Memory Retrievers (Readers)**
 
-What this does is tell Wilmer where the memory ends, so that it knows where the next memory begins. Wilmer can also use
-this to figure out how many messages ago you last made a memory.
+* **`RecentMemorySummarizerTool`**: This node quickly **reads** the last few chunks from your Long-Term Memory File.
+  It's great for giving an AI general context of what just happened.
 
-Chat summaries work the same way, except there is only 1 text block and hash; the hash will be the same as the last
-memory it included in the summary.
+  *Example Config:*
 
-Memories are automatically created as you go, and the chat summary is automatically updated as you go. As long as you
-have the node in your workflow and a discussionid, you shouldn't need to be do anything with them.
+  ```json
+  {
+    "id": "get_recent_memories_node",
+    "type": "RecentMemorySummarizerTool",
+    "name": "Get Recent Memories",
+    "maxTurnsToPull": 0,
+    "maxSummaryChunksFromFile": 3 // Pulls the last 3 memory chunks
+  }
+  ```
 
-### Cleaning up memories
+* **`FullChatSummary`**: This node **reads** the Rolling Chat Summary file. Use this to give the AI the complete "story
+  so far."
 
-With that said, there are a couple of tricks with memories to improve quality. In particular, if you delete the memory
-file, or you delete a few memories starting at the end of the file, Wilmer will regenerate them on the next run.
+  *Example Config:*
 
-Note- you will also want to delete your chat summary if you do this; Wilmer might do weird things if you only mess with
-the memory file. Your summary could end up looking really funky.
+  ```json
+  {
+    "id": "get_full_summary_node",
+    "type": "FullChatSummary",
+    "name": "Get Full Chat Summary"
+  }
+  ```
 
-A couple of reasons you may want to delete the memory file are:
+* **`VectorMemorySearch`**: This is the new **smart search** node. It takes keywords and searches the Vector Memory
+  database for the most relevant information. This is perfect for Retrieval-Augmented Generation (RAG), where you want
+  the AI to look up specific facts from your conversation history before responding.
 
-* You modified some messages early on and want to capture that information
-* You redid the prompts in the memory settings and want the memories rebuilt using those prompts
-* You want to consolidate memories
+  *Example Config:*
 
-On the last point: if you're looking at the memory settings, you'll see this:
+  ```json
+  {
+    "id": "smart_search_node",
+    "type": "VectorMemorySearch",
+    "name": "Search for Specific Details",
+    // Keywords must be separated by a semicolon (;)
+    "input": "Project Stardust;mission parameters;Dr. Evelyn Reed"
+  }
+  ```
+
+-----
+
+### \#\# Why have "Creator" and "Reader" nodes?
+
+This separation is all about **performance and keeping your chat fast**. Writing memories, especially the new searchable
+ones, can take a few moments. By splitting the process, you can have a responsive AI that chats with you instantly while
+another process works quietly in the background to keep the memories updated.
+
+This is where **Workflow Locks** are key. Consider this workflow order:
+
+1. **Read Memory** (`VectorMemorySearch` or `FullChatSummary`).
+2. **AI Responds** (The AI uses the memory you just read).
+3. **Workflow Lock** engages.
+4. **Create Memory** (`QualityMemory` runs in the background).
+
+When you send a prompt, the workflow instantly grabs existing memories (fast\!), gets a response to you from your main
+AI (fast\!), and then locks. While you're reading the response, a secondary process can start working on the
+`QualityMemory` node in the background to update everything based on what you just said.
+
+If you send another message while the background process is still working, the workflow will simply stop at the lock,
+but you'll still get a fast response from the AI based on the memories that were read *before* the lock. This means you
+can have a seamless conversation without waiting for memory processing.
+
+-----
+
+### \#\# Configuring Your Memories: File vs. Vector
+
+You now have a choice in how your memories are created. In your `_DiscussionId-MemoryFile-Workflow-Settings.json` file,
+you'll find a new key setting:
+
+* **`useVectorForQualityMemory`**: If this is `false` (the classic way), the `QualityMemory` node will only write to the
+  Long-Term Memory file. If you set it to `true`, it will create the powerful, searchable Vector Memories instead\!
+
+*Example `_DiscussionId-MemoryFile-Workflow-Settings.json`:*
 
 ```json
 {
-  "maxResponseSizeInTokens": 250,
-  "chunkEstimatedTokenSize": 2500,
-  "maxMessagesBetweenChunks": 20,
-  "lookbackStartTurn": 7
+  // This is the master switch for the new memory system.
+  // Set to true to create searchable vector memories.
+  // Set to false to use the classic file-based memory system.
+  "useVectorForQualityMemory": true,
+  // ====================================================================
+  // == Vector Memory Configuration (Only used if the above is true) ==
+  // ====================================================================
+
+  // For advanced users: specify a workflow to generate the structured JSON for a vector memory.
+  "vectorMemoryWorkflowName": "my-vector-memory-workflow",
+  // The LLM endpoint to use specifically for vector memory generation. Falls back to "endpointName".
+  "vectorMemoryEndpointName": "gpt-4-turbo",
+  // The preset for the specified endpoint. Falls back to "preset".
+  "vectorMemoryPreset": "default_preset_for_json_output",
+  // The max response size for the generated JSON. Falls back to "maxResponseSizeInTokens".
+  "vectorMemoryMaxResponseSizeInTokens": 1024,
+  // The target size in tokens for a chunk of conversation before it's processed.
+  "vectorMemoryChunkEstimatedTokenSize": 1000,
+  // The max number of new messages before forcing processing, even if token size isn't met.
+  "vectorMemoryMaxMessagesBetweenChunks": 5,
+  // How many of the most recent turns to ignore. This prevents summarizing an in-progress thought.
+  "vectorMemoryLookBackTurns": 3,
+  // ====================================================================
+  // == File-based Memory Configuration (Only used if the switch is false) ==
+  // ====================================================================
+
+  // For advanced users: specify a workflow to generate the summary text for a file-based memory.
+  "fileMemoryWorkflowName": "my-file-memory-workflow",
+  // The system prompt used for the summarization LLM call when not using a workflow.
+  "systemPrompt": "You are an expert summarizer. Your task is to extract key facts...",
+  // The user prompt used for the summarization LLM call. [TextChunk] is replaced automatically.
+  "prompt": "Please summarize the following conversation chunk: [TextChunk]",
+  // The target size in tokens for a chunk of conversation before it's summarized.
+  "chunkEstimatedTokenSize": 1000,
+  // The max number of new messages before forcing a summarization, even if token size isn't met.
+  "maxMessagesBetweenChunks": 5,
+  // How many of the most recent turns to ignore for file-based memory generation.
+  "lookbackStartTurn": 3,
+  // ====================================================================
+  // == General / Fallback LLM Settings                           ==
+  // ====================================================================
+
+  // The default LLM endpoint to use if a specific one (e.g., vectorMemoryEndpointName) isn't set.
+  "endpointName": "default_endpoint",
+  // The default preset to use.
+  "preset": "default_preset",
+  // The default max response size in tokens.
+  "maxResponseSizeInTokens": 400
 }
 ```
 
-Chunk estimated token size is 2500 and maxMessagesBetweenChunks is 20. Say that you've been chatting for a while
-and it has generated 10 memories, even though all your messages were pretty short. The reason may be that each memory
-was triggered to be made because of maxMessagesBetweenChunks; no matter what, it kept generating a new memory every 20
-messages.
+-----
 
-If you delete the memory file and re-run it, Wilmer will prioritize instead the chunkEstimatedTokenSize, and will ignore
-the max message limit for old messages (it will still use that limit for new messages that come in later). Because of
-this, if that limit caused each of your memories to be made with only 500 tokens worth of messages, you might get
-memories made up of 5x larger chunks of messages with this, reducing your 10 memories down to 2 or 3.
+### \#\# Cleaning Up and Regenerating Memories
+
+Sometimes you might want to rebuild your memories from scratch. Maybe you changed the summarization prompts or edited a
+bunch of old messages.
+
+To do this, you need to **delete the memory files**. With the new system, there can be up to three:
+
+1. `Public/<id>_memories.jsonl` (Long-Term Memory)
+2. `Public/<id>_summary.jsonl` (Rolling Summary)
+3. `Public/<id>_vector_memory.db` (The Searchable Vector Memory)
+
+**Important**: If you delete the memory files, you should delete all of them for that discussion to avoid confusing the
+system. The next time you run a workflow with a `QualityMemory` node, Wilmer will see the files are missing and
+regenerate everything from your chat history.
+
+The tip about consolidating memories still works, too\! If you feel too many small memories were created because of the
+`maxMessagesBetweenChunks` limit, just delete the files. When they are regenerated, Wilmer will prioritize the
+`chunkEstimatedTokenSize`, likely creating fewer, but larger and more comprehensive, memory chunks from your history.
