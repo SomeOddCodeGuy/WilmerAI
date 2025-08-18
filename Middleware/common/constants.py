@@ -7,5 +7,6 @@ VALID_NODE_TYPES = [
     "chatSummarySummarizer", "GetCurrentMemoryFromFile", "WriteCurrentSummaryToFileAndReturnIt",
     "SlowButQualityRAG", "QualityMemory", "PythonModule", "OfflineWikiApiFullArticle",
     "OfflineWikiApiBestFullArticle", "OfflineWikiApiTopNFullArticles", "OfflineWikiApiPartialArticle",
-    "WorkflowLock", "CustomWorkflow", "ConditionalCustomWorkflow", "GetCustomFile", "ImageProcessor"
-] 
+    "WorkflowLock", "CustomWorkflow", "ConditionalCustomWorkflow", "GetCustomFile", "ImageProcessor",
+    "VectorMemorySearch"
+]

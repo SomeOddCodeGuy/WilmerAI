@@ -1,42 +1,39 @@
 # Middleware/api/handlers/impl/ollama_api_handler.py
 
-import hashlib
 import json
 import logging
-import time
-from datetime import datetime
 from typing import Any, Dict, Union, List
 
 from flask import jsonify, request, Response
 from flask.views import MethodView
 
-from Middleware.api import api_helpers
 from Middleware.api.app import app
 from Middleware.api.handlers.base.base_api_handler import BaseApiHandler
 from Middleware.api.workflow_gateway import handle_user_prompt, _sanitize_log_data, handle_openwebui_tool_check
 from Middleware.common import instance_global_variables
+from Middleware.services.response_builder_service import ResponseBuilderService
 from Middleware.utilities.config_utils import get_is_chat_complete_add_user_assistant, \
     get_is_chat_complete_add_missing_assistant
 from Middleware.utilities.prompt_extraction_utils import parse_conversation
 
 logger = logging.getLogger(__name__)
+response_builder = ResponseBuilderService()
 
 
 class GenerateAPI(MethodView):
     @staticmethod
     def post() -> Union[Response, Dict[str, Any]]:
         """
-        Handles POST requests for the generate endpoint, matching Ollama's API.
+        Handles POST requests for the /api/generate endpoint.
 
-        This method processes incoming requests to the /api/generate endpoint,
-        extracts the prompt and other parameters, and uses the workflow gateway
-        to handle the request, returning either a streaming or a single-block
-        response that mimics the Ollama generate API's format.
+        This method processes the request, transforms the prompt and images into the
+        internal message format, and calls the workflow engine. It returns a response
+        that mimics the Ollama generate API format.
 
         Returns:
-            Union[Response, Dict[str, Any]]: A Flask Response object for streaming,
-                                             or a dictionary that will be JSONified
-                                             for a single-block response.
+            Union[Response, Dict[str, Any]]: A Flask Response object for a streaming
+                                             response, or a dictionary for a non-streaming
+                                             response.
         """
         instance_global_variables.API_TYPE = "ollamagenerate"
         logger.debug("GenerateAPI request received")
@@ -49,7 +46,7 @@ class GenerateAPI(MethodView):
 
         prompt: str = data.get("prompt", "")
         system: str = data.get("system", "")
-        stream: bool = data.get("stream", True) # Ollama defaults to true if not present
+        stream: bool = data.get("stream", True)
 
         if system:
             prompt = system + prompt
@@ -64,23 +61,7 @@ class GenerateAPI(MethodView):
             return Response(handle_user_prompt(messages, stream=True), content_type='application/json')
         else:
             return_response: str = handle_user_prompt(messages, stream=False)
-            current_time: int = int(time.time())
-            response = {
-                "id": f"gen-{current_time}",
-                "object": "text_completion",
-                "created": current_time,
-                "model": model,
-                "response": f"{return_response}",
-                "choices": [
-                    {
-                        "text": f"{return_response}",
-                        "index": 0,
-                        "logprobs": None,
-                        "finish_reason": "stop"
-                    }
-                ],
-                "usage": {}
-            }
+            response = response_builder.build_ollama_generate_response(return_response, model=model)
             return jsonify(response)
 
 
@@ -89,17 +70,15 @@ class ApiChatAPI(MethodView):
     @handle_openwebui_tool_check('ollamaapichat')
     def post() -> Response:
         """
-        Handles POST requests for Ollama's /api/chat endpoint.
+        Handles POST requests for the /api/chat endpoint.
 
-        This method processes incoming requests to the /api/chat endpoint,
-        extracts the conversation history, and optionally modifies it based on
-        user configuration. It then passes the messages to the workflow gateway
-        and returns a streaming or a single-block response that matches
-        the Ollama /api/chat format.
+        This method extracts the conversation history from the request, transforms
+        it into the internal message format, and calls the workflow engine. It
+        returns a response that matches the Ollama /api/chat format.
 
         Returns:
-            Response: A Flask Response object for either streaming or
-                      a single-block JSON response.
+            Response: A Flask Response object for either a streaming or a
+                      non-streaming JSON response.
         """
         instance_global_variables.API_TYPE = "ollamaapichat"
         add_user_assistant = get_is_chat_complete_add_user_assistant()
@@ -152,20 +131,8 @@ class ApiChatAPI(MethodView):
         if stream:
             return Response(response_data, mimetype='text/event-stream')
         else:
-            current_time = datetime.utcnow().isoformat() + 'Z'
-            response = {
-                "model": request_data.get("model", "llama3.2"),
-                "created_at": current_time,
-                "message": {
-                    "role": "assistant",
-                    "content": response_data
-                },
-                "done_reason": "stop",
-                "done": True,
-                "total_duration": 4505727700, "load_duration": 23500100,
-                "prompt_eval_count": 15, "prompt_eval_duration": 4000000,
-                "eval_count": 392, "eval_duration": 4476000000
-            }
+            model_name = request_data.get("model", "llama3.2")
+            response = response_builder.build_ollama_chat_response(response_data, model_name=model_name)
             return jsonify(response)
 
 
@@ -175,29 +142,14 @@ class TagsAPI(MethodView):
         """
         Handles GET requests for the /api/tags endpoint.
 
-        This method returns a list of available models, which in this
-        implementation is a hardcoded list containing the model specified
-        in the Endpoint config. The response is formatted to be compatible with
-        the Ollama API's /api/tags endpoint.
+        This method returns a list of available models, formatted to be compatible
+        with the Ollama /api/tags endpoint.
 
         Returns:
             Response: A JSON response containing a list of available models.
         """
-        model_name = api_helpers.get_model_name()
-        models = [
-            {
-                "name": model_name,
-                "model": model_name + ":latest",
-                "modified_at": "2024-11-23T00:00:00Z",
-                "size": 1,
-                "digest": hashlib.sha256(model_name.encode('utf-8')).hexdigest(),
-                "details": {
-                    "format": "gguf", "family": "wilmer", "families": None,
-                    "parameter_size": "N/A", "quantization_level": "Q8"
-                }
-            }
-        ]
-        return jsonify({"models": models})
+        response = response_builder.build_ollama_tags_response()
+        return jsonify(response)
 
 
 class VersionAPI(MethodView):
@@ -206,30 +158,26 @@ class VersionAPI(MethodView):
         """
         Handles GET requests for the /api/version endpoint.
 
-        This method returns the current version of the application as a
-        JSON response, mimicking the Ollama API's /api/version endpoint.
+        This method returns the application version, mimicking the Ollama
+        /api/version endpoint.
 
         Returns:
             Response: A JSON response containing the version number.
         """
-        return jsonify({"version": "0.9"})
+        return jsonify(response_builder.build_ollama_version_response())
 
 
 class OllamaApiHandler(BaseApiHandler):
     """
-    Handles API requests that follow the Ollama API schema.
-
-    This class provides the entry points for different Ollama-compatible
-    endpoints, such as /api/generate, /api/chat, /api/tags, and /api/version.
-    It registers these routes with the Flask application instance.
+    Registers all API endpoints that conform to the Ollama API specification.
     """
+
     def register_routes(self, app_instance: app) -> None:
         """
         Registers the Ollama API-compatible routes with the Flask app.
 
         Args:
-            app_instance (app): The Flask application instance to which the routes
-                                should be added.
+            app_instance (app): The Flask application instance.
         """
         app_instance.add_url_rule('/api/generate', view_func=GenerateAPI.as_view('api_generate'))
         app_instance.add_url_rule('/api/chat', view_func=ApiChatAPI.as_view('api_chat'))

@@ -2,70 +2,58 @@
 
 import logging
 from copy import deepcopy
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 
+from Middleware.utilities.prompt_extraction_utils import extract_last_n_turns
 from Middleware.utilities.prompt_template_utils import (
     format_user_turn_with_template, add_assistant_end_token_to_user_turn,
     format_system_prompt_with_template, get_formatted_last_n_turns_as_string,
     format_assistant_turn_with_template
 )
-from Middleware.utilities.prompt_extraction_utils import extract_last_n_turns
+# Import the new context object
+from Middleware.workflows.models.execution_context import ExecutionContext
 
 logger = logging.getLogger(__name__)
 
 
 class LLMDispatchService:
-    """
-    A stateless service to prepare prompts and dispatch them to an LLM handler.
-
-    This service is responsible for formatting prompts and messages
-    based on the LLM API type (chat vs. completions) and dispatching
-    them to the appropriate LLM handler for processing.
-    """
+    """Formats prompts based on API type and dispatches them to an LLM handler."""
 
     @staticmethod
     def dispatch(
-            llm_handler: Any,
-            workflow_variable_service: Any,
-            config: Dict,
-            messages: List[Dict[str, str]],
-            agent_outputs: Optional[Dict],
+            context: ExecutionContext,
             image_message: Optional[Dict] = None
     ) -> Any:
         """
-        Prepares inputs and calls the LLM, handling both chat and completion APIs.
-
-        This method applies variables to prompts, formats the conversation
-        based on the LLM's API type (chat or completions), and dispatches
-        the final payload to the `llm_handler` to get a response.
+        Prepares prompts and dispatches them to the configured LLM handler.
 
         Args:
-            llm_handler (Any): The LLM API handler (e.g., OllamaChatHandler).
-            workflow_variable_service (Any): The service to apply variables to prompts.
-            config (Dict): The workflow node configuration.
-            messages (List[Dict[str, str]]): The conversation history as a list of
-                                             role/content dictionaries.
-            agent_outputs (Optional[Dict]): A dictionary of outputs from previous
-                                            non-responding nodes in the workflow.
+            context (ExecutionContext): The context object containing all runtime state.
             image_message (Optional[Dict]): An optional message containing image data.
 
         Returns:
-            Any: The response from the LLM, which can be a string, a stream of
-                 events, or another data type depending on the LLM handler.
+            Any: The raw response from the LLM handler (e.g., a string or a generator).
         """
-        message_copy = deepcopy(messages)
+        # All required data is now pulled from the context object
+        llm_handler = context.llm_handler
+        config = context.config
+
+        workflow_variable_service = context.workflow_variable_service
+
+        message_copy = deepcopy(context.messages)
         llm_takes_images = llm_handler.takes_image_collection
 
         # 1. Get and apply variables to base prompts from the node config
         system_prompt = workflow_variable_service.apply_variables(
-            prompt=config.get("systemPrompt", ""), llm_handler=llm_handler,
-            messages=message_copy, agent_outputs=agent_outputs, config=config
+            prompt=config.get("systemPrompt", ""),
+            context=context  # Pass the whole context
         )
+
         prompt = config.get("prompt", "")
         if prompt:
             prompt = workflow_variable_service.apply_variables(
-                prompt=prompt, llm_handler=llm_handler, messages=message_copy,
-                agent_outputs=agent_outputs, config=config
+                prompt=prompt,
+                context=context  # Pass the whole context
             )
             use_last_n_messages = False
         else:
@@ -81,7 +69,6 @@ class LLMDispatchService:
                     template_file_name=llm_handler.prompt_template_file_name,
                     isChatCompletion=False
                 )
-
             if config.get("addUserTurnTemplate"):
                 prompt = format_user_turn_with_template(prompt, llm_handler.prompt_template_file_name, False)
             if config.get("addOpenEndedAssistantTurnTemplate"):

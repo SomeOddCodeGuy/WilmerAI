@@ -1,0 +1,326 @@
+# Middleware/utilities/vector_db_utils.py
+import datetime
+import json
+import logging
+import math
+import os
+import sqlite3
+from typing import List, Optional
+
+logger = logging.getLogger(__name__)
+
+# This prevents exceeding SQLite's expression depth limit (SQLITE_LIMIT_EXPR_DEPTH).
+MAX_KEYWORDS_FOR_SEARCH = 60
+
+
+def _get_db_path(discussion_id: str) -> str:
+    """
+    Generates the database file path for a specific discussion ID.
+
+    Args:
+        discussion_id (str): The unique identifier for the discussion.
+
+    Returns:
+        str: The full path to the discussion-specific SQLite database file.
+    """
+    db_dir = 'Public'
+    os.makedirs(db_dir, exist_ok=True)
+    return os.path.join(db_dir, f'{discussion_id}_vector_memory.db')
+
+
+def setup_database_functions(connection: sqlite3.Connection, decay_rate: float = 0.01, max_boost: float = 2.5):
+    """
+    Creates and registers a custom recency_score SQL function on a database connection.
+
+    Args:
+        connection (sqlite3.Connection): The active database connection.
+        decay_rate (float, optional): The decay rate for the recency calculation. Defaults to 0.01.
+        max_boost (float, optional): The maximum score boost for the newest items. Defaults to 2.5.
+    """
+
+    def create_recency_scorer(decay_rate_inner, max_boost_inner):
+        def recency_score(date_added_str: str) -> float:
+            """Calculates a score based on how many days old a memory is. Newer is higher."""
+            try:
+                date_added = datetime.datetime.fromisoformat(date_added_str)
+                now_utc = datetime.datetime.now(datetime.timezone.utc)
+
+                if date_added.tzinfo is None:
+                    date_added_utc = date_added.replace(tzinfo=datetime.timezone.utc)
+                else:
+                    date_added_utc = date_added.astimezone(datetime.timezone.utc)
+
+                days_old = (now_utc - date_added_utc).total_seconds() / (24 * 3600)
+
+                days_old = max(0.0, days_old)
+
+                boost = 1.0 + (max_boost_inner - 1.0) * math.exp(-decay_rate_inner * days_old)
+                return boost
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Error calculating recency score for date '{date_added_str}': {e}")
+                return 1.0
+
+        return recency_score
+
+    scorer_func = create_recency_scorer(decay_rate, max_boost)
+    # Set deterministic=False because the result depends on the current time (datetime.now)
+    connection.create_function("recency_score", 1, scorer_func, deterministic=False)
+
+
+def get_db_connection(discussion_id: str) -> Optional[sqlite3.Connection]:
+    """
+    Establishes a connection to a discussion-specific SQLite database.
+
+    Args:
+        discussion_id (str): The unique identifier for the discussion.
+
+    Returns:
+        Optional[sqlite3.Connection]: A database connection object if successful, otherwise None.
+    """
+    db_path = _get_db_path(discussion_id)
+    try:
+        conn = sqlite3.connect(db_path, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        setup_database_functions(conn)
+        return conn
+    except sqlite3.Error as e:
+        logger.error(f"Database connection error for {discussion_id} at path {db_path}: {e}")
+        return None
+
+
+def initialize_vector_db(discussion_id: str):
+    """
+    Initializes the necessary tables for vector memory in a discussion's database.
+
+    Args:
+        discussion_id (str): The unique identifier for the discussion whose database needs initialization.
+    """
+    conn = get_db_connection(discussion_id)
+    if conn is None:
+        logger.error(f"Failed to initialize vector DB for '{discussion_id}': Could not connect to database.")
+        return
+
+    try:
+        # Main table to store the ground truth for each memory.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS memories (
+                id INTEGER PRIMARY KEY,
+                discussion_id TEXT NOT NULL,
+                memory_text TEXT NOT NULL,
+                date_added TEXT NOT NULL,
+                metadata_json TEXT
+            );
+        ''')
+        # FTS5 virtual table for indexing and searching.
+        conn.execute('''
+            CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+                title,
+                summary,
+                entities,
+                key_phrases,
+                memory_text_unweighted,
+                tokenize='porter'
+            );
+        ''')
+        # Table to track the last processed message hash.
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS vector_memory_tracker (
+                discussion_id TEXT PRIMARY KEY,
+                last_checked_message_hash TEXT NOT NULL,
+                last_updated TIMESTAMP NOT NULL
+            );
+        ''')
+        conn.commit()
+        logger.info(f"Vector memory database for discussion '{discussion_id}' initialized successfully.")
+    except Exception as e:
+        logger.error(f"Failed to initialize vector DB for '{discussion_id}': {e}", exc_info=True)
+    finally:
+        if conn:
+            conn.close()
+
+
+def add_memory_to_vector_db(discussion_id: str, memory_text: str, metadata_json_str: str):
+    """
+    Adds a new memory and its FTS index entry to the database.
+
+    Args:
+        discussion_id (str): The identifier for the discussion to add the memory to.
+        memory_text (str): The core text of the memory (e.g., LLM summary).
+        metadata_json_str (str): A JSON string containing metadata like title, summary, entities, etc.
+    """
+    conn = get_db_connection(discussion_id)
+    if conn is None:
+        logger.error(f"Failed to add memory for '{discussion_id}': Could not connect to database.")
+        return
+
+    try:
+        cursor = conn.cursor()
+        date_added = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        cursor.execute(
+            'INSERT INTO memories (discussion_id, memory_text, date_added, metadata_json) VALUES (?, ?, ?, ?)',
+            (discussion_id, memory_text, date_added, metadata_json_str)
+        )
+        memory_id = cursor.lastrowid
+        metadata = json.loads(metadata_json_str)
+
+        def format_for_fts(data):
+            if isinstance(data, list):
+                return ' '.join(str(item).replace('"', '') for item in data)
+            return data if data else ''
+
+        title = metadata.get('title', '')
+        summary = metadata.get('summary', '')
+        entities = format_for_fts(metadata.get('entities', []))
+        key_phrases = format_for_fts(metadata.get('key_phrases', []))
+
+        cursor.execute(
+            '''
+            INSERT INTO memories_fts (rowid, title, summary, entities, key_phrases, memory_text_unweighted) 
+            VALUES (?, ?, ?, ?, ?, ?)
+            ''',
+            (memory_id, title, summary, entities, key_phrases, memory_text)
+        )
+        conn.commit()
+        logger.debug(f"Added vector memory for discussion_id {discussion_id} with memory_id {memory_id}")
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse metadata JSON: {e}. Content: {metadata_json_str}")
+    except Exception as e:
+        logger.error(f"Failed to add memory to vector DB for '{discussion_id}': {e}", exc_info=True)
+    finally:
+        if conn:
+            conn.close()
+
+
+def _sanitize_fts5_term(term: str) -> str:
+    """
+    Sanitizes a single search term for an FTS5 MATCH query.
+
+    Wraps the term in double quotes to treat it as a literal phrase and
+    escapes any internal double quotes. This prevents syntax errors from
+    user input containing FTS5 operators.
+
+    Args:
+        term (str): The raw search term from user input.
+
+    Returns:
+        str: A sanitized search term safe for FTS5 queries.
+    """
+    term = term.replace('-', ' ')
+    sanitized_term = term.strip().replace('"', '""')
+    return f'"{sanitized_term}"'
+
+
+def search_memories_by_keyword(discussion_id: str, search_query: str, limit: int = 15) -> List[sqlite3.Row]:
+    """
+    Searches memories using the FTS index in the discussion-specific database.
+
+    The search query is a semicolon-delimited string of keywords. Results are
+    ranked by the BM25 algorithm.
+
+    Args:
+        discussion_id (str): The identifier for the discussion to search within.
+        search_query (str): A string of keywords separated by semicolons.
+        limit (int, optional): The maximum number of results to return. Defaults to 15.
+
+    Returns:
+        List[sqlite3.Row]: A list of database rows matching the search query, ordered by relevance.
+    """
+    conn = get_db_connection(discussion_id)
+    if conn is None:
+        return []
+    try:
+        cursor = conn.cursor()
+        keywords = [k.strip() for k in search_query.split(';') if k.strip()]
+        if not keywords:
+            return []
+        if len(keywords) > MAX_KEYWORDS_FOR_SEARCH:
+            logger.warning(
+                f"Received {len(keywords)} keywords. Truncating to the first {MAX_KEYWORDS_FOR_SEARCH} to prevent SQLite query complexity errors."
+            )
+            keywords = keywords[:MAX_KEYWORDS_FOR_SEARCH]
+        sanitized_terms = [_sanitize_fts5_term(k) for k in keywords]
+        final_query = ' OR '.join(sanitized_terms)
+
+        sql_query = """
+            SELECT
+                m.*,
+                bm25(memories_fts) AS rank
+            FROM memories_fts AS fts
+            JOIN memories AS m ON fts.rowid = m.id
+            WHERE memories_fts MATCH ?
+            ORDER BY rank DESC
+            LIMIT ?
+        """
+        cursor.execute(sql_query, (final_query, limit))
+        rows = cursor.fetchall()
+        if rows is None:
+            return []
+        return rows
+    except Exception as e:
+        logger.error(f"Failed to search memories in DB for '{discussion_id}': {e}", exc_info=True)
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+
+def get_last_vector_check_hash(discussion_id: str) -> Optional[str]:
+    """
+    Retrieves the last processed message hash from the vector memory tracker.
+
+    Args:
+        discussion_id (str): The identifier for the discussion.
+
+    Returns:
+        Optional[str]: The hash of the last message processed for vector memory, or None if not found.
+    """
+    conn = get_db_connection(discussion_id)
+    if conn is None:
+        return None
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            'SELECT last_checked_message_hash FROM vector_memory_tracker WHERE discussion_id = ?',
+            (discussion_id,)
+        )
+        row = cursor.fetchone()
+        return row['last_checked_message_hash'] if row else None
+    except Exception as e:
+        logger.error(f"Failed to get last vector check hash for {discussion_id}: {e}")
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+
+def update_last_vector_check_hash(discussion_id: str, message_hash: str):
+    """
+    Updates or inserts the last processed message hash in the vector memory tracker.
+
+    Args:
+        discussion_id (str): The identifier for the discussion.
+        message_hash (str): The new hash of the last message processed.
+    """
+    conn = get_db_connection(discussion_id)
+    if conn is None:
+        return
+
+    try:
+        conn.execute(
+            '''
+            INSERT INTO vector_memory_tracker (discussion_id, last_checked_message_hash, last_updated)
+            VALUES (?, ?, ?)
+            ON CONFLICT(discussion_id) DO UPDATE SET
+                last_checked_message_hash = excluded.last_checked_message_hash,
+                last_updated = excluded.last_updated;
+            ''',
+            (discussion_id, message_hash, datetime.datetime.utcnow())
+        )
+        conn.commit()
+        logger.debug(f"Updated last vector check hash for {discussion_id}")
+    except Exception as e:
+        logger.error(f"Failed to update last vector check hash for {discussion_id}: {e}")
+    finally:
+        if conn:
+            conn.close()

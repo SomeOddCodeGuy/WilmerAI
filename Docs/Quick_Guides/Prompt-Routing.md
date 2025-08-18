@@ -1,22 +1,29 @@
-## Quick Guide to Understanding Prompt Routing in WilmerAI
+## Quick Guide to Prompt Routing in WilmerAI
 
-Prompt routing is primarily controlled by 2 pieces
+Prompt routing is the brain behind WilmerAI's ability to use the right tool for the right job. It's controlled by two
+key pieces you can configure:
 
-* A categorization workflow, specified in your user config
-* A routing file, also specified in your user config.
+* A **categorization workflow**, specified in your user config. This workflow's job is to figure out what the user is
+  talking about.
+* A **routing configuration file**, also specified in your user config. This file acts as a map, telling the system
+  which specialized workflow to run based on the category that was chosen.
 
-Let's consider an example user: [assistant-multi-model](../../Public/Configs/Users/assistant-multi-model.json).
+Let's consider an example user: `assistant-multi-model.json`.
 
-Looking at this user, we see things:
+Looking at this user's config, we see these two important lines:
 
-```
+```json
   "routingConfig": "assistantMultiModelCategoriesConfig",
-  "categorizationWorkflow": "CustomCategorizationWorkflow",
+"categorizationWorkflow": "CustomCategorizationWorkflow",
 ```
 
-First, lets look at [the routing config](../../Public/Configs/Routing/assistantMultiModelCategoriesConfig.json):
+-----
 
-```
+### The Routing Config File
+
+First, let's look at the routing config, `assistantMultiModelCategoriesConfig.json`:
+
+```json
 {
   "CODING": {
     "description": "An appropriate response would fall within the category of writing, editing or answering questions about code or other software development related topics (such as SQL queries).",
@@ -29,66 +36,93 @@ First, lets look at [the routing config](../../Public/Configs/Routing/assistantM
   "FACTUAL": {
     "description": "An appropriate response would require encyclopedic knowledge of a topic, and would benefit from direct access to wikipedia articles",
     "workflow": "Factual-Wiki-Workflow"
-  },
-  ...
-  ...
+  }
+}
 ```
 
-You can see that the routing config is made up of 2 pieces:
+This file is a simple map made up of categories (like "CODING", "TECHNICAL", etc.). Each category has two parts:
 
-* Description: This is sent to the LLM alongside the category to tell it what fits into that category. This isn't just
-  for display; this is part of the prompt, so tweaking these descriptions can improve your routing results
-* workflow: the name of the workflow, in your user's workflow folder, that will be called for this route.
+* **`description`**: This text is sent to the LLM during the categorization step. It's not just for display; it's a
+  critical part of the prompt that teaches the LLM what each category means. Tweaking these descriptions is the best way
+  to improve your routing results.
+* **`workflow`**: This is the name of the workflow that will be run if this category is chosen.
 
-If we then take a look at the categorization workflow for this user, we see this (as of 2024-11-30)
-:
+-----
+
+### The Categorization Workflow
+
+Next is the categorization workflow itself. This is a standard workflow, but its purpose is to analyze the user's
+conversation and output a single word: the name of the category it chose. The system will then use that word to find a
+match in your routing config.
+
+Here's the example `CustomCategorizationWorkflow.json`:
 
 ```json
 [
   {
     "title": "Analyzing the conversation context",
     "agentName": "Conversation Analyzer Agent One",
-    "systemPrompt": "When given an ongoing conversation, review the most recent messages and expertly outline exactly what the most recent speaker is asking for or saying. Please make use of previous messages in the conversation to confirm the context of the most recent speaker's message. Make sure to specify whether the speaker is seeking a specific answer, making a specific request, playing around, or just engaging in idle conversation.",
-    "prompt": "Please consider the below messages:\n[\n{chat_user_prompt_last_ten}\n]\nConsidering the full context of the messages given, please analyze and report the exact context of the last speaker's messages. Do not simply assume that it is discussing the most recent messages; consider the entire context that has been provided and think deeply about what the speaker might really be saying.\n\nIf the final message is a prompt for the most recent speaker to speak again, this is a 'Continue' situation where the next message continue where the previous message left off. This is a very important piece of information that should be noted\n\nIMPORTANT: Please be sure to consider if the last speaker is simply responding with appreciation, is changing the subject or is concluding a topic. The result of this request will decide what tools will be utilized to generate a response, and failure to appropriately not the end of a conversation topic could result in the wrong tool being used.",
-    "lastMessagesToSendInsteadOfPrompt": 5,
-    "endpointName": "Assistant-Multi-Model-Categorizer-Endpoint",
-    "preset": "Categorizer_Preset",
-    "maxResponseSizeInTokens": 300,
-    "addUserTurnTemplate": true
+    "systemPrompt": "When given an ongoing conversation, review the most recent messages and expertly outline exactly what the most recent speaker is asking for or saying...",
+    "prompt": "Please consider the below messages:\n[\n{chat_user_prompt_last_ten}\n]\n...please analyze and report the exact context of the last speaker's messages...",
+    "endpointName": "Assistant-Multi-Model-Categorizer-Endpoint"
   },
   {
     "title": "Determining category of prompt",
     "agentName": "Categorization Agent Two",
-    "systemPrompt": "When given a message and a series of categories to choose from, always respond with only a single word: the expected category. Do not include any other words than the single appropriate category that was chosen.\nIMPORTANT: When categorizing, always consider whether a topic has concluded or the subject has been changed, and adjust the category accordingly.",
+    "systemPrompt": "When given a message and a series of categories to choose from, always respond with only a single word: the expected category...",
     "prompt": "A user is currently in an online conversation, and has sent a new message. The intent and context of the message has been described below:\n[\n{agent1Output}\n]\nPlease categorize the user's message into one of the following categories: {category_colon_descriptions}. Return only one word for the response.\n\nPlease respond with one of the following: {categoriesSeparatedByOr}.",
-    "endpointName": "Assistant-Multi-Model-Categorizer-Endpoint",
-    "preset": "Categorizer_Preset",
-    "maxResponseSizeInTokens": 300,
-    "addUserTurnTemplate": true
+    "endpointName": "Assistant-Multi-Model-Categorizer-Endpoint"
   }
 ]
 ```
 
-This workflow does 2 things:
+This workflow does two things:
 
-* First, it has the LLM summarize exactly what the intent of the user is. What are they saying and what are they asking
-  for?
-* Then, it asks the LLM to specify which of the categories we gave it the output of node 1 would fall into.
+1. First, it has the LLM summarize the intent of the user's latest message based on the conversation history.
+2. Then, it feeds that summary into a second node, asking the LLM to pick the best category from a list.
 
-You can see `{category_colon_descriptions}` in the prompt; that would return something like
+The final output of this workflow is what matters. The system takes the text from the last node, cleans it up, and tries
+to match it to a key in your routing config. If it can't get a clear answer, it will even retry a few times before
+giving up.
 
-> CODING: An appropriate response would fall within the category of writing, editing or answering questions about code
-> or other software development related topics (such as SQL queries).
+If no category can be matched, a default workflow (`_DefaultWorkflow`) will be run instead.
 
-for each of the categories in our file.
+-----
 
-We also see `{categoriesSeparatedByOr}`. That would output something like:
+### Available Prompt Variables
 
-> CODING or TECHNICAL or FACTUAL...
+When building your categorization workflow, the system automatically makes several variables available based on your
+routing config file. You can use these placeholders in your prompts to dynamically insert your categories and
+descriptions.
 
-For each of our categories.
+Here are all the available variables:
 
-This is a regular workflow, so if you wanted to update it to be 10 different nodes, you could. The output of the
-final node will be used by Wilmer as the category.
+* **`{category_colon_descriptions}`**
+  This joins each category with its description, separated by a semicolon.
 
-In the event that no category can be found, the default workflow will be run.
+  > CODING: An appropriate response would fall within the category of writing...; TECHNICAL: An appropriate response
+  would involve IT...
+
+* **`{category_colon_descriptions_newline_bulletpoint}`**
+  This lists each category and its description on a new line with a dash.
+
+  > - CODING: An appropriate response would fall within the category of writing...
+  >   - TECHNICAL: An appropriate response would involve IT...
+
+* **`{categoriesSeparatedByOr}`**
+  This gives a simple list of category names.
+
+  > CODING or TECHNICAL or FACTUAL
+
+* **`{categoryNameBulletpoints}`**
+  This gives a bulleted list of just the category names.
+
+  > - CODING
+  >   - TECHNICAL
+  >   - FACTUAL
+
+* **`{category_list}`**
+  This provides the raw list of category names (less useful for prompts, but available).
+
+* **`{category_descriptions}`**
+  This provides the raw list of descriptions (less useful for prompts, but available).

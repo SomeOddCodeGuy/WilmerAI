@@ -1,63 +1,61 @@
 ## DISCLAIMER:
 
-> This is a personal project that is under heavy development. It could, and likely does, contain bugs, incomplete code,
+> This is a personal project under heavy development. It could, and likely does, contain bugs, incomplete code,  
 > or other unintended issues. As such, the software is provided as-is, without warranty of any kind.
 >
-> This project and any expressed views, methodologies, etc found within are the result of contributions by the
+> This project and any expressed views, methodologies, etc., found within are the result of contributions by the  
 > maintainer and any contributors in their free time, and should not reflect upon any of their employers.
-> 
-> As the maintainer has a full time job, any updates can only be made late in the evening or on weekends. Sometimes
-> work can get particularly busy, so if you don't hear back for a week or two, apologies in
-> advance, and that's why.
-
-## Maintainer's Note UPDATED 2025-08-03
-
-> IMPORTANT: Wilmer now more gracefully handles reasoning models, and can strip out thinking blocks of many types
-> both mid-workflow, and when returning/streaming to the user. It can also inject text into various parts of the prompt
-> at the endpoint level; meaning, for example, you can inject thinking tags for every prompt to R1 0528, turning it into
-> a slightly updated V3 0324. This is a significant improvement for the modern LLM landscape. Peek down at the endpoint 
-> configs section of the readme for more info. -Socg
-
-> Until September 2025, WilmerAI will not be accepting any new Pull Requests that modify anything within the
-> Middleware modules; some exceptions may apply. Updates to iSevenDays' new MCP tool calling feature, or adding new 
-> custom users or prompt templates within the Public directory, are still welcome.
-> 
-> Reasoning behind this:
-> - I am going to be doing a large scale refactor of the core Workflow and LLM handler modules to clean them up,
->   make them testable, and make them make sense to others. I started on those files early on, before I had either
->   learned python properly or had Wilmer actually running to help me. Today, my situation is completely different;
->   I have a better understanding of the language, a better grasp on what Wilmer's architecture looks like and I
->   have a pretty extensive Wilmer setup to help me. I will also be redoing the example users.
-> - I expect to be exceptionally busy at work for the next few months. I expect this to calm down significantly in 
->   the Fall, but until then I won't have any time during weekdays, and only a little on weekends, to devote to this 
->   project.
-> 
-> Additionally, I plan to completely redo many of the example users. The prompting strategy I use in them is very
-> outdated, and I've employed many new prompt strategies that work far better, for everything from categorization to
-> coding.
-> 
-> I apologize in advance for any bugs I introduce during this period. I will do my best to minimize impact.
-> 
->   -Socg
 
 ## What is WilmerAI?
 
-Wilmer is an application that sits between your front end (or any other LLM calling program) and the LLM APIs you're 
+Wilmer is an application that sits between your front end (or any other LLM-calling program) and the LLM APIs you're  
 sending your prompts to.
 
-To connect to it, Wilmer exposes OpenAI and Ollama compatible API endpoints, and on the backend it can connect to LLM 
-APIs like OpenAI, KoboldCpp, and Ollama. 
+To connect to it, Wilmer exposes OpenAI- and Ollama-compatible API endpoints, and on the backend it can connect to LLM  
+APIs like OpenAI, KoboldCpp, and Ollama.
 
-To visualize: you type a prompt into your front end, which is connected to Wilmer. The prompt gets sent to Wilmer first,
-which runs it through a series of workflows. Each workflow may make calls to multiple LLMs, after which the final 
-response comes backs to you. 
+To visualize: you type a prompt into your front end, which is connected to Wilmer. The prompt gets sent to Wilmer
+first,  
+which runs it through a series of workflows. Each workflow may make calls to multiple LLMs, after which the final  
+response comes back to you.
 
-From your perspective, it looked like a (likely long running) one shot call to an LLM. But in reality, 
-it could be many LLM and even tools doing complex work.
+From your perspective, it looks like a (likely long-running) one-shot call to an LLM. But in reality,  
+it could involve many LLMs—and even tools—performing complex work.
 
 ### What Does WilmerAI Stand For?
 
 WilmerAI stands for **"What If Language Models Expertly Routed All Inference?"**
+
+## Maintainer's Note — UPDATED 2025-08-17
+
+> **IMPORTANT:**  
+> Until October 2025, WilmerAI will not accept any new Pull Requests that modify anything within the  
+> Middleware modules; some exceptions may apply. Updates to iSevenDays' new MCP tool-calling feature, or adding new  
+> custom users or prompt templates within the Public directory, are still welcome.
+>
+> **Roadmap to Complete Before New PRs Accepted**
+> * ~~Reasoning LLM Support (think block removal, prepend text to prompt/system)~~ **(COMPLETE)**
+> * ~~Refactor LlmApis~~ **(First Round COMPLETE)**
+> * ~~Refactor FrontEnd Apis~~ **(First Round COMPLETE)**
+> * ~~Refactor Workflows~~ **(First Round COMPLETE)**
+> * ~~Vector Memory Initial Implementation~~ **(COMPLETE)**
+> * Rewrite Readme and Expand Documentation *(In Progress)*
+> * Full Redo of Most Example Users, Using New Prompting Strategies *(Up Next)*
+> * Second Round Refactoring for Unit Tests
+> * Full Unit Test Coverage of Primary Functions
+>
+> During this time, there are very likely to be new bugs introduced. I really don’t have the ability  
+> to work on this project during the week at all, so it’s a heads-down code-a-thon on weekends whenever  
+> I can. Please bear with me if I break stuff along the way over the next few weeks.
+>
+> To help reduce the pain of this, I’ve finally set up tags/releases, with major checkpoints from the past  
+> few months chosen so you can grab earlier, better-working versions.
+>
+> PS: Please bear with me if one of my documents says something dumb. When time is short, documentation usually  
+> suffers the most, so I’m relying heavily on LLMs right now. Normally I would do it by hand or at least  
+> proofread it better—so I apologize in advance. I’ll clean that up soon-ish.
+>
+> — Socg
 
 ## The Power of Workflows
 
@@ -82,8 +80,8 @@ automate those steps can have great results.
 ### Distributed LLMs
 
 With workflows, you can have as many LLMs available to work together in a single call as you have computers to support.
-For example, if you have old machines lying around that can run 3-8b models? You can put them to use as worker LLMs in 
-various nodes. The more LLM APIs that you have available to you, either on your own home hardware or via proprietary 
+For example, if you have old machines lying around that can run 3-8b models? You can put them to use as worker LLMs in
+various nodes. The more LLM APIs that you have available to you, either on your own home hardware or via proprietary
 APIs, the more powerful you can make your workflow network. A single prompt to Wilmer could reach out to 5+ computers,
 including proprietary APIs, depending on how you build your workflow.
 
@@ -156,43 +154,44 @@ including proprietary APIs, depending on how you build your workflow.
 
 
 - **MCP Server Tool Integration using MCPO:** New and experimental support for MCP
-  server tool calling using MCPO, allowing tool use mid-workflow. Big thank you to [iSevenDays](https://github.com/iSevenDays)
+  server tool calling using MCPO, allowing tool use mid-workflow. Big thank you
+  to [iSevenDays](https://github.com/iSevenDays)
   for the amazing work on this feature. More info can be found in the [ReadMe](Public/modules/README_MCP_TOOLS.md)
-
 
 ## Why Make WilmerAI?
 
 Wilmer was kicked off in late 2023, during the Llama 2 era, to make maximum use of fine-tunes through routing.
-The routers that existed at the time didn't handle semantic routing well- often categorizing was based on a single 
-word and the last message only; but sometimes a single word isn't enough to describe a category, and the last 
+The routers that existed at the time didn't handle semantic routing well- often categorizing was based on a single
+word and the last message only; but sometimes a single word isn't enough to describe a category, and the last
 message may have too much inferred speech or lack too much context to appropriately categorize on.
 
 Almost immediately after Wilmer was started, it became apparent that just routing wasn't enough: the finetunes were ok,
-but nowhere near as smart as proprietary LLMs. However, when the LLMs were forced to iterate on the same task over and 
+but nowhere near as smart as proprietary LLMs. However, when the LLMs were forced to iterate on the same task over and
 over, the quality of their responses tended to improve (as long as the prompt was well written). This meant that the
-optimal result wasn't routing just to have a single LLM one-shot the response, but rather sending the prompt to something
+optimal result wasn't routing just to have a single LLM one-shot the response, but rather sending the prompt to
+something
 more complex.
 
-Instead of relying on unreliable autonomous agents, Wilmer became focused on semi-autonomous Workflows, giving the 
-user granular control of the path the LLMs take, and allow maximum use of the user's own domain knowledge and 
+Instead of relying on unreliable autonomous agents, Wilmer became focused on semi-autonomous Workflows, giving the
+user granular control of the path the LLMs take, and allow maximum use of the user's own domain knowledge and
 experience. This also meant that multiple LLMs could work together, orchestrated by the workflow itself,
-to come up with a single solution. 
+to come up with a single solution.
 
 Rather than routing to a single LLM, Wilmer routes to many via a whole workflow.
 
-This has allowed Wilmer's categorization to be far more complex and customizable than most routers. Categorization is 
-handled by user defined workflows, with as many nodes and LLMs involved as the user wants, to break down the 
+This has allowed Wilmer's categorization to be far more complex and customizable than most routers. Categorization is
+handled by user defined workflows, with as many nodes and LLMs involved as the user wants, to break down the
 conversation and determine exactly what the user is asking for. This means the user can experiment with different
-prompting styles to try to make the router get the best result. Additionally, the routes are more than just keywords, 
-but rather full descriptions of what the route entails. Little is left to the LLM's "imagination". The goal is that 
-any weakness in Wilmer's categorization can be corrected by simply modifying the categorization workflow. And once 
+prompting styles to try to make the router get the best result. Additionally, the routes are more than just keywords,
+but rather full descriptions of what the route entails. Little is left to the LLM's "imagination". The goal is that
+any weakness in Wilmer's categorization can be corrected by simply modifying the categorization workflow. And once
 that category is chosen? It goes to another workflow.
 
 Eventually Wilmer became more about Workflows than routing, and an optional bypass was made to skip routing entirely.
 Because of the small footprint, this means that users can run multiple instances of Wilmer- some hitting a workflow
 directly, while others use categorization and routing.
 
-While Wilmer may have been the first of its kind, many other semantic routers have since appeared; some of which are 
+While Wilmer may have been the first of its kind, many other semantic routers have since appeared; some of which are
 likely faster and better. But this project will continue to be maintained for a long time to come, as the maintainer
 of the project still uses it as his daily driver, and has many more plans for it.
 
@@ -588,85 +587,88 @@ Let's
 walk
 through what you need.
 
-#### Endpoints
+### **Endpoints**
 
-These configuration files represent the LLM API endpoints you are connected to. For example, the following JSON
-file, `SmallModelEndpoint.json`, defines an endpoint:
+These configuration files represent the LLM API endpoints you are connected to. For example, the following JSON file,
+`SmallModelEndpoint.json`, defines an endpoint:
 
 ```json
 {
   "modelNameForDisplayOnly": "Small model for all tasks",
-  "endpoint": "http://127.0.0.1:5000",
+  "endpoint": "http://12.0.0.1:5000",
   "apiTypeConfigFileName": "KoboldCpp",
   "maxContextTokenSize": 8192,
   "modelNameToSendToAPI": "",
-  "promptTemplate": "chatml",
-  "addGenerationPrompt": true,
   "trimBeginningAndEndLineBreaks": true,
   "dontIncludeModel": false,
-  "removeThinking": false,
-  "thinkTagText": "think",
+  "removeThinking": true,
+  "startThinkTag": "<think>",
+  "endThinkTag": "</think>",
+  "openingTagGracePeriod": 100,
   "expectOnlyClosingThinkTag": false,
   "addTextToStartOfSystem": true,
   "textToAddToStartOfSystem": "/no_think ",
   "addTextToStartOfPrompt": false,
-  "textToAddToStartOfPrompt": "/no_think",
+  "textToAddToStartOfPrompt": "",
   "addTextToStartOfCompletion": false,
-  "textToAddToStartOfCompletion": "<think>\n</think>\n",
-  "ensureTextAddedToAssistantWhenChatCompletion": false
+  "textToAddToStartOfCompletion": "",
+  "ensureTextAddedToAssistantWhenChatCompletion": false,
+  "removeCustomTextFromResponseStartEndpointWide": false,
+  "responseStartTextToRemoveEndpointWide": []
 }
 ```
 
-- **endpoint**: The address of the LLM API that you are connecting to. Must be an openAI compatible API of either
-  text Completions or Chat Completions type (if you're unsure- that's the vast majority of APIs, so this will
-  probably work with whatever you're trying)
-- **apiTypeConfigFileName**: The exact name of the json file from the ApiTypes folder that specifies what type
-  of API this is, minus the ".json" extension. "Open-AI-API" will probably work for most cloud services.
-- **maxContextTokenSize**: Specifies the max token size that your endpoint can accept
-- **modelNameToSendToAPI**: Specifies what model name to send to the API. For cloud services, this can be important.
-  For example, OpenAI may expect "gpt-3.5-turbo" here, or something like that. For local AI running in Kobold,
-  text-generation-webui, etc., this is mostly unused. (Ollama may use it, though)
-- **promptTemplate**: The exact json file name of the prompt template to use, minus the ".json" extension. These
-  can be found in the PromptTemplates folder.
-- **addGenerationPrompt**: This boolean is for Text Completion endpoints to specify whether the model expects a
-  final "assistant" tag at the very end. Not all models do. If you're unsure about this, just set it to
-  "false"
-- **trimBeginningAndEndLineBreaks**: This boolean will run a trim at the start and end of your prompt, to remove
-  any spaces or linebreaks before or after the prompt. Some LLMs don't handle those extra spaces/lines well.
-- **dontIncludeModel**: This will NOT send the model name you specify in your endpoint config to the LLM api
-  endpoint. Generally, sending that model will tell systems like MLX, Llama.cpp server and Ollama to load the model
-  with that name. You may have a reason why you don't want it to do that, and instead have just the model you already
-  loaded on that port be used. Setting this to true will stop the model name from being sent, thus not changing
-  the loaded model.
-- **removeThinking**: This boolean is for reasoning models. By setting this to true, it will completely strip out the
-  thinking text from responses coming from LLMs, both for streaming and non-streaming. This is a major fix for Wilmer
-  using reasoning models for things like internal, inter-node processing. Socg keeps this on constantly. (NOTE: When
-  streaming, this buffers the response to you until thinking is done. That means it looks like the LLM isn't sending
-  you anything, but in actuality it's thinking. The moment the thinking is done, this will remove the thinking block
-  and start sending you the LLM's response. So as a user, it just looks like the time to first token is FAR longer
-  than it is.)
-- **thinkTagText**: Allows you to set custom think tags. Some LLMs do things like \<reasoning> or \<thinking> as opposed
-  to <think>. With this, each endpoint can account for the specific type of tag it expects
-- **expectOnlyClosingThinkTag**: This is for models like Qwen3, which sometimes don't send their opening \<think> tag,
-  and instead just start thinking. This will continue to buffer responses until \</think> (or your custom tag) appears,
-  at which point it removes everything before that and sends it to you. If no closing tag appears, you will get a dump
-  of the whole response at once.
-- **addTextToStartOfSystem**: This will add whatever text you put in textToAddToStartOfSystem to the start of the system 
-  prompt. Made specifically for the Qwen3 hybrid-thinkers that accept "/no_think ". This will make every prompt run by this
-  specific endpoint add that text. In chat/completion, will add it to the first system prompt message.
-- **textToAddToStartOfSystem**: The text to add if addTextToStartOfSystem is true. Can be any text you want, probably.
-- **addTextToStartOfPrompt**: Same as the one for system, but this adds it to the beginning of the last user 
-  message in chat/completion, or the beginning of the whole user prompt in v1/Completion.
-- **textToAddToStartOfPrompt**: The text to add if addTextToStartOfPrompt is true.
-- **addTextToStartOfCompletion**: This is meant to seed the start of the AI speaking. The intention was for reasoning
-  models that don't use "/no_think", so that you can just forcefully add opening and closing think tags. However, you can
-  also use it to force the llm to respond certain ways. Like the old trick of having the LLM always start with
-  "Absolutely! Here is your answer: " in case it wasn't answering you properly.
-- **textToAddToStartOfCompletion**: The text to add if addTextToStartOfCompletion is true.
-- **ensureTextAddedToAssistantWhenChatCompletion**: This should create an assistant message if none exists at the end
-  of the conversation to seed the response on to. Some inference APIs may not appreciate this. If not, you may not be
-  able to use the message seeding feature, and might need to swap to v1/Completion. This does appear to work fine for me
-  in llama.cpp server atm.
+- **endpoint**: The address of the LLM API that you are connecting to. Must be an OpenAI-compatible API of either text
+  Completions or Chat Completions type (if you're unsure—that's the vast majority of APIs, so this will probably work
+  with whatever you're trying).
+- **apiTypeConfigFileName**: The exact name of the JSON file from the `ApiTypes` folder that specifies what type of API
+  this is, minus the ".json" extension. "Open-AI-API" will probably work for most cloud services.
+- **maxContextTokenSize**: Specifies the max token size that your endpoint can accept. This is used to set the model's
+  truncation length property.
+- **modelNameToSendToAPI**: Specifies what model name to send to the API. For cloud services, this can be important. For
+  example, OpenAI may expect "gpt-3.5-turbo" here. For local AI running in Kobold, text-generation-webui, etc., this is
+  mostly unused. (Ollama may use it, though).
+- **trimBeginningAndEndLineBreaks**: This boolean will run a trim at the start and end of the final response to remove
+  any spaces or linebreaks before or after the text. Some LLMs don't handle those extra spaces/lines well.
+- **dontIncludeModel**: This will NOT send the model name you specify in your endpoint config to the LLM API endpoint.
+  Generally, sending that model name will tell systems like MLX, Llama.cpp server, and Ollama to load the model with
+  that name. You may have a reason why you don't want it to do that and instead have the model you already loaded on
+  that port be used. Setting this to `true` will stop the model name from being sent.
+- **removeThinking**: This boolean is for reasoning models. By setting this to `true`, it will completely strip out the
+  thinking text from responses coming from LLMs, both for streaming and non-streaming. (NOTE: When streaming, this
+  buffers the response until thinking is done. That means it looks like the LLM isn't sending you anything, but in
+  actuality, it's thinking. The moment the thinking is done, this will remove the thinking block and start sending you
+  the LLM's response. So as a user, it just looks like the time to first token is far longer than it is.)
+- **startThinkTag** & **endThinkTag**: Allows you to set custom think tags. Some LLMs do things like `<reasoning>` or
+  `<thinking>` as opposed to `<think>`. With these, each endpoint can account for the specific start and end tags it
+  expects. Both must be defined for `removeThinking` to work.
+- **openingTagGracePeriod**: An integer defining the number of characters at the beginning of the LLM's response to scan
+  for a `startThinkTag`. If the tag is not found within this window, the system assumes there is no thinking block and
+  disables removal for the rest of the response.
+- **expectOnlyClosingThinkTag**: This is for models that sometimes don't send their opening think tag and instead just
+  start thinking. This will continue to buffer the response until the `endThinkTag` appears, at which point it removes
+  everything before that and sends the rest of the stream. If no closing tag appears, you may get a dump of the whole
+  response at once.
+- **addTextToStartOfSystem**: This will add whatever text you put in `textToAddToStartOfSystem` to the start of the
+  system prompt. Made specifically for models that accept commands like "/no\_think ". This will make every prompt run
+  by this specific endpoint add that text.
+- **textToAddToStartOfSystem**: The text to add if `addTextToStartOfSystem` is `true`.
+- **addTextToStartOfPrompt**: Same as the one for system, but this adds it to the beginning of the last user message in
+  a chat history, or the beginning of the whole user prompt in a `v1/Completion` context.
+- **textToAddToStartOfPrompt**: The text to add if `addTextToStartOfPrompt` is `true`.
+- **addTextToStartOfCompletion**: This is meant to seed the start of the AI's response. The intention was for reasoning
+  models, so that you can forcefully add opening and closing think tags. However, you can also use it to force the LLM
+  to respond in certain ways, like the old trick of having the LLM always start with "Absolutely\! Here is your
+  answer: ".
+- **textToAddToStartOfCompletion**: The text to add if `addTextToStartOfCompletion` is `true`.
+- **ensureTextAddedToAssistantWhenChatCompletion**: If `addTextToStartOfCompletion` is enabled for a Chat Completions
+  model, this setting will ensure the text is added inside a new assistant message if the conversation does not already
+  end with one. Some inference APIs may not appreciate this.
+- **removeCustomTextFromResponseStartEndpointWide**: A boolean that, if `true`, enables the removal of custom
+  boilerplate text from the beginning of an LLM's response.
+- **responseStartTextToRemoveEndpointWide**: A list of strings to check for and remove from the start of the LLM's
+  response if `removeCustomTextFromResponseStartEndpointWide` is `true`. For example,
+  `["Assistant:", "Okay, here's the answer:"]`. The system will remove the first match it finds.
 
 ##### Amusing Example of Completion Seeding
 
@@ -675,8 +677,8 @@ workflow describe a picture of a cat that I sent it. The response amused me.
 
 ```json
   "addTextToStartOfCompletion": true,
-  "textToAddToStartOfCompletion": "Roses are red, violets are blue,  ",
-  "ensureTextAddedToAssistantWhenChatCompletion": true
+"textToAddToStartOfCompletion": "Roses are red, violets are blue,  ",
+"ensureTextAddedToAssistantWhenChatCompletion": true
 ```
 
 ![Completion Seeding: Roses Are Red...](Docs/Examples/Images/Completion_Seed_Roses_Red.png)
@@ -893,213 +895,327 @@ Workflows in this project are modified and controlled in the `Public/Workflows` 
 workflows folder. For example, if your user is named `socg` and you have a `socg.json` file in the `Users` folder, then
 within workflows you should have a `Workflows/socg` folder.
 
-### Example Workflow JSON
+### Workflow Structure
 
-Here is an example of what a workflow JSON might look like:
+Workflows are JSON files made up of "nodes" that execute sequentially. The system has been updated to support a more
+powerful dictionary-based format that allows for top-level configuration and variables, making workflows much cleaner
+and easier to manage.
+
+#### New Format (Recommended)
+
+This format allows you to define custom variables at the top level of the JSON. These variables can then be used in any
+node throughout the workflow.
+
+```json
+{
+  "persona": "You are a helpful and creative AI assistant.",
+  "shared_endpoint": "OpenWebUI-NoRouting-Single-Model-Endpoint",
+  "nodes": [
+    {
+      "title": "Gather Relevant Memories",
+      "type": "VectorMemorySearch",
+      "endpointName": "{shared_endpoint}"
+    },
+    {
+      "title": "Respond to User",
+      "type": "Standard",
+      "systemPrompt": "{persona}\n\nHere are some relevant memories from our past conversations:\n[\n{agent1Output}\n]",
+      "endpointName": "{shared_endpoint}",
+      "preset": "Conversational_Preset",
+      "returnToUser": true
+    }
+  ]
+}
+```
+
+#### Old Format (Still Supported)
+
+For 100% backward compatibility, the original format, which is just a list of nodes, is still fully supported and will
+work without any changes.
 
 ```json
 [
   {
     "title": "Coding Agent",
-    "agentName": "Coder Agent One",
-    "systemPrompt": "You are an exceptionally powerful and intelligent technical AI that is currently in a role play with a user in an online chat.\nThe instructions for the roleplay can be found below:\n[\n{chat_system_prompt}\n]\nPlease continue the conversation below. Please be a good team player. This means working together towards a common goal, and does not always include being overly polite or agreeable. Disagreement when the other user is wrong can help foster growth in everyone, so please always speak your mind and critically review your peers. Failure to correct someone who is wrong could result in the team's work being a failure.",
+    "systemPrompt": "You are an exceptionally powerful and intelligent technical AI...",
     "prompt": "",
     "lastMessagesToSendInsteadOfPrompt": 6,
     "endpointName": "SocgMacStudioPort5002",
-    "preset": "Coding",
-    "maxResponseSizeInTokens": 500,
-    "addUserTurnTemplate": false
+    "preset": "Coding"
   },
   {
     "title": "Reviewing Agent",
-    "agentName": "Code Review Agent Two",
-    "systemPrompt": "You are an exceptionally powerful and intelligent technical AI that is currently in a role play with a user in an online chat.",
-    "prompt": "You are in an online conversation with a user. The last five messages can be found here:\n[\n{chat_user_prompt_last_five}\n]\nYou have already considered this request quietly to yourself within your own inner thoughts, and come up with a possible answer. The answer can be found here:\n[\n{agent1Output}\n]\nPlease critically review the response, reconsidering your initial choices, and ensure that it is accurate, complete, and fulfills all requirements of the user's request.\n\nOnce you have finished reconsidering your answer, please respond to the user with the correct and complete answer.\n\nIMPORTANT: Do not mention your inner thoughts or make any mention of reviewing a solution. The user cannot see the answer above, and any mention of it would confuse the user. Respond to the user with a complete answer as if it were the first time you were answering it.",
+    "systemPrompt": "You are an exceptionally powerful and intelligent technical AI...",
+    "prompt": "Please critically review the response: {agent1Output}",
     "endpointName": "SocgMacStudioPort5002",
-    "preset": "Coding",
-    "maxResponseSizeInTokens": 1000,
-    "addUserTurnTemplate": true
+    "preset": "Coding"
   }
 ]
 ```
 
-### Workflow Nodes
+### Node Properties
 
-The above workflow is made up of conversation nodes. Both nodes do one simple thing: send a message to the LLM specified
-at the endpoint.
+A workflow is made up of one or more nodes. Each node is a JSON object with properties that define its behavior.
 
-#### Node Properties
-
-- **title**: This is for your use only and may show up in the console when running to help with debugging.
-- **agentName**: Similar to `title`. It's helpful to name these ending in "One", "Two", etc., to keep track of the agent
-  output. The first node's output is saved to `{agent1Output}`, the second to `{agent2Output}`, and so on.
-- **systemPrompt**: The system prompt to send to the LLM API.
-- **prompt**: The prompt to send. If left blank, either the last five messages from your conversation will be sent, or
-  however many you specify.
-- **lastMessagesToSendInsteadOfPrompt**: Specify how many messages to send to the LLM if "prompt" is left as an empty
-  string.
-- **endpointName**: The LLM API endpoint to send the prompt to. This should match a JSON file name from the `Endpoints`
-  folder, without the `.json` extension.
-- **preset**: The preset to send to the API. Truncate length and max tokens to send come from this. This should match a
-  JSON file name from the `Presets` folder, without the `.json` extension.
-- **maxResponseSizeInTokens**: Specifies the maximum number of tokens you want the LLM to send back to you as a
-  response.
-  This can be set per node, in case you want some nodes to respond with only 100 tokens and others to respond with 3000.
-- **addUserTurnTemplate**: Whether to wrap the prompt being sent to the LLM within a user turn template. If you send the
-  last few messages, set this as `false` (see first example node above). If you send a prompt, set this as `true` (see
-  second example node above).
-- **returnToUser**: This forces a node that is not the final node in a workflow to be the one to return its output
-  to the user. This can be especially helpful in workflow lock scenarios. (please see
-  the [Workflow lock section](#workflow-lock)). **IMPORTANT**: This only works for streaming workflows. This does not
-  work for non-streaming.
-- **addDiscussionIdTimestampsForLLM**: This will generate timestamps and track them across your conversation starting
-  from the moment you add this. The timestamps will be added to the beginning of any message sent to the LLM
-  where that timestamp has been tracked. So, for example, if you turn this on after 10 messages have been sent, messages
-  11 onward will be tracked on when the message arrived. When the messages are sent to the LLM, the timestamps will be
-  included.
-
-`NOTE: The addDiscussionIdTimestampsForLLM feature was an experiment, and truthfully I am not happy with how the
-experiment went. Even the largest LLMs misread the timestamps, got confused by them, etc. I have other plans for this
-feature which should be far more useful, but I left it in and won't be removing it, even though I don't necessarily
-recommend using it. -Socg`
+- **`type`**: **(Required)** A string that determines the node's function. This is the most important property. Common
+  types include `"Standard"` (for LLM calls), `"PythonModule"` (for running custom scripts), `"VectorMemorySearch"`, and
+  `"CustomWorkflow"` (for running another workflow).
+- **`title`**: A descriptive name for the node. This is for your use only and may show up in console logs to help with
+  debugging.
+- **`systemPrompt`**: The system prompt to send to the LLM API.
+- **`prompt`**: The user prompt to send. If left blank, the conversation history will be sent instead, based on the
+  `lastMessagesToSendInsteadOfPrompt` value.
+- **`lastMessagesToSendInsteadOfPrompt`**: Specify how many recent messages to send to the LLM if the `prompt` field is
+  an empty string.
+- **`endpointName`**: The name of the LLM API endpoint to use for this node. This must match a JSON file name from the
+  `Endpoints` folder (without the `.json` extension).
+- **`preset`**: The preset to use for the API call, controlling parameters like temperature and token limits. This must
+  match a JSON file name from the `Presets` folder (without the `.json` extension).
+- **`maxResponseSizeInTokens`**: Overrides the preset to specify the maximum number of tokens for the LLM's response for
+  this specific node.
+- **`addUserTurnTemplate`**: A boolean. Set to `false` if you are sending raw conversation history. Set to `true` if you
+  are sending a custom string via the `prompt` field that should be wrapped in the user turn template.
+- **`returnToUser`**: A boolean. If set to `true` on a node that is not the final one, its output will be returned to
+  the user immediately. This is useful for "fire and forget" tasks where later nodes perform background actions (like
+  saving memories) without making the user wait.
+- **`useRelativeTimestamps`**: A boolean. If set to `true`, timestamps will be prepended to messages in a
+  human-readable, relative format (e.g., `[Sent 5 minutes ago]`). If omitted or `false`, absolute timestamps are used.
+- **`workflowName`**: Used only in `"CustomWorkflow"` nodes. Specifies the file name of the sub-workflow to execute.
+- **`scoped_variables`**: Used only in `"CustomWorkflow"` nodes. A list of variables from the current workflow (e.g.,
+  `["{agent1Output}"]`) to pass into the sub-workflow. These become available as `{agent#Input}` variables inside the
+  sub-workflow.
 
 ### Variables in Prompts
 
-You can use several variables within these prompts. These will be appropriately replaced at runtime:
+You can use a rich set of dynamic variables within `systemPrompt` and `prompt` fields. These placeholders will be
+replaced with real-time values when the workflow runs.
 
-- `{chat_user_prompt_last_one}`: The last message in the conversation, without prompt template tags wrapping the
-  message.
-    - Variables for last "one", "two", "three", "four", "five", "ten", and "twenty" messages are available.
-    - Typically used in prompts.
-- `{templated_user_prompt_last_one}`: The last message in the conversation, wrapped in the appropriate user/assistant
-  prompt template tags.
-    - Variables for last "one", "two", "three", "four", "five", "ten", and "twenty" messages are available.
-    - Rarely needed.
-- `{chat_system_prompt}`: The system prompt sent from the front end. Often contains character card and other important
-  info.
-    - Commonly used.
-- `{templated_system_prompt}`: The system prompt from the front end, wrapped in the appropriate system prompt template
-  tag.
-    - Used if the workflow system prompt is just the system prompt.
-- `{agent#Output}`: `#` is replaced with the number you want. Every node generates an agent output. The first node is
-  always 1, and each subsequent node increments by 1. For example, `{agent1Output}` for the first node, `{agent2Output}`
-  for the second, etc.
-    - Accessible in any node after they've run.
-- `{category_colon_descriptions}`: Pulls the categories and descriptions from your `Routing` JSON file.
-    - Example: "CODING: Any request which requires a code snippet as a response; FACTUAL: Requests that require factual
-      information or data; CONVERSATIONAL: Casual conversation or non-specific inquiries".
-- `{category_colon_descriptions_newline_bulletpoint}`: Same as above except uses a bulletpoint list instead of semicolon
-  delimited.
-- `{categoriesSeparatedByOr}`: Pulls the category names, separated by "OR".
-    - Example: "CODING OR FACTUAL OR CONVERSATION".
-- `{categoryNameBulletpoints}`: Same as above, but bullet points instead of "OR"
-- `[TextChunk]`: A special variable unique to the parallel processor, likely not used often.
+#### Inter-Node & Workflow Variables
+
+- **`{agent#Output}`**: The result from a previously executed node within the *same* workflow. The `#` corresponds to
+  the node's position (e.g., `{agent1Output}` for the first node, `{agent2Output}` for the second).
+- **`{agent#Input}`**: A value passed from a parent workflow into a sub-workflow via `scoped_variables`. For example,
+  `{agent1Input}` is the first variable passed from the parent.
+- **`{custom_variable}`**: Any custom key defined at the top level of a workflow JSON (in the new dictionary format) is
+  available as a variable. For example, if you define `"persona": "You are a pirate."`, you can use `{persona}` in any
+  prompt within that workflow.
+
+#### Conversation & Message Variables
+
+- **`{chat_user_prompt_last_one}`**: The raw text content of the last message in the conversation. Also available for
+  `two`, `three`, `four`, `five`, `ten`, and `twenty` messages.
+- **`{templated_user_prompt_last_one}`**: The last message, but wrapped in the appropriate user/assistant prompt
+  template tags. Also available for `two`, `three`, `four`, `five`, `ten`, and `twenty`.
+- **`{chat_system_prompt}`**: The system prompt sent from the front-end client (e.g., a character card).
+- **`{templated_system_prompt}`**: The front-end system prompt, wrapped in the appropriate system prompt template tag.
+- **`{messages}`**: The raw, complete list of message objects. This is primarily useful for advanced templating with
+  `jinja2` enabled on the node.
+
+#### Date, Time & Context Variables
+
+- **`{todays_date_pretty}`**: Today's date, e.g., "August 17, 2025".
+- **`{todays_date_iso}`**: Today's date in ISO format, e.g., "2025-08-17".
+- **`{current_time_12h}`**: The current time in 12-hour format, e.g., "8:48 PM".
+- **`{current_time_24h}`**: The current time in 24-hour format, e.g., "20:48".
+- **`{current_month_full}`**: The full name of the current month, e.g., "August".
+- **`{current_day_of_week}`**: The full name of the current day, e.g., "Sunday".
+- **`{current_day_of_month}`**: The day of the month as a number, e.g., "17".
+- **`{time_context_summary}`**: A natural language summary of the conversation's timeline,
+  e.g., "[Time Context: This conversation started 2 hours ago. The most recent message was sent 5 minutes ago.]".
+
+#### Prompt Routing Variables
+
+These variables are automatically available in categorization workflows and are populated from your routing
+configuration file.
+
+- **`{category_colon_descriptions}`**: A semicolon-separated list of categories and their descriptions. Example: "
+  CODING: Any request which requires a code snippet...; FACTUAL: Requests that require factual information...".
+- **`{category_colon_descriptions_newline_bulletpoint}`**: The same as above, but formatted as a bulleted list.
+- **`{categoriesSeparatedByOr}`**: A simple list of just the category names. Example: "CODING or FACTUAL or
+  CONVERSATIONAL".
+- **`{categoryNameBulletpoints}`**: A bulleted list of just the category names.
+
+#### Special Variables
+
+- **`[TextChunk]`**: A special placeholder primarily used within memory-generation workflows (e.g., inside
+  `fileMemoryWorkflowName` or `vectorMemoryWorkflowName`). It represents a specific block of conversation text that is
+  being analyzed or summarized.
 
 ### Other Types of Nodes
 
-#### Recent Memory Summarizer Tool
+#### The Memory System: Creators and Retrievers
 
-> NOTE: For a deeper understanding of how memories work, please see
-> the [Understanding Memories section](#understanding-memories)
+The memory system has been fundamentally redesigned for performance and power. The core principle is a separation of
+concerns between two types of nodes: **Creators** and **Retrievers**.
 
-This node will pull N number of memories (or most recent messages if no DiscussionId is present) and add a custom
-delimiter between them. So if you have a memory file with 3 memories, and choose a delimiter of "\n---------\n" then
-you might get the following:
+* **Memory Creators (Write Operations)**: These are computationally "heavy" nodes that analyze the conversation,
+  generate new memories, and save them to files. This process is designed to run in the background, often after a
+  workflow lock, so it doesn't slow down the user experience.
+* **Memory Retrievers (Read Operations)**: These are "lightweight" nodes that perform fast, inexpensive lookups of
+  existing memories to provide context for an AI's response.
 
-```text
-This is the first memory
----------
-This is the second memory
----------
-This is the third memory
-```
+This split allows you to build highly responsive workflows. You can retrieve existing context instantly at the beginning
+of a workflow, get a fast reply to the user, and then trigger a memory creation node in the background to update the
+memories with the latest turn of the conversation.
 
-Combining this node with the chat summary can allow the LLM to receive not only the summarized breakdown of the entire
-conversation as a whole, but also a list of all the memories that summary was built off of, which may contain more
-detailed and granular information about it. Sending both of those together, alongside the last 15-20 messages, can
-create the impression of a continual and persistent memory of the entire chat up to the most recent messages. Special
-care to craft good prompts for the generation of the memories can help to ensure the details you care about are
-captured, while less pertinent details are ignored.
+-----
 
-This node will NOT generate new memories; this is so that workflow locks can be respected if you are using them
-on a multi-computer setup. Currently the best way to generate memories is the FullChatSummary node.
+### **Memory Creator Node**
+
+This is the engine of the memory system. You only need one type of creator node, which handles all types of memory
+generation.
+
+#### QualityMemory
+
+This is the primary and only node for **creating and updating** all persistent memories. When this node runs, it checks
+the conversation history and, if enough new messages have been added, it will generate and save new memories. It can
+create classic file-based memories or the new, powerful searchable vector memories, depending on your configuration.
+This node does **not** return any text to the workflow; its only job is to write memories to storage in the background.
+
+It's best practice to place this node at the end of a workflow, after a workflow lock, to ensure memory generation
+doesn't delay the AI's response to the user.
 
 ```json
 {
-  "title": "Recent memory gathering",
-  "agentName": "Recent Memory Gathering Tool",
+  "id": "create_memories_node",
+  "type": "QualityMemory",
+  "name": "Create or Update All Memories"
+}
+```
+
+-----
+
+### **Memory Retriever Nodes**
+
+These nodes read from the memory files that the `QualityMemory` node creates. They are fast and provide different kinds
+of context to your AI.
+
+#### RecentMemorySummarizerTool
+
+This node quickly **reads** the last few memory chunks from the long-term memory file (`<id>_memories.jsonl`). It's
+excellent for providing the AI with immediate context on what was discussed recently. You can specify how many of the
+most recent summarized chunks to retrieve.
+
+Note that if a `discussionId` is not active, this node falls back to simply pulling the last `N` turns directly from the
+current chat history, acting as a stateless memory provider.
+
+```json
+{
+  "id": "get_recent_memories_node",
   "type": "RecentMemorySummarizerTool",
-  "maxTurnsToPull": 30,
-  "maxSummaryChunksFromFile": 30,
-  "lookbackStart": 20,
+  "name": "Get Recent Memories",
+  "maxTurnsToPull": 0,
+  "maxSummaryChunksFromFile": 5,
   "customDelimiter": "\n------------\n"
 }
 ```
 
-Note that if DiscussionId is null, this will instead pull a series of messages, starting from N number since the
-most recent. So if lookbackStart is 20, then it will ignore the most recent 20 messages, and will instead begin
-at message 21. Starting there, it will go back "maxTurnsToPull" number of messages. So if your lookback is 20,
-and maxTurns is 30, it will start at message 21 and pull to message 51.
+* `maxSummaryChunksFromFile`: Specifies how many of the latest memory chunks to pull from the file.
 
-#### Recent/Quality Memory Node
+#### FullChatSummary
 
-This node will do a keyword search against the memories for anything related to the current conversation. So the result
-may be several
-summarized memory chunks loosely related to what's being talked about.
-
-This is different from the recent memory summarizer tool in that this will take the memories in the file and run them
-through an LLM to have the LLM further summarize them in the context of what is being said, while the previous recent
-memory tool will just dump all the memories raw for the LLM.
-
-Between the two, the Recent Memory Summarizer Tool is faster and often has better results, though will eat up more of
-the LLM's available context.
+This node **reads** the single, continuously updated "rolling summary" of the entire conversation from the chat summary
+file (`<id>_summary.jsonl`). Use this to give the AI a high-level, condensed overview of the entire chat history from
+start to finish. This node does **not** generate or update the summary; it only retrieves the existing one.
 
 ```json
 {
-  "title": "Checking AI's long term memory about this topic",
-  "agentName": "QualityMemoryAgent",
-  "type": "QualityMemory"
-}
-```
-
-#### Full Chat Summary Node
-
-> NOTE: For a deeper understanding of how chat summaries work, please see
-> the [Understanding The Chat Summary section](#understanding-the-chat-summary)
-
-This node is only activate if [DiscussionId] is used.
-
-This node will also generate a recent memories file, if one doesn't exist already, and then will take all
-the memories and summarize them into a single large summary. This summary is saved in `DiscussionId_chatsummary.json`.
-So `123456_chatsummary.json`, in our above example. If a chat summary already exists and was recently updated, it will
-simply use the one that already exists. If one exists and it hasn't been updated in a while, it will update the summary.
-
-```json
-{
-  "title": "Checking AI's recent memory about this topic",
-  "agentName": "Chat Summary",
+  "id": "get_full_summary_node",
   "type": "FullChatSummary",
-  "isManualConfig": false
+  "name": "Get Full Chat Summary"
 }
 ```
 
-* isManualConfig is supposed to tell the chatSummary to look for a summary file but not write to it, so that the user
-  can write their own summaries. However, I think this field is actually bugged and does nothing. Just leave this false
-  for now.
+#### VectorMemorySearch
 
-#### Get Current Chat Summary From File
+This is the new **smart search** node, designed for Retrieval-Augmented Generation (RAG). It performs a powerful,
+relevance-based search against the dedicated vector memory database (`<id>_vector_memory.db`). Instead of just getting
+recent context, this node allows you to look up specific facts, topics, or details from anywhere in the conversation
+history.
 
-Additionally, another node exists that allows you to simply grab the chat summary file without triggering memories to
-be processed or a new chat summary to be created. This node will only grab whatever is in the chat summary file and
-return it; it will do nothing else. If there is no file or memories, it will not generate them.
+The search input **must be a string of keywords separated by semicolons (`;`)**. The node will find the memory chunks
+most relevant to those keywords and return them, ranked by relevance.
 
 ```json
-  {
-  "title": "Grab the current summary from file",
-  "agentName": "Chat Summary File Puller Agent",
-  "type": "GetCurrentSummaryFromFile"
+{
+  "id": "smart_search_node",
+  "type": "VectorMemorySearch",
+  "name": "Search for Specific Details",
+  "input": "Project Stardust;mission parameters;Dr. Evelyn Reed"
 }
 ```
+
+-----
+
+### **Configuring Memory Generation (`_DiscussionId-MemoryFile-Workflow-Settings.json`)**
+
+The behavior of the `QualityMemory` node is controlled by a dedicated configuration file for each `discussionId`. This
+is where you decide what kind of memories to create and how they should be generated.
+
+Here is a breakdown of the key configuration options:
+
+```json
+{
+  // This is the master switch for the new memory system.
+  // Set to true to create searchable vector memories.
+  // Set to false to use the classic file-based memory system.
+  "useVectorForQualityMemory": true,
+  // ====================================================================
+  // == Vector Memory Configuration (Only used if the above is true) ==
+  // ====================================================================
+
+  // For advanced users: specify a workflow to generate the structured JSON for a vector memory.
+  "vectorMemoryWorkflowName": "my-vector-memory-workflow",
+  // The LLM endpoint to use specifically for vector memory generation. Falls back to "endpointName".
+  "vectorMemoryEndpointName": "gpt-4-turbo",
+  // The preset for the specified endpoint. Falls back to "preset".
+  "vectorMemoryPreset": "default_preset_for_json_output",
+  // The max response size for the generated JSON. Falls back to "maxResponseSizeInTokens".
+  "vectorMemoryMaxResponseSizeInTokens": 1024,
+  // The target size in tokens for a chunk of conversation before it's processed.
+  "vectorMemoryChunkEstimatedTokenSize": 1000,
+  // The max number of new messages before forcing processing, even if token size isn't met.
+  "vectorMemoryMaxMessagesBetweenChunks": 5,
+  // How many of the most recent turns to ignore. This prevents summarizing an in-progress thought.
+  "vectorMemoryLookBackTurns": 3,
+  // ====================================================================
+  // == File-based Memory Configuration (Only used if the switch is false) ==
+  // ====================================================================
+
+  // For advanced users: specify a workflow to generate the summary text for a file-based memory.
+  "fileMemoryWorkflowName": "my-file-memory-workflow",
+  // The system prompt used for the summarization LLM call when not using a workflow.
+  "systemPrompt": "You are an expert summarizer. Your task is to extract key facts...",
+  // The user prompt used for the summarization LLM call. [TextChunk] is replaced automatically.
+  "prompt": "Please summarize the following conversation chunk: [TextChunk]",
+  // The target size in tokens for a chunk of conversation before it's summarized.
+  "chunkEstimatedTokenSize": 1000,
+  // The max number of new messages before forcing a summarization, even if token size isn't met.
+  "maxMessagesBetweenChunks": 5,
+  // How many of the most recent turns to ignore for file-based memory generation.
+  "lookbackStartTurn": 3,
+  // ====================================================================
+  // == General / Fallback LLM Settings                           ==
+  // ====================================================================
+
+  // The default LLM endpoint to use if a specific one (e.g., vectorMemoryEndpointName) isn't set.
+  "endpointName": "default_endpoint",
+  // The default preset to use.
+  "preset": "default_preset",
+  // The default max response size in tokens.
+  "maxResponseSizeInTokens": 400
+}
+```
+
+* **`useVectorForQualityMemory`**: This boolean is the most important setting. `true` enables the creation of a
+  searchable SQLite database for the discussion. `false` falls back to the classic `.jsonl` memory file.
+* **`vectorMemoryWorkflowName` / `fileMemoryWorkflowName`**: These keys allow you to specify the name of a sub-workflow
+  to handle memory generation. This gives you complete control over the summarization process, allowing for multi-step
+  logic (e.g., extracting topics then summarizing each one). If a workflow name is not provided, the system falls back
+  to a direct LLM call using the `systemPrompt` and `prompt` fields.
+* **`chunkEstimatedTokenSize` / `maxMessagesBetweenChunks`**: These values control how often the `QualityMemory` node
+  decides to create a new memory chunk. A new memory is created if either the token count of new messages exceeds
+  `chunkEstimatedTokenSize` OR the number of new messages exceeds `maxMessagesBetweenChunks`.
 
 #### Parallel Processing Node
 
@@ -1437,184 +1553,309 @@ for this once I'm done with my testing.
 
 ---
 
-### Custom Workflow Node
+### **Custom Workflow Node**
 
-The **Custom Workflow Node** allows you to execute a specific workflow in the middle of another workflow. This
-node is particularly useful when you need to perform a predefined series of steps that are isolated from the main
-workflow. The outputs from the custom workflow can be referenced by subsequent nodes using `{agent#Output}`, where `#`
-is the node number.
+The **`CustomWorkflow` Node** allows you to execute an entire, separate workflow from within the current workflow. This
+is incredibly powerful for encapsulating reusable logic, breaking down complex processes into smaller, manageable parts,
+and orchestrating multi-step agentic tasks. The final result of the child workflow is captured and stored in the
+parent's state, accessible to subsequent nodes.
 
-- **`workflowName`**: The name of the custom workflow to execute.
-- **`is_responder`**: Determines if this node provides the final response for the user. If set to `true`, streaming is
-  becomes enabled based on the user's selection, and the output of this workflow is returned to the user.
-- **`firstNodeSystemPromptOverride`** *(optional)*: Overrides the system prompt for the first node in the custom
-  workflow.
-- **`firstNodePromptOverride`** *(optional)*: Overrides the user prompt for the first node in the custom workflow.
+#### **Properties**
 
-This node can be added with the following syntax:
+* `type` (string, required): Must be `"CustomWorkflow"`.
+* `workflowName` (string, required): The filename of the custom workflow to execute (e.g., `"MySubWorkflow.json"`).
+* `is_responder` (boolean, optional, default: `false`): Determines if this node provides the final, user-facing
+  response.
+    * If `true`, the sub-workflow's final output is returned to the user, and the parent workflow terminates. If the
+      initial request was for a streaming response, this sub-workflow will stream its output.
+    * If `false` (or omitted), the sub-workflow runs "silently." Its final output is captured and stored in an
+      `agent#Output` variable for the parent workflow to use, but it is not sent to the user.
+* `scoped_variables` (array of strings, optional): **(Recommended)** A list of values to pass from the parent workflow
+  into the child workflow's global scope. These values become available to *all nodes* in the child workflow as
+  `{agent1Input}`, `{agent2Input}`, etc., based on their order in the array. This is the most flexible way to provide a
+  child workflow with the context it needs.
+* `firstNodeSystemPromptOverride` (string, optional): Overrides the `systemPrompt` for the very first node in the child
+  workflow. This is a legacy method for passing data.
+* `firstNodePromptOverride` (string, optional): Overrides the `prompt` for the very first node in the child workflow.
+  This is also a legacy method for passing data.
+
+#### **Syntax**
 
 ```json
 {
-  "title": "Custom Workflow Example",
+  "title": "Call a Sub-Workflow to Summarize Text",
   "type": "CustomWorkflow",
-  "workflowName": "ExampleCustomWorkflow",
-  "is_responder": true,
-  "firstNodeSystemPromptOverride": "This is the custom system prompt override.",
-  "firstNodePromptOverride": "This is the custom user prompt override."
+  "workflowName": "SummarizerWorkflow.json",
+  "is_responder": false,
+  "scoped_variables": [
+    "{agent1Output}",
+    "A custom static string value"
+  ],
+  "firstNodeSystemPromptOverride": "You are a helpful summarization assistant. The user has provided the following text from a previous step: {agent1Output}",
+  "firstNodePromptOverride": "Please summarize the provided text."
 }
 ```
 
-**NOTE**: On the system and prompt override- the very first node of whatever workflow you call will have their system
-and prompt replaced with whatever you put here, if applicable. The reason for this is that the child workflow will not
-have access to the agent outputs of the parent workflow. Say you have workflow `Workflow-1.json`. Node 4 is a custom
-workflow node, which called `Workflow-2.json`. `Workflow-2.json` will run like any other workflow, meaning that the
-first node's output will be stored in agent1Output for that `Workflow-2`. This means agent's 1, 2 and 3 of
-`Workflow-1` are completely inaccessible within `Workflow-2`. To get around this, you can pass in a prompt/system prompt
-from `Workflow-1` into the first node of `Workflow-2` using the overrides, and those prompts can reference the agent
-outputs for 1, 2 and 3 of `Workflow-1`. This allows you to make use of those values in the first node of the child
-workflow.
+-----
 
-The output of the custom workflow that is called will be stored in a standard agent output like any other node. So
-if `Workflow-1` calls `Workflow-2` in its 4th node, then agent4Output of `Workflow-1` would be the final output of
-`Workflow-2`.
+### **Conditional Custom Workflow Node**
 
----
+The **`ConditionalCustomWorkflow` Node** extends the `CustomWorkflow` node with powerful branching logic. It dynamically
+selects and executes a specific sub-workflow based on the resolved value of a conditional variable (e.g., the output
+from a previous node). This allows you to create adaptive workflows that react differently based on runtime conditions.
 
-Here’s the updated README section for the **Conditional Custom Workflow Node** that incorporates the changes to support
-route-specific overrides:
+Each potential path, or "route," can also have its own unique prompt overrides, giving you fine-grained control over how
+each selected sub-workflow is initiated.
 
----
+#### **Properties**
 
-### Conditional Custom Workflow Node
+* `type` (string, required): Must be `"ConditionalCustomWorkflow"`.
+* `conditionalKey` (string, required): A variable placeholder (e.g., `{agent1Output}`) whose resolved value determines
+  which workflow to execute.
+* `conditionalWorkflows` (object, required): A dictionary that maps the possible values of `conditionalKey` to workflow
+  filenames.
+    * **`Default`** (string, optional): A special key that specifies a fallback workflow to run if the `conditionalKey`'
+      s value does not match any other key in the map.
+* `is_responder` (boolean, optional, default: `false`): Functions identically to the `CustomWorkflow` node, determining
+  if the selected sub-workflow provides the final user-facing response.
+* `scoped_variables` (array of strings, optional): **(Recommended)** Functions identically to the `CustomWorkflow` node.
+  The provided variables are passed into whichever sub-workflow is chosen by the conditional logic.
+* `routeOverrides` (object, optional): A dictionary specifying prompt overrides for each potential route. The keys in
+  this object should correspond to the keys in `conditionalWorkflows`. Each route can define:
+    * `systemPromptOverride` (string, optional): Overrides the system prompt for the first node in the selected
+      workflow.
+    * `promptOverride` (string, optional): Overrides the user prompt for the first node in the selected workflow.
 
-The **Conditional Custom Workflow Node** extends the capabilities of the Custom Workflow Node by adding branching logic.
-It allows the workflow to dynamically select a specific sub-workflow to execute based on the value of a conditional
-key (e.g., agent output from a previous node). If no match is found for the key's value, a default workflow can be
-specified as a fallback.
-
-In addition, each route can have optional **system prompt** and **user prompt** overrides, providing fine-grained
-control over the first node in the selected sub-workflow.
-
-#### Properties
-
-- **`conditionalKey`**: A variable or placeholder (e.g., `{agent1Output}`) whose value determines which workflow to
-  execute.
-- **`conditionalWorkflows`**: A dictionary mapping possible values of `conditionalKey` to workflow names.
-    - **`Default`** *(optional)*: Specifies the fallback workflow if no match is found for the key's value.
-- **`is_responder`**: Determines if this node provides the final response for the user. If set to `true`, streaming is
-  enabled, and the workflow concludes after this node.
-- **`routeOverrides`** *(optional)*: A dictionary specifying prompt overrides for each route. Each route can define:
-    - **`systemPromptOverride`** *(optional)*: Overrides the system prompt for the first node in the selected workflow.
-    - **`promptOverride`** *(optional)*: Overrides the user prompt for the first node in the selected workflow.
-
-#### Syntax
-
-This node can be added with the following syntax:
+#### **Syntax**
 
 ```json
 {
-  "title": "Conditional Workflow Example",
+  "title": "Route to a Specific Coding Model",
   "type": "ConditionalCustomWorkflow",
   "conditionalKey": "{agent1Output}",
   "conditionalWorkflows": {
-    "Yes": "WorkflowWhenYes",
-    "No": "WorkflowWhenNo",
-    "Default": "DefaultFallbackWorkflow"
+    "Python": "PythonCodingWorkflow.json",
+    "JavaScript": "JavaScriptCodingWorkflow.json",
+    "Default": "GeneralCodingWorkflow.json"
   },
   "is_responder": true,
+  "scoped_variables": [
+    "{lastUserMessage}"
+  ],
   "routeOverrides": {
-    "Yes": {
-      "systemPromptOverride": "Yes-specific system prompt override.",
-      "promptOverride": "Yes-specific user prompt override."
+    "Python": {
+      "systemPromptOverride": "You are an expert Python programmer. The user's request is: {agent1Input}"
+    },
+    "JavaScript": {
+      "systemPromptOverride": "You are a master JavaScript developer. The user's request is: {agent1Input}"
     }
   }
 }
 ```
 
-#### Behavior
+#### **Behavior and Known Issue**
 
-1. **Conditional Execution**:  
-   The node evaluates the value of `conditionalKey` (e.g., `{agent1Output}`) and selects a workflow based on
-   the `conditionalWorkflows` mapping. If no match is found, the workflow specified in the `Default` key (if provided)
-   is executed.
+1. **Conditional Execution**: The node resolves the value of `conditionalKey`. It then performs a **case-insensitive**
+   search for that value as a key within the `conditionalWorkflows` map. For example, if `{agent1Output}` resolves to
+   `"python"`, `"Python"`, or `"PYTHON"`, it will correctly match the `"Python"` key and select
+   `PythonCodingWorkflow.json`. If no match is found, it will use the workflow specified under the `Default` key.
 
-2. **Route-Specific Overrides**:  
-   Each route in `routeOverrides` can specify:
-    - A **system prompt override** that replaces the system prompt of the first node in the selected workflow.
-    - A **user prompt override** that replaces the user prompt of the first node in the selected workflow.  
-      If no overrides are provided for a route, the first node uses its original prompts.
+2. **⚠️ Known Issue: Route Override Key Casing**: When looking for overrides in the `routeOverrides` map, the logic is
+   different. The resolved `conditionalKey` is normalized to lowercase and then **capitalized** (e.g., `"python"`
+   becomes `"Python"`). This means the keys in your `routeOverrides` object **must be capitalized** to be found.
 
-3. **Fallback Behavior**:  
-   If `routeOverrides` or a specific route's overrides are missing, the workflow will run without applying any overrides
-   to the first node.
+    * ✅ **Correct**: `"Python"`, `"JavaScript"`
+    * ❌ **Incorrect**: `"python"`, `"javascript"`
 
-#### Example for `conditionalWorkflows`
+3. **Fallback Behavior**: If `routeOverrides` is not defined for a matching route, the selected sub-workflow will
+   execute using its own default prompts for its first node.
 
-If `{agent1Output}` evaluates to `"Yes"`, the node executes `"WorkflowWhenYes"`. If `{agent1Output}` evaluates
-to `"No"`, the node executes `"WorkflowWhenNo"`. If `{agent1Output}` evaluates to any other value or is empty,
-the `"DefaultFallbackWorkflow"` is executed.
+-----
 
-#### Example for `routeOverrides`
+### **Passing Data from a Parent Workflow to a Child Workflow**
 
-Suppose `{agent1Output}` evaluates to `"Yes"`. The node:
+A critical concept to understand is that a child workflow runs in an isolated context. It **cannot** directly access the
+outputs of the parent workflow (e.g., `{agent1Output}`, `{agent2Output}`, etc., from the parent are unavailable inside
+the child).
 
-- Selects `"WorkflowWhenYes"`.
-- Replaces the first node's system prompt with `"Yes-specific system prompt override."`.
-- Replaces the first node's user prompt with `"Yes-specific user prompt override."`.
+There are two primary mechanisms to pass data from the parent to the child.
 
-If `{agent1Output}` evaluates to `"No"`, the node:
+#### **Method 1: `scoped_variables` (Recommended Method)**
 
-- Selects `"WorkflowWhenNo"`.
-- Leaves the Prompt and System Prompt of `"WorkflowWhenNo"`'s first node unchanged, as no
-  override was provided.
+This is the most powerful and flexible method. The `scoped_variables` property lets you define a list of values from the
+parent's context that you want to make available globally within the child.
 
-If `{agent1Output}` does not fit any of the above conditionals, the node:
+* **How it Works**: The values you list in `scoped_variables` are bundled and passed to the child workflow. Inside the
+  child workflow, they can be accessed *at any node* using the special `{agent#Input}` syntax. The numbering corresponds
+  to the order in the array (0-indexed array, 1-indexed variable).
 
-- Selects `"DefaultFallbackWorkflow"`.
-- Leaves the Prompt and System Prompt of `"DefaultFallbackWorkflow"`'s first node unchanged, as no
-  override was provided.
+    * The 1st item in `scoped_variables` becomes `{agent1Input}`.
+    * The 2nd item becomes `{agent2Input}`.
+    * ...and so on.
 
-**NOTE**: The conditions are string literals that are normalized by stripping white space and capitalization
-in the code. So you are not limited to 'Yes' and 'No', those were only examples. It could be 'Cat' and
-'Dog' and 'Bird' and 'Iguana'.
+* **Example**:
 
-An example I intend to use personally is choosing which programming language a coding request is, so that I can
-route to whatever model handles that request best.
+    * Parent Node Config:
+      ```json
+      "scoped_variables": [
+        "{agent1Output}",
+        "{lastUserMessage}"
+      ]
+      ```
+    * Usage anywhere in the Child Workflow's JSON:
+      ```json
+      "prompt": "The text to analyze is '{agent1Input}' and the user's original question was '{agent2Input}'."
+      ```
+
+#### **Method 2: Prompt Overrides (Legacy Method)**
+
+This was the original method for passing data. You can embed parent variables directly into the
+`firstNodeSystemPromptOverride` or `firstNodePromptOverride` properties.
+
+* **How it Works**: The variable placeholders are resolved in the parent's context *before* the child workflow is
+  called. The resulting string is then forced upon the first node of the child workflow, replacing its original prompt.
+* **Limitation**: This method only makes the data available to the **first node** of the child workflow. If you need the
+  data in later nodes, you must have the first node explicitly output it so it can be accessed via that child's
+  `{agent1Output}`. This is why `scoped_variables` is now the recommended approach.
+
+### **Receiving Data from a Child Workflow**
+
+The process of getting the final result back from a child workflow is simple. The entire final output of the
+sub-workflow (i.e., the result of its last or "responder" node) is treated as the output of the `CustomWorkflow` node
+itself.
+
+* **Example**: If a `CustomWorkflow` node is the **4th node** in your parent workflow, its final, resolved output will
+  be stored in the parent's `{agent4Output}`, ready to be used by node 5 and beyond.
 
 ---
 
 ## Understanding Memories
 
-### What are "Recent Memories"?
+WilmerAI's memory system has undergone a significant evolution, making it more powerful, flexible, and intelligent. It's
+designed to provide rich, searchable context for your conversations, ensuring the AI remains coherent and knowledgeable
+over long discussions. This guide will provide an exhaustive breakdown of how the new system works.
 
-The "Recent Memories" function is designed to enhance your conversation experience by chunking and summarizing your
-messages, and then writing them to a specified text file.
+The core architecture is built on a few key principles:
 
-When creating memories, Wilmer will group together the messages that you send the LLM into small chunks, and then use an
-LLM that you specify to summarize them. Wilmer will then save these summary chunks to a memory file.
-In order to trigger memories to be created, Wilmer will first look for a recent memory node in your workflow and then
-will look for a Discussion Id, which is signified by having `[DiscussionId]#####[/DiscussionId]` anywhere in the
-conversation, in either the system prompt, standard prompt or any of the messages (where #### is any number.
-So, for example, `[DiscussionId]123456[/DiscussionId]`).
+1. **Three Types of Memory:** The system supports three distinct memory types, each with a specific purpose:
+   chronological **Long-Term Memory** (file-based), a holistic **Rolling Chat Summary**, and a powerful, searchable *
+   *Vector Memory** for RAG.
+2. **Separation of Concerns:** The system is split into **Creator** nodes, which perform the computationally expensive
+   work of writing memories, and **Retriever** nodes, which perform fast, inexpensive reads. This split ensures your
+   chat remains responsive even while memories are being updated in the background.
+3. **Workflow-Driven:** Memory operations are implemented as nodes within the workflow engine, giving you explicit
+   control over when and how memories are created and accessed.
 
-The memory file will be written as the `DiscussionId + _memories.json`; so `123456_memories.json`, in our example.
+-----
 
-> NOTE: It is recommended to not put it in the system prompt, as then the memory will be shared between all chats.
-> Also, some front ends have variables that may help streamline the naming of memories. For example, one possible
-> discussion id in SillyTavern might be `[DiscussionId]{{char}}_2024-11-10[/DiscussionId]`, which for the character
-> TestPersona would result in a file called `TestPersona_2024-11-10_memories.json`
+### How Memories are Enabled
 
-The settings for how these memories are generated can be
-found in the file `_DiscussionId_MemoryFile-Workflow-Settings.json` for most users, though a different file name can be
-specified in the user json file within the field `discussionIdMemoryFileWorkflowSettings`.
+The entire persistent memory system is activated by a single tag: `[DiscussionId]`. You must include this tag anywhere
+in your conversation (system prompt, user prompt, or messages) to enable the creation and retrieval of long-term
+memories.
 
-Example of the `_DiscussionId_MemoryFile-Workflow-Settings` file:
+`[DiscussionId]#######[/DiscussionId]` (where `#######` is any unique identifier).
+
+For example, `[DiscussionId]project_alpha_123[/DiscussionId]`. Wilmer will automatically remove this tag before sending
+prompts to the LLM.
+
+> **NOTE:** It's recommended not to put the `DiscussionId` in a character's main definition or system prompt if you want
+> separate conversations with that character to have separate memories. Placing it in an author's note or the first
+> message of a chat is often a better practice. Some front-ends support variables that can help create unique IDs, for
+> example: `[DiscussionId]{{char}}_2025-08-17[/DiscussionId]`.
+
+-----
+
+### The Three Types of Memory
+
+When a `DiscussionId` is active, the system can maintain up to three distinct files in your `Public/` directory, each
+serving a specific purpose.
+
+#### 1\. Long-Term Memory (File-Based)
+
+This system provides a chronological, diary-like record of the conversation.
+
+* **Memory File (`<id>_memories.jsonl`)**: This is the classic memory file. Wilmer groups messages into chunks, uses an
+  LLM to summarize them, and saves these summaries sequentially. It's a detailed, append-only ledger of what's been
+  discussed, with each summary chunk linked via a hash to the last message it was based on.
+
+#### 2\. Rolling Chat Summary
+
+This provides a high-level narrative of the entire conversation, updated periodically.
+
+* **Chat Summary File (`<id>_summary.jsonl`)**: This file maintains a single, continuously updated story of the entire
+  conversation. It synthesizes the chunks from the Long-Term Memory file into a holistic overview, giving the AI a
+  bird's-eye view of everything that has happened so far.
+
+#### 3\. Vector Memory (The Smart Search System) 🧠
+
+This is the most powerful addition to the memory system. It creates a dedicated, intelligent database for each
+discussion, enabling highly relevant, keyword-based search for Retrieval-Augmented Generation (RAG).
+
+* **Vector Memory Database (`<id>_vector_memory.db`)**: Instead of just a text summary, vector memories are stored as
+  structured data in a dedicated **SQLite database**. When a memory is created, it's saved with rich metadata. The
+  system uses SQLite's FTS5 extension to perform powerful full-text searches across this metadata, allowing the AI to
+  perform a "smart search" to find the most relevant pieces of information about a specific topic.
+
+-----
+
+### Using Memories in a Workflow: Creators vs. Retrievers
+
+This separation is crucial for performance. Writing and summarizing memories can take time. By splitting the process,
+you can design workflows where the AI responds instantly using existing memories, while the creation of new memories
+happens in the background.
+
+#### Memory Creation Nodes (The "Heavy Lifting")
+
+These nodes perform the computationally expensive work of generating and saving memories.
+
+* **`QualityMemory`**: This is the main node for **creating and updating** your **Long-Term (File-Based)** and **Vector
+  ** memories. You place this in your workflow where you want memory generation to happen (usually at the very end).
+  It's the engine that powers the main memory system and will generate either file-based or vector memories based on
+  your configuration.
+* **`chatSummarySummarizer`**: This is a special-purpose creator node used exclusively for generating and updating the *
+  *Rolling Chat Summary** (`<id>_summary.jsonl`).
+
+#### Memory Retrieval Nodes (The "Fast Readers")
+
+These nodes are lightweight and designed to quickly read existing memories to provide context for an AI's response.
+
+* **`RecentMemory` / `RecentMemorySummarizerTool`**: Reads the last few summary chunks from your Long-Term Memory File (
+  `<id>_memories.jsonl`). It's great for giving an AI general context of what just happened.
+* **`FullChatSummary`**: Reads the entire Rolling Chat Summary from `<id>_summary.jsonl`. Use this to give the AI the
+  complete "story so far."
+* **`VectorMemorySearch`**: The powerful **smart search** node. It performs a keyword search against the Vector Memory
+  database (`<id>_vector_memory.db`) to find the most relevant information for RAG.
+
+-----
+
+### Configuration: The Master Settings File
+
+All settings for how the `QualityMemory` node generates memories are controlled by a single configuration file:
+`_DiscussionId-MemoryFile-Workflow-Settings.json`.
+
+The most important setting is the master switch that determines which memory system to use:
+
+* **`useVectorForQualityMemory`**: If `false` (the default), the `QualityMemory` node will write to the classic
+  Long-Term Memory (`.jsonl` files). If `true`, it will create the powerful, searchable Vector Memories in the SQLite
+  database.
+
+Below is an example of the expanded settings file:
 
 ```json
 {
-  "Display_Only_Description": "A brief description that is not used for anything; display purposes only",
-  "systemPrompt": "Put your system system prompt here for the LLM to use when generating memories",
-  "prompt": "Put the prompt for generating memories here. Best to specify the format, what details you want, etc.",
+  "Display_Only_Description": "Settings for the QualityMemory node.",
+  "useVectorForQualityMemory": true,
+  "vectorMemoryWorkflowName": "my-vector-memory-workflow",
+  "vectorMemoryEndpointName": "Your-Endpoint",
+  "vectorMemoryPreset": "_Your_Preset",
+  "vectorMemoryMaxResponseSizeInTokens": 2048,
+  "vectorMemoryChunkEstimatedTokenSize": 1000,
+  "vectorMemoryMaxMessagesBetweenChunks": 5,
+  "vectorMemoryLookBackTurns": 3,
+  "fileMemoryWorkflowName": "my-file-memory-workflow",
+  "systemPrompt": "You are a summarizer. [Memory_file] [Chat_Summary]",
+  "prompt": "Summarize this chunk: [TextChunk]",
   "endpointName": "Your-Endpoint",
   "preset": "_Your_MemoryChatSummary_Preset",
   "maxResponseSizeInTokens": 250,
@@ -1624,213 +1865,255 @@ Example of the `_DiscussionId_MemoryFile-Workflow-Settings` file:
 }
 ```
 
-Breaking down the above:
+#### Breakdown of Configuration Fields
 
-* System Prompt: Your system prompt to use when having the LLM take in messages and summarize them
-* Prompt: The prompt to use when having an LLM take in memories and summarize them
-* Endpoint: The endpoint to use for memory generation
-* Preset: The preset to use for memory generation
-* maxResponseSizeInTokens: The maximum size you want your memory summary to be in tokens. This will be enforced by the
-  LLM.
-* chunkEstimatedTokenSize: This is telling Wilmer how large of a chunk of messages you want to be gathered before making
-  a memory. This is estimated tokens, and may be off by a bit from actual token sizes. If you put 2500 here, then Wilmer
-  will try to wait until your messages are at or a little under 2500 tokens, and then will send those messages to the
-  LLM to generate a new memory. It will remember that spot, and begin counting again from there. So after another 2500
-  tokens, it will generate another memory
-* maxMessagesBetweenChunks: This is an override for Wilmer during normal conversation flow to use instead of the token
-  size. So say that you set 2500 tokens in the previous value, but every message is really small; this means you could
-  go 50 messages before making a memory. If you put 20 here, then if you haven't hit 2500 tokens by 20 messages since
-  the last memory, it will make one there. So, essentially, a memory is generated when the first of these two are hit-
-  either the token limit or message limit. (NOTE: this is ignored when rebuilding older memories, often triggered by
-  deleting the memory file well into a conversation. Will explain more below)
-* lookbackStartTurn: This tells Wilmer to ignore the last N messages when making memories. If you put 7 here, then
-  starting from the most recent message sent, it will count backwards 7 messages before beginning its memory
-  work. (This has value for some chat front ends like SillyTavern that place static text within the first 1-5 messages.
-  That static text can confuse or even break the memories entirely, so by going backwards 7 or more messages, we are
-  safer from that happening).
+* **`useVectorForQualityMemory`**: The master switch. `true` for Vector DB, `false` for file-based `.jsonl`.
 
-The above file is not a normal workflow file; this is a static file where you can only change the values for the fields
-you see here. Adding more nodes will do nothing, and will probably break it.
+* **General Settings**:
 
-This file also has a series of prompt injectible variables that are unique only to it. Those can be found below:
+    * **`chunkEstimatedTokenSize` / `maxMessagesBetweenChunks`**: These work together. A memory is generated when the
+      conversation history since the last memory point reaches `chunkEstimatedTokenSize` **OR** when
+      `maxMessagesBetweenChunks` have passed, whichever comes first. This ensures memories are created regularly.
+    * **`lookbackStartTurn`**: Tells Wilmer to ignore the last N messages when creating memories. This is useful for
+      preventing static text or system messages from being included in memory summaries.
 
-* [TextChunk]: The chunk of messages that were created based on the settings (using either token size or max messages).
-  This is what you want to have the LLM summarize
-* [Memory_file]: Up to the most recent 3 memories generated in the memory file. This was added recently to allow the
-  the LLM to not only have additional context around what happened recently, but also to be able to maintain a level of
-  consistency between memories.
-* [Full_Memory_file]: All currently generated memories
-* [Chat_Summary]: The chat summary from file, if it exists
+* **Vector-Specific Settings**: The settings prefixed with `vectorMemory...` apply *only* when
+  `useVectorForQualityMemory` is `true`, allowing you to tune vector memory generation independently.
 
-#### How memories are stored and tracked
+* **File-Based Settings**: The classic settings (`systemPrompt`, `prompt`, `endpointName`, etc.) apply *only* when
+  `useVectorForQualityMemory` is `false`.
 
-The memories are generated as json files, alongside the chat summary (if you have nodes for either in your workflow).
-Each memory is generated alongside a hash representing the last message in the chunk that the memory was made off of.
-For example, if you have 20 messages that will be turned into a memory, then the most recent memory in that chunk
-will be hashed (this generates a unique string of characters and numbers that represents that string of text),
-and that hass is stored with the memory. Now Wilmer knows that the memory ended with this message.
+-----
 
-This is important for Wilmer to determine when it needs to make new memories. Lets say that you have a new conversation,
-and you send 20 messages; if your settings require it, a new memory will be made for messages 1-20. The hash on the
-memory will be for message #20. When you send a new message, #21, Wilmer will be able to see that there has only been 1
-new message since the last memory. Later, when you reach message #40, your settings may require another new memory to be
-created. Message #40 will be hashed, and that new memory + the hash will be appended to your memory file alongside the
-first memory and the hash of message #20.
+### Implementation Guide: Putting It All Together
 
-Now, this represents a pitfall within memories. If you go back and delete message #20, then the message that was hashed
-as a bookmark for where the first memory was created will be gone. How this affects Wilmer depends:
+This section provides exhaustive, step-by-step instructions for creating and using each memory type.
 
-* In the case that your last memory was marked with message #20 (so, in our example, you are on message #27 and it
-  should count 7 messages since the last memory), then by deleting message #20 it will suddenly think there have been
-  26 messages since the last memory (as it can no longer find a message that matches up to the hash it stored alongside
-  the memory, and will think that it needs to generate a new memory. This could mean you have two memories in your file
-  for the first 20 messages or so, so it will generate this new memory and append it to the file. So your first memory
-  in the file might be messages 1-20, and the second memory might be messages 1-26. This could confuse the LLM a little,
-  passing two separate summarized memories of the same events/conversation.
-* In the case that your last memory was marked with message #40 (so, in our example, you should have 2 memories by this
-  point
-  and perhaps are on message #43; it should count 3 messages since the last memory), deleting message #20 should have
-  no effect. Wilmer doesn't care about the hashed bookmarks earlier than the most recent, so you're safe. When you send
-  message #44, it will ask "when was my last memory made?", see it was message #40 (or #39 now that we deleted an
-  earlier
-  message) and count that it's not yet time to make a memory. However, if you deleted message #40 that was the hashed
-  message attached to the memory, you'd have the same issue as the first bullet point.
+#### How to Create & Use Vector Memories (RAG)
 
-#### Redoing memories
+Vector memory is the most powerful option for RAG. It involves creating a workflow that outputs structured JSON data.
 
-> NOTE: Always back up your memory and chat summary json files before opening, modifying or deleting them, unless
-> you are positive you don't need or want the current memories/summary any longer.
+**Step 1: Configure for Vector Memory**
 
-If you are unhappy with the last memory generated, it would cause Wilmer no issue for you to open up the memory json
-file and delete that memory so that on the next run it gets regenerated.
+In `_DiscussionId-MemoryFile-Workflow-Settings.json`, enable vector memory and specify the name of the workflow that
+will generate it.
 
-Also, it will also not cause Wilmer issue if you simply delete the entire memory file. The memories will be re-generated
-on the
-next message. In fact, Socg does this quite often to clean up memories for his assistants.
-
-One important note: in the discussion id workflow settings file, there are two variables I'd like to point out:
-
-```
-  "chunkEstimatedTokenSize": 2500,
-  "maxMessagesBetweenChunks": 20,
+```json
+{
+  "useVectorForQualityMemory": true,
+  "vectorMemoryWorkflowName": "my-vector-fact-extraction-workflow"
+}
 ```
 
-When generating memories over the normal course of a conversation, both settings are respected. However, if you were to
-delete the memory file and start over, or delete several old memories and regenerate them, ONLY the chunk estimated
-token
-size will be respected.
+**Step 2: Build the Generation Workflow**
 
-The reason for this is to allow consolidation down the line. The max messages exists because, to save tokens sent to the
-LLM, it might be preferable to send only the last 30 or so messages at a time and rely on memories/summary to do the
-rest.
-This means any message past 30 is lost from the context. By using "maxMessagesBetweenChunks" with a value of 20, it
-helps ensure that the minimum amount of information possible is missing from the context during the conversation, by
-having a new memory being forced to generate every 20 messages even if they don't hit the token limit.
+Your vector memory workflow must have a final node that outputs a **JSON string**. This string can represent a single
+JSON object or, more commonly, an array of objects. Each object represents a single "memory" or "fact" to be stored in
+the database.
 
-If the messages DO hit the token limit before 20, the new memory would be generated earlier instead. But in our example,
-lets say that 20 messages comes in well below 2500 tokens.
+Based on the system's database schema, each JSON object **must** contain the following keys to be indexed for search:
+`title`, `summary`, `entities`, and `key_phrases`. The value for `summary` is also used as the primary `memory_text`.
+You can include other keys (like `sentiment` or `topics` from the example), but they will only be stored as metadata and
+not used in the default search.
 
-Now, since each message generates up to 250 tokens of memory, then 120 messages may result in 1,500 tokens of memories.
-But what if those 120 messages only amounted to 5,000 tokens of conversation, with 20 messages coming in well below the
-specified 2500 token limit specified? Based on the settings above, Wilmer would instead trigger new memories based on
-the max messages setting, generating 6 memories for 120 messages (one memory every 20 messages).
+Here is a complete, three-step example workflow (`my-vector-fact-extraction-workflow.json`):
 
-Now, lets say that after message 120 you were to delete that memory file and regenerate it; in that situation,
-Wilmer would instead focus on the "chunkEstimatedTokenSize", which is 2500 tokens, and completely ignore the max
-message setting for the old memories. This means that the 5000 tokens of 120 messages would become only 2 memories,
-down from 6. So that 1,500 tokens of memories suddenly becomes 500.
+```json
+[
+  {
+    "title": "LLM Determine New Memories",
+    "agentName": "Memory Finder Agent One",
+    "type": "Standard",
+    "systemPrompt": "You are a Fact Extraction Agent... Your role is crucial for maintaining the illusion of long-term memory... Focus on the Subject, Not the Conversation... Timelessness... Self-Contained...",
+    "prompt": "Analyze the following new messages in the chat and extract persistent facts for the Fact Database:\n\n<new_messages>\n{agent1Input}\n</new_messages>\n\nFormat the output as a list of bullet points...",
+    "endpointName": "Your-Endpoint",
+    "preset": "_Your_MemoryChatSummary_Preset",
+    "maxResponseSizeInTokens": 2000,
+    "returnToUser": false
+  },
+  {
+    "title": "LLM adding context to the memories",
+    "agentName": "Memory Finder Agent Two",
+    "type": "Standard",
+    "systemPrompt": "You are an AI assistant that structures factual data. When given a bullet point list of memories, and the messages they were pulled from, please add additional structured information as required about each memory.",
+    "prompt": "A new series of messages arrived in the chat...:\n\n<new_messages>\n{agent1Input}\n</new_messages>\n\nNew memories were generated...:\n\n<new_memories>\n{agent1Output}\n</new_memories>\n\nFor each memory, please do the following:\n- Separate the memories with headers ('# Memory 1', etc.).\n- Specify a `title`: A concise, 5-10 word headline.\n- Write a `summary`: the exact text of the memory from the bullet point list.\n- Specify `entities`: a list of important proper nouns.\n- Specify `key_phrases`: A list of key conceptual phrases.\n\nPlease respond with the structured memory list now.",
+    "endpointName": "Your-Endpoint",
+    "preset": "_Your_MemoryChatSummary_Preset",
+    "maxResponseSizeInTokens": 2000,
+    "returnToUser": false
+  },
+  {
+    "title": "LLM Format Memories into JSON Array",
+    "agentName": "Memory Finder Agent Three",
+    "type": "Standard",
+    "systemPrompt": "You are a JSON formatting agent. When given a list of structured memories, format them into a valid JSON array of objects and respond ONLY with the formatted JSON. Do not include any other text, comments, or markdown.",
+    "prompt": "Below is a generated list of memories:\n\n<memories>\n{agent2Output}\n</memories>\n\nPlease take the above memories and reformat them into a single, valid JSON array of objects. The final output must be only the raw JSON text.",
+    "endpointName": "Your-Endpoint",
+    "preset": "_Your_MemoryChatSummary_Preset",
+    "maxResponseSizeInTokens": 2000,
+    "returnToUser": true
+  }
+]
+```
 
-This helps a lot for ensuring memories remain current for a conversation as its happening, but also allowing the user
-to go back and consolidate memories over time to keep the prompt being sent to the LLM lean.
+* **Workflow Input**: The system automatically injects the raw conversation chunk into your workflow as `{agent1Input}`.
+* **Final Workflow Output**: The final node (`returnToUser: true`) must produce a raw JSON string like this:
 
-#### Enabling the memory
+<!-- end list -->
 
-To enable this, include a tag in your conversation: `[DiscussionId]#######[/DiscussionId]`, where `######` is any
-numerical value. For example `[DiscussionId]123456[/DiscussionId]`. You can insert this tag anywhere in the system
-prompt or prompt; Wilmer should remove the tag before sending prompts to your LLM. Without this tag, the function
-defaults to searching the last N number of messages instead.
+```json
+[
+  {
+    "title": "Inspection Report for House in Florida",
+    "summary": "The inspection for the prospective white house in Florida revealed some termite damage in the garage, but was otherwise positive. A repair quote is being obtained.",
+    "entities": [
+      "Florida"
+    ],
+    "key_phrases": [
+      "inspection report",
+      "termite damage",
+      "repair quote"
+    ]
+  },
+  {
+    "title": "Bob's Annual Summer Resort",
+    "summary": "Bob visits an annual summer resort that features waterfront access, a private beach, spa facilities, and is built into a former country club.",
+    "entities": [
+      "Bob"
+    ],
+    "key_phrases": [
+      "annual summer resort",
+      "private beach",
+      "spa facilities"
+    ]
+  }
+]
+```
 
-**Note:** In SillyTavern, placing the tag in the character card will cause every conversation with that character to
-share the same memories, leading to confusion. I recommend putting it somewhere in the conversation or the author's
-note.
+**Step 3: Retrieving Vector Memories**
 
-### Understanding the Chat Summary
+Use the `VectorMemorySearch` node in your workflow. It takes a single string input containing your search terms. *
+*Keywords must be separated by semicolons (`;`)**. The system sanitizes each term and searches for any of them (using
+`OR` logic), ranking the results by relevance.
 
-The "Chat Summary" function builds upon the "Recent Memories" by summarizing the entire conversation up to the current
-point. It updates the summary every time new memories are added. Similar to "Recent Memories," this feature requires
-the `[DiscussionId]#######[/DiscussionId]` tag to function correctly.
+* **Example Input for `VectorMemorySearch` node**: `"Florida house inspection; termite damage; bob's vacation"`
+* **Note**: The system will process a maximum of 60 keywords to prevent overly complex queries.
 
-The chat summary is created via an internal loop within the `chatSummarySummarizer` type node. Like the DiscussionId
-settings file, this workflow is a single node workflow (a change from early days where it could be multi-node) and is
-still a work in progress.
+#### How to Create & Use File-Based Memories
 
-The reason it was changed from multi-node to single-node was because there was an issue with how summaries were being
-generated over time. In the early days, if you deleted memories and generated your summary, depending on how long the
-conversation was you could have too many memories in your prompt; either it would exceed the summary endpoint's context
-window or it would just be so full of text that the LLM would lose information.
+This is the classic, chronological memory system.
 
-On top of this, memories were being generated without a lot of context surrounding the history of the conversation.
-Changes
-were made to the way memories were being generated to account for this, and the chat summary changes were part of them.
+**Step 1: Configure for File-Based Memory**
 
-To correct these issues, an internal loop was created. If you delete the memories and summary, the summary node will
-begin
-regenerating memories; for every N number of memories, it will generate a new chat summary. So, starting from 0 memories
-in a 100+ message conversation, it might generate 2 memories and then write a summary. Then 2 more memories and update
-the summary with those.
+In `_DiscussionId-MemoryFile-Workflow-Settings.json`, ensure vector memory is disabled.
 
-This accomplished another goal as well- the memories being generated will also actively have access to the summary
-up to that point. So now the new memories will not only have the last 3 memories passed in, but also the entire chat
-summary. This allows new memories being generated to have as clear of a picture as possible of exactly what has
-transpired in the conversation up to this point, and vastly improved the overall quality of both the memories and
-summary.
+```json
+{
+  "useVectorForQualityMemory": false
+}
+```
 
-Below is an example of a Chat Summary workflow (which only supports 1 node):
+**Step 2: Choose a Creation Method**
+
+* **A) Workflow-Based (Recommended):** Specify a workflow name in the settings file via `fileMemoryWorkflowName`. The
+  system will execute this workflow, and the final output **must be a single summarized text block**. The system injects
+  the following context, available in your prompts:
+    * `{agent1Input}`: The raw text chunk to be summarized.
+    * `{agent2Input}`: The most recent memory chunks.
+    * `{agent3Input}`: The full history of all memory chunks.
+    * `{agent4Input}`: The current rolling chat summary.
+* **B) Direct LLM Call (Legacy):** If `fileMemoryWorkflowName` is not set, the system falls back to a direct LLM call
+  using the `prompt` and `systemPrompt` from the settings file. You can use these special variables in your prompts:
+    * `[TextChunk]`: The chunk of messages to be summarized.
+    * `[Memory_file]`: The last 3 memories generated.
+    * `[Full_Memory_file]`: All currently generated memories.
+    * `[Chat_Summary]`: The current rolling chat summary.
+
+**Step 3: Retrieving File-Based Memories**
+
+Use the `RecentMemory` or `RecentMemorySummarizerTool` node in your workflow. It will read the most recent summary
+chunks from the `<id>_memories.jsonl` file.
+
+#### How to Create & Use the Rolling Chat Summary
+
+The rolling summary is generated by a separate, dedicated workflow node.
+
+**Step 1: The `chatSummarySummarizer` Node**
+
+To create or update the rolling summary, you must include a node with `"type": "chatSummarySummarizer"` in your
+workflow. This is a special, single-node workflow.
+
+**Step 2: Building the Summary Workflow**
+
+Here is a complete example of a chat summary workflow. Note the special properties `loopIfMemoriesExceed` and
+`minMemoriesPerSummary` which are required.
 
 ```json
 [
   {
     "title": "Chat Summarizer",
     "agentName": "Chat Summarizer Agent",
-    "systemPrompt": "Put your system system prompt here for the LLM to use when generating chat summaries",
-    "prompt": "Put the prompt for generating summaries here. Best to specify the format, what details you want, etc.",
+    "type": "chatSummarySummarizer",
+    "systemPrompt": "You are an expert summarizer. Condense the provided information into a coherent narrative summary.",
+    "prompt": "The current chat summary is:\n[CHAT_SUMMARY]\n\nThe newest memories since the last summary are:\n[LATEST_MEMORIES]\n\nPlease update the summary to incorporate the new information from the latest memories.",
     "endpointName": "Your-Endpoint",
     "preset": "_Your_MemoryChatSummary_Preset",
     "maxResponseSizeInTokens": 2000,
-    "addUserTurnTemplate": true,
-    "type": "chatSummarySummarizer",
     "loopIfMemoriesExceed": 3,
     "minMemoriesPerSummary": 2
   }
 ]
 ```
 
-Breaking down the above:
+* **Workflow Properties**:
+    * `loopIfMemoriesExceed`: When regenerating many memories at once, this tells the system to update the summary after
+      every `N` new memories are created. This improves quality by feeding the summary back into the next memory
+      generation cycle.
+    * `minMemoriesPerSummary`: During a normal conversation, this prevents the summary from updating until at least `N`
+      new memories have been generated since the last update.
+* **Prompt Variables**:
+    * `[CHAT_SUMMARY]`: The current rolling chat summary from the file.
+    * `[LATEST_MEMORIES]`: The new memory chunks created since the last summary was written.
 
-* System Prompt: Your system prompt to use when having the LLM take in memories and summarize them
-* Prompt: The prompt to use when having an LLM take in memories and summarize them
-* Endpoint: The endpoint to use for chat summary generation
-* Preset: The preset to use for chat summary generation
-* maxResponseSizeInTokens: Maximum size you want your Chat Summaries to be
-* addUserTurnTemplate: Leave this as true
-* loopIfMemoriesExceed: This specifies that, when generating large numbers of memories at once, it should generate a
-  new chat summary every N number of memories. So if you have a chat with 100+ messages that might generate 6 memories,
-  and you delete the memory file, then on the next run it will regenerate those 6. If you set this value to "2", then
-  every 2 memories it creates, it will stop and generate/update a chat summary. So it will generate 6 total memories and
-  1 chat summary, but it will generate the memories 2 at a time, then update the summary, to accomplish that goal. This
-  is valuable for adding quality to both memories and summary.
-* minMemoriesPerSummary: This ensures that during a normal conversation flow, it will not generate a new summary until
-  there are at least N number of memories ready. So as you're chatting, if 1 memory gets generated but this value is "
-  2", the chat summary workflow won't be kicked off. On the next memory generated, however, it will kick the summary
-  off.
+**Step 3: Retrieving the Summary**
 
-The chatSummarySummarizer node also has a series of prompt injectible variables that are unique only to it.
-Those can be found below:
+Use the `FullChatSummary` node to get the complete text from the `<id>_summary.jsonl` file.
 
-* [CHAT_SUMMARY]: The current chat summary that exists, if one is available.
-* [LATEST_MEMORIES]: This pulls N number of memories, where N is the number of new memories generated since the last
-  summary was written. If 5 new memories have occurred since the last time the summary was updated, then this will pull
-  5 memories.
+-----
+
+### Advanced Topics: Tracking and Regeneration
+
+#### How Memories are Stored and Tracked
+
+The system has robust mechanisms to avoid reprocessing the same conversation history.
+
+* **File-Based Tracking**: Each summary in `<id>_memories.jsonl` is stored alongside a **hash** of the last message it
+  was based on. When the `QualityMemory` node runs, it finds the last hash and compares it to the chat history to see
+  where to resume processing. **Pitfall**: If you edit or delete a message that was hashed, the system may lose its
+  place and re-summarize a large portion of your chat, potentially creating duplicate memories.
+
+* **Vector-Based Tracking**: This system is more robust. Inside the `<id>_vector_memory.db` file, a dedicated
+  `vector_memory_tracker` table stores the hash of the last message processed. This prevents reprocessing messages even
+  if earlier parts of the conversation are edited.
+
+#### Redoing Memories
+
+To regenerate memories from scratch (e.g., after improving your prompts), you must **delete all memory files** for that
+`DiscussionId`.
+
+> **NOTE:** Always back up your memory files before modifying or deleting them, unless you are certain you want to
+> rebuild them completely.
+
+Delete all associated files from the `Public/` directory:
+
+1. `<id>_memories.jsonl` (Long-Term Memory)
+2. `<id>_summary.jsonl` (Rolling Summary)
+3. `<id>_vector_memory.db` (Vector Memory)
+
+The next time you run a workflow containing the creator nodes (`QualityMemory`, `chatSummarySummarizer`), the system
+will see the files are missing and regenerate everything from the complete chat history. This is also a useful way to *
+*consolidate memories**, as regeneration prioritizes the `chunkEstimatedTokenSize` over `maxMessagesBetweenChunks`,
+often resulting in fewer, more comprehensive memory chunks.
 
 ### Parallel Processing
 
@@ -1953,6 +2236,7 @@ The libraries are:
 * scikit-learn: https://github.com/scikit-learn/scikit-learn/
 * urllib3: https://github.com/urllib3/urllib3/
 * jinja2: https://github.com/pallets/jinja
+* pillow: https://github.com/python-pillow/Pillow
 
 Further information on their licensing can be found within the README of the ThirdParty-Licenses folder, as well as the
 full text of each license and their NOTICE files, if applicable, with relevant last updated dates for each.
@@ -1960,7 +2244,7 @@ full text of each license and their NOTICE files, if applicable, with relevant l
 ## Wilmer License and Copyright
 
     WilmerAI
-    Copyright (C) 2024 Christopher Smith
+    Copyright (C) 2025 Christopher Smith
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
