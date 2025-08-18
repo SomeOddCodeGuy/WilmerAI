@@ -15,8 +15,7 @@ To connect to it, Wilmer exposes OpenAI- and Ollama-compatible API endpoints, an
 APIs like OpenAI, KoboldCpp, and Ollama.
 
 To visualize: you type a prompt into your front end, which is connected to Wilmer. The prompt gets sent to Wilmer
-first,  
-which runs it through a series of workflows. Each workflow may make calls to multiple LLMs, after which the final  
+first, which runs it through a series of workflows. Each workflow may make calls to multiple LLMs, after which the final  
 response comes back to you.
 
 From your perspective, it looks like a (likely long-running) one-shot call to an LLM. But in reality,  
