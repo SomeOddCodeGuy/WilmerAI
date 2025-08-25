@@ -1,0 +1,14 @@
+{
+  "CODING": {
+    "description": "The request to the user would be best made by an LLM that specializes in software development. The response will likely involve writing, editing or debugging code.",
+    "workflow": "Coding-Route-Workflow"
+  },
+  "WIKI": {
+    "description": "The request to the user would greatly benefit from access to an encyclopedia like wikipedia. Any questions about specific people, places or things that do not fall within the scope only being known to the user (such as their friends and family) would fit this category..",
+    "workflow": "Wiki-Route-Workflow"
+  },
+  "GENERAL": {
+    "description": "The request to the user would be best made does not fit into the other categories specified here.",
+    "workflow": "General-Route-Workflow"
+  }
+}

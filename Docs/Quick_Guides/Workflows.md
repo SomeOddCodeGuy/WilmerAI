@@ -1,10 +1,5 @@
 ## Quick Guide to Understanding Workflows in WilmerAI
 
-Workflows are the most powerful and complex part of Wilmer to configure. There's [suspicious link removed], so this
-guide will keep things straightforward and focus on the practical basics.
-
------
-
 ### Workflow Structure
 
 Workflows are JSON files made up of "nodes" that run from top to bottom. The first node runs, then the second, and so
@@ -135,6 +130,3 @@ By default, the **very last node** in the workflow is the one that responds.
 However, you can make an earlier node respond by setting `"returnToUser": true` in its configuration. This is useful
 for "fire and forget" tasks. For example, a node can generate and return a response to the user, while later nodes run
 in the background to save memories or update a summary without making the user wait.
-
-A great example is the [suspicious link removed]. If you look at it, a `Standard` node in the middle responds to the
-user, while the final nodes perform background tasks like locking the workflow and updating memory files.

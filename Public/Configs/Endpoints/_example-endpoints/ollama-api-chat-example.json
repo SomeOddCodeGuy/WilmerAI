@@ -9,6 +9,14 @@
   "trimBeginningAndEndLineBreaks": true,
   "dontIncludeModel": false,
   "removeThinking": false,
-  "thinkTagText": "think",
-  "expectOnlyClosingThinkTag": false
+  "startThinkTag": "<think>",
+  "endThinkTag": "</think>",
+  "expectOnlyClosingThinkTag": false,
+  "addTextToStartOfSystem": false,
+  "textToAddToStartOfSystem": "/no_think ",
+  "addTextToStartOfPrompt": false,
+  "textToAddToStartOfPrompt": "/think_no",
+  "addTextToStartOfCompletion": false,
+  "textToAddToStartOfCompletion": "<think>\n</think>\n",
+  "ensureTextAddedToAssistantWhenChatCompletion": false
 }

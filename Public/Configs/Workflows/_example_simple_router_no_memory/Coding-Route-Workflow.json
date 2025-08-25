@@ -1,0 +1,15 @@
+{
+  "example_variable": "This isn't going to be used but I'm making it to show you. Inside the custom workflow, you'd access it with {agent1Input} anywere that you like",
+  "nodes": [
+    {
+      "displayOnlyComment": "Example General workflow. You can find this same workflow but with image support, and other general workflows, in the _common folder to replace this with. Just change the workflowName.",
+      "title": "Run General Workflow",
+      "type": "CustomWorkflow",
+      "workflowName": "Coding_Workflow",
+      "workflowUserFolderOverride": "_common",
+      "scoped_variables": [
+        "{example_variable}"
+      ]
+    }
+  ]
+}

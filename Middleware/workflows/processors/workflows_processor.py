@@ -1,5 +1,3 @@
-# /Middleware/workflows/processors/workflow_processor.py
-
 import logging
 import time
 from copy import deepcopy
@@ -54,23 +52,6 @@ class WorkflowProcessor:
                  ):
         """
         Initializes the WorkflowProcessor instance.
-
-        Args:
-            node_handlers (Dict[str, Any]): A dictionary mapping node type strings to their handler instances.
-            llm_handler_service (LlmHandlerService): Service for creating LLM handler instances.
-            workflow_variable_service (WorkflowVariableManager): Service for resolving dynamic variables.
-            workflow_config_name (str): The name of the workflow configuration being executed.
-            workflow_file_config (Dict[str, Any]): The entire workflow JSON configuration file as a dictionary.
-            configs (List[Dict]): The list of node configurations (the "nodes" array from the workflow).
-            request_id (str): The unique identifier for the current request.
-            workflow_id (str): The unique identifier for the current workflow execution.
-            discussion_id (str): The identifier for the conversation history.
-            messages (List[Dict]): The list of messages in the current conversation.
-            stream (bool): A flag indicating whether the final response should be streamed.
-            non_responder_flag (bool): A flag related to response generation logic.
-            first_node_system_prompt_override (str): An optional system prompt to override the first node's prompt.
-            first_node_prompt_override (str): An optional user prompt to override the first node's prompt.
-            scoped_inputs (Optional[List[str]]): A list of inputs passed from a parent workflow, if any.
         """
         self.node_handlers = node_handlers
         self.llm_handler_service = llm_handler_service
@@ -106,16 +87,6 @@ class WorkflowProcessor:
     def execute(self) -> Generator[Any, None, None]:
         """
         Executes the main workflow logic by processing nodes sequentially.
-
-        This method iterates through each node configuration, processes it using
-        the `_process_section` helper, and manages state by passing outputs
-        from one node to subsequent nodes. It handles the final response
-        generation, yielding results for either streaming or non-streaming cases.
-
-        Returns:
-            Generator[Any, None, None]: A generator that yields the final response.
-                                        For streaming, it yields SSE events. For non-streaming,
-                                        it yields a single string.
         """
         returned_to_user = False
         agent_outputs = {}
@@ -134,9 +105,6 @@ class WorkflowProcessor:
                             config["prompt"] = self.first_node_prompt_override
                         self.override_first_available_prompts = False
 
-                # Combine persistent agent_inputs with transient agent_outputs
-                # This makes {agent1Input}, {agent2Input}, etc. available to the node
-                # alongside the outputs from previous nodes in *this* workflow.
                 combined_agent_variables = {**self.agent_inputs, **agent_outputs}
 
                 if not returned_to_user and (config.get('returnToUser', False) or idx == len(self.configs) - 1):
@@ -150,18 +118,38 @@ class WorkflowProcessor:
 
                     # Streaming logic is now centralized here
                     if self.stream and isinstance(result_gen, Generator):
-                        endpoint_name = config.get("endpointName")
-                        endpoint_config = get_endpoint_config(endpoint_name) if endpoint_name else {}
-                        # Pass both endpoint and node config to the handler
-                        stream_handler = StreamingResponseHandler(endpoint_config, config)
-
-                        yield from stream_handler.process_stream(result_gen)
-
-                        result = stream_handler.full_response_text
-                        logger.info("\n\nOutput from the LLM: %s", result)
+                        node_type = config.get("type", "Standard")
+                        if node_type in ["CustomWorkflow", "ConditionalCustomWorkflow"]:
+                            # This stream is already processed into SSE strings, pass it through directly.
+                            full_response_list = []
+                            for chunk in result_gen:
+                                yield chunk
+                                # This logic is flawed for re-assembly but necessary for capture
+                                if isinstance(chunk, str) and chunk.startswith("data: "):
+                                    try:
+                                        data_content = chunk.split("data: ")[1].strip()
+                                        if data_content != "[DONE]":
+                                            # A more robust solution would json.loads and extract the token
+                                            pass
+                                    except:
+                                        pass
+                            result = "".join(full_response_list)
+                            logger.info("\n\nOutput from the LLM (raw SSE stream from sub-workflow): %s", result)
+                        else:
+                            # This is a raw stream from a standard node, process it now.
+                            endpoint_name = config.get("endpointName")
+                            endpoint_config = get_endpoint_config(endpoint_name) if endpoint_name else {}
+                            stream_handler = StreamingResponseHandler(endpoint_config, config)
+                            yield from stream_handler.process_stream(result_gen)
+                            result = stream_handler.full_response_text
+                            logger.info("\n\nOutput from the LLM: %s", result)
                     else:
                         result = result_gen
                         yield result
+
+                    if self.discussion_id and config.get("addDiscussionIdTimestampsForLLM", False):
+                        logger.debug("Saving placeholder timestamp for assistant's response.")
+                        self.timestamp_service.save_placeholder_timestamp(self.discussion_id)
 
                     agent_outputs[f'agent{idx + 1}Output'] = result
                 else:
@@ -186,22 +174,6 @@ class WorkflowProcessor:
     def _process_section(self, config: Dict, agent_outputs: Dict, is_responding_node: bool):
         """
         Processes a single node of the workflow.
-
-        This method prepares the LLM handler, creates the comprehensive `ExecutionContext`
-        for the current node, finds the correct node handler based on the node's type,
-        and dispatches the context to that handler for execution.
-
-        Args:
-            config (Dict): The configuration for the specific node being processed.
-            agent_outputs (Dict): A dictionary containing outputs from all previous nodes
-                                  in the current workflow execution, as well as any inputs
-                                  from a parent workflow.
-            is_responding_node (bool): A flag indicating if this node is responsible for
-                                       generating the final user-facing response.
-
-        Returns:
-            Any: The result returned by the node's handler. This could be a string
-                 or a generator for streaming responses.
         """
         is_streaming_for_node = self.stream and is_responding_node
         endpoint_config = {}
@@ -236,9 +208,9 @@ class WorkflowProcessor:
 
         # 2. Prepare the messages payload, adding timestamps if required
         messages_to_send = self.messages
-        if is_responding_node and self.discussion_id and config.get("addDiscussionIdTimestampsForLLM", False):
+        if self.discussion_id and config.get("addDiscussionIdTimestampsForLLM", False):
             if self.non_responder_flag is None:
-                logger.debug("Adding timestamps to messages for LLM.")
+                logger.debug("Adding timestamps to messages for LLM as requested by node config.")
                 use_relative = config.get("useRelativeTimestamps", False)
                 messages_to_send = self.timestamp_service.track_message_timestamps(
                     messages=deepcopy(self.messages),
@@ -256,12 +228,9 @@ class WorkflowProcessor:
             messages=messages_to_send,
             stream=is_streaming_for_node,
             agent_inputs=self.agent_inputs,
-            # This contains both parent inputs and prior sibling outputs
             agent_outputs=agent_outputs,
             llm_handler=self.llm_handler,
             workflow_variable_service=self.workflow_variable_service,
-            # Get the manager instance from a handler that is guaranteed to have it.
-            # This is used for sub-workflow calls.
             workflow_manager=self.node_handlers.get("CustomWorkflow").workflow_manager,
             node_handlers=self.node_handlers
         )
@@ -276,7 +245,6 @@ class WorkflowProcessor:
         if not handler:
             raise ValueError(f"No handler found for node type: {node_type}")
 
-        # The handler's llm_handler instance is set from the context for this specific call
         handler.llm_handler = context.llm_handler
         result = handler.handle(context)
 

@@ -1,0 +1,22 @@
+{
+  "modelNameForDisplayOnly": "Qwen3 32b Thinking With Thinking Block Removed Llama.Cpp Server",
+  "endpoint": "http://127.0.0.1:5001",
+  "apiTypeConfigFileName": "LlamaCppServer",
+  "maxContextTokenSize": 65535,
+  "modelNameToSendToAPI": "None",
+  "promptTemplate": "chatml",
+  "addGenerationPrompt": true,
+  "trimBeginningAndEndLineBreaks": true,
+  "dontIncludeModel": true,
+  "removeThinking": true,
+  "startThinkTag": "<think>",
+  "endThinkTag": "</think>",
+  "expectOnlyClosingThinkTag": false,
+  "addTextToStartOfSystem": false,
+  "textToAddToStartOfSystem": "/no_think ",
+  "addTextToStartOfPrompt": false,
+  "textToAddToStartOfPrompt": "/think_no",
+  "addTextToStartOfCompletion": false,
+  "textToAddToStartOfCompletion": "<think>\n</think>\n",
+  "ensureTextAddedToAssistantWhenChatCompletion": false
+}

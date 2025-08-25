@@ -1,9 +1,9 @@
 ## DISCLAIMER:
 
-> This is a personal project under heavy development. It could, and likely does, contain bugs, incomplete code, 
+> This is a personal project under heavy development. It could, and likely does, contain bugs, incomplete code,
 > or other unintended issues. As such, the software is provided as-is, without warranty of any kind.
 >
-> This project and any expressed views, methodologies, etc., found within are the result of contributions by the 
+> This project and any expressed views, methodologies, etc., found within are the result of contributions by the
 > maintainer and any contributors in their free time, and should not reflect upon any of their employers.
 
 ---
@@ -20,7 +20,8 @@ To visualize: you type a prompt into your front end, which is connected to Wilme
 first, which runs it through a series of workflows. Each workflow may make calls to multiple LLMs, after which the final
 response comes back to you.
 
-From your perspective, it looks like a (likely long-running) one-shot call to an LLM. But in reality, it could involve many
+From your perspective, it looks like a (likely long-running) one-shot call to an LLM. But in reality, it could involve
+many
 LLMs—and even tools—performing complex work.
 
 ### What Does WilmerAI Stand For?
@@ -447,118 +448,38 @@ You can specify the IP address to your API in the user json of your choice.
 
 First, choose which template user you'd like to use:
 
-* **assistant-single-model**: This template is for a single small model being used on all nodes. This also has routes
-  for many different category types and uses appropriate presets for each
-  node. If you're wondering why there are routes for different categories when there is only 1 model: it's so that you
-  can
-  give each category their own presets, and also so that you can make custom workflows for them. Maybe you want the
-  coder to do multiple iterations to check itself, or the reasoning to think through things in multiple steps.
+* **\_example\_simple\_router\_no\_memory**: This is a simple user that has routing to WIKI, CODING and GENERAL
+  categories, each going to a special workflow. Best used with direct and productive front ends like Open WebUI.
+  Requires the Offline Wikipedia API
 
+* **\_example\_general\_workflow**: This is a simple user that runs a single general purpose workflow. Simple, to the
+  point. Best used with direct and productive front ends like Open WebUI. Requires the Offline Wikipedia API
 
-* **assistant-multi-model**: This template is for using many models in tandem. Looking at the endpoints for
-  this user, you can see that every category has its own endpoint. There is absolutely nothing stopping you from
-  re-using the same API for multiple categories. For example, you might use Llama 3.1 70b for coding, math, and
-  reasoning,
-  and Command-R 35b 08-2024 for categorization, conversation, and factual. Don't feel like you NEED 10 different models.
-  This is simply to allow you to bring that many if you want. This user uses appropriate presets for each node in the
-  workflows.
+* **\_example\_coding\_workflow**: This is a simple user that runs a single coding workflow. Simple, to the point. Best
+  used with direct and productive front ends like Open WebUI. Requires the Offline Wikipedia API
 
+* **\_example\_wikipedia\_multi\_step\_workflow**: This is a wikipedia search against the Offline Wikipedia API.
+  Requires the Offline Wikipedia API
 
-* **convo-roleplay-single-model**: This user uses a single model with a custom workflow that is good for
-  conversations,
-  and should be good for roleplay (awaiting feedback to tweak if needed). This bypasses all routing.
+* **\_example\_wikipedia\_multi\_step\_workflow**: This is a wikipedia search against the Offline Wikipedia API, but
+  instead of just 1 pass it does a total of 4, attempting to build up extra info for the report. Still very
+  experimental; not sure how I feel about the results yet. Requires the Offline Wikipedia API
 
+* **\_example\_assistant\_with\_vector\_memory**: This template is for a simple "assistant" that will diligently think
+  through your message via a series of workflow nodes, and will attempt to track important facts in a simple vector
+  memory implementation (*EXPERIMENTAL*)
 
-* **convo-roleplay-dual-model**: This user uses two models with a custom workflow that is good for conversations,
-  and should be good for roleplay (awaiting feedback to tweak if needed). This bypasses all routing. **NOTE**: This
-  workflow works best if you have 2 computers that can run LLMs. With the current setup for this user, when you send a
-  message
-  to Wilmer, the responder model (computer 1) will respond to you. Then the workflow will apply a "workflow lock" at
-  that
-  point. The memory/chat summary model (computer 2) will then begin updating the memories and summary of the
-  conversation so far, which is passed to the responder to help it remember stuff. If you were to send another prompt
-  while the memories are being written, the responder (computer 1) will grab whatever summary exists and
-  go ahead and respond to you. The workflow lock will stop you from re-entering the new memories section. What this
-  means is that you can continue talking to your responder model while new memories are being written. This is a HUGE
-  performance boost. I've tried it out, and for me the response times were amazing. Without this, I get responses in 30
-  seconds 3-5 times, and then suddenly have a 2 minute wait to generate memories. With this, every message is 30
-  seconds, every time, on Llama 3.1 70b on my Mac Studio.
+  > This user thinks a LOT, so it's slow and chews up tokens. I recommend using a non-reasoning model with this. Use
+  this with a local model or prepare for it to expensive
 
+* **\_example\_game\_bot\_with\_file\_memory**: This is best used with a game front end, like a custom text game
+  implementation or SillyTavern. This is an experimental user with the goal of trying to solve some of the common
+  complaints or problems that have voiced on various boards. Feedback is welcome.
 
-* **group-chat-example**: This user is an example of my own personal group chats. The characters and the groups
-  included are actual characters and actual groups that I use. You can find the example characters in
-  the `Docs/SillyTavern`
-  folder. These are SillyTavern compatible characters that you can import directly into that program or any program
-  that supports .png character import types. The dev team
-  characters have only 1 node per workflow: they simply respond to you. The advisory group characters have 2 nodes
-  per workflow: first node generates a response, and the second node enforces the character's "persona" (the endpoint
-  in charge of this is the `businessgroup-speaker` endpoint). The group
-  chat personas help a lot to vary up the responses you get, even if you use only 1 model. However, I aim to use
-  different models for every character (but re-using models between groups; so, for example, I have a Llama 3.1 70b
-  model character in each group).
+  > Again this is expensive and thinks a lot. It's very slow.
 
-
-* **openwebui-norouting-single-model**: This user is essentially the convo-roleplay-single-model, but the prompts are
-  more tailored for openwebui, which has no concept of a persona.
-
-
-* **openwebui-norouting-dual-model**: This user is essentially the convo-roleplay-dual-model, but the prompts are
-  more tailored for openwebui, which has no concept of a persona.
-
-
-* **openwebui-routing-multi-model**: This user is essentially the assistant-multi-model, but the prompts are
-  more tailored for openwebui, which has no concept of a persona.
-
-
-* **openwebui-routing-single-model**: This user is essentially the assistant-single-model, but the prompts are
-  more tailored for openwebui, which has no concept of a persona.
-
-> NOTE: The below "socg" workflows are (as of 2025-03-09) copies of personal workflows that Socg uses as part of
-> his personal development toolkit, though with some minor modifications. For example- these are configured with
-> endpoints suitable for a 24GB
-> video card, like the RTX 3090. If you have more VRAM, please replace with what is available to you. In general,
-> socg uses a different model lineup. This workflow supports images if you use Ollama for the image endpoint.
-> Additionally, QwQ 32b just came out and Socg made some last minute updates to these before deploying them to make
-> full use of that new model for his own workflows, so if you see any typos or errors, that's why. Finally, socg
-> loads models at 32768 context, and doubles all of the maxResponseSizeInTokens in the workflows. They are reduced
-> here because the 24GB card would struggle with some models at that context size. If you can use 32k, that will work
-> out better, as will doubling all of the maxResponseSizeInTokens within the coding workflows especially.
-
-> IMPORTANT: The below users will be updated semi-often. Pull your configurations out of the main folder if you want
-> to use them, or copy them and rename them. As Socg improves his own workflows, those updates will be propagated to
-> these users.
-
-* **socg-openwebui-norouting-coding-complex-multi-model**: This user is a coding workflow tends to
-  run, with the models that Socg uses on an M2 Ultra Mac Studio, around 20-30 minutes. Generally this is used
-  to kick off a request before starting a feature or project, just to get a starting point; this workflow is rarely
-  used in the middle of development, unless he'll be going afk for a while and it wouldn't be bothersome, or
-  unless some bug is being really aggravating.
-
-
-* **socg-openwebui-norouting-coding-dual-multi-model**: This user is a coding workflow that relies on 2 models
-  working in tandem to try to solve the issue. Much faster than the complex workflow, but still slower than asking
-  single LLM.
-
-
-* **socg-openwebui-norouting-coding-reasoning-multi-model**: Similar to the dual model coding workflow, but this
-  expects a reasoning endpoint halfway through. Not a huge difference other than bigger max response sizes and a
-  summary node before the responder.
-
-
-* **socg-openwebui-norouting-coding-single-multi-model**: This calls a single coding model directly. Fastest response;
-  not much different than just connecting directly to the LLM API, other than the support for the image endpoints.
-
-
-* **socg-openwebui-norouting-general-multi-model**: Calls a single general endpoint. This is good for things like RAG.
-  Socg runs 3 variants of this: General, Large and Large-Rag (basically just copy/pasted the same user 3 times and
-  changed the endpoints). General might be something mid-ranged like Mistral Small 24b or Qwen2.5 32b. Large might be a
-  good factual model like Qwen2.5 72b, and Large-Rag would be something with a high IF score like Llama 3.3 70b.
-
-
-* **socg-openwebui-norouting-general-offline-wikipedia**: This is similar to general-multi-model, but also makes a call
-  to the  [OfflineWikipediaTextApi](https://github.com/SomeOddCodeGuy/OfflineWikipediaTextApi) to first pull an article.
-  There's still work to do on the efficacy of this, as
-  the wiki api can sometimes pull the wrong article. For now, continue to take answers with caution and validate them.
+**IMPORTANT**: Each of the above users call custom workflows pointing to workflows in the _common directory. You can
+find other workflows to swap out as well.
 
 Once you have selected the user that you want to use, there are a couple of steps to perform:
 

@@ -1,0 +1,22 @@
+{
+  "modelNameForDisplayOnly": "Llama.Cpp Example Endpoint",
+  "endpoint": "http://192.168.1.100:5001",
+  "apiTypeConfigFileName": "LlamaCppServer",
+  "maxContextTokenSize": 65535,
+  "modelNameToSendToAPI": "None",
+  "promptTemplate": "chatml",
+  "addGenerationPrompt": true,
+  "trimBeginningAndEndLineBreaks": true,
+  "dontIncludeModel": true,
+  "removeThinking": false,
+  "startThinkTag": "<think>",
+  "endThinkTag": "</think>",
+  "expectOnlyClosingThinkTag": false,
+  "addTextToStartOfSystem": false,
+  "textToAddToStartOfSystem": "/no_think ",
+  "addTextToStartOfPrompt": false,
+  "textToAddToStartOfPrompt": "/think_no",
+  "addTextToStartOfCompletion": false,
+  "textToAddToStartOfCompletion": "<think>\n</think>\n",
+  "ensureTextAddedToAssistantWhenChatCompletion": false
+}

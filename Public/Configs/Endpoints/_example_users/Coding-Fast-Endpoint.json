@@ -1,0 +1,22 @@
+{
+  "modelNameForDisplayOnly": "Coding-Fast",
+  "endpoint": "http://127.0.0.1:5001",
+  "apiTypeConfigFileName": "LlamaCppServer",
+  "maxContextTokenSize": 32786,
+  "modelNameToSendToAPI": "",
+  "promptTemplate": "llama3",
+  "addGenerationPrompt": true,
+  "trimBeginningAndEndLineBreaks": true,
+  "dontIncludeModel": true,
+  "removeThinking": false,
+  "startThinkTag": "<think>",
+  "endThinkTag": "</think>",
+  "expectOnlyClosingThinkTag": false,
+  "addTextToStartOfSystem": false,
+  "textToAddToStartOfSystem": "/nothink ",
+  "addTextToStartOfPrompt": false,
+  "textToAddToStartOfPrompt": "/think_no",
+  "addTextToStartOfCompletion": false,
+  "textToAddToStartOfCompletion": "\n<think></think>",
+  "ensureTextAddedToAssistantWhenChatCompletion": false
+}

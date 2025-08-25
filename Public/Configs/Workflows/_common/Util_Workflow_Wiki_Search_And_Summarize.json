@@ -1,0 +1,22 @@
+[
+  {
+    "title": "Querying Offline Wikipedia API",
+    "agentName": "Wikipedia Search Agent",
+    "promptToSearch": "{agent2Input}",
+    "type": "OfflineWikiApiBestFullArticle"
+  },
+  {
+    "title": "Summarizing Wikipedia Article",
+    "agentName": "Summarizing Agent",
+    "systemPrompt": "When given an ongoing conversation, take the most recent messages sent, a breakdown of what the user is asking for, and a wikipedia article containing information about the topic, and summarize the important facts from the article needed to answer the user's question.",
+    "prompt": "A new message has come in from a user in an online conversation, asking specifically for information about a topic. In order to appropriately respond to the user, a summary of the user's desired research topic was generated. That summary can be found below:\n\n<user_research_topic>\n{agent1Input}\n</user_research_topic>\n\nAWikipedia article was pulled down that should be relevant to the user's messages; the article can be found below:\n\n<wiki_article>\n{agent1Output}\n</wiki_article>\n\nPlease look over the provided information, and respond with the following in complete sentences:\n1) Relevant information from the wiki article to use as context when responding to the user. If the wiki article appears to be the incorrect article for the topic, please respond with 'No relevant information was found in the article'.\n2) Please include the title of the article that was pulled (found at the top of the text).\n3) This search is one of several that will occur during this research session. Using only information found within this document, please specify other items from the article that could be researched to further expand the user's research topic. For example- important names or places uncovered in the article text that could possibly give more information about the research topic would be one example. Another example is the bottom of the article usually contains a 'See also' section, with titles of other articles related to the topic- those would be excellent to list here. However, if there are no topics within the articles worth following up on, please respond with 'Article provided no further topics worth researching on the matter'",
+    "lastMessagesToSendInsteadOfPrompt": 10,
+    "endpointName": "General-Rag-Fast-Endpoint",
+    "preset": "Factual_Preset",
+    "maxResponseSizeInTokens": 4000,
+    "addUserTurnTemplate": true,
+    "forceGenerationPromptIfEndpointAllows": false,
+    "addDiscussionIdTimestampsForLLM": false,
+    "is_responder": false
+  }
+]

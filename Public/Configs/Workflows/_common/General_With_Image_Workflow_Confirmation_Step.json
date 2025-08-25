@@ -1,0 +1,41 @@
+[
+  {
+    "displayOnlyComment": "This workflow starts by checking the conversation for any images. There is no problem if no images are sent; this node is skipped entirely in the event no images exist in the conversation. If there are any, it processes them and adds them to the conversation as a user message. It will process the images every round for however long the front end keeps sending the images, so this can be somewhat non-performant. This should have no problem processing many images. After that it runs the General workflow of first confirming that a good response is possible, then performing the response. This can work for coding, translation, etc. Its not perfect, but I've had great luck with it compared to reasoning models on trick questions. -socg",
+    "title": "Processing any images",
+    "agentName": "Image Processing Agent One",
+    "type": "ImageProcessor",
+    "systemPrompt": "You are an image analysis AI that has received an image from a user, and needs to visually describe that image in extreme detail.\nWhen given an image from the user, please describe the image in vivid detail.",
+    "prompt": "The user has sent a new image in a chat. Along with the image, here are the last five messages that the user sent:\n\n<recent_conversation>\n{chat_user_prompt_last_five}\n</recent_conversation>\n\nPlease respond in two parts:\nFirst: Please describe every aspect of the image in vivid detail, especially if it pertains to the user's message. If the image appears to be a screenshot of a website or desktop application, describe not only the contents of the programs but also the general layout and UX. If it is a photo or artwork, please describe in detail the contents and any styling that can be identified. If it is a screenshot of a game that has menu options or a HUD or any sort of interactive UX, please be sure to summarize not only what is currently occurring in the screenshot but also what options appear to be available in the various UI elements. Spare no detail and be as verbose as possible about every possible detail.\nSecond: Please describe any text that exists in the image, as accurately and completely as possible.",
+    "endpointName": "Image-Endpoint",
+    "preset": "Image_Preset",
+    "maxResponseSizeInTokens": 2000,
+    "addUserTurnTemplate": true,
+    "addAsUserMessage": true
+  },
+  {
+    "title": "Determining if a good response is even possible",
+    "agentName": "Capability Discernment Agent Two",
+    "systemPrompt": "System Information: Today is {current_day_of_week}, {todays_date_pretty}. The current time is {current_time_12h}\n\nA new message has arrived in a conversation between a user and an AI assistant.\n\nThe primary language for the conversation is English.\n\nPlease analyze the current conversation, and think carefully through the possible answer to the user.",
+    "prompt": "The user has sent a new message in an online conversation. Please see the messages below:\n\n<conversation>\n{chat_user_prompt_last_twenty}\n</conversation>\n\nPlease carefully consider whether responding to the user accurately is possible. There may be times where the user gives a task that contains rules, instructions, or examples- but those rules, instructions or examples can be wrong, due to human error or general oversight. Identifying these errors early can save a lot of time.\n\nPlease ensure that a good, valid and complete response to the user is possible with the information provided, including validating any examples or instructions that might be given.",
+    "lastMessagesToSendInsteadOfPrompt": 25,
+    "endpointName": "General-Endpoint",
+    "preset": "Factual_Preset",
+    "maxResponseSizeInTokens": 4000,
+    "addUserTurnTemplate": false,
+    "addDiscussionIdTimestampsForLLM": false,
+    "jinja2": false
+  },
+  {
+    "title": "Responding Agent",
+    "agentName": "Responding Agent Three",
+    "systemPrompt": "System Information: Today is {current_day_of_week}, {todays_date_pretty}. The current time is {current_time_12h}\n\nThe primary language for the conversation is English.\n\nThe following messages come from an ongoing conversation between a user and an AI assistant via an online chat program.\n\nWhen responding to the user, please answer clearly and follow all instructions given. The conversation has been analyzed to determine whether a valid and complete response is possible with the information provided. Please see the analysis below:\n\n<analysis>\n{agent2Output}\n</analysis>\n\nPlease consider the analysis, and base the response upon the verdict rendered in the analysis. If a valid and complete response is not possible, please make a closest attempt to respond to the user, while also noting the issues in the request. Note that if the analysis ends abruptly after the AI attempted many times to validate the request, it can be assumed that the answer is NO. In this case please do not attempt to re-validate it. Proceed as if the request is invalid, and produce the best possible answer to the invalid request.\n\nPlease continue the conversation below, willingly assisting the user to the fullest extent.",
+    "prompt": "",
+    "lastMessagesToSendInsteadOfPrompt": 25,
+    "endpointName": "General-Endpoint",
+    "preset": "Factual_Preset",
+    "maxResponseSizeInTokens": 8000,
+    "addUserTurnTemplate": false,
+    "addDiscussionIdTimestampsForLLM": false,
+    "jinja2": false
+  }
+]

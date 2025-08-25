@@ -1,0 +1,15 @@
+[
+  {
+    "title": "Result Summarizer",
+    "agentName": "Memory Summarizer Agent",
+    "systemPrompt": "This is a request from a user that requires intelligent and careful summarization of incoming text, including a contextual understanding of what that text is truly saying. The summaries should always be clear and concise, and never allow misplaced prompt template tags, odd parentheses or brackets, or other things to negatively affect them",
+    "prompt": "A new message has been received in an online chat with a user; this could be a standard conversation between a user and an AI assistant, could be a group chat of multiple individuals (including multiple AI assistants), or could be a roleplay scenario.\nThe instructions for the conversation can be found below:\n\n<chat_instruction>\n{chat_system_prompt}\n</chat_instruction>\n\nAdditionally, any updates or new events to the chat scenario since it began can be found here:\n\n<chat_summary>\n[CHAT_SUMMARY]\n</chat_summary>\n\nSince that update was last written, more messages have come in, which have been described below:\n\n<latest_memories>\n[LATEST_MEMORIES]\n</latest_memories>\n\nPlease consider the instructions, the entire summary of the chat up to now, and the described new messages that have occurred since the summary was written. Please update the summary, including the new information and changes that came with the described messages in order to create a more complete summary.\nPlease respond with the complete and updated summary. The response to this request will overwrite the previous summary.",
+    "endpointName": "Memory-Generation-Endpoint",
+    "preset": "Summarization_Preset",
+    "maxResponseSizeInTokens": 2000,
+    "addUserTurnTemplate": true,
+    "type": "chatSummarySummarizer",
+    "loopIfMemoriesExceed": 3,
+    "minMemoriesPerSummary": 2
+  }
+]

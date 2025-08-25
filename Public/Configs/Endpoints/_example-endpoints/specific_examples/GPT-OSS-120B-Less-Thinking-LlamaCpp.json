@@ -1,0 +1,28 @@
+{
+  "modelNameForDisplayOnly": "GPT-OSS-120b Llama.cpp",
+  "endpoint": "http://127.0.0.1:5001",
+  "apiTypeConfigFileName": "LlamaCppServer",
+  "maxContextTokenSize": 65535,
+  "modelNameToSendToAPI": "None",
+  "promptTemplate": "chatml",
+  "addGenerationPrompt": true,
+  "trimBeginningAndEndLineBreaks": true,
+  "dontIncludeModel": true,
+  "removeThinking": false,
+  "startThinkTag": "<|channel|>analysis<|message|>",
+  "endThinkTag": "<|start|>assistant<|channel|>final<|message|>",
+  "expectOnlyClosingThinkTag": false,
+  "addTextToStartOfSystem": false,
+  "textToAddToStartOfSystem": "/no_think",
+  "addTextToStartOfPrompt": false,
+  "textToAddToStartOfPrompt": "/no_think",
+  "addTextToStartOfCompletion": true,
+  "textToAddToStartOfCompletion": "<|channel|>analysis<|message|> Respond now. <|channel|>final<|message|>",
+  "ensureTextAddedToAssistantWhenChatCompletion": true,
+  "removeCustomTextFromResponseStartEndpointWide": true,
+  "responseStartTextToRemoveEndpointWide": [
+    "<|channel|>final<|message|>",
+    "<|channel|>analysis",
+    "analysis<|message|>"
+  ]
+}
