@@ -44,7 +44,7 @@ WilmerAI stands for **"What If Language Models Expertly Routed All Inference?"**
 > * ~~Refactor Workflows~~ **(First Round COMPLETE)**
 > * ~~Vector Memory Initial Implementation~~ **(COMPLETE)**
 > * Rewrite Readme and Expand Documentation *(In Progress)*
-> * Full Redo of Most Example Users, Using New Prompting Strategies *(Up Next)*
+> * Full Redo of Most Example Users, Using New Prompting Strategies *(In Progress)*
 > * Second Round Refactoring for Unit Tests
 > * Full Unit Test Coverage of Primary Functions
 >
