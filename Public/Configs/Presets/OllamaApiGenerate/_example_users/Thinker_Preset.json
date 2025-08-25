@@ -1,0 +1,29 @@
+{
+  "temperature": 0.7,
+  "top_k": 20,
+  "top_p": 0.95,
+  "min_p": 0,
+  "tfs_z": 1,
+  "typical_p": 1,
+  "repeat_last_n": 256,
+  "repeat_penalty": 1,
+  "presence_penalty": 1.0,
+  "frequency_penalty": 1.0,
+  "mirostat": 0,
+  "mirostat_tau": 5.0,
+  "mirostat_eta": 0.1,
+  "penalize_newline": true,
+  "stop": [
+    "<|im_end|>",
+    "</s>"
+  ],
+  "numa": false,
+  "num_batch": 2,
+  "num_gpu": 1,
+  "main_gpu": 0,
+  "low_vram": false,
+  "vocab_only": false,
+  "use_mmap": true,
+  "use_mlock": false,
+  "num_thread": 8
+}

@@ -1,0 +1,22 @@
+{
+  "port": 5071,
+  "stream": true,
+  "customWorkflowOverride": true,
+  "customWorkflow": "CustomWorkflow-VectorMemory-Simple",
+  "routingConfig": "",
+  "categorizationWorkflow": "",
+  "defaultParallelProcessWorkflow": "",
+  "fileMemoryToolWorkflow": "",
+  "chatSummaryToolWorkflow": "",
+  "conversationMemoryToolWorkflow": "",
+  "recentMemoryToolWorkflow": "",
+  "discussionIdMemoryFileWorkflowSettings": "_DiscussionId-MemoryFile-Workflow-Settings",
+  "discussionDirectory": "/Users/example/temp",
+  "sqlLiteDirectory": "/Users/example/temp",
+  "chatPromptTemplateName": "_chatonly",
+  "verboseLogging": true,
+  "chatCompleteAddUserAssistant": false,
+  "chatCompletionAddMissingAssistantGenerator": false,
+  "endpointConfigsSubDirectory": "_example_users",
+  "presetConfigsSubDirectoryOverride": "_example_users"
+}

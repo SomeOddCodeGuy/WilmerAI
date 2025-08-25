@@ -1,7 +1,7 @@
 # /Middleware/workflows/handlers/impl/sub_workflow_handler.py
 
 import logging
-from typing import Any, List
+from typing import Any, List, Dict, Optional
 
 from Middleware.workflows.handlers.base.base_workflow_node_handler import BaseHandler
 from Middleware.workflows.models.execution_context import ExecutionContext
@@ -51,27 +51,43 @@ class SubWorkflowHandler(BaseHandler):
 
         raise ValueError(f"Unknown sub-workflow node type: {node_type}")
 
-    def _prepare_workflow_overrides(self, context: ExecutionContext):
+    def _prepare_workflow_overrides(self, context: ExecutionContext, overrides_config: Optional[Dict] = None):
         """
         Prepares prompt overrides and streaming settings for a sub-workflow.
 
+        This method correctly determines the responder and streaming flags based on the parent
+        processor's decision (communicated via `context.stream`).
+
         Args:
             context (ExecutionContext): The current node's execution context.
+            overrides_config (Optional[Dict]): An optional dictionary (e.g., from routeOverrides)
+                                               to source prompt overrides from. Defaults to None.
 
         Returns:
             tuple: A tuple containing the resolved system prompt override, prompt override,
                    the non-responder flag, and the streaming flag.
         """
-        is_responder = context.config.get("isResponder", False) or context.config.get("is_responder", False)
-        non_responder = None if is_responder else True
-        allow_streaming = context.stream if is_responder else False
+        source_config = overrides_config if overrides_config is not None else context.config
 
-        system_override_raw = context.config.get("firstNodeSystemPromptOverride", None)
+        if context.stream:
+            # This node is the responder. The child workflow is allowed to stream and must produce a response.
+            non_responder = None
+            allow_streaming = True
+        else:
+            # This is a non-responder node. The child workflow cannot stream or respond.
+            non_responder = True
+            allow_streaming = False
+
+        # Centralized prompt override logic
+        system_override_key = "firstNodeSystemPromptOverride" if "firstNodeSystemPromptOverride" in source_config else "systemPromptOverride"
+        prompt_override_key = "firstNodePromptOverride" if "firstNodePromptOverride" in source_config else "promptOverride"
+
+        system_override_raw = source_config.get(system_override_key, None)
         system_prompt = self.workflow_variable_service.apply_variables(system_override_raw,
                                                                        context) if system_override_raw not in [None,
                                                                                                                ""] else None
 
-        prompt_override_raw = context.config.get("firstNodePromptOverride", None)
+        prompt_override_raw = source_config.get(prompt_override_key, None)
         prompt = self.workflow_variable_service.apply_variables(prompt_override_raw,
                                                                 context) if prompt_override_raw not in [None,
                                                                                                         ""] else None
@@ -90,6 +106,7 @@ class SubWorkflowHandler(BaseHandler):
         """
         logger.info("Custom Workflow initiated")
         workflow_name = context.config.get("workflowName", "No_Workflow_Name_Supplied")
+        workflow_user_folder_override = context.config.get("workflowUserFolderOverride")
 
         system_prompt, prompt, non_responder, allow_streaming = self._prepare_workflow_overrides(context)
         scoped_inputs = self._prepare_scoped_inputs(context)
@@ -98,7 +115,8 @@ class SubWorkflowHandler(BaseHandler):
             workflow_name=workflow_name, request_id=context.request_id, discussion_id=context.discussion_id,
             messages=context.messages, non_responder=non_responder, is_streaming=allow_streaming,
             first_node_system_prompt_override=system_prompt, first_node_prompt_override=prompt,
-            scoped_inputs=scoped_inputs
+            scoped_inputs=scoped_inputs,
+            workflow_user_folder_override=workflow_user_folder_override
         )
 
     def handle_conditional_custom_workflow(self, context: ExecutionContext):
@@ -121,26 +139,18 @@ class SubWorkflowHandler(BaseHandler):
         workflow_name = workflow_map.get(key_value, workflow_map.get("default", "No_Workflow_Name_Supplied"))
         logger.info(f"Resolved conditionalKey='{raw_key_value}' => workflow_name='{workflow_name}'")
 
+        workflow_user_folder_override = context.config.get("workflowUserFolderOverride")
         route_overrides = context.config.get("routeOverrides", {}).get(key_value.capitalize(), {})
-        system_prompt_override = route_overrides.get("systemPromptOverride")
-        prompt_override = route_overrides.get("promptOverride")
 
-        is_responder = context.config.get("isResponder", False) or context.config.get("is_responder", False)
-        non_responder = None if is_responder else True
-        allow_streaming = context.stream if is_responder else False
-
+        system_prompt, prompt, non_responder, allow_streaming = self._prepare_workflow_overrides(context,
+                                                                                                 overrides_config=route_overrides)
         scoped_inputs = self._prepare_scoped_inputs(context)
-
-        expanded_system_prompt = self.workflow_variable_service.apply_variables(
-            system_prompt_override, context) if system_prompt_override else None
-
-        expanded_prompt = self.workflow_variable_service.apply_variables(prompt_override,
-                                                                         context) if prompt_override else None
 
         return self.workflow_manager.run_custom_workflow(
             workflow_name=workflow_name, request_id=context.request_id, discussion_id=context.discussion_id,
             messages=context.messages, non_responder=non_responder, is_streaming=allow_streaming,
-            first_node_system_prompt_override=expanded_system_prompt,
-            first_node_prompt_override=expanded_prompt,
-            scoped_inputs=scoped_inputs
+            first_node_system_prompt_override=system_prompt,
+            first_node_prompt_override=prompt,
+            scoped_inputs=scoped_inputs,
+            workflow_user_folder_override=workflow_user_folder_override
         )

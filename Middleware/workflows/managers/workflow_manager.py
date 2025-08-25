@@ -36,26 +36,25 @@ class WorkflowManager:
                             non_responder: bool | None = None, is_streaming: bool = False,
                             first_node_system_prompt_override: str | None = None,
                             first_node_prompt_override: str | None = None,
-                            scoped_inputs: Optional[List[str]] = None) -> Union[
+                            scoped_inputs: Optional[List[str]] = None,
+                            workflow_user_folder_override: Optional[str] = None) -> Union[
         Generator[str, None, None], str, None]:
         """
         Initiates and executes a specified custom workflow.
 
         Args:
-            workflow_name (str): The name of the workflow configuration to run.
-            request_id (str): A unique identifier for the request.
-            discussion_id (str): The identifier for the conversation thread.
-            messages (Optional[List[Dict[str, str]]]): The conversation history. Defaults to None.
-            non_responder (Optional[bool]): If True, the workflow runs without generating a final response. Defaults to None.
-            is_streaming (bool): If True, the response is returned as a stream. Defaults to False.
-            first_node_system_prompt_override (Optional[str]): A string to override the system prompt of the first node. Defaults to None.
+            ...
             first_node_prompt_override (Optional[str]): A string to override the main prompt of the first node. Defaults to None.
             scoped_inputs (Optional[List[str]]): A list of inputs passed from a parent workflow. Defaults to None.
+            workflow_user_folder_override (Optional[str]): An override for the user folder to load the workflow from. Defaults to None.
 
         Returns:
             Union[Generator[str, None, None], str, None]: A generator for streaming responses, a string for non-streaming responses, or None.
         """
-        workflow_gen = WorkflowManager(workflow_config_name=workflow_name)
+        workflow_gen = WorkflowManager(
+            workflow_config_name=workflow_name,
+            workflow_user_folder_override=workflow_user_folder_override
+        )
         return workflow_gen.run_workflow(messages, request_id, discussion_id, nonResponder=non_responder,
                                          stream=is_streaming,
                                          first_node_system_prompt_override=first_node_system_prompt_override,
@@ -136,9 +135,17 @@ class WorkflowManager:
 
         Args:
             workflow_config_name (str): The name of the primary workflow configuration.
-            **kwargs: Additional keyword arguments, including an optional `path_finder_func`.
+            **kwargs: Additional keyword arguments, including an optional `path_finder_func` or 'workflow_user_folder_override'.
         """
-        self.path_finder_func = kwargs.pop('path_finder_func', default_get_workflow_path)
+        workflow_user_folder_override = kwargs.pop('workflow_user_folder_override', None)
+        if workflow_user_folder_override:
+            # Use a lambda to curry the folder override argument into the default path finder
+            self.path_finder_func = lambda wn: default_get_workflow_path(wn,
+                                                                         user_folder_override=workflow_user_folder_override)
+        else:
+            # Keep original behavior
+            self.path_finder_func = kwargs.pop('path_finder_func', default_get_workflow_path)
+
         self.workflowConfigName = workflow_config_name
         self.workflow_variable_service = WorkflowVariableManager(**kwargs)
         self.llm_handler_service = LlmHandlerService()

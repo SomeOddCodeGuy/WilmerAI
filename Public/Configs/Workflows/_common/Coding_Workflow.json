@@ -1,0 +1,15 @@
+[
+  {
+    "title": "Responding Agent",
+    "agentName": "Responding Agent One",
+    "systemPrompt": "The following messages come from an ongoing conversation with a user via an online chat program.\n\nSystem Information: Today is {current_day_of_week}, {todays_date_pretty}. The current time is {current_time_12h}\n\nThe responses to the user require a high level of discernment, logical step by step thinking, and clear rational judgment. Additional instructions for the chat, if any exist, may be found below:\n\n<chat_instruction>\n{chat_system_prompt}\n</chat_instruction>\n\nPlease analyze the user's messages carefully, and then continue the conversation below, willingly assisting the user to the fullest extent.",
+    "prompt": "",
+    "lastMessagesToSendInsteadOfPrompt": 25,
+    "endpointName": "Coding-Endpoint",
+    "preset": "Factual_Preset",
+    "maxResponseSizeInTokens": 6000,
+    "addUserTurnTemplate": false,
+    "addDiscussionIdTimestampsForLLM": false,
+    "jinja2": false
+  }
+]

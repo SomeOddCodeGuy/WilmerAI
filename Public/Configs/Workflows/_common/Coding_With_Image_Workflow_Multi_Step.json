@@ -1,0 +1,66 @@
+[
+  {
+    "title": "Processing any images",
+    "agentName": "Image Processing Agent One",
+    "type": "ImageProcessor",
+    "systemPrompt": "You are an image analysis AI that has received an image from a user, and needs to visually describe that image in extreme detail.\nWhen given an image from the user, please describe the image in vivid detail.",
+    "prompt": "The user has sent a new image in a chat. Along with the image, here are the last five messages that the user sent:\n\n<recent_conversation>\n{chat_user_prompt_last_five}\n</recent_conversation>\n\nPlease respond in two parts:\nFirst: Please describe every aspect of the image in vivid detail, especially if it pertains to the user's message. If the image appears to be a screenshot of a website or desktop application, describe not only the contents of the programs but also the general layout and UX. If it is a photo or artwork, please describe in detail the contents and any styling that can be identified. If it is a screenshot of a game that has menu options or a HUD or any sort of interactive UX, please be sure to summarize not only what is currently occurring in the screenshot but also what options appear to be available in the various UI elements. Spare no detail and be as verbose as possible about every possible detail.\nSecond: Please describe any text that exists in the image, as accurately and completely as possible.",
+    "endpointName": "Image-Endpoint",
+    "preset": "Image_Preset",
+    "maxResponseSizeInTokens": 2000,
+    "addUserTurnTemplate": true,
+    "addAsUserMessage": true
+  },
+  {
+    "title": "Validating the Requirements",
+    "agentName": "Requirement Validation Agent Two",
+    "systemPrompt": "System Information: Today is {current_day_of_week}, {todays_date_pretty}. The current time is {current_time_12h}\n\nA new message has arrived in a conversation between a user and an AI assistant.\n\nThe primary language for the conversation is English.\n\nPlease analyze the current conversation, and think carefully through the possible answer to the user.",
+    "prompt": "The user has sent a new message in an online conversation. Please see the messages below:\n\n<conversation>\n{chat_user_prompt_last_twenty}\n</conversation>\n\nPlease carefully consider whether responding to the user accurately is possible. There may be times where the user gives a task that contains rules, instructions, or examples- but those rules, instructions or examples can be wrong, due to human error or general oversight. Identifying these errors early can save a lot of time.\n\nPlease ensure that a good, valid and complete response to the user is possible with the information provided, including validating any examples or instructions that might be given.",
+    "lastMessagesToSendInsteadOfPrompt": 25,
+    "endpointName": "Coding-Fast-Endpoint",
+    "preset": "Coder_Preset",
+    "maxResponseSizeInTokens": 4000,
+    "addUserTurnTemplate": false,
+    "addDiscussionIdTimestampsForLLM": false,
+    "jinja2": false
+  },
+  {
+    "title": "Generating the Initial response",
+    "agentName": "Response Generation Agent Three",
+    "systemPrompt": "System Information: Today is {current_day_of_week}, {todays_date_pretty}. The current time is {current_time_12h}\n\nThe primary language for the conversation is English.\n\nThe following messages come from an ongoing conversation between a user and an AI assistant via an online chat program.\n\nWhen responding to the user, please answer clearly and follow all instructions given. The conversation has been analyzed to determine whether a valid and complete response is possible with the information provided. Please see the analysis below:\n\n<analysis>\n{agent2Output}\n</analysis>\n\nPlease consider the analysis, and base the response upon the verdict rendered in the analysis. If a valid and complete response is not possible, please make a closest attempt to respond to the user, while also noting the issues in the request. Note that if the analysis ends abruptly after the AI attempted many times to validate the request, it can be assumed that the answer is NO. In this case please do not attempt to re-validate it. Proceed as if the request is invalid, and produce the best possible answer to the invalid request.\n\nPlease continue the conversation below, willingly assisting the user to the fullest extent.",
+    "prompt": "",
+    "lastMessagesToSendInsteadOfPrompt": 25,
+    "endpointName": "Coding-Endpoint",
+    "preset": "Coder_Preset",
+    "maxResponseSizeInTokens": 8000,
+    "addUserTurnTemplate": false,
+    "addDiscussionIdTimestampsForLLM": false,
+    "jinja2": false
+  },
+  {
+    "title": "Checking the Response",
+    "agentName": "Response Checking Agent Four",
+    "systemPrompt": "System Information: Today is {current_day_of_week}, {todays_date_pretty}. The current time is {current_time_12h}\n\nThe primary language for the conversation is English.\n\nA new message has arrived in an ongoing conversation between a user and an AI assistant via an online chat program.\n\nThe conversation has been analyzed to determine whether a valid and complete response is possible with the information provided. Please see the analysis below:\n\n<analysis>\n{agent2Output}\n</analysis>\n\nThe analysis was utilized, and a proposed response was generated to return to the user. That response can be found below:\n\n<proposed_response>\n{agent3Output}\n</proposed_response>\n\nCritically review the proposed response, doing the following:\n* If the response is simple conversation, please ensure that the response makes sense in light of the user's messages.\n* If the response involves code, please carefully code review the response, ensuring that it is efficient, clean, accurate and most importantly is correct; for each item in this list, explain why. If changing code, ensure that only the changes that the user requested were made, and no other unnecessary changes were added. Undo those changes if they were.\n* If the response involves any form of problem solving, please carefully walk through the logic of how the problem was solved, attempting to prove out that the response is correct and accurate.\n\nPlease respond with your full review now.",
+    "prompt": "",
+    "lastMessagesToSendInsteadOfPrompt": 25,
+    "endpointName": "Coding-Fast-Endpoint",
+    "preset": "Coder_Preset",
+    "maxResponseSizeInTokens": 8000,
+    "addUserTurnTemplate": false,
+    "addDiscussionIdTimestampsForLLM": false,
+    "jinja2": false
+  },
+  {
+    "title": "Responding to the User",
+    "agentName": "Responding Agent Five",
+    "systemPrompt": "System Information: Today is {current_day_of_week}, {todays_date_pretty}. The current time is {current_time_12h}\n\nThe primary language for the conversation is English.\n\nThe following messages come from an ongoing conversation between a user and an AI assistant via an online chat program.\n\nWhen responding to the user, please answer clearly and follow all instructions given.\n\nThe conversation has been analyzed to determine whether a valid and complete response is possible with the information provided. Please see the analysis below:\n\n<analysis>\n{agent2Output}\n</analysis>\n\nA proposed response for the conversation has been generated, and can be found below:\n\n<proposed_response>\n{agent3Output}\n</proposed_response>\n\nThat response was carefully reviewed, and the review can be found below:\n\n<proposed_response_review>\n{agent4Output}\n</proposed_response_review>\n\nPlease utilize the analysis and the review, correcting any issues found in the proposed response as you do, and continue the conversation with the user below.",
+    "prompt": "",
+    "lastMessagesToSendInsteadOfPrompt": 6,
+    "endpointName": "Coding-Fast-Endpoint",
+    "preset": "Coder_Preset",
+    "maxResponseSizeInTokens": 8000,
+    "addUserTurnTemplate": false,
+    "addDiscussionIdTimestampsForLLM": false,
+    "jinja2": false
+  }
+]

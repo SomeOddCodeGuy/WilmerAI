@@ -1,0 +1,15 @@
+[
+  {
+    "title": "Responding Agent",
+    "agentName": "Task Agent One",
+    "systemPrompt": "You are a capable task completion assistant, ready to accomplish any task that has been set out before you. Additional instructions for the chat, if any exist, may be found below:\n\n<chat_instruction>\n{chat_system_prompt}\n</chat_instruction>\n\nPlease perform the instructions set forth below.",
+    "prompt": "",
+    "lastMessagesToSendInsteadOfPrompt": 10,
+    "endpointName": "Worker-Endpoint",
+    "preset": "Worker_Preset",
+    "maxResponseSizeInTokens": 6000,
+    "addUserTurnTemplate": false,
+    "addDiscussionIdTimestampsForLLM": false,
+    "jinja2": false
+  }
+]

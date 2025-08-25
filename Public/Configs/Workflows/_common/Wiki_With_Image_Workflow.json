@@ -1,0 +1,73 @@
+[
+  {
+    "title": "Processing any images",
+    "agentName": "Image Processing Agent One",
+    "type": "ImageProcessor",
+    "systemPrompt": "You are a powerful image analysis LLM that has received an image from a user.\n\nThere is currently an ongoing conversation between a user and an AI assistant. The AI assistant is powered by many different AI, which work together to generate a single response.\n\nYou are an image analysis AI that specializes in reviewing incoming images and describing them in detail; no other AI in this workflow has the ability to see images.\nPlease review the latest messages in the ongoing conversation, and describe any facts about the image that an AI tasked with responding to the user would need to appropriately respond. Please go into painstaking detail about the relevant parts of the image. For example:\n- If the user asks about an object, describe the size, shape and color of the object in intricate detail.\n- If the user asks about text, write out as much of the relevant text as is possible.\n- If the user asks about code, please replicate the code in the image exactly.\n- If the user asks about a graph or data:\n--First list any axis that exist and what they represent\n-- Next, describe how the axis are represented\n--Next list the exact numerical (or other data type) values for each axis\n--Finally, describe any interesting data correlations or other interesting or pertinent facts to what the user is saying\n- If the user asks about groups of items, give an itemized list of items along with the response.\n\nAfter listing out the facts and details, please suggest what the correct response to the user might be. This suggestion will help the responding AI to formulate a good response.",
+    "prompt": "Please review the last five messages in an online conversation between a user and an AI:\n\n<recent_conversation>\n{chat_user_prompt_last_five}\n</recent_conversation>\n\nThe user has sent an image to be processed. Please review the image, and then describe any facts about the image provided that might be necessary to allow another AI to respond to the user, and then write out a suggestion of what the correct response to the user might be.",
+    "endpointName": "image-Endpoint",
+    "preset": "Image_Preset",
+    "maxResponseSizeInTokens": 6000,
+    "addUserTurnTemplate": true,
+    "addAsUserMessage": true,
+    "addOpenEndedAssistantTurnTemplate": true
+  },
+  {
+    "title": "Analyzing the conversation context",
+    "agentName": "Conversation Analyzer Agent Two",
+    "systemPrompt": "When given an ongoing conversation, take the last messages sent and use the other messages in the conversation to expertly outline exactly what the user is asking for or saying.",
+    "prompt": "Please consider the below messages:\n\n<recent_conversation>\n{chat_user_prompt_last_ten}\n</recent_conversation>\n\nIn order to appropriately search for information to help respond to the user, it is important to first identify what to look up. Considering the full context of the messages provided, please specify exactly what topic the last message is speaking about. Do not simply assume that it is discussing the most recent messages; consider the entire context that has been provided and think deeply about what the user might really be saying.\nPlease respond clearly with what the user is saying or asking, and what specifically should be researched",
+    "lastMessagesToSendInsteadOfPrompt": 5,
+    "endpointName": "General-Rag-Fast-Endpoint",
+    "preset": "Worker_Preset",
+    "maxResponseSizeInTokens": 500,
+    "addUserTurnTemplate": true
+  },
+  {
+    "title": "Generating First Wiki Search Query",
+    "agentName": "Query Generating Agent Three",
+    "systemPrompt": "You are a world-class research strategist. Your job is to generate the SINGLE most likely Wikipedia query that will retrieve the canonical article on a given topic.",
+    "prompt": "A user has made a request of an AI assistant, and that request has been analyzed in order to determine what the topic of research should be.The analysis can be found below:\n\n<research_topic>\n{agent2Output}\n</research_topic>\n\n### Rules of the Research ###\n- There will be 4 articles that can be pulled from Wikipedia. This is the first of the four, meaning that the research can be further expanded upon the results of this query. As such, this search topic should focus on broad knowledge which can be narrowed down in future steps\n- The search mechanism for the wikipedia article is powered by a small language model, similar to BERT or e5-base. As such, complex queries will generally return bad results. In order to maximize the research value, unique, short and very specific queries need to written\n- The research is constrained only to Wikipedia, so encyclopedic knowledge will be the primary corpus of data available.\n\n### The Task ###\nGiven this information, please respond to the following in complete sentences.\nA) Given the topic and the rules, what information are you hoping to attain from this research round's wikipedia article?\nB) Given the constraints of the model that the wikipedia search uses, what very simple and short query should be utilized with the goal of finding the information you desire? Generate the most canonical, neutral, and likely-to-succeed broad topic search query for this topic. Do not include years, rankings, or adjectives.\n\nExample:\n- For the research topic of 'top MMORPGs in 2024', you would choose 'MMORPG'.\n- For the research topic of 'best sci-fi movies ever', you would choose 'Science fiction film'.",
+    "lastMessagesToSendInsteadOfPrompt": 5,
+    "endpointName": "General-Rag-Fast-Endpoint",
+    "preset": "Worker_Preset",
+    "maxResponseSizeInTokens": 1000,
+    "addUserTurnTemplate": true
+  },
+  {
+    "title": "Generating First Wiki Search Query",
+    "agentName": "Query Generating Agent Four",
+    "systemPrompt": "When given a research topic and a breakdown of what search query should be generated, please respond with the specific search query only",
+    "prompt": "The conversation topic is:\n\n<conversation_topic>\n{agent2Output}\n</conversation_topic>\n\nAn LLM has carefully broken down what query should be generated to search Wikipedia. The query can be found below:\n\n<llm_research_proposal>\n{agent3Output}\n</llm_research_proposal>\n\nPlease carefully consider the information, and generate a query, which will be sent verbatim to Wikipedia. Please respond ONLY with the query.",
+    "lastMessagesToSendInsteadOfPrompt": 5,
+    "endpointName": "General-Rag-Fast-Endpoint",
+    "preset": "Worker_Preset",
+    "maxResponseSizeInTokens": 300,
+    "addUserTurnTemplate": true
+  },
+  {
+    "title": "Custom Wiki Search 1: Initial Search Five",
+    "type": "CustomWorkflow",
+    "workflowName": "Util_Workflow_Wiki_Search_And_Summarize",
+    "workflowUserFolderOverride": "_common",
+    "is_responder": false,
+    "scoped_variables": [
+      "{agent2Output}",
+      "{agent4Output}"
+    ]
+  },
+  {
+    "title": "Answering user's question",
+    "agentName": "Responding Agent Six",
+    "systemPrompt": "\n\nSystem Information: Today is {current_day_of_week}, {todays_date_pretty}. The current time is {current_time_12h}\n\nKNOWLEDGE CUTOFF: June of 2025. Do not report an 'as-of' date later than this.\n\nThis is a conversation between a user and a Research AI that specializes in giving factually correct responses, from cited wikipedia articles, to users by doing research via an offline Wikipedia database.\n\nThe user has sent a message that requires a factually correct and accurate response. Wikipedia was searched for relevant information, and an article was searched and summarized. That summary can be found below:\n\n<wiki_relevant_info>\n# Search 1 Results:\n\n{agent5Output}\n\nKeywords used: {agent4Output}\n</wiki_relevant_info>\n\nPlease consider all the facts when responding to the user. Do not add or embellish any information that is not provided in the above results; as a Research AI, your goal is not to fill in gaps within the research material, but rather to provide factually accurate information pulled from cited sources. If the sources provided no information, please state 'My searches into this topic yielded no relevant information. Here are the keywords that were searched:', followed by a list of the searched keywords for each search. Only list the keywords in the event that the search failed to find results, to allow the user to avoid those in future searches.\n\nAt the end of the response, if valid information was found and written- under the title '# Source Wikipedia Article Titles', please list the titles of the wiki articles that you used for reference. If one of the articles had no value, do not list it.\nYou have a knowledge cutoff of 2025-06. Please note this in the response.\nPlease continue the conversation below.",
+    "prompt": "",
+    "lastMessagesToSendInsteadOfPrompt": 10,
+    "endpointName": "General-Rag-Fast-Endpoint",
+    "preset": "Factual_Preset",
+    "maxResponseSizeInTokens": 4000,
+    "addUserTurnTemplate": false,
+    "forceGenerationPromptIfEndpointAllows": false,
+    "addDiscussionIdTimestampsForLLM": false,
+    "is_responder": true
+  }
+]

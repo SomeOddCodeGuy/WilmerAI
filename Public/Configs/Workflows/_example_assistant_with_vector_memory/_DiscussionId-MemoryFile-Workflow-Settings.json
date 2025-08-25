@@ -1,0 +1,11 @@
+{
+  "Display_Only_Description": "This file is not truly a workflow, but rather settings for a hardcoded workflow with a single node. You can change the system prompt/prompt, endpoint, preset, etc like normal, but this does not support multiple nodes.",
+  "maxResponseSizeInTokens": 350,
+  "chunkEstimatedTokenSize": 3000,
+  "maxMessagesBetweenChunks": 10,
+  "lookbackStartTurn": 5,
+  "useVectorForQualityMemory": true,
+  "vectorMemoryWorkflowName": "Memory_Vector_Workflow",
+  "vectorMemoryChunkEstimatedTokenSize": 1200,
+  "vectorMemoryMaxMessagesBetweenChunks": 8
+}

@@ -82,22 +82,23 @@ Memory Text:
 [TextChunk]
 JSON Output:"""
 
-        endpoint_name = config.get('vectorMemoryEndpointName', config.get('endpointName'))
-        preset_name = config.get('vectorMemoryPreset', config.get('preset'))
-        max_tokens = config.get("vectorMemoryMaxResponseSizeInTokens", 1024)
-        endpoint_data = get_endpoint_config(endpoint_name)
-        llm_handler_service = LlmHandlerService()
-        llm_handler = llm_handler_service.initialize_llm_handler(
-            endpoint_data, preset_name, endpoint_name, False,
-            endpoint_data.get("maxContextTokenSize", 4096), max_tokens
-        )
+        vector_workflow_name = config.get('vectorMemoryWorkflowName')
+        llm_handler = None
+        if not vector_workflow_name:
+            endpoint_name = config.get('vectorMemoryEndpointName', config.get('endpointName'))
+            preset_name = config.get('vectorMemoryPreset', config.get('preset'))
+            max_tokens = config.get("vectorMemoryMaxResponseSizeInTokens", 1024)
+            endpoint_data = get_endpoint_config(endpoint_name)
+            llm_handler_service = LlmHandlerService()
+            llm_handler = llm_handler_service.initialize_llm_handler(
+                endpoint_data, preset_name, endpoint_name, False,
+                endpoint_data.get("maxContextTokenSize", 4096), max_tokens
+            )
 
         # Create a temporary context for the specific LLM handler needed for this task
         temp_llm_context = deepcopy(context)
         temp_llm_context.llm_handler = llm_handler
         temp_llm_context.config = config  # Ensure the correct node config is used
-
-        vector_workflow_name = config.get('vectorMemoryWorkflowName')
 
         for chunk in text_chunks:
             if not chunk.strip():

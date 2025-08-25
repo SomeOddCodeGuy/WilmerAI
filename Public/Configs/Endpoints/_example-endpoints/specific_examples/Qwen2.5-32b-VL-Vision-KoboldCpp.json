@@ -1,0 +1,11 @@
+{
+  "modelNameForDisplayOnly": "Qwen2.5 32b VL LlamaCpp",
+  "endpoint": "http://127.0.0.1:5001",
+  "apiTypeConfigFileName": "KoboldCppImageSpecific",
+  "maxContextTokenSize": 65536,
+  "modelNameToSendToAPI": "",
+  "promptTemplate": "chatml",
+  "addGenerationPrompt": true,
+  "trimBeginningAndEndLineBreaks": true,
+  "dontIncludeModel": true
+}

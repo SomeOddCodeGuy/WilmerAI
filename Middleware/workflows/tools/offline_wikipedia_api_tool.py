@@ -153,7 +153,7 @@ class OfflineWikiApiClient:
         response = requests.get(url, params=params)
         logger.info(f"Response Status Code: {response.status_code}")
         logger.info(f"Response Text: {response.text}")
-        
+
         if response.status_code == 200:
             result = response.json()
             return [result.get('text', "No text element found")]  # Wrap the single text in a list
@@ -192,11 +192,12 @@ class OfflineWikiApiClient:
         response = requests.get(url, params=params)
         logger.info(f"Response Status Code: {response.status_code}")
         logger.info(f"Response Text: {response.text}")
+
         if response.status_code == 200:
             results = response.json()
-            return [result.get('text', "No text element found") for result in results]
+            # ✅ Return full results (list of dicts), not just text!
+            return results
         elif response.status_code == 404:
-            # For 404 errors, return a message about article not being found
             return [f"No articles found for '{prompt}'. The information may not be available in the offline database."]
         else:
             raise Exception(f"Error: {response.status_code}, {response.text}")

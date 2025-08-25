@@ -1,0 +1,15 @@
+{
+  "modelNameForDisplayOnly": "Image",
+  "endpoint": "http://127.0.0.1:5001",
+  "apiTypeConfigFileName": "KoboldCppImageSpecific",
+  "maxContextTokenSize": 65536,
+  "modelNameToSendToAPI": "",
+  "promptTemplate": "chatml",
+  "addGenerationPrompt": true,
+  "trimBeginningAndEndLineBreaks": true,
+  "dontIncludeModel": true,
+  "removeThinking": false,
+  "startThinkTag": "<think>",
+  "endThinkTag": "</think>",
+  "expectOnlyClosingThinkTag": false
+}

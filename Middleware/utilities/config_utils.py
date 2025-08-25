@@ -552,7 +552,7 @@ def load_template_from_json(template_file_name):
     return load_config(config_path)
 
 
-def get_workflow_path(workflow_name):
+def get_workflow_path(workflow_name, user_folder_override=None):
     """
     Retrieves the file path to a workflow configuration file.
 
@@ -561,11 +561,13 @@ def get_workflow_path(workflow_name):
 
     Args:
         workflow_name (str): The name of the workflow configuration.
+        user_folder_override (str, optional): If provided, uses this folder name
+                                            instead of the current user's. Defaults to None.
 
     Returns:
         str: The full path to the workflow configuration file.
     """
-    user_name = get_current_username()
+    user_name = user_folder_override if user_folder_override else get_current_username()
     config_dir = str(get_root_config_directory())
     config_file = os.path.join(config_dir, 'Workflows', user_name, f'{workflow_name}.json')
     return config_file

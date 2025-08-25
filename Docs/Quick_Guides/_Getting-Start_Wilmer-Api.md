@@ -6,22 +6,27 @@
 
 Short version desc of each:
 
-* `Assistant Multi-Model`: Good for SillyTavern. Prompts are routed to categories, each category
-  gets its own workflow and LLM.
-* `Assistant Single-Model`: Similar as above, but just 1 model. Each category gets its own workflow,
-  so this still has value (like coding specific workflows or reasoning workflows)
-* `Convo-Roleplay-Single-Model`: No routing. All messages go to 1 workflow, which is good for regular ol'
-  chattin with an LLM.
-* `Convo-Roleplay-Dual-Model`: Same as above, but uses 2 models. The second model will be used for generating
-  memories and chat summaries. Great if you have 2 computers, as one can work quietly on making memories while
-  the other keeps chatting with ya uninterrupted.
-* `Group-Chat-Example`: Neat concept user for showing how to do group chats in sillytavern where each persona is a
-  different LLM
-* `OpenWebUI-Routing-Multi-Model`: Same as assistant multi-model except it has prompts tailored for OpenWebUI. That
-  app doesn't do personas, so some of the instructions of other pre-made users confused it.
-* `OpenWebUI-Routing-Single-Model`: Same as assistant single-model but for Open-WebUI
-* `OpenWebUI-NoRouting-Single-Model`: Same as convo-roleplay single model, but for Open-WebUI
-* `OpenWebUI-NoRouting-Dual-Model`: Same as convo-roleplay dual model, but for Open-WebUI.
+* **\_example\_simple\_router\_no\_memory**: This is a simple user that has routing to WIKI, CODING and GENERAL
+  categories, each going to a special workflow. Best used with direct and productive front ends like Open WebUI.
+  Requires the Offline Wikipedia API
+* **\_example\_general\_workflow**: This is a simple user that runs a single general purpose workflow. Simple, to the
+  point. Best used with direct and productive front ends like Open WebUI. Requires the Offline Wikipedia API
+* **\_example\_coding\_workflow**: This is a simple user that runs a single coding workflow. Simple, to the point. Best
+  used with direct and productive front ends like Open WebUI. Requires the Offline Wikipedia API
+* **\_example\_wikipedia\_multi\_step\_workflow**: This is a wikipedia search against the Offline Wikipedia API.
+  Requires the Offline Wikipedia API
+* **\_example\_wikipedia\_multi\_step\_workflow**: This is a wikipedia search against the Offline Wikipedia API, but
+  instead of just 1 pass it does a total of 4, attempting to build up extra info for the report. Still very
+  experimental; not sure how I feel about the results yet. Requires the Offline Wikipedia API
+* **\_example\_assistant\_with\_vector\_memory**: This template is for a simple "assistant" that will diligently think
+  through your message via a series of workflow nodes, and will attempt to track important facts in a simple vector
+  memory implementation (*EXPERIMENTAL*)
+  > This user thinks a LOT, so it's slow and chews up tokens. I recommend using a non-reasoning model with this. Use
+  this with a local model or prepare for it to expensive
+* **\_example\_game\_bot\_with\_file\_memory**: This is best used with a game front end, like a custom text game
+  implementation or SillyTavern. This is an experimental user with the goal of trying to solve some of the common
+  complaints or problems that have voiced on various boards. Feedback is welcome.
+  > Again this is expensive and thinks a lot. It's very slow.
 
 ### Step 3: Go to the [endpoints folder](../../Public/Configs/Endpoints) and find the folder for the user you chose.
 
@@ -71,7 +76,7 @@ Both of these files have access
 to [a few optional properties](../../README.md#script-arguments-for-bat-sh-and-py-files),
 and specifying a user is one of them. So an example would be
 
-`bash run_macos.sh --User "Convo-Roleplay-Single-Model"`
+`bash run_macos.sh --User "_user_general_workflow"`
 
 NOTE- If you get an error, there could be a lot of reasons but the most common for me is
 accidentally leaving a typo or something in one of the json files. Peek at the error and it

@@ -1,0 +1,22 @@
+{
+  "modelNameForDisplayOnly": "GLM 4.5 Air q8_0",
+  "endpoint": "http://127.0.0.1:5001",
+  "apiTypeConfigFileName": "LlamaCppServer",
+  "maxContextTokenSize": 32786,
+  "modelNameToSendToAPI": "",
+  "promptTemplate": "chatml",
+  "addGenerationPrompt": true,
+  "trimBeginningAndEndLineBreaks": true,
+  "dontIncludeModel": true,
+  "removeThinking": false,
+  "startThinkTag": "<think>",
+  "endThinkTag": "</think>",
+  "expectOnlyClosingThinkTag": false,
+  "addTextToStartOfSystem": true,
+  "textToAddToStartOfSystem": "/nothink ",
+  "addTextToStartOfPrompt": false,
+  "textToAddToStartOfPrompt": "/nothink",
+  "addTextToStartOfCompletion": true,
+  "textToAddToStartOfCompletion": "\n<think></think>",
+  "ensureTextAddedToAssistantWhenChatCompletion": true
+}

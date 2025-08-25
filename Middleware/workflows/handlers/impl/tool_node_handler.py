@@ -171,6 +171,8 @@ class ToolNodeHandler(BaseHandler):
         try:
             if node_type == "OfflineWikiApiBestFullArticle":
                 results = self.offline_wiki_api_client.get_top_full_wiki_article_by_prompt(variabled_prompt)
+                return results[0] if results else f"No additional information provided about '{variabled_prompt}'"
+
             elif node_type == "OfflineWikiApiTopNFullArticles":
                 results = self.offline_wiki_api_client.get_top_n_full_wiki_articles_by_prompt(
                     variabled_prompt,
@@ -178,12 +180,25 @@ class ToolNodeHandler(BaseHandler):
                     num_results=config.get("num_results", 10),
                     top_n_articles=config.get("top_n_articles", 3)
                 )
+                if not results:
+                    return f"No articles found for '{variabled_prompt}' in the offline database."
+
+                # Format each article with title and text, joined by delimiter
+                formatted_articles = []
+                for article in results:
+                    title = article.get("title", "Untitled Article")
+                    text = article.get("text", "No text available.")
+                    formatted_articles.append(f"Title: {title}\n{text}")
+
+                return "\n\n--- END ARTICLE ---\n\n".join(formatted_articles)
+
             elif node_type == "OfflineWikiApiPartialArticle":
                 results = self.offline_wiki_api_client.get_wiki_summary_by_prompt(variabled_prompt)
+                return results[0] if results else f"No summary found for '{variabled_prompt}'."
+
             else:  # Fallback for "OfflineWikiApiFullArticle"
                 results = self.offline_wiki_api_client.get_full_wiki_article_by_prompt(variabled_prompt)
-
-            return results[0] if results else f"No additional information provided about '{variabled_prompt}'"
+                return results[0] if results else f"No article found for '{variabled_prompt}'."
 
         except Exception as e:
             logger.error(f"Error accessing Wikipedia information: {e}")

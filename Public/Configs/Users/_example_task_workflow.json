@@ -1,0 +1,22 @@
+{
+  "port": 5077,
+  "stream": true,
+  "customWorkflowOverride": true,
+  "customWorkflow": "TaskWorkflow",
+  "routingConfig": "",
+  "categorizationWorkflow": "",
+  "defaultParallelProcessWorkflow": "",
+  "fileMemoryToolWorkflow": "",
+  "chatSummaryToolWorkflow": "",
+  "conversationMemoryToolWorkflow": "",
+  "recentMemoryToolWorkflow": "",
+  "discussionIdMemoryFileWorkflowSettings": "",
+  "discussionDirectory": "",
+  "sqlLiteDirectory": "",
+  "chatPromptTemplateName": "_chatonly",
+  "verboseLogging": true,
+  "chatCompleteAddUserAssistant": true,
+  "chatCompletionAddMissingAssistantGenerator": true,
+  "endpointConfigsSubDirectory": "_example_users",
+  "presetConfigsSubDirectoryOverride": "_example_users"
+}
