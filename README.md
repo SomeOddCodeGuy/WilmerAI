@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/someoddcodeguy-wilmerai-badge.png)](https://mseep.ai/app/someoddcodeguy-wilmerai)
+
 ## DISCLAIMER:
 
 > This is a personal project under heavy development. It could, and likely does, contain bugs, incomplete code,
