@@ -1,6 +1,7 @@
-## Quick Guide to Setting up SillyTavern with WilmerAI
+## Quick Guide to Setting up SillyTavern with WilmerAI *(Out of Date. Will Update Soon)*
 
-NOTE: Make sure that you already [set up Wilmer-Api](Wilmer-Api.md) in order to be able to connect to it. Choose
+NOTE: Make sure that you already [set up Wilmer-Api](_Getting-Start_Wilmer-Api.md) in order to be able to connect to it.
+Choose
 a SillyTavern friendly example user.
 
 ### Step 1: Download SillyTavern and follow their setup instructions to install it and run it
@@ -13,7 +14,7 @@ a SillyTavern friendly example user.
 
 It should look like this:
 
-![Ollama Text Completion Settings](../../Docs/Examples/Images/ST_ollama_text_completion_settings.png)
+![Ollama Text Completion Settings](../../Examples/Images/ST_ollama_text_completion_settings.png)
 
 You can also choose KoboldCpp for the connection type, which used to be my favorite. However, Ollama
 was recently added in order to allow Wilmer to be extended with multi-modal support, so this is probably
@@ -25,9 +26,9 @@ There are 2 sections: Instruct and Context. We want to import settings for both 
 
 Each section has an import button. I have marked them in the picture below:
 
-![SillyTavern Import Section](../../Docs/Examples/Images/ST_Instruct_Context_Settings.png)
+![SillyTavern Import Section](../../Examples/Images/ST_Instruct_Context_Settings.png)
 
-The files you want to import can be found in the [Docs/SillyTavern section of Wilmer's codebase](../../Docs/SillyTavern)
+The files you want to import can be found in the [Docs/SillyTavern section of Wilmer's codebase](../../SillyTavern)
 
 > **IMPORTANT**: Yes, Wilmer has an Instruct Template, and it is absolutely important that you import it
 > and do not modify it. Wilmer is not like a model that may do ok with a different template. Without this

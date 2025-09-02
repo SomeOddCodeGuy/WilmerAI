@@ -1,8 +1,8 @@
-## Quick Guide to Setting up WilmerAI
+## Quick Guide to Setting up WilmerAI *(Out of Date. Will Update Soon)*
 
 ### Step 1: Download Wilmer and unzip it somewhere. Navigate to that folder
 
-### Step 2: [Pick a pre-made user](../../README.md#step-2-fast-route-use-pre-made-users)
+### Step 2: [Pick a pre-made user](../../../README.md#step-2-fast-route-use-pre-made-users)
 
 Short version desc of each:
 
@@ -28,32 +28,30 @@ Short version desc of each:
   complaints or problems that have voiced on various boards. Feedback is welcome.
   > Again this is expensive and thinks a lot. It's very slow.
 
-### Step 3: Go to the [endpoints folder](../../Public/Configs/Endpoints) and find the folder for the user you chose.
+### Step 3: Go to the [endpoints folder](../../../Public/Configs/Endpoints) and find the folder for the user you chose.
 
 ### Step 4: Update all the endpoint files.
 
-For single or dual model users this won't be too painful, but for the assistants it's going to suck. Sorry in
-advance.
-
-There are a few examples here: [Example Endpoints](../../Public/Configs/Endpoints/_example-endpoints). You can straight
+There are a few examples here: [Example Endpoints] (../../../Public/Configs/Endpoints/_example-endpoints). You can
+straight
 copy the values of those and paste them into the endpoints of the user you want to use, then tweak as needed.
 
 When looking at the file, here is a breakdown of what to change:
 
 * `modelNameForDisplayOnly`- Can ignore that
 * `endpoint` - IP Address and port of your LLM API, like you'd normally put in SillyTavern
-* `apiTypeConfigFileName` - The name of [one of these files](../../Public/Configs/ApiTypes) in the ApiTypes folder.
+* `apiTypeConfigFileName` - The name of [one of these files] (../../../Public/Configs/ApiTypes) in the ApiTypes folder.
   Pick the one that matches your backend. If using Ollama, I recommend `OllamaApiGenerate`. If using Kobold, then
   `KoboldCpp`. `Open-AI-API` is OpenAI chat completions, and `OpenAI-Compatible-Completions` is v1/completions.
 * `maxContextTokenSize` - Context size you loaded the model with
 * `modelNameToSendToAPI` - If you are using Ollama, this must match the name of the model you loaded. For anything else,
   it doesn't matter.
-* `promptTemplate` - The [file name of the Prompt template](../../Public/Configs/PromptTemplates) for the LLM you're
+* `promptTemplate` - The [file name of the Prompt template] (../../../Public/Configs/PromptTemplates) for the LLM you're
   using. Chances are there's already a template in there for what you need, but you can add more in there if you
   need. They are pretty similar to how SillyTavern does its templates.
 * `addGenerationPrompt` - Likely safe to just leave this as true. Almost every model I've used likes this.
 
-### Step 5: Pop over to your [user file](../../Public/Configs/Users) and tweak a few things
+### Step 5: Pop over to your [user file] (../../../Public/Configs/Users) and tweak a few things
 
 There's lots of stuff in here, but for a quick start you don't really need to look at a lot of it.
 
@@ -73,7 +71,7 @@ You can start Wilmer via the bat or bash file. I always recommend peeking over s
 if they are safe before running one.
 
 Both of these files have access
-to [a few optional properties](../../README.md#script-arguments-for-bat-sh-and-py-files),
+to [a few optional properties](../../../README.md#script-arguments-for-bat-sh-and-py-files),
 and specifying a user is one of them. So an example would be
 
 `bash run_macos.sh --User "_user_general_workflow"`
@@ -81,7 +79,3 @@ and specifying a user is one of them. So an example would be
 NOTE- If you get an error, there could be a lot of reasons but the most common for me is
 accidentally leaving a typo or something in one of the json files. Peek at the error and it
 may tell you what file type, and then you can go check if you did.
-
-
-
-

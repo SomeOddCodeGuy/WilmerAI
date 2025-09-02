@@ -1,6 +1,7 @@
-## Quick Guide to Setting up Open-WebUI with WilmerAI
+## Quick Guide to Setting up Open-WebUI with WilmerAI *(Out of Date. Will Update Soon)*
 
-NOTE: Make sure that you already [set up Wilmer-Api](Wilmer-Api.md) in order to be able to connect to it. Choose
+NOTE: Make sure that you already [set up Wilmer-Api](_Getting-Start_Wilmer-Api.md) in order to be able to connect to it.
+Choose
 an Open WebUI friendly example user.
 
 ### Step 1: Install and run Open-WebUI.
@@ -22,7 +23,7 @@ Once in Admin Settings, there should be a "Connections" options.
 WilmerAI can be connected to as either an OpenAI or Ollama connection, but I recommend Ollama. I find the
 quality far higher. Put in the API connection info found on the console output of Wilmer if it is running
 
-![Ollama connection example](../../Docs/Examples/Images/OW_ollama_settings.png)
+![Ollama connection example](../../Examples/Images/OW_ollama_settings.png)
 
 You should just need to type in the IP/port like the image above, and click save at the bottom right
 
@@ -30,4 +31,3 @@ You should just need to type in the IP/port like the image above, and click save
 
 Once you've saved your settings and exit the settings area, you should be able to see Wilmer as a model
 in the model dropdown at the top center. If you don't, sometimes I have to reload the page to make it show up.
-
