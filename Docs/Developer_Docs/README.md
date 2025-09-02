@@ -4,38 +4,37 @@
 
 ## 1\. Project Overview
 
-WilmerAI is a Python-based **middleware system** designed to act as a sophisticated bridge between user-facing clients (
-e.g., SillyTavern, OpenWebUI) and various Large Language Model (LLM) backends (e.g., OpenAI, Ollama, KoboldCPP). Its
-primary function is to process user prompts by leveraging a highly modular and extensible **node-based workflow engine
-**.
+WilmerAI is a Python-based **middleware system** designed to act as a bridge between user-facing clients (e.g.,
+SillyTavern, OpenWebUI) and various Large Language Model (LLM) backends (e.g., OpenAI, Ollama, KoboldCPP). Its primary
+function is to process user prompts by leveraging a modular and extensible **node-based workflow engine**.
 
-The architecture has been refactored around a central **`$ExecutionContext$`** object. This powerful data structure
-encapsulates all runtime information for a single operational step—including the full conversation history, the current
-node's configuration, and outputs from previous nodes. The core engine creates a fresh `ExecutionContext` for each node
-in a workflow and passes it as the sole argument to a specialized **Node Handler**.
+The architecture is centered on the **`$ExecutionContext$`** object. This data structure encapsulates all runtime
+information for a single operational step—including the full conversation history, the current node's configuration, and
+outputs from previous nodes. The core engine creates a new `ExecutionContext` for each node in a workflow and passes it
+as the sole argument to a specialized **Node Handler**.
 
-This state-driven design makes the system exceptionally clean and easy to extend. Each node in a workflow performs a
-specific task and is designated as either a **responder** (its output is sent to the user) or a **non-responder** (its
-output is saved as a variable for subsequent nodes). Nodes can call an LLM, run a Python script (tool), manage
-conversational memory, or trigger another workflow. This architecture enables developers to create sophisticated,
-dynamic, and stateful conversational agents with ease.
+This state-driven design makes the system clean and easy to extend. Each node in a workflow performs a specific task and
+is designated as either a **responder** (its output is sent to the user) or a **non-responder** (its output is saved as
+a variable for subsequent nodes). Nodes can call an LLM, run a Python script (tool), manage conversational memory, or
+trigger another workflow. This architecture enables developers to create sophisticated, dynamic, and stateful
+conversational agents.
 
 ### Key Capabilities
 
 * **Multi-Step, State-Driven Workflows:** Chains multiple LLMs and tools together using a central `$ExecutionContext$`
-  to manage state between nodes, simplifying the development of complex logic.
+  to manage state between nodes.
 * **Extensible Node System:** New functionality is added by creating new Node Handler classes that operate on the
-  comprehensive `$ExecutionContext$`, making the system highly adaptable.
+  `$ExecutionContext$`, making the system highly adaptable.
 * **Flexible API Compatibility:** Exposes OpenAI- and Ollama-compatible endpoints. It uses a dedicated *
-  *`$ResponseBuilderService$`** to act as the single source of truth for all outgoing API schemas, ensuring responses
-  perfectly match the client's expectations.
+  *`$ResponseBuilderService$`** as the single source of truth for all outgoing API schemas, ensuring responses match the
+  client's expectations.
 * **Stateful Conversation Management:** Manages short-term and long-term memory using a `discussionId` to track
-  conversational context. This includes summarized memory chunks, rolling chat summaries, and a vector database for
-  keyword-based retrieval.
+  conversational context. This includes summarized memory chunks, rolling chat summaries, and a discussion-specific
+  vector database for keyword-based retrieval.
 * **Dynamic Tool Use:** Integrates external tools, APIs, and custom Python scripts directly into workflows, allowing for
   capabilities like Retrieval-Augmented Generation (RAG) and API interactions.
 * **Streaming Responses:** Natively supports both streaming (`stream=true`) and single-block (`stream=false`) responses
-  from responder nodes, providing a responsive user experience.
+  from responder nodes.
 * **Flexible Variable System:** Supports inter-node variables (`{agent1Output}`), date/time variables, and custom
   variables defined directly in the workflow JSON, with optional Jinja2 templating for advanced logic.
 
@@ -43,8 +42,7 @@ dynamic, and stateful conversational agents with ease.
 
 ## 2\. Architectural Flow
 
-A typical request in WilmerAI follows this high-level path, transforming a client request into a schema-compliant LLM
-response.
+A typical request in WilmerAI follows this path, transforming a client request into a schema-compliant LLM response.
 
 1. **API Ingestion & Routing:** A request arrives at a public endpoint (e.g., `/v1/chat/completions`). The Flask server
    in `Middleware/api/` routes the request to the appropriate registered **API Handler** (e.g.,
@@ -65,7 +63,7 @@ response.
    the workflow step-by-step.
 
 6. **Node Execution Loop:** The `$WorkflowProcessor$` iterates through each node in the workflow configuration. For *
-   *each node**, it performs the following critical steps:
+   *each node**, it performs the following steps:
    a. It assembles a new, comprehensive **`$ExecutionContext$`** object, populating it with the node's config, the full
    conversation history, all available variables, and service references.
    b. It reads the node's `type` and uses the handler registry to select the appropriate **Node Handler**.
@@ -210,22 +208,22 @@ WilmerAI
 
 #### **`Middleware/`**
 
-This is the application's brain, containing all the core logic.
+This is the application's core logic.
 
 * **`api/`**: The API entry point. Houses the Flask server (`app.py`, `api_server.py`) and modular handlers (e.g.,
   `openai_api_handler.py`) for different API schemas. It acts as a compatibility and translation layer. The *
-  *`workflow_gateway.py`** file is critical, providing the single, standardized bridge to the backend workflow engine.
+  *`workflow_gateway.py`** file provides the single, standardized bridge to the backend workflow engine.
 * **`llmapis/`**: The abstraction layer for communicating with external LLM backends. It translates requests and parses
-  responses, abstracting away the differences between various APIs. Crucially, this layer's job is to return **raw,
-  unformatted data** from the backing APIs. The `$LlmApiService$` in `llm_api.py` is the main entry point, acting as a
-  factory to select the correct handler from `handlers/impl/`.
+  responses, abstracting away API differences. This layer's job is to return **raw, unformatted data** from the backing
+  APIs. The `$LlmApiService$` in `llm_api.py` is the main entry point, acting as a factory to select the correct handler
+  from `handlers/impl/`.
 * **`services/`**: Contains stateless, reusable business logic. Key services include:
     * `$response_builder_service.py$`: The **single source of truth** for constructing all API-specific JSON responses
       and streaming chunks, ensuring schema compliance.
     * `$MemoryService$`: Centralizes all logic for memory retrieval (reading) from memory files or the vector database.
     * `$LLMDispatchService$`: Orchestrates the final call to the `$LlmApiService$` to get a response from a language
       model.
-* **`utilities/`**: A collection of stateless helper modules for common tasks.
+* **`utilities/`**: A collection of stateless helper modules.
     * `streaming_utils.py`: Contains logic for response cleaning, including `post_process_llm_output` for non-streaming
       text and `$StreamingThinkRemover$` for stateful stream cleaning.
     * `vector_db_utils.py`: The abstraction layer for the SQLite FTS5 vector memory database.
@@ -242,15 +240,15 @@ This is the application's brain, containing all the core logic.
       cleaning and formatting a raw LLM stream into a final, client-ready SSE stream.
     * **`models/`**: Defines core data structures. The key file is **`$execution_context.py$`**, which defines the
       central dataclass for passing state to all node handlers.
-    * **`tools/`**: Contains implementations of complex tools callable by the `$ToolNodeHandler$`, such as RAG and a
-      dynamic Python module loader.
+    * **`tools/`**: Contains implementations of complex tools callable by the `$ToolNodeHandler$`, such as the RAG
+      memory creation tool (`slow_but_quality_rag_tool.py`) and a dynamic Python module loader.
 
 #### **`Public/`**
 
 Contains all user-facing JSON configuration files.
 
-* **`ApiTypes/`**: Defines the schemas for different LLM APIs (Ollama, OpenAI, etc.), specifying property names for
-  things like `streaming` or `max_tokens`.
+* **`ApiTypes/`**: Defines the schemas for different LLM APIs, specifying property names for things like `streaming` or
+  `max_tokens`.
 * **`Endpoints/`**: Specifies connection details for an LLM API (e.g., URL, API Type).
 * **`Presets/`**: Contains LLM generation parameters (temperature, top\_k, etc.).
 * **`Workflows/`**: Defines the sequence of nodes for each workflow.
@@ -259,15 +257,15 @@ Contains all user-facing JSON configuration files.
 
 ## 4\. Important Notes
 
-* **The `ExecutionContext`**: This is the central architectural pattern. Instead of passing many individual arguments,
-  the `$WorkflowProcessor$` assembles a single `ExecutionContext` object for each node, containing all possible state (
-  conversation history, node config, previous outputs, service instances). This makes node handlers simple to write and
-  test, as they receive all their dependencies in one place.
+* **The `ExecutionContext`**: This is the central architectural pattern. The `$WorkflowProcessor$` assembles a single
+  `ExecutionContext` object for each node, containing all possible state (conversation history, node config, previous
+  outputs, service instances). This makes node handlers simple to write and test, as they receive all their dependencies
+  in one place.
 
 * **Proxy Behavior & `API_TYPE`**: WilmerAI can act as a proxy. A client can connect to it as if it were an OpenAI
   server, while Wilmer, in the background, talks to an Ollama backend. The internal `API_TYPE` variable tracks what kind
-  of API the *front-end client* expects. This is used by the **`$ResponseBuilderService$`** at the very end of the
-  process to format the response correctly for that client.
+  of API the front-end client expects. This is used by the **`$ResponseBuilderService$`** at the end of the process to
+  format the response correctly for that client.
 
 * **LLM API Paradigms**: The `llmapis` layer internally handles the two main types of LLM backends: modern **Chat
   Completions** APIs that take a structured list of messages (role/content pairs), and legacy **Completions** APIs that
@@ -276,14 +274,13 @@ Contains all user-facing JSON configuration files.
 
 * **Responder vs. Non-Responder Nodes**: Each workflow can have only one **responder** node, whose output is sent to the
   user. All other nodes are **non-responders**; their output is captured internally as a variable for use by later
-  nodes. The responder does **not** have to be the last node; this allows for long-running cleanup tasks (like memory
-  generation) to occur *after* the user has received their response.
+  nodes. The responder does not have to be the last node; this allows for cleanup tasks (like memory generation) to
+  occur after the user has received their response.
 
-* **`discussionId`**: This ID, provided by the user via a `[DiscussionId]` tag, is the key that enables all persistent,
-  stateful features like conversation memory. If absent, features that rely on it are disabled or fall back to stateless
-  operations.
+* **`discussionId`**: This ID, provided by the user, is the key that enables all persistent, stateful features like
+  conversation memory. If absent, features that rely on it are disabled or fall back to stateless operations.
 
-* **Response Cleaning**: All cleaning of LLM output (removing `<think>` tags, boilerplate prefixes like `Assistant:`,
-  etc.) happens *after* the raw, unmodified response is received from the `llmapis` layer. This logic is implemented in
-  parallel by `post_process_llm_output` (for non-streaming) and the `$StreamingResponseHandler$` (for streaming) to
-  ensure consistent behavior.
+* **Response Cleaning**: All cleaning of LLM output (removing `<think>` tags, boilerplate prefixes, etc.) happens after
+  the raw, unmodified response is received from the `llmapis` layer. This logic is implemented in parallel by
+  `post_process_llm_output` (for non-streaming) and the `$StreamingResponseHandler$` (for streaming) to ensure
+  consistent behavior.

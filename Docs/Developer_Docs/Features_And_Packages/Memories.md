@@ -55,6 +55,9 @@ be strategically placed within workflows.
         * **`memories_fts` table**: A virtual table that indexes the metadata for fast searching. The indexed columns
           are `title`, `summary`, `entities`, `key_phrases`, and the original `memory_text`. Search relevance is
           determined by the **`bm25`** ranking function.
+        * **Recency Scoring**: The database connection is initialized with a custom SQL function, `recency_score`, which
+          can calculate a time-decay boost for memories. While the default search query uses only `bm25` ranking, this
+          function is available for developers to implement time-sensitive search ranking logic.
     4. **Vector Memory Tracker (`vector_memory_tracker` table)**: Located inside the `<id>_vector_memory.db`, this table
        stores the hash of the last message processed for vector memory creation. This crucial feature prevents the
        system from re-processing the same conversation history on subsequent runs.
@@ -105,9 +108,14 @@ These nodes perform fast, inexpensive "read" operations and are powered by **`Me
     * **Purpose**: Performs a highly relevant, keyword-based search against the discussion-specific vector memory
       database.
     * **Process Flow**: This node takes a string of keywords. The keywords **must be separated by semicolons (`;`)**.
-      The `MemoryService` calls `vector_db_utils.search_memories_by_keyword`, which sanitizes each keyword, truncates
-      the list to a maximum of 60, and constructs a `MATCH` query using **`OR` logic**. It executes the query against
-      the SQLite FTS5 index, returning the most relevant memory summaries ranked by the `bm25` algorithm.
+      The `MemoryService` calls `vector_db_utils.search_memories_by_keyword`.
+    * **Keyword Handling**: Internally, this process is robust:
+        * **Sanitization**: Each keyword is passed through the `_sanitize_fts5_term` function, which wraps it in double
+          quotes (`"`) to handle multi-word phrases and prevent FTS5 syntax errors.
+        * **Query Construction**: The sanitized terms are combined into a `MATCH` query using **`OR` logic**.
+        * **Limits**: The system truncates the keyword list to a maximum of `60` (`MAX_KEYWORDS_FOR_SEARCH`) to avoid
+          exceeding SQLite's expression depth limit.
+        * **Ranking**: The final results are ranked by relevance using the `bm25` algorithm.
 
 * **`FullChatSummary`**: Retrieves the holistic, rolling summary of the conversation from `<id>_summary.jsonl`.
 
@@ -151,7 +159,7 @@ conversation to provide context on its origin.
        hashed_chunks = read_chunks_with_hashes(filepath)
        if not hashed_chunks:
            return "No memories have been generated yet"
-       
+
        chunks = extract_text_blocks_from_hashed_chunks(hashed_chunks)
        return '--ChunkBreak--'.join(chunks[:5])
    ```
