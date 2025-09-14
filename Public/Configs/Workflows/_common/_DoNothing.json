@@ -1,0 +1,8 @@
+[
+  {
+    "title": "Static Response",
+    "agentName": "Static Response Node One",
+    "type": "StaticResponse",
+    "content": "No workflow was called for this route."
+  }
+]

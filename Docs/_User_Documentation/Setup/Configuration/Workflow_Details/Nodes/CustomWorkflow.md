@@ -19,7 +19,7 @@ of the child workflow is then returned to the parent and saved as the output of 
 |:------------------------------------|:-----------------|:---------|:--------|:-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | **`type`**                          | String           | Yes      | N/A     | Must be set to `"CustomWorkflow"`.                                                                                                                                                                                       |
 | **`title`**                         | String           | No       | ""      | A descriptive title for the node shown in logs.                                                                                                                                                                          |
-| **`workflowName`**                  | String           | Yes      | N/A     | The filename of the child workflow to execute (e.g., `"MySubWorkflow.json"`).                                                                                                                                            |
+| **`workflowName`**                  | String           | Yes      | N/A     | The filename of the child workflow to execute (e.g., `"MySubWorkflow.json"`) without the `.json`.                                                                                                                        |
 | **`is_responder`**                  | Boolean          | No       | `false` | Determines if this node provides the final, user-facing response. If `true`, the child workflow's output is streamed to the user. If `false`, the output is captured as a variable for later nodes in the parent to use. |
 | **`scoped_variables`**              | Array of Strings | No       | `[]`    | **(Recommended)** The list of values to pass from the parent into the child workflow's global scope. These become available to *all nodes* in the child workflow as `{agent1Input}`, `{agent2Input}`, etc.               |
 | **`workflowUserFolderOverride`**    | String           | No       | `null`  | Specifies a user folder from which to load the `workflowName`. Use `_common` for workflows shared across all users.                                                                                                      |
@@ -68,7 +68,7 @@ summarize the findings.
 {
   "title": "Custom Wiki Search 1: Initial Search",
   "type": "CustomWorkflow",
-  "workflowName": "Util_Workflow_Wiki_Search_And_Summarize.json",
+  "workflowName": "Util_Workflow_Wiki_Search_And_Summarize",
   "workflowUserFolderOverride": "_common",
   "is_responder": false,
   "scoped_variables": [

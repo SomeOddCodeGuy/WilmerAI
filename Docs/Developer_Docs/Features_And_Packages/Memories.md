@@ -78,9 +78,11 @@ These nodes perform the "heavy lifting" of creating and saving memories. They ar
     * **Process Flow**:
         1. The node triggers `SlowButQualityRAGTool.handle_discussion_id_flow`.
         2. The tool checks if new memories are needed by comparing the current conversation history against the last
-           processed point (using either the file-based memory ledger hash or the vector memory tracker hash).
-        3. Based on the `useVectorForQualityMemory` flag in the central discussion config, the tool proceeds to generate
-           either vector or file-based memories.
+           processed point.
+        3. **(Correction Start)** It checks the `useVectorForQualityMemory` flag from the config to determine its
+           behavior: if `true`, it generates **vector memories**; if `false`, it generates **file-based memories**. This
+           flag controls the behavior of the `QualityMemory` node specifically. Other nodes (like `RecentMemory`) can
+           trigger the creation of file-based memories independently of this flag's value. **(Correction End)**
         4. For the chosen memory type, the tool generates memories using one of two methods, based on its configuration:
             * **A) Workflow-Based Generation (Recommended)** ✨: If the config specifies a `fileMemoryWorkflowName` or
               `vectorMemoryWorkflowName`, the tool executes that sub-workflow.

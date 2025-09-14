@@ -317,7 +317,7 @@ non-streaming.
            # (This is a simplified example)
            messages = [{"role": m["role"], "content": m["content"][0]["text"]} for m in data.get("messages", [])]
            
-           stream = data.get("stream", False)
+           stream = data.get("stream", True)
 
            # 3. Handoff to the workflow engine
            llm_response = handle_user_prompt(messages, stream=stream)

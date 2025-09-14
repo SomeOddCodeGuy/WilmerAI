@@ -218,7 +218,7 @@ JSON Output:"""
         filtered_chunks = [s for s in search_result_chunks if s]
         return '\n\n'.join(filtered_chunks)
 
-    def handle_discussion_id_flow(self, context: ExecutionContext) -> None:
+    def handle_discussion_id_flow(self, context: ExecutionContext, force_file_memory: bool = False) -> None:
         """
         Handles the automatic generation of long-term memories for a conversation.
 
@@ -228,6 +228,7 @@ JSON Output:"""
 
         Args:
             context (ExecutionContext): The current workflow execution context.
+            force_file_memory (bool): If True, forces the file-based memory path, ignoring the config.
         """
         if len(context.messages) < 3:
             logger.debug("Less than 3 messages, no memory will be generated.")
@@ -236,48 +237,65 @@ JSON Output:"""
         messages_copy = deepcopy(context.messages)
         # This method uses a specific, separate config file to govern its behavior.
         discussion_id_workflow_config = load_config(get_discussion_id_workflow_path())
-        use_vector_memory = discussion_id_workflow_config.get('useVectorForQualityMemory', False)
+        use_vector_memory_from_config = discussion_id_workflow_config.get('useVectorForQualityMemory', False)
 
-        if use_vector_memory:
+        if use_vector_memory_from_config and not force_file_memory:
             vector_db_utils.initialize_vector_db(context.discussion_id)
             logger.debug("Running vector memory check.")
-            new_message_content_to_process = []
-            last_processed_message_for_hash_update = None
+
             lookback_turns = discussion_id_workflow_config.get('vectorMemoryLookBackTurns', 3)
             if len(messages_copy) <= lookback_turns:
                 return
 
-            eligible_messages = messages_copy[:-lookback_turns]
-            last_checked_hash = vector_db_utils.get_last_vector_check_hash(context.discussion_id)
+            # Define the boundary for eligible messages (we won't process the last few turns)
+            end_index = len(messages_copy) - lookback_turns
 
-            if not last_checked_hash:
-                new_message_content_to_process = eligible_messages
-            else:
-                start_index = -1
-                for i in range(len(eligible_messages) - 1, -1, -1):
-                    if hash_single_message(eligible_messages[i]) == last_checked_hash:
-                        start_index = i + 1
+            # 1. Get the history of the last N hashes, not just one.
+            hash_history = vector_db_utils.get_vector_check_hash_history(context.discussion_id, limit=10)
+
+            start_index = 0  # Default to the beginning if no hash is found
+            if hash_history:
+                found_match = False
+                # 2. Loop through the historical hashes, from newest to oldest.
+                for historical_hash in hash_history:
+                    # 3. Search the full conversation for the current hash in the loop.
+                    for i in range(end_index - 1, -1, -1):
+                        if hash_single_message(messages_copy[i]) == historical_hash:
+                            # 4. If a hash is found, we have our starting point. Break the loops.
+                            start_index = i + 1
+                            found_match = True
+                            logger.info(
+                                f"Found matching historical hash at message index {i}. Starting memory generation from there.")
+                            break
+                    if found_match:
                         break
-                if start_index != -1:
-                    new_message_content_to_process = eligible_messages[start_index:]
-                else:
+
+                if not found_match:
                     logger.warning(
-                        f"Vector memory hash for {context.discussion_id} not found. Reprocessing all eligible messages.")
-                    new_message_content_to_process = eligible_messages
+                        f"Could not find any of the last {len(hash_history)} historical hashes for {context.discussion_id}. Reprocessing all eligible messages.")
+                    # If no hashes in history match, start_index remains 0.
+
+            new_message_content_to_process = []
+            if start_index < end_index:
+                new_message_content_to_process = messages_copy[start_index:end_index]
 
             if new_message_content_to_process:
                 last_processed_message_for_hash_update = new_message_content_to_process[-1]
-                logger.info("Threshold met. Generating new vector memories.")
+                logger.info(
+                    f"Threshold met. Found {len(new_message_content_to_process)} new messages. Generating new vector memories.")
+
                 chunk_size = discussion_id_workflow_config.get('vectorMemoryChunkEstimatedTokenSize', 1000)
                 max_messages = discussion_id_workflow_config.get('vectorMemoryMaxMessagesBetweenChunks', 5)
                 hashed_chunks = chunk_messages_with_hashes(new_message_content_to_process, chunk_size,
                                                            max_messages_before_chunk=max_messages)
                 text_chunks = extract_text_blocks_from_hashed_chunks(hashed_chunks)
-                logger.info("Using new vector memory creation flow.")
+
                 self.generate_and_store_vector_memories(text_chunks, discussion_id_workflow_config, context)
+
                 if last_processed_message_for_hash_update:
                     new_hash = hash_single_message(last_processed_message_for_hash_update)
-                    vector_db_utils.update_last_vector_check_hash(context.discussion_id, new_hash)
+                    # Use the new function to add the hash to the log
+                    vector_db_utils.add_vector_check_hash(context.discussion_id, new_hash)
         else:
             # This is the file-based memory path
             logger.debug("Running file-based memory check.")

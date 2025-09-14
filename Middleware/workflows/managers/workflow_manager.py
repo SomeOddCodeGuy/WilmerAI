@@ -202,7 +202,9 @@ class WorkflowManager:
             "ConditionalCustomWorkflow": sub_workflow_handler,
             "WorkflowLock": specialized_node_handler,
             "GetCustomFile": specialized_node_handler,
+            "SaveCustomFile": specialized_node_handler,
             "ImageProcessor": specialized_node_handler,
+            "StaticResponse": specialized_node_handler,
         }
 
     def run_workflow(self, messages, request_id, discussionId: str = None, stream: bool = False,

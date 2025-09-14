@@ -124,10 +124,11 @@ def initialize_vector_db(discussion_id: str):
         ''')
         # Table to track the last processed message hash.
         conn.execute('''
-            CREATE TABLE IF NOT EXISTS vector_memory_tracker (
-                discussion_id TEXT PRIMARY KEY,
-                last_checked_message_hash TEXT NOT NULL,
-                last_updated TIMESTAMP NOT NULL
+            CREATE TABLE IF NOT EXISTS vector_memory_hash_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                discussion_id TEXT NOT NULL,
+                message_hash TEXT NOT NULL,
+                timestamp DATETIME NOT NULL
             );
         ''')
         conn.commit()
@@ -264,39 +265,44 @@ def search_memories_by_keyword(discussion_id: str, search_query: str, limit: int
             conn.close()
 
 
-def get_last_vector_check_hash(discussion_id: str) -> Optional[str]:
+def get_vector_check_hash_history(discussion_id: str, limit: int = 10) -> List[str]:
     """
-    Retrieves the last processed message hash from the vector memory tracker.
+    Retrieves a list of the most recent message hashes from the log.
 
     Args:
         discussion_id (str): The identifier for the discussion.
+        limit (int): The maximum number of recent hashes to retrieve.
 
     Returns:
-        Optional[str]: The hash of the last message processed for vector memory, or None if not found.
+        List[str]: A list of message hashes, ordered from most recent to oldest.
     """
     conn = get_db_connection(discussion_id)
     if conn is None:
-        return None
-
+        return []
     try:
         cursor = conn.cursor()
         cursor.execute(
-            'SELECT last_checked_message_hash FROM vector_memory_tracker WHERE discussion_id = ?',
-            (discussion_id,)
+            '''
+            SELECT message_hash FROM vector_memory_hash_log
+            WHERE discussion_id = ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+            ''',
+            (discussion_id, limit)
         )
-        row = cursor.fetchone()
-        return row['last_checked_message_hash'] if row else None
+        rows = cursor.fetchall()
+        return [row['message_hash'] for row in rows] if rows else []
     except Exception as e:
-        logger.error(f"Failed to get last vector check hash for {discussion_id}: {e}")
-        return None
+        logger.error(f"Failed to get vector check hash history for {discussion_id}: {e}")
+        return []
     finally:
         if conn:
             conn.close()
 
 
-def update_last_vector_check_hash(discussion_id: str, message_hash: str):
+def add_vector_check_hash(discussion_id: str, message_hash: str):
     """
-    Updates or inserts the last processed message hash in the vector memory tracker.
+    Adds a new processed message hash to the historical log.
 
     Args:
         discussion_id (str): The identifier for the discussion.
@@ -305,22 +311,18 @@ def update_last_vector_check_hash(discussion_id: str, message_hash: str):
     conn = get_db_connection(discussion_id)
     if conn is None:
         return
-
     try:
         conn.execute(
             '''
-            INSERT INTO vector_memory_tracker (discussion_id, last_checked_message_hash, last_updated)
+            INSERT INTO vector_memory_hash_log (discussion_id, message_hash, timestamp)
             VALUES (?, ?, ?)
-            ON CONFLICT(discussion_id) DO UPDATE SET
-                last_checked_message_hash = excluded.last_checked_message_hash,
-                last_updated = excluded.last_updated;
             ''',
-            (discussion_id, message_hash, datetime.datetime.utcnow())
+            (discussion_id, message_hash, datetime.datetime.now(datetime.timezone.utc))
         )
         conn.commit()
-        logger.debug(f"Updated last vector check hash for {discussion_id}")
+        logger.debug(f"Added new vector check hash to log for {discussion_id}")
     except Exception as e:
-        logger.error(f"Failed to update last vector check hash for {discussion_id}: {e}")
+        logger.error(f"Failed to add vector check hash for {discussion_id}: {e}")
     finally:
         if conn:
             conn.close()

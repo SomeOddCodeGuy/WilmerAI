@@ -53,7 +53,7 @@ class CompletionsAPI(MethodView):
         data: Dict[str, Any] = request.json
         logger.debug(f"CompletionsAPI request received: {json.dumps(_sanitize_log_data(data))}")
         prompt: str = data.get("prompt", "")
-        stream: bool = data.get("stream", False)
+        stream: bool = data.get("stream", True)
         messages = parse_conversation(prompt)
 
         if stream:
