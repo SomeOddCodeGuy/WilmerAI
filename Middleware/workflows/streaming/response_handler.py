@@ -94,7 +94,9 @@ class StreamingResponseHandler:
             if isinstance(custom_texts_endpoint, str):
                 custom_texts_endpoint = [custom_texts_endpoint]
 
-            for custom_text in custom_texts_endpoint:
+            for custom_text_raw in custom_texts_endpoint:
+                custom_text = custom_text_raw.strip()
+
                 if custom_text and content.startswith(custom_text):
                     content = content[len(custom_text):].lstrip()
                     break  # Stop after first match

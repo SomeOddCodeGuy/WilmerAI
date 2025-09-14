@@ -217,7 +217,7 @@ def post_process_llm_output(text: str, endpoint_config: Dict, workflow_node_conf
     from Middleware.api import api_helpers
     from Middleware.utilities.config_utils import get_is_chat_complete_add_user_assistant, \
         get_is_chat_complete_add_missing_assistant
-
+    
     processed_text = remove_thinking_from_text(text, endpoint_config)
     content = processed_text.lstrip()
 
@@ -236,7 +236,9 @@ def post_process_llm_output(text: str, endpoint_config: Dict, workflow_node_conf
         if isinstance(custom_texts_endpoint, str):
             custom_texts_endpoint = [custom_texts_endpoint]
 
-        for custom_text in custom_texts_endpoint:
+        for custom_text_raw in custom_texts_endpoint:
+            custom_text = custom_text_raw.strip()
+
             if custom_text and content.startswith(custom_text):
                 content = content[len(custom_text):].lstrip()
                 break
@@ -252,6 +254,8 @@ def post_process_llm_output(text: str, endpoint_config: Dict, workflow_node_conf
                                get_is_chat_complete_add_missing_assistant())
     if should_remove_assistant and content.startswith("Assistant:"):
         content = api_helpers.remove_assistant_prefix(content)
+
+    logger.info(f"--- POST-CLEANING TEXT ---\n{content}\n-------------------------")
 
     if endpoint_config.get("trimBeginningAndEndLineBreaks", False):
         return content.strip()

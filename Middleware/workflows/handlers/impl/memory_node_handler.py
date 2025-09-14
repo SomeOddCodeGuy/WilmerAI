@@ -79,7 +79,7 @@ class MemoryNodeHandler(BaseHandler):
 
         elif node_type == "RecentMemory":
             if context.discussion_id is not None:
-                self._handle_memory_file(context)
+                self._handle_memory_file(context, force_file_memory=True)
             return self._handle_recent_memory_parser(context.request_id, context.discussion_id, context.messages)
 
         elif node_type == "RecentMemorySummarizerTool":
@@ -114,7 +114,7 @@ class MemoryNodeHandler(BaseHandler):
         else:
             raise ValueError(f"MemoryNodeHandler received unhandled node type: {node_type}")
 
-    def _handle_memory_file(self, context: ExecutionContext) -> Any:
+    def _handle_memory_file(self, context: ExecutionContext, force_file_memory: bool = False) -> Any:
         """
         Delegates to the RAG tool to handle the full memory creation workflow.
 
@@ -124,7 +124,7 @@ class MemoryNodeHandler(BaseHandler):
         Returns:
             Any: The result from the memory creation process.
         """
-        return self.slow_but_quality_rag_service.handle_discussion_id_flow(context)
+        return self.slow_but_quality_rag_service.handle_discussion_id_flow(context, force_file_memory)
 
     def _save_summary_to_file(self, context: ExecutionContext, summary_override: str = None,
                               last_hash_override: str = None) -> Any:
@@ -257,7 +257,7 @@ class MemoryNodeHandler(BaseHandler):
                 summary_chunk = read_chunks_with_hashes(filepath)
                 return extract_text_blocks_from_hashed_chunks(summary_chunk) if summary_chunk else "No summary found"
 
-            self._handle_memory_file(context)
+            self._handle_memory_file(context, force_file_memory=True)
 
             mem_filepath = get_discussion_memory_file_path(context.discussion_id)
             hashed_memory_chunks = read_chunks_with_hashes(mem_filepath)

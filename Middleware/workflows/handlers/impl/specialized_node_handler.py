@@ -1,14 +1,15 @@
 # /Middleware/workflows/handlers/impl/specialized_node_handler.py
 
 import logging
+import time
 from copy import deepcopy
-from typing import Any
+from typing import Any, Dict, Generator
 
 from Middleware.common import instance_global_variables
 from Middleware.exceptions.early_termination_exception import EarlyTerminationException
 from Middleware.services.llm_dispatch_service import LLMDispatchService
 from Middleware.services.locking_service import LockingService
-from Middleware.utilities.file_utils import load_custom_file
+from Middleware.utilities.file_utils import load_custom_file, save_custom_file
 from Middleware.workflows.handlers.base.base_workflow_node_handler import BaseHandler
 from Middleware.workflows.models.execution_context import ExecutionContext
 
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 class SpecializedNodeHandler(BaseHandler):
     """
-    A router for miscellaneous workflow nodes like "WorkflowLock" and "GetCustomFile".
+    A router for miscellaneous workflow nodes like "WorkflowLock", "GetCustomFile", and "SaveCustomFile".
     """
 
     def __init__(self, **kwargs):
@@ -49,10 +50,58 @@ class SpecializedNodeHandler(BaseHandler):
         elif node_type == "GetCustomFile":
             return self.handle_get_custom_file(context)
 
+        elif node_type == "SaveCustomFile":
+            return self.handle_save_custom_file(context)
+
         elif node_type == "ImageProcessor":
             return self.handle_image_processor_node(context)
 
+        elif node_type == "StaticResponse":
+            return self.handle_static_response(context)
+
         raise ValueError(f"Unknown specialized node type: {node_type}")
+
+    def _stream_static_content(self, content: str) -> Generator[Dict[str, Any], None, None]:
+        """
+        A generator that yields a static string word by word to simulate a stream.
+        This mimics the raw output format of an LLM API handler.
+        """
+        words = content.split()
+        if not words:
+            yield {'token': '', 'finish_reason': 'stop'}
+            return
+
+        words_per_second = 50
+        delay = 1.0 / words_per_second
+
+        for word in words:
+            time.sleep(delay)
+            # Yield in the standardized dictionary format expected by the WorkflowProcessor
+            yield {'token': word + ' ', 'finish_reason': None}
+
+        # Signal the end of the stream
+        yield {'token': '', 'finish_reason': 'stop'}
+
+    def handle_static_response(self, context: ExecutionContext) -> Any:
+        """
+        Handles the logic for a "StaticResponse" node.
+
+        Returns a hardcoded string, resolving any workflow variables within it.
+        If streaming is enabled for the node, it returns a generator that
+        yields the string word-by-word.
+        """
+        content_template = context.config.get("content", "")
+
+        resolved_content = self.workflow_variable_service.apply_variables(
+            content_template, context
+        )
+
+        if context.stream:
+            logger.debug("Returning static content as a stream.")
+            return self._stream_static_content(resolved_content)
+        else:
+            logger.debug("Returning static content as a single string.")
+            return resolved_content
 
     def handle_workflow_lock(self, context: ExecutionContext) -> None:
         """
@@ -104,6 +153,36 @@ class SpecializedNodeHandler(BaseHandler):
             custom_return_delimiter = delimiter
 
         return load_custom_file(filepath=filepath, delimiter=delimiter, custom_delimiter=custom_return_delimiter)
+
+    def handle_save_custom_file(self, context: ExecutionContext) -> str:
+        """
+        Handles the logic for a "SaveCustomFile" node by saving content to a file.
+
+        Args:
+            context (ExecutionContext): The central object containing all runtime data for the node.
+
+        Returns:
+            str: A message indicating the result of the save operation.
+        """
+        filepath = context.config.get("filepath")
+        if not filepath:
+            return "No filepath specified"
+
+        content_template = context.config.get("content")
+        if content_template is None:
+            return "No content specified"
+
+        # Resolve any workflow variables within the content
+        resolved_content = self.workflow_variable_service.apply_variables(
+            content_template, context
+        )
+
+        try:
+            save_custom_file(filepath=filepath, content=resolved_content)
+            return f"File successfully saved to {filepath}"
+        except Exception as e:
+            logger.error(f"Failed to save file to {filepath}. Error: {e}")
+            return f"Error saving file: {e}"
 
     def handle_image_processor_node(self, context: ExecutionContext) -> str:
         """

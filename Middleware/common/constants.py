@@ -8,5 +8,5 @@ VALID_NODE_TYPES = [
     "SlowButQualityRAG", "QualityMemory", "PythonModule", "OfflineWikiApiFullArticle",
     "OfflineWikiApiBestFullArticle", "OfflineWikiApiTopNFullArticles", "OfflineWikiApiPartialArticle",
     "WorkflowLock", "CustomWorkflow", "ConditionalCustomWorkflow", "GetCustomFile", "ImageProcessor",
-    "VectorMemorySearch"
+    "VectorMemorySearch", "SaveCustomFile", "StaticResponse"
 ]

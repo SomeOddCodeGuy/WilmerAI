@@ -258,3 +258,26 @@ def load_custom_file(
         return content
     else:
         return "Custom instruction file did not exist"
+
+
+# ADD THIS NEW FUNCTION
+def save_custom_file(filepath: str, content: str) -> None:
+    """
+    Saves content to a text file, creating parent directories if they don't exist.
+
+    Args:
+        filepath (str): The path where the file will be saved.
+        content (str): The string content to write to the file.
+
+    Raises:
+        IOError: If there is an issue writing to the file.
+    """
+    try:
+        file_path = Path(filepath)
+        # Create parent directories if they don't exist
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with file_path.open("w", encoding="utf-8") as f:
+            f.write(content)
+    except Exception as e:
+        raise IOError(f"Could not write to file at {filepath}") from e

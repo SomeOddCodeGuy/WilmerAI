@@ -42,10 +42,9 @@ and any number of other top-level keys that will serve as custom variables.
 }
 ```
 
-* **Custom Variables**: As seen with `"persona"` and `"default_endpoint"`, any key-value pair defined at the root of the
-  JSON object (except for `nodes`) is automatically registered as a reusable variable. These can be used in any valid *
-  *content field** within a node.
-
+* **Custom Variables**: As seen with `"persona"`, any key-value pair defined at the root of the JSON object (except for
+  `nodes`) is automatically registered as a reusable variable. These can be used in any valid **content field** within a
+  node.
 * **`nodes` list**: This is a required list of node objects that will be executed in order.
 
 For backward compatibility, a simple list of nodes is also supported, but the dictionary structure is the correct modern
@@ -92,7 +91,7 @@ property.
     {
       "title": "Call Summarizer",
       "type": "CustomWorkflow",
-      "workflowName": "summarize.json",
+      "workflowName": "summarize",
       "scoped_variables": [
         "{agent1Output}"
       ]
@@ -125,7 +124,11 @@ This is a catalog of available node types, validated against the `WorkflowManage
 * **`PythonModule`**: Executes a custom Python script as long as it matches the required signature, and returns the
   string output from that script as the nodes output.
 * **`GetCustomFile`**: Loads a `.txt` file from disk and places its content into the node's output.
+* **`SaveCustomFile`**: Writes string content to a local text file. Its `filepath` and `content` fields support
+  variables. The node's output is a success or error message.
 * **`ImageProcessor`**: Generates a text description from an image provided by the user.
+* **`StaticResponse`**: Returns a hardcoded string from its `content` field. Can act as a responder node and supports
+  streaming.
 
 #### Workflow Orchestration Nodes
 
@@ -161,6 +164,11 @@ This is a catalog of available node types, validated against the `WorkflowManage
 In addition to custom variables and data flow variables, the system provides a rich set of built-in variables that can
 be used in any valid string field.
 
+It is important to note that the only user defined variables that exist are the constants, which can be added to the top
+of the workflow, above the Nodes array. It is not possible for a user to create new variables with their own unique
+names. If the user decides that they want a dynamically assigned variable called `{last_user_who_spoke}`, which is not a
+defined variable within the Wilmer system- that will not work. At best, they could assign it as a constant.
+
 #### Variable Templating Engine
 
 * **Standard Python Format**: **`{variable_name}`** is the default. The system uses Python's `str.format()` method.
@@ -169,13 +177,13 @@ be used in any valid string field.
 
 #### Date & Time Variables
 
-* `{todays_date_pretty}`: e.g., "August 30, 2025"
-* `{todays_date_iso}`: e.g., "2025-08-30"
-* `{current_time_12h}`: e.g., "08:04 PM"
-* `{current_time_24h}`: e.g., "20:04"
-* `{current_month_full}`: e.g., "August"
+* `{todays_date_pretty}`: e.g., "September 13, 2025"
+* `{todays_date_iso}`: e.g., "2025-09-13"
+* `{current_time_12h}`: e.g., "04:30 PM"
+* `{current_time_24h}`: e.g., "16:30"
+* `{current_month_full}`: e.g., "September"
 * `{current_day_of_week}`: e.g., "Saturday"
-* `{current_day_of_month}`: e.g., "30"
+* `{current_day_of_month}`: e.g., "13"
 
 #### Conversation History Variables
 
@@ -219,17 +227,17 @@ workflows.
 
 **This is the most important section.** The system's code confirms that variable substitution (`{...}`) is performed by
 node handlers on specific fields, not by the core workflow engine. This creates a critical distinction between what can
-and cannot be a variable. In general, variable usage is limited to systemprompt, prompt, and some input fields like
-those found on custom workflows.
+and cannot be a variable.
 
 **The principle is: Configuration keys are static, content keys can be dynamic.**
 
 #### ✅ Fields that SUPPORT variables (Content)
 
-Below are the only fields that support variables. Any other fields on nodes will not replace variables within them
+Below are the only fields that support variables. Any other fields on nodes will not replace variables within them.
 
 * `prompt`
 * `systemPrompt`
+* `content` (e.g., in the `SaveCustomFile` node)
 * `promptToSearch` (and similar input fields on specialized nodes)
-* `filepath` (in `GetCustomFile`, the handler specifically processes variables for this field)
+* `filepath` (in `GetCustomFile` and `SaveCustomFile`, the handlers specifically process variables for this field)
 * `scoped_variables` (in `CustomWorkflow` nodes, to pass the variables into the workflow being called)

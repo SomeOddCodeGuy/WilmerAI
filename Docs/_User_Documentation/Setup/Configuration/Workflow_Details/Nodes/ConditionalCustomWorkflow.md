@@ -56,9 +56,9 @@ user's message in as context.
   "is_responder": true,
   "conditionalKey": "{agent1Output}",
   "conditionalWorkflows": {
-    "Python": "PythonCodingWorkflow.json",
-    "JavaScript": "JavaScriptCodingWorkflow.json",
-    "Default": "GeneralCodingWorkflow.json"
+    "Python": "PythonCodingWorkflow",
+    "JavaScript": "JavaScriptCodingWorkflow",
+    "Default": "GeneralCodingWorkflow"
   },
   "scoped_variables": [
     "{lastUserMessage}"
@@ -75,8 +75,8 @@ user's message in as context.
 ```
 
 * **`conditionalKey`**: The node will check the value of `{agent1Output}`.
-* **`conditionalWorkflows`**: If the value is (case-insensitively) `"Python"`, it will run `PythonCodingWorkflow.json`.
-  If it's `"JavaScript"`, it runs `JavaScriptCodingWorkflow.json`. For anything else, it falls back to the `"Default"`
+* **`conditionalWorkflows`**: If the value is (case-insensitively) `"Python"`, it will run `PythonCodingWorkflow`.
+  If it's `"JavaScript"`, it runs `JavaScriptCodingWorkflow`. For anything else, it falls back to the `"Default"`
   workflow.
 * **`scoped_variables`**: The user's last message will be passed to the chosen workflow and be available as
   `{agent1Input}`.

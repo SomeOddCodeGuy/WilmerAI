@@ -1,10 +1,11 @@
 ### **Feature Guide: WilmerAI's Memory System**
 
-WilmerAI uses a three-part memory system for managing long-term conversational context. It is designed to provide both
-chronological recall and relevant information retrieval.
+WilmerAI uses a sophisticated, multi-layered memory system for managing long-term conversational context. It is designed
+to provide both chronological recall and relevant information retrieval by allowing its different memory components to
+work in concert.
 
-The system separates memory creation from retrieval to maintain response speed during stateful conversations. To use
-persistent memory, the `[DiscussionId]` tag must be included in the initial user message.
+The system separates memory creation from retrieval to maintain response speed. To use persistent memory, the
+`[DiscussionId]` tag must be included in the initial user message.
 
 -----
 
@@ -13,7 +14,8 @@ persistent memory, the `[DiscussionId]` tag must be included in the initial user
 WilmerAI's memory consists of three components. Each is stored in a separate file and linked by a unique discussion ID.
 
 * **Long-Term Memory File (`<id>_memories.jsonl`)**: This file stores chronological summaries of the conversation. The
-  system periodically reviews the chat history, divides it into chunks, and uses an LLM to summarize each chunk.
+  system periodically reviews the chat history, divides it into chunks, and uses an LLM to summarize each chunk. This
+  forms the backbone of the conversation's timeline.
 * **Rolling Chat Summary (`<id>_summary.jsonl`)**: This file contains a single, continuously updated summary of the
   entire conversation. It synthesizes the chunks from the Long-Term Memory File to provide a high-level overview.
 * **Searchable Vector Memory (`<id>_vector_memory.db`)**: A dedicated vector database for the discussion. When a memory
@@ -31,13 +33,16 @@ intensive) and nodes that retrieve them (fast).
 
 These nodes analyze chat history and write data to the memory files.
 
-* **`QualityMemory`**: The primary node for creating and updating memories. It can generate both **Long-Term File** and
-  **Vector** memories depending on the configuration.
+* **`QualityMemory`**: The primary node for creating and updating **vector memories**. When this node is run, it checks
+  the conversation history and generates new, structured memories for the searchable vector database.
+    * *Note: If `useVectorForQualityMemory` is set to `false` in the configuration, this node will fall back to
+      creating **file-based** memories instead.*
+  <!-- end list -->
   ```json
   {
-    "id": "create_memories_node",
+    "id": "create_vector_memories_node",
     "type": "QualityMemory",
-    "name": "Create/Update All Memories"
+    "name": "Create/Update Vector Memories"
   }
   ```
 * **`ChatSummarySummarizer`**: This node updates the **Rolling Chat Summary**. It processes new chunks from the
@@ -60,8 +65,8 @@ memories before reading.
 * **Pure/Fast Readers**: These nodes perform a direct read from the memory files. They are fast and suitable for
   providing context to an LLM call without adding latency.
 
-* **Read-and-Update Nodes**: Before reading, these nodes first trigger the memory creation process to ensure the data is
-  current. This can introduce latency.
+* **Read-and-Update Nodes**: Before reading, these nodes first trigger the **file-based** memory creation process to
+  ensure the data is current. This can introduce latency but guarantees the freshest chronological context.
 
 * **`RecentMemorySummarizerTool`** (Pure/Fast Reader)
   Reads the last few summary chunks from the Long-Term Memory File, providing context on recent parts of the
@@ -80,8 +85,8 @@ memories before reading.
   ```
 
 * **`RecentMemory`** (Read-and-Update Node)
-  Retrieves recent memories, but first runs the `QualityMemory` creation process to ensure long-term memories are
-  current.
+  Retrieves recent memories, but first triggers the **file-based memory creation process** to ensure the long-term
+  memory file is current. This update logic is independent of the vector memory system.
 
   ```json
   {
@@ -92,7 +97,7 @@ memories before reading.
   ```
 
 * **`GetCurrentSummaryFromFile`** (Pure/Fast Reader)
-  Performs a direct read of the Rolling Chat Summary file (`_summary.jsonl`) to get the full conversation summary.
+  Performs a direct read of the Rolling Chat Summary file (`_summary.jsonl`).
 
   ```json
   {
@@ -103,7 +108,8 @@ memories before reading.
   ```
 
 * **`FullChatSummary`** (Read-and-Update Node)
-  Reads the Rolling Chat Summary after ensuring that both the long-term memories and the summary itself are updated.
+  Reads the Rolling Chat Summary after ensuring that both the **file-based long-term memories** and the summary itself
+  are updated.
 
   ```json
   {
@@ -144,8 +150,8 @@ A typical high-performance flow is as follows:
 1. **Read Memory:** A fast reader node (`VectorMemorySearch`, `GetCurrentSummaryFromFile`) pulls existing context.
 2. **AI Responds:** The primary LLM generates a response using the context.
 3. **Workflow Lock:** The workflow locks after delivering the response to the user.
-4. **Create Memory:** A creator node (`QualityMemory`) runs in a non-blocking background process to analyze the latest
-   exchange and update memory files for the next turn.
+4. **Create Memory:** A creator node (like `QualityMemory`) runs in a non-blocking background process to analyze the
+   latest exchange and update memory files for the next turn.
 
 This architecture allows for a responsive chat experience by not blocking the user response on memory processing.
 
@@ -153,28 +159,33 @@ This architecture allows for a responsive chat experience by not blocking the us
 
 ## Configuration
 
-Memory behavior is configured in the `_DiscussionId-MemoryFile-Workflow-Settings.json` file. Memory generation can be
-defined using direct LLM settings (prompts, endpoint) or by specifying a sub-workflow for more complex logic. **If a
-sub-workflow is specified for a memory type, its direct LLM settings are ignored.**
+Memory behavior is configured in the `_DiscussionId-MemoryFile-Workflow-Settings.json` file. This file contains settings
+for both vector and file-based memory generation.
 
-The `useVectorForQualityMemory` flag controls which memory system is active.
+### The `useVectorForQualityMemory` Flag
 
-* If `false`, `QualityMemory` writes to the Long-Term Memory file.
-* If `true`, `QualityMemory` creates entries in the Searchable Vector Memory.
+This flag determines the **default behavior of the `QualityMemory` node**.
+
+* If `true`, the `QualityMemory` node will create **vector memories**.
+* If `false`, the `QualityMemory` node will create **file-based memories**.
+
+This flag **does not disable the file-based memory system**. Nodes like `RecentMemory` and `FullChatSummary` will *
+*always** trigger the creation of file-based memories when their update cycle is run, regardless of this setting. This
+allows you to create vector memories with `QualityMemory` while simultaneously maintaining the file-based memory
+timeline with other nodes in the same workflow.
 
 *Example `_DiscussionId-MemoryFile-Workflow-Settings.json`:*
 
 ```json
 {
-  // Sets the memory system used by the QualityMemory node.
+  // Sets the default behavior for the QualityMemory node.
   "useVectorForQualityMemory": true,
   // ====================================================================
-  // == Vector Memory Configuration (Only used if the above is true) ==
+  // == Vector Memory Configuration
   // ====================================================================
-
   // Specify a workflow to generate the structured JSON for a vector memory.
   "vectorMemoryWorkflowName": "my-vector-memory-workflow",
-  // The settings below are IGNORED if "vectorMemoryWorkflowName" is set.
+  // The settings below are used if "vectorMemoryWorkflowName" is not set.
   "vectorMemoryEndpointName": "gpt-4-turbo",
   "vectorMemoryPreset": "default_preset_for_json_output",
   "vectorMemoryMaxResponseSizeInTokens": 1024,
@@ -182,22 +193,20 @@ The `useVectorForQualityMemory` flag controls which memory system is active.
   "vectorMemoryMaxMessagesBetweenChunks": 5,
   "vectorMemoryLookBackTurns": 3,
   // ====================================================================
-  // == File-based Memory Configuration (Only used if the switch is false) ==
+  // == File-based Memory Configuration
   // ====================================================================
-
   // Specify a workflow to generate the summary text for a file-based memory.
   "fileMemoryWorkflowName": "my-file-memory-workflow",
-  // The prompts below are IGNORED if "fileMemoryWorkflowName" is set.
+  // The prompts below are used if "fileMemoryWorkflowName" is not set.
   "systemPrompt": "You are an expert summarizer...",
   "prompt": "Please summarize the following: [TextChunk]",
   "chunkEstimatedTokenSize": 1000,
   "maxMessagesBetweenChunks": 5,
   "lookbackStartTurn": 3,
   // ====================================================================
-  // == General / Fallback LLM Settings                              ==
+  // == General / Fallback LLM Settings
   // ====================================================================
-
-  // The default LLM endpoint to use if a specific one isn't set for a direct LLM call.
+  // The default LLM endpoint to use if a specific one isn't set.
   "endpointName": "default_endpoint",
   "preset": "default_preset",
   "maxResponseSizeInTokens": 400
