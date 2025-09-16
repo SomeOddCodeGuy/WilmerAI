@@ -201,6 +201,9 @@ WilmerAI
 │        ├─ folders named after usernames
 │        └─ ...
 │
+├─ run_linux.sh
+├─ run_macos.sh
+├─ run_windows.bat
 └─ server.py
 ```
 
@@ -247,11 +250,32 @@ This is the application's core logic.
 
 Contains all user-facing JSON configuration files.
 
-* **`ApiTypes/`**: Defines the schemas for different LLM APIs, specifying property names for things like `streaming` or
-  `max_tokens`.
-* **`Endpoints/`**: Specifies connection details for an LLM API (e.g., URL, API Type).
-* **`Presets/`**: Contains LLM generation parameters (temperature, top\_k, etc.).
-* **`Workflows/`**: Defines the sequence of nodes for each workflow.
+* **`ApiTypes/`**: Contains json files that define the schemas for different LLM APIs, specifying property names for
+  things like `streaming` or `max_tokens`. These are utilized in the Endpoint configs
+* **`Endpoints/`**: Contains json files that specify connection details for an LLM API (e.g., URL, API Type) that Wilmer
+  will make calls to. Every LLM that the user intends to use in their workflows must be specified here. Every workflow
+  node can specify a different endpoint.
+* **`Presets/`**: Contains json files with LLM generation parameters (temperature, top\_k, etc.). These are applied per
+  workflow node.
+* **`PromptTemplates/`**: Contains the json files that specify various prompt templates. Used in Endpoint configs
+* **`Routing/`**: Contains json files that specify the central semantic router instructions for users/workflows that do
+  routing. You specify the domains you are routing to here, and what workflows they correspond with.
+* **`Users/`**: Contains json files with all of the specific settings for a user, including things like what port
+  the app runs on, where to connect to things like the offline wikipedia api, and where certain files are saved, go
+  here.
+* **`Workflows/`**: Contains json files that define the sequence of nodes for each workflow.
+
+### **`run_linux/run_macos/run_windows`**
+
+Scripts to automatically generate a venv, install the requirements.txt for the app, and run the application by calling
+server.py. Takes two optional parameters:
+
+- `--ConfigDirectory` - String input that specifies where the Public/Configs folder is at.
+- `--User` - String input that specifies the name of the user you'd like to start the app as.
+
+### **`server.py`**
+
+Main script of the app.
 
 -----
 
