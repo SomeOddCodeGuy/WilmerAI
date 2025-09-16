@@ -9,7 +9,7 @@
   "trimBeginningAndEndLineBreaks": true,
   "dontIncludeModel": true,
   "removeThinking": false,
-  "startThinkTag": "<think>",
-  "endThinkTag": "</think>",
+  "startThinkTag": "",
+  "endThinkTag": "",
   "expectOnlyClosingThinkTag": false
 }

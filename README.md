@@ -14,7 +14,7 @@
 
 ## What is WilmerAI?
 
-WilmerAI is an  application designed for advanced semantic prompt routing and complex task orchestration. It
+WilmerAI is an application designed for advanced semantic prompt routing and complex task orchestration. It
 originated from the need for a router that could understand the full context of a conversation, rather than just the
 most recent message.
 
@@ -46,7 +46,7 @@ logic without requiring changes to your existing front-end tools.
 > * ~~Refactor FrontEnd Apis~~ **(First Round COMPLETE)**
 > * ~~Refactor Workflows~~ **(First Round COMPLETE)**
 > * ~~Vector Memory Initial Implementation~~ **(COMPLETE)**
-> * Rewrite Readme and Expand Documentation *(In progress)*
+> * Rewrite Readme and Expand Documentation *(90% Complete)*
 > * ~~Full Redo of Most Example Users, Using New Prompting Strategies~~ **(COMPLETE)**
 > * Second Round Refactoring for Unit Tests
 > * Full Unit Test Coverage of Primary Functions
@@ -174,11 +174,33 @@ including proprietary APIs, depending on how you build your workflow.
 
 ## User Documentation
 
-User Documentation can be found by going to [/Docs/_User_Documentation/](/Docs/_User_Documentation/README.md)
+User Documentation can be found by going to [/Docs/_User_Documentation/](Docs/_User_Documentation/README.md)
 
 ## Developer Documentation
 
-Helpful developer docs can be found in [/Docs/Developer_Docs/](/Docs/Developer_Docs/README.md)
+Helpful developer docs can be found in [/Docs/Developer_Docs/](Docs/Developer_Docs/README.md)
+
+## Quick-ish Setup
+
+### Youtube Videos
+
+[![WilmerAI and Open WebUI Install on Fresh Windows 11 Desktop](https://img.youtube.com/vi/KDpbxHMXmTs/0.jpg)](https://www.youtube.com/watch?v=KDpbxHMXmTs "WilmerAI and Open WebUI Install on Fresh Windows 11 Desktop")
+
+### Guides
+
+#### WilmerAI
+
+Hop into the [User Documents Setup Starting Guide](Docs/_User_Documentation/Setup/_Getting-Start_Wilmer-Api.md) to get
+step by step rundown of how to quickly set up the API.
+
+#### Wilmer with Open WebUI
+
+[You can click here to find a written guide for setting up Wilmer with Open WebUI](Docs/_User_Documentation/Setup/Open-WebUI.md)
+
+#### Wilmer With SillyTavern
+
+[You can click here to find a written guide for setting up Wilmer with SillyTavern](Docs/_User_Documentation/Setup/SillyTavern.md).
+
 
 ---
 
@@ -275,216 +297,6 @@ and Open WebUI.
 > entirely dependent on the connected LLMs and their responses. If you connect Wilmer to a model that produces lower
 > quality outputs, or if your presets or prompt template have flaws, then Wilmer's overall quality will be much lower
 > quality as well. It's not much different than agentic workflows in that way.
-
----
-
-### Connecting in SillyTavern
-
-#### Text Completion
-
-To connect as a Text Completion in SillyTavern, follow these steps (the below screenshot is from SillyTavern):
-
-Connect as OpenAI Compatible v1/Completions:
-
-![OpenAI Text Completion Settings](Docs/Examples/Images/ST_text_completion_settings.png)
-
-OR
-
-Connect as Ollama api/generate:
-
-![Ollama Text Completion Settings](Docs/Examples/Images/ST_ollama_text_completion_settings.png)
-
-When using text completions, you need to use a WilmerAI-specific Prompt Template format. An importable ST file can be
-found within `Docs/SillyTavern/InstructTemplate`. The context template is also included if you'd like to use that as
-well.
-
-The instruction template looks like this:
-
-```
-[Beg_Sys]You are an intelligent AI Assistant.[Beg_User]SomeOddCodeGuy: Hey there![Beg_Assistant]Wilmer: Hello![Beg_User]SomeOddCodeGuy: This is a test[Beg_Assistant]Wilmer:  Nice.
-```
-
-From SillyTavern:
-
-```
-    "input_sequence": "[Beg_User]",
-    "output_sequence": "[Beg_Assistant]",
-    "first_output_sequence": "[Beg_Assistant]",
-    "last_output_sequence": "",
-    "system_sequence_prefix": "[Beg_Sys]",
-    "system_sequence_suffix": "",
-```
-
-There are no expected newlines or characters between tags.
-
-Please ensure that Context Template is "Enabled" (checkbox above the dropdown)
-
-#### Chat Completions (Not Recommended)
-
-To connect as Open AI Chat Completions in SillyTavern, follow these steps (the below screenshot is from SillyTavern):
-
-![Chat Completion Settings](Docs/Examples/Images/ST_chat_completion_settings.png)
-
-* Once connected, your presets are largely irrelevant and will be controlled by Wilmer; settings like temperature,
-  top_k, etc. The only field you need to update is your truncate length. I recommend setting it to the maximum your
-  front end will allow; in SillyTavern, that is around 200,000 tokens.
-* If you connect via chat/Completion, please go to presets, expand "Character Names Behavior", and set it to "Message
-  Content". If you do not do this, then go to your Wilmer user file and set `chatCompleteAddUserAssistant` to true. (I
-  don't recommend setting both to true at the same time. Do either character names from SillyTavern, OR user/assistant
-  from Wilmer. The AI might get confused otherwise.)
-
-### Additional Recommendations
-
-For either connection type, I recommend going to the "A" icon in SillyTavern and selecting "Include Names" and "Force
-Groups and Personas" under instruct mode, and then going to the far left icon (where the samplers are) and checking
-"stream" on the top left, and then on the top right checking "unlock" under context and dragging it to 200,000+. Let
-Wilmer
-worry about the context.
-
-### Connecting in Open WebUI
-
-When connecting to Wilmer from Open WebUI, simply connect to it as if it were an Ollama instance.
-
-![Ollama Open WebUI Settings](Docs/Examples/Images/OW_ollama_settings.png)
-
-## Quick-ish Setup
-
-Wilmer currently has no user interface; everything is controlled via JSON configuration files located in the "Public"
-folder. This folder contains all essential configurations. When updating or downloading a new copy of WilmerAI, you
-should
-simply copy your "Public" folder to the new installation to retain your settings.
-
-This section will walk you through setting up Wilmer. I have broken the sections into steps; I might recommend copying
-each step, 1 by 1, into an LLM and asking it to help you set the section up. That may make this go much easier.
-
-### Step 1: Installing the Program
-
-Installing Wilmer is straightforward. Ensure you have Python installed; the author has been using the program with
-Python 3.10 and 3.12, and both work well.
-
-**Option 1: Using Provided Scripts**
-
-For convenience, Wilmer includes a BAT file for Windows and a .sh file for macOS. These scripts will create a virtual
-environment, install the required packages from `requirements.txt`, and then run Wilmer. You can use these scripts to
-start Wilmer each time.
-
-- **Windows**: Run the provided `.bat` file.
-- **macOS**: Run the provided `.sh` file.
-- **linux**: The author doesn't have a Linux machine and can't test it, so none is provided
-
-> **IMPORTANT:** Never run a BAT or SH file without inspecting it first, as this can be risky. If you are unsure about
-> the safety of such a file, open it in Notepad/TextEdit, copy the contents and then ask your LLM to review it for any
-> potential issues.
-
-**Option 2: Manual Installation**
-
-Alternatively, you can manually install the dependencies and run Wilmer with the following steps:
-
-1. Install the required packages:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-2. Start the program:
-   ```bash
-   python server.py
-   ```
-
-The provided scripts are designed to streamline the process by setting up a virtual environment. However, you can safely
-ignore them if you prefer manual installation.
-
-#### Script arguments for .bat, .sh and .py files:
-
-**NOTE**: When running either the bat file, the sh file or the python file, all three now accept the following
-OPTIONAL arguments:
-
-* "--ConfigDirectory": Directory where your config files can be found. By default, this is the "Public" folder within
-  the Wilmer root.
-* "--LoggingDirectory": The directory where file logs, if enabled, are stored. Be default file logging is turned OFF,
-  and in the event that they are enabled in the user json, they default to going to the "logs" folder in the Wilmer root
-* "--User": The user that you want to run under.
-
-So, for example, consider the following possible runs:
-
-* `bash run_macos.sh` (will use user specified in _current-user.json, configs in "Public", logs in "logs")
-* `bash run_macos.sh --User "single-model-assistant"` (will default to public for configs and "log" for logs)
-* `bash run_macos.sh --ConfigDirectory "/users/socg/Public/configs" --User "single-model-assistant"` (will just
-  use default for "logs"
-* `bash run_macos.sh --ConfigDirectory "/users/socg/Public/configs" --User "single-model-assistant" --LoggingDirectory
-  "/users/socg/wilmerlogs"`
-
-This these optional arguments allow users to spin up multiple instances of WilmerAI, each instance using a different
-user profile, logging to a different place, and specifying configs at a different location, if desired.
-
-### Step 2 Fast Route: Use Pre-made Users
-
-Within the Public/Configs you will find a series of folders containing json files. The two that you are
-most interested in are the `Endpoints` folder and the `Users` folder.
-
-**NOTE:** The Factual workflow nodes of the `assistant-single-model`, `assistant-multi-model`
-and `group-chat-example` users will attempt to utilize the
-[OfflineWikipediaTextApi](https://github.com/SomeOddCodeGuy/OfflineWikipediaTextApi)
-project to pull full wikipedia articles to RAG against. If you don't have this API, the workflow
-should not have any issues, but I personally use this API to help improve the factual responses I get.
-You can specify the IP address to your API in the user json of your choice.
-
-First, choose which template user you'd like to use:
-
-* **\_example\_simple\_router\_no\_memory**: This is a simple user that has routing to WIKI, CODING and GENERAL
-  categories, each going to a special workflow. Best used with direct and productive front ends like Open WebUI.
-  Requires the Offline Wikipedia API
-
-* **\_example\_general\_workflow**: This is a simple user that runs a single general purpose workflow. Simple, to the
-  point. Best used with direct and productive front ends like Open WebUI. Requires the Offline Wikipedia API
-
-* **\_example\_coding\_workflow**: This is a simple user that runs a single coding workflow. Simple, to the point. Best
-  used with direct and productive front ends like Open WebUI. Requires the Offline Wikipedia API
-
-* **\_example\_wikipedia\_multi\_step\_workflow**: This is a wikipedia search against the Offline Wikipedia API.
-  Requires the Offline Wikipedia API
-
-* **\_example\_wikipedia\_multi\_step\_workflow**: This is a wikipedia search against the Offline Wikipedia API, but
-  instead of just 1 pass it does a total of 4, attempting to build up extra info for the report. Still very
-  experimental; not sure how I feel about the results yet. Requires the Offline Wikipedia API
-
-* **\_example\_assistant\_with\_vector\_memory**: This template is for a simple "assistant" that will diligently think
-  through your message via a series of workflow nodes, and will attempt to track important facts in a simple vector
-  memory implementation (*EXPERIMENTAL*)
-
-  > This user thinks a LOT, so it's slow and chews up tokens. I recommend using a non-reasoning model with this. Use
-  this with a local model or prepare for it to expensive
-
-* **\_example\_game\_bot\_with\_file\_memory**: This is best used with a game front end, like a custom text game
-  implementation or SillyTavern. This is an experimental user with the goal of trying to solve some of the common
-  complaints or problems that have voiced on various boards. Feedback is welcome.
-
-  > Again this is expensive and thinks a lot. It's very slow.
-
-**IMPORTANT**: Each of the above users call custom workflows pointing to workflows in the _common directory. You can
-find other workflows to swap out as well.
-
-Once you have selected the user that you want to use, there are a couple of steps to perform:
-
-1) Update the endpoints for your user under Public/Configs/Endpoints. The example characters are sorted into folders
-   for each. The user's endpoint folder is specified at the bottom of their user.json file. You will want to fill in
-   every endpoint
-   appropriately for the LLMs you are using. You can find some example endpoints under the `_example-endpoints` folder.
-    1) **NOTE** Currently, there is best support for standard openai chat completions and v1 completions endpoints, and
-       recently KoboldCpp's generate endpoint was added to the mix, since that is the author's favorite to use. If you
-       use
-       koboldcpp, I HIGHLY recommend turning off context shifting (--noshift). It will absolutely break Wilmer.
-
-2) You will need to set your current user. You can do this when running the bat/sh/py file by using the --User argument,
-   or you can do this in Public/Configs/Users/_current-user.json.
-   Simply put the name of the user as the current user and save.
-
-3) You will want to open your user json file and peek at the options. Here you can set whether you want streaming or
-   not,
-   can set the IP address to your offline wiki API (if you're using it), specify where you want your memories/summary
-   files
-   to go during DiscussionId flows, and also specify where you want the sqllite db to go if you use Workflow Locks.
-
-That's it! Run Wilmer, connect to it, and you should be good to go.
 
 ---
 

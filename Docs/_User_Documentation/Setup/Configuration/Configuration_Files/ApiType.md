@@ -118,3 +118,18 @@ Here is a fully-commented example for an Ollama Chat API (`/api/chat`).
   "streamPropertyName": "stream"
 }
 ```
+
+#### Pre-defined ApiTypes
+
+- **`KoboldCpp`**: For KoboldCpp's text completion api. Does not send images to the server
+- **`KoboldCppImageSpecific`**: For KoboldCpp's text completion REST api. Same as `KoboldCpp`, but sends images for
+  vision models to process
+- **`LlamaCppServer`**: For Llama.cpp chat completion api. Does not send images
+- **`OllamaApiChat`**: For Ollama's chat completion api. Does not send images
+- **`OllamaApiChatImageSpecific`**: For Ollama's chat completion api. Supports images for vision model to process.
+- **`OllamaApiGenerate`**: For Ollama's text completion api. Does not send images
+- **`Open-AI-API`**: For standard OpenAI api compatible chat completion apis. Does not send images
+- **`OpenAIApiChatImageSpecific`**: For standard OpenAI api compatible chat completion apis. Supports images for vision
+  models to process
+- **`OpenAI-Compatible-Completions`**: For standard OpenAI api compatible text completion apis. Does not send images
+- **`Text-Generation-WebUI`**: For the Text Generation WebUI project's chat completion API. Does not send images
