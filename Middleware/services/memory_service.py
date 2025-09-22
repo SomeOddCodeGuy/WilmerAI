@@ -127,7 +127,7 @@ class MemoryService:
         if not memory_chunks_with_hashes:
             return ''
 
-        memory_chunks = [chunk for _, chunk in memory_chunks_with_hashes]
+        memory_chunks = [text_block for text_block, _ in memory_chunks_with_hashes]
         return '\n------------\n'.join(memory_chunks)
 
     def _get_recent_chat_messages_up_to_max(self, max_turns_to_search: int, messages: List[Dict[str, str]],

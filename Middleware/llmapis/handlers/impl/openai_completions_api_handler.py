@@ -90,18 +90,20 @@ class OpenAiCompletionsApiHandler(BaseCompletionsHandler):
 
         Returns:
             Optional[Dict[str, Any]]: A dictionary with 'token' and 'finish_reason'
-            keys, or None if parsing fails.
+            keys, or None if parsing fails or the structure is invalid.
         """
         try:
             if not data_str:
                 return None
 
             chunk_data = json.loads(data_str)
-            choice = chunk_data.get("choices", [{}])[0]
+            # Use direct access to raise IndexError/KeyError on malformed data
+            choice = chunk_data['choices'][0]
             token = choice.get("text", "")
             finish_reason = choice.get("finish_reason")
             return {'token': token, 'finish_reason': finish_reason}
-        except (json.JSONDecodeError, IndexError):
+        # Add KeyError to the list of caught exceptions
+        except (json.JSONDecodeError, IndexError, KeyError):
             logger.warning(f"Could not parse OpenAI Completions stream data string: {data_str}")
             return None
 

@@ -5,9 +5,19 @@ from collections import defaultdict
 from itertools import combinations
 from typing import List, Dict
 
-from sklearn.feature_extraction.text import TfidfVectorizer
+# Conditional import for sklearn dependencies
+try:
+    from sklearn.feature_extraction.text import TfidfVectorizer
+except ImportError:
+    TfidfVectorizer = None
 
-from Middleware.utilities.text_utils import tokenize
+# Assuming tokenize is correctly imported. We define a fallback for robustness.
+try:
+    from Middleware.utilities.text_utils import tokenize
+except ImportError:
+    # Fallback definition using standard word boundaries.
+    def tokenize(text: str) -> List[str]:
+        return re.findall(r'\b\w+\b', text)
 
 
 def build_inverted_index(lines: List[str]) -> Dict[str, List[int]]:
@@ -27,10 +37,12 @@ def build_inverted_index(lines: List[str]) -> Dict[str, List[int]]:
     """
     index = defaultdict(list)
     for line_number, line in enumerate(lines):
+        speakers_in_line = {w.lower() for w in re.findall(r'(\b\w+):', line)}
         for token in tokenize(line):
             token_lower = token.lower().strip()
-            if not token_lower.endswith(':'):
-                index[token_lower].append(line_number)
+            if token_lower not in speakers_in_line:
+                if line_number not in index[token_lower]:
+                    index[token_lower].append(line_number)
     return index
 
 
@@ -53,16 +65,22 @@ def calculate_line_scores(lines: List[str], index: Dict[str, List[int]], query_t
         value is the calculated score for that line.
     """
     line_scores = defaultdict(int)
-    for token in query_tokens:
-        token_lower = token.lower()
-        if token_lower in index:
-            for line_number in index[token_lower]:
-                line_scores[line_number] += 1
+    lower_query_tokens = [t.lower() for t in query_tokens]
+    relevant_line_numbers = set()
+    for token in lower_query_tokens:
+        if token in index:
+            relevant_line_numbers.update(index[token])
+    for line_number in relevant_line_numbers:
+        if line_number < len(lines):
+            line_tokens = [word.lower() for word in tokenize(lines[line_number])]
+            score = sum(line_tokens.count(query_token) for query_token in lower_query_tokens)
+            if score > 0:
+                line_scores[line_number] = score
     return line_scores
 
 
 def apply_proximity_filter(lines: List[str], line_scores: Dict[int, int], tokens: List[str], proximity_limit: int) -> \
-Dict[int, int]:
+        Dict[int, int]:
     """
     Applies a proximity filter to line scores, boosting lines with close tokens.
 
@@ -82,26 +100,30 @@ Dict[int, int]:
         Dict[int, int]: A dictionary with updated line scores after applying
         the proximity filter.
     """
-    new_scores = defaultdict(int)
-    token_positions = defaultdict(list)
-
-    for line_number, score in line_scores.items():
-        words = tokenize(lines[line_number])
-        positions = {word.lower(): idx for idx, word in enumerate(words)}
-        for token in tokens:
-            if token.lower() in positions:
-                token_positions[token].append((line_number, positions[token.lower()]))
-
-    for token_pos in token_positions.values():
-        for pos1, pos2 in combinations(token_pos, 2):
-            if abs(pos1[1] - pos2[1]) <= proximity_limit:
-                new_scores[pos1[0]] += 1  # Increment the score for lines where tokens are within the proximity limit.
-
-    # Apply the proximity score only if it's higher than the existing score.
-    for line_number in new_scores:
-        line_scores[line_number] = max(line_scores[line_number], new_scores[line_number])
-
-    return line_scores
+    lower_query_tokens = {t.lower() for t in tokens}
+    if len(lower_query_tokens) < 2:
+        return line_scores
+    updated_line_scores = line_scores.copy()
+    for line_number in line_scores:
+        if line_number >= len(lines):
+            continue
+        words = [word.lower() for word in tokenize(lines[line_number])]
+        token_positions = defaultdict(list)
+        for i, word in enumerate(words):
+            if word in lower_query_tokens:
+                token_positions[word].append(i)
+        found_tokens = list(token_positions.keys())
+        if len(found_tokens) < 2:
+            continue
+        proximity_score = 0
+        for token1, token2 in combinations(found_tokens, 2):
+            for pos1 in token_positions[token1]:
+                for pos2 in token_positions[token2]:
+                    if abs(pos1 - pos2) <= proximity_limit:
+                        proximity_score += 1
+        if proximity_score > 0:
+            updated_line_scores[line_number] += proximity_score
+    return updated_line_scores
 
 
 def search_in_chunks(chunks: List[str], query: str, max_hits: int = 0) -> List[str]:
@@ -122,9 +144,14 @@ def search_in_chunks(chunks: List[str], query: str, max_hits: int = 0) -> List[s
         List[str]: A list of text chunks that contain one or more query tokens.
     """
     query_tokens = set(token.lower() for token in tokenize(query))
-    relevant_chunks = [chunk for chunk in chunks if any(
-        any(query_token in token.lower() for token in tokenize(chunk)) for query_token in query_tokens)]
-    return relevant_chunks[:max_hits] if max_hits else relevant_chunks
+    if not query_tokens:
+        return []
+    relevant_chunks = []
+    for chunk in chunks:
+        chunk_tokens = set(token.lower() for token in tokenize(chunk))
+        if query_tokens.intersection(chunk_tokens):
+            relevant_chunks.append(chunk)
+    return relevant_chunks[:max_hits] if max_hits > 0 else relevant_chunks
 
 
 def advanced_search_in_chunks(chunks: List[str], query: str, max_excerpts: int = 40, proximity_limit: int = 5) -> List[
@@ -148,13 +175,13 @@ def advanced_search_in_chunks(chunks: List[str], query: str, max_excerpts: int =
     Returns:
         List[str]: A sorted list of the most relevant chunks based on scoring.
     """
+    if not chunks or not query:
+        return []
     index = build_inverted_index(chunks)
     query_tokens = tokenize(query)
     chunk_scores = calculate_line_scores(chunks, index, query_tokens)
-
-    if proximity_limit:
+    if proximity_limit > 0:
         chunk_scores = apply_proximity_filter(chunks, chunk_scores, query_tokens, proximity_limit)
-
     sorted_chunk_indices = sorted(chunk_scores, key=chunk_scores.get, reverse=True)
     relevant_chunks = [chunks[chunk_index] for chunk_index in sorted_chunk_indices[:max_excerpts]]
     return relevant_chunks
@@ -176,24 +203,23 @@ def filter_keywords_by_speakers(messages: List[Dict[str, str]], keywords: str) -
     Returns:
         str: The filtered keyword string with speaker names removed.
     """
-    # Extract speakers from the messages
     speakers = set()
     for message in messages:
-        content = message['content']
+        content = message.get('content', '')
         found_speakers = re.findall(r'\b(\w+):', content)
-        speakers.update(found_speakers)
-
-    # Tokenize the keywords
+        speakers.update(s.lower() for s in found_speakers)
     tokens = re.findall(r'(\b\w+\b:|\bAND\b|\bOR\b|\(|\)|\b\w+\b)', keywords)
-
-    # Filter tokens
-    filtered_tokens = [token for token in tokens if token not in speakers and not token.endswith(':')]
-
-    # Join filtered tokens back into a string
+    filtered_tokens = []
+    for token in tokens:
+        is_speaker = token.lower() in speakers
+        is_label = token.endswith(':')
+        if not is_speaker and not is_label:
+            filtered_tokens.append(token)
     result = ' '.join(filtered_tokens)
     result = re.sub(r'\(\s+', '(', result)
     result = re.sub(r'\s+\)', ')', result)
-
+    result = re.sub(r'\(\s*\)', '', result)
+    result = re.sub(r'\s{2,}', ' ', result).strip()
     return result
 
 
@@ -213,10 +239,18 @@ def calculate_tfidf_scores(chunks: List[str], query: str) -> List[float]:
         List[float]: A list of TF-IDF scores, where each score corresponds to a
         chunk at the same index.
     """
-    vectorizer = TfidfVectorizer()
-    tfidf_matrix = vectorizer.fit_transform(chunks)
-    query_vector = vectorizer.transform([query])
-    return (tfidf_matrix * query_vector.T).toarray().flatten()
+    if not chunks or not query:
+        return [0.0] * len(chunks)
+    if TfidfVectorizer is None:
+        return [0.0] * len(chunks)
+    try:
+        vectorizer = TfidfVectorizer()
+        tfidf_matrix = vectorizer.fit_transform(chunks)
+        query_vector = vectorizer.transform([query])
+        scores = (tfidf_matrix * query_vector.T).toarray().flatten()
+        return scores.tolist()
+    except ValueError:
+        return [0.0] * len(chunks)
 
 
 def advanced_search(lines: List[str], index: Dict[str, List[int]], query: str, max_excerpts: int = 5,
@@ -241,12 +275,13 @@ def advanced_search(lines: List[str], index: Dict[str, List[int]], query: str, m
     Returns:
         List[str]: A sorted list of the most relevant lines (excerpts).
     """
+    if not lines or not query or not index:
+        return []
     query_tokens = tokenize(query)
     line_scores = calculate_line_scores(lines, index, query_tokens)
-
-    if proximity_limit:
+    if proximity_limit > 0:
         line_scores = apply_proximity_filter(lines, line_scores, query_tokens, proximity_limit)
-
     sorted_line_numbers = sorted(line_scores, key=line_scores.get, reverse=True)
-    excerpts = [lines[line_number].strip() for line_number in sorted_line_numbers[:max_excerpts]]
+    excerpts = [lines[line_number].strip() for line_number in sorted_line_numbers[:max_excerpts] if
+                line_number < len(lines)]
     return excerpts

@@ -4,3 +4,4 @@
 logs/**/wilmerai.log*
 *.sqlite
 *.pyc
+/.coverage

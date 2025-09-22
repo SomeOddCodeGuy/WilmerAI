@@ -7,6 +7,7 @@ from Middleware.utilities.text_utils import rough_estimate_token_length
 
 logger = logging.getLogger(__name__)
 
+
 def combine_initial_system_prompts(messages: List[Dict[str, str]], prefix: str, suffix: str) -> str:
     """
     Combines the initial system messages from a conversation into a single prompt.
@@ -25,10 +26,11 @@ def combine_initial_system_prompts(messages: List[Dict[str, str]], prefix: str, 
     """
     system_prompt_parts = []
     for message in messages:
-        if message['role'] == 'system' and not system_prompt_parts and not any(
-                m['role'] == 'user' for m in messages[:messages.index(message)]):
+        # We collect system messages until we encounter any other role.
+        if message['role'] == 'system':
             system_prompt_parts.append(message['content'])
-        elif message['role'] == 'user' or message['role'] == 'assistant':
+        else:
+            # Stop at the first non-system message.
             break
 
     combined_system_prompt = ' '.join(system_prompt_parts)
@@ -52,8 +54,13 @@ def get_messages_within_index(messages: List[Dict[str, str]], index_count: int) 
     """
     if index_count < 1:
         return []
-    subset = messages[-(index_count + 1):-1] if index_count + 1 <= len(messages) else messages[:-1]
-    return subset
+
+    # Calculate the start and end for the slice. The end is always -1 to exclude the last item.
+    end_index = -1
+    start_index = end_index - index_count
+
+    # Return the requested slice, ensuring we don't go out of bounds.
+    return messages[start_index:end_index]
 
 
 def reduce_messages_to_fit_token_limit(system_prompt: str, messages: List[Dict[str, str]], max_tokens: int) -> List[

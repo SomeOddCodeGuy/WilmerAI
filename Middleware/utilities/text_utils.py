@@ -258,30 +258,6 @@ def replace_brackets_in_list(input_list: List[Dict[str, str]]) -> List[Dict[str,
     return replace_characters_in_collection(input_list, bracket_dict)
 
 
-def escape_unmatched_braces(prompt: str) -> str:
-    """
-       This function pattern matches '{', '}', and any valid format field like '{variable}'
-       remains unchanged
-
-       Returns:
-           str: The prompt with escaped unmatched braces.
-       """
-    pattern = r'({{)|(}})|{[^{}]*}'
-    parts = re.split(pattern, prompt)
-    new_parts = []
-    for part in parts:
-        if part is None:
-            continue
-        if part == '{{' or part == '}}' or (part.startswith('{') and part.endswith('}')):
-            # Keep valid format fields and escaped braces as is
-            new_parts.append(part)
-        else:
-            # Escape any single braces in the literal text
-            part = part.replace('{', '{{').replace('}', '}}')
-            new_parts.append(part)
-    return ''.join(new_parts)
-
-
 def return_brackets(input_list: List[Dict[str, str]]) -> List[Dict[str, str]]:
     """Replaces escaped brackets in the 'content' element of each dictionary in the list.
 

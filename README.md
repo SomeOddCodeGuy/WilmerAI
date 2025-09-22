@@ -4,11 +4,11 @@
 
 ## DISCLAIMER:
 
-> This is a personal project under heavy development. It could, and likely does, contain bugs, incomplete code,
-> or other unintended issues. As such, the software is provided as-is, without warranty of any kind.
+> This project is still under development. The software is provided as-is, without warranty of any kind.
 >
 > This project and any expressed views, methodologies, etc., found within are the result of contributions by the
-> maintainer and any contributors in their free time, and should not reflect upon any of their employers.
+> maintainer and any contributors in their free time and on their personal hardware, and should not reflect upon
+> any of their employers.
 
 ---
 
@@ -33,34 +33,21 @@ logic without requiring changes to your existing front-end tools.
 
 ---
 
-## Maintainer's Note — UPDATED 2025-09-01
+## Maintainer's Note — UPDATED 2025-09-21
 
 > **IMPORTANT:**  
-> Until October 2025, WilmerAI will not accept any new Pull Requests that modify anything within the
-> Middleware modules; some exceptions may apply. Updates to iSevenDays' new MCP tool-calling feature, or adding new
-> custom users or prompt templates within the Public directory, are still welcome.
+> Wilmer is once more accepting contributions. A six-month-long refactor was kicked off back in March of
+> 2025 to correct long-standing issues that resulted from me learning Python as I was first making this.
+> The code is now much easier to work in, is thoroughly documented, and currently has 92% unit test code
+> coverage. It's not perfect, but it's a good start. Now that it's out of the way, I can start adding even
+> more features and fleshing out the ones that exist.
 >
-> **Roadmap to Complete Before New PRs Accepted**
-> * ~~Reasoning LLM Support (think block removal, prepend text to prompt/system)~~ **(COMPLETE)**
-> * ~~Refactor LlmApis~~ **(First Round COMPLETE)**
-> * ~~Refactor FrontEnd Apis~~ **(First Round COMPLETE)**
-> * ~~Refactor Workflows~~ **(First Round COMPLETE)**
-> * ~~Vector Memory Initial Implementation~~ **(COMPLETE)**
-> * Rewrite Readme and Expand Documentation *(90% Complete)*
-> * ~~Full Redo of Most Example Users, Using New Prompting Strategies~~ **(COMPLETE)**
-> * Second Round Refactoring for Unit Tests
-> * Full Unit Test Coverage of Primary Functions
+> For most of this year, I've only really had a few hours each weekend to put into this project, but things
+> are starting to quite down. As I start to get a bit more free time, I'm hoping I can begin to poking at this
+> in the late evenings as well.
 >
-> During this time, there are very likely to be new bugs introduced. I really don’t have the ability
-> to work on this project during the week at all, so it’s a heads-down code-a-thon on weekends whenever
-> I can. Please bear with me if I break stuff along the way over the next few weeks.
->
-> To help reduce the pain of this, I’ve finally set up tags/releases, with major checkpoints from the past
-> few months chosen so you can grab earlier, better-working versions.
->
-> PS: Please bear with me if one of my documents says something dumb. When time is short, documentation usually
-> suffers the most, so I’m relying heavily on LLMs right now. Normally I would do it by hand or at least
-> proofread it better—so I apologize in advance. I’ll clean that up soon-ish.
+> To those who are still around: thanks for your patience with me. I've still got a lot of plans for this project,
+> and now that my schedule is clearing up, I plan to dig into them.
 >
 > — Socg
 
@@ -73,16 +60,15 @@ directly, and then the second instance makes a call to
 the [Offline Wikipedia API](https://github.com/SomeOddCodeGuy/OfflineWikipediaTextApi) before making the call to the
 same model.
 
-![No-RAG vs RAG](Docs/Gifs/Search-Gif.gif)
+![No-RAG vs RAG](Doc_Resources/Media/Gifs/Search-Gif.gif)
 *Click the image to play gif if it doesn't start automatically*
 
 ### Iterative LLM Calls To Improve Performance
 
 A zero-shot to an LLM may not give great results, but follow-up questions will often improve them. If you
-regularly
-perform [the same follow-up questions when doing tasks like software development](https://github.com/SomeOddCodeGuy/SomeOddCodeGuy/blob/main/Github_Images/My%20personal%20guide%20for%20developing%20software%20with%20AI%20assistance%20r_LocalLLaMA.png),
-creating a workflow to
-automate those steps can have great results.
+regularly perform
+[the same follow-up questions when doing tasks like software development](https://www.someoddcodeguy.dev/my-personal-guide-for-developing-software-with-ai-assistance/),
+creating a workflow to automate those steps can have great results.
 
 ### Distributed LLMs
 
@@ -96,19 +82,19 @@ including proprietary APIs, depending on how you build your workflow.
 
 #### Example of A Simple Assistant Workflow Using the Prompt Router
 
-![Single Assistant Routing to Multiple LLMs](Docs/Examples/Images/Wilmer-Assistant-Workflow-Example.jpg)
+![Single Assistant Routing to Multiple LLMs](Doc_Resources/Media/Images/Wilmer-Assistant-Workflow-Example.jpg)
 
 #### Example of How Routing Might Be Used
 
-![Prompt Routing Example](Docs/Examples/Images/Wilmer-Categorization-Workflow-Example.png)
+![Prompt Routing Example](Doc_Resources/Media/Images/Wilmer-Categorization-Workflow-Example.png)
 
 #### Group Chat to Different LLMs
 
-![Groupchat to Different LLMs](Docs/Examples/Images/Wilmer-Groupchat-Workflow-Example.png)
+![Groupchat to Different LLMs](Doc_Resources/Media/Images/Wilmer-Groupchat-Workflow-Example.png)
 
 #### Example of a UX Workflow Where A User Asks for a Website
 
-![Oversimplified Example Coding Workflow](Docs/Examples/Images/Wilmer-Simple-Coding-Workflow-Example.jpg)
+![Oversimplified Example Coding Workflow](Doc_Resources/Media/Images/Wilmer-Simple-Coding-Workflow-Example.jpg)
 
 ## Key Features
 
@@ -272,8 +258,8 @@ and Open WebUI.
 
 ## Maintainer's Note:
 
-> This is a passion project that is being supported in my free time. I do not have the ability to contribute to this
-> during standard business hours on
+> This project is being supported in my free time on my personal hardware. I do not have the ability to contribute to
+> this during standard business hours on
 > weekdays due to work, so my only times to make code updates are weekends, and some weekday late nights.
 >
 > If you find a bug or other issue, a fix may take a week or two to go out. I apologize in

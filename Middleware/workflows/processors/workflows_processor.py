@@ -25,12 +25,6 @@ logger = logging.getLogger(__name__)
 class WorkflowProcessor:
     """
     Processes a pre-configured workflow by executing its nodes sequentially.
-
-    This class iterates through the nodes defined in a workflow configuration,
-    creates a specific `ExecutionContext` for each node, and dispatches it
-    to the appropriate handler for execution. It manages the workflow state,
-    including outputs from previous nodes, and handles both streaming and
-    non-streaming responses.
     """
 
     def __init__(self,
@@ -45,9 +39,9 @@ class WorkflowProcessor:
                  discussion_id: str,
                  messages: List[Dict],
                  stream: bool,
-                 non_responder_flag: bool,
-                 first_node_system_prompt_override: str,
-                 first_node_prompt_override: str,
+                 non_responder_flag: Optional[bool],
+                 first_node_system_prompt_override: Optional[str],
+                 first_node_prompt_override: Optional[str],
                  scoped_inputs: Optional[List[str]] = None
                  ):
         """
@@ -71,7 +65,6 @@ class WorkflowProcessor:
         self.first_node_system_prompt_override = first_node_system_prompt_override
         self.first_node_prompt_override = first_node_prompt_override
 
-        # Process scoped inputs into agent_inputs dictionary
         self.agent_inputs = {}
         if scoped_inputs:
             for i, value in enumerate(scoped_inputs):
@@ -84,6 +77,35 @@ class WorkflowProcessor:
                 self.first_node_prompt_override is not None
         )
 
+    def _identify_generation_prompt(self) -> Optional[str]:
+        """
+        Heuristic check to identify if the last message in the input history
+        is a generation prompt (e.g., "CharacterName:").
+        """
+        if not self.messages:
+            return None
+        last_message = self.messages[-1]
+        content = last_message.get('content', '').strip()
+        if 0 < len(content) < 100 and content.endswith(':'):
+            logger.debug(f"Detected potential generation prompt in input messages: '{content}'")
+            return content
+        return None
+
+    def _reconstruct_non_streaming(self, llm_output: str, generation_prompt: str) -> str:
+        """
+        Applies group chat reconstruction logic for non-streaming responses.
+        """
+        if not isinstance(llm_output, str):
+            return llm_output
+        llm_output_trimmed = llm_output.lstrip()
+        if not llm_output_trimmed:
+            return f"{generation_prompt} "
+        first_word = llm_output_trimmed.split(' ', 1)[0]
+        if first_word.endswith(':'):
+            return llm_output_trimmed
+        logger.debug(f"Reconstructing non-streaming group chat message. Prepended prompt: '{generation_prompt}'")
+        return f"{generation_prompt} {llm_output_trimmed}"
+
     def execute(self) -> Generator[Any, None, None]:
         """
         Executes the main workflow logic by processing nodes sequentially.
@@ -91,6 +113,19 @@ class WorkflowProcessor:
         returned_to_user = False
         agent_outputs = {}
         start_time = time.perf_counter()
+
+        # Pre-scan all nodes to see if any of them will use timestamping.
+        is_any_node_timestamped = False
+        if self.discussion_id:
+            for node_config in self.configs:
+                if node_config.get("addDiscussionIdTimestampsForLLM", False):
+                    is_any_node_timestamped = True
+                    break
+
+        # If any node uses timestamps, resolve the history for the entire workflow run.
+        # This correctly handles placeholders from the previous turn.
+        if is_any_node_timestamped:
+            self.timestamp_service.resolve_and_track_history(self.messages, self.discussion_id)
 
         try:
             for idx, config in enumerate(self.configs):
@@ -111,45 +146,62 @@ class WorkflowProcessor:
                     returned_to_user = True
                     logger.debug("Executing a responding node flow.")
 
+                    generation_prompt = None
+                    use_group_chat_logic = config.get("useGroupChatTimestampLogic", False)
+
+                    # Check for timestamping on this specific node.
+                    is_timestamping_enabled_for_node = self.discussion_id and config.get(
+                        "addDiscussionIdTimestampsForLLM", False)
+
+                    if use_group_chat_logic:
+                        generation_prompt = self._identify_generation_prompt()
+
+                    if is_timestamping_enabled_for_node:
+                        logger.debug("Saving placeholder timestamp for assistant's response.")
+                        self.timestamp_service.save_placeholder_timestamp(self.discussion_id)
+
                     result_gen = self._process_section(
                         config=config, agent_outputs=combined_agent_variables,
                         is_responding_node=True
                     )
 
-                    # Streaming logic is now centralized here
                     if self.stream and isinstance(result_gen, Generator):
                         node_type = config.get("type", "Standard")
                         if node_type in ["CustomWorkflow", "ConditionalCustomWorkflow"]:
-                            # This stream is already processed into SSE strings, pass it through directly.
                             full_response_list = []
                             for chunk in result_gen:
                                 yield chunk
-                                # This logic is flawed for re-assembly but necessary for capture
                                 if isinstance(chunk, str) and chunk.startswith("data: "):
                                     try:
                                         data_content = chunk.split("data: ")[1].strip()
                                         if data_content != "[DONE]":
-                                            # A more robust solution would json.loads and extract the token
                                             pass
                                     except:
                                         pass
                             result = "".join(full_response_list)
                             logger.info("\n\nOutput from the LLM (raw SSE stream from sub-workflow): %s", result)
                         else:
-                            # This is a raw stream from a standard node, process it now.
                             endpoint_name = config.get("endpointName")
                             endpoint_config = get_endpoint_config(endpoint_name) if endpoint_name else {}
-                            stream_handler = StreamingResponseHandler(endpoint_config, config)
+                            stream_handler = StreamingResponseHandler(endpoint_config, config,
+                                                                      generation_prompt=generation_prompt)
                             yield from stream_handler.process_stream(result_gen)
                             result = stream_handler.full_response_text
                             logger.info("\n\nOutput from the LLM: %s", result)
                     else:
                         result = result_gen
+                        if not self.stream and generation_prompt:
+                            result = self._reconstruct_non_streaming(result, generation_prompt)
                         yield result
 
-                    if self.discussion_id and config.get("addDiscussionIdTimestampsForLLM", False):
-                        logger.debug("Saving placeholder timestamp for assistant's response.")
-                        self.timestamp_service.save_placeholder_timestamp(self.discussion_id)
+                    if is_timestamping_enabled_for_node:
+                        if use_group_chat_logic:
+                            logger.debug(
+                                "Committing timestamp immediately for assistant's response (GroupChatLogic enabled).")
+                            self.timestamp_service.commit_assistant_response(self.discussion_id, result)
+                        else:
+                            logger.debug(
+                                "Skipping immediate timestamp commit. Relying on fallback mechanism on next turn (GroupChatLogic disabled).")
 
                     agent_outputs[f'agent{idx + 1}Output'] = result
                 else:
@@ -178,7 +230,6 @@ class WorkflowProcessor:
         is_streaming_for_node = self.stream and is_responding_node
         endpoint_config = {}
 
-        # 1. Determine the LLM Handler for this specific node
         if "endpointName" in config and config.get("endpointName"):
             endpoint_name = config["endpointName"]
             endpoint_config = get_endpoint_config(endpoint_name)
@@ -203,22 +254,19 @@ class WorkflowProcessor:
                 addGenerationPrompt=add_generation_prompt
             )
         else:
-            # Provide a default, non-functional handler if no endpoint is specified
             self.llm_handler = LlmHandler(None, get_chat_template_name(), 0, 0, True)
 
-        # 2. Prepare the messages payload, adding timestamps if required
         messages_to_send = self.messages
         if self.discussion_id and config.get("addDiscussionIdTimestampsForLLM", False):
             if self.non_responder_flag is None:
-                logger.debug("Adding timestamps to messages for LLM as requested by node config.")
+                logger.debug("Formatting messages with timestamps for LLM as requested by node config.")
                 use_relative = config.get("useRelativeTimestamps", False)
-                messages_to_send = self.timestamp_service.track_message_timestamps(
+                messages_to_send = self.timestamp_service.format_messages_with_timestamps(
                     messages=deepcopy(self.messages),
                     discussion_id=self.discussion_id,
                     use_relative_time=use_relative
                 )
 
-        # 3. Create the unified ExecutionContext object
         context = ExecutionContext(
             request_id=self.request_id,
             workflow_id=self.workflow_id,
@@ -235,7 +283,6 @@ class WorkflowProcessor:
             node_handlers=self.node_handlers
         )
 
-        # 4. Find and dispatch to the correct handler
         node_type = context.config.get("type", "Standard")
         if node_type not in VALID_NODE_TYPES:
             logger.warning(f"Config Type: '{node_type}' is not a valid node type. Defaulting to 'Standard'.")
@@ -248,7 +295,6 @@ class WorkflowProcessor:
         handler.llm_handler = context.llm_handler
         result = handler.handle(context)
 
-        # 5. Apply centralized post-processing for non-streaming results
         if not is_streaming_for_node and isinstance(result, str) and endpoint_config:
             result = post_process_llm_output(result, endpoint_config, config)
 
