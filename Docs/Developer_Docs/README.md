@@ -200,12 +200,13 @@ WilmerAI
 │     └─ Workflows
 │        ├─ folders named after usernames
 │        └─ ...
+├─ tests/
 │
 ├─ run_linux.sh
 ├─ run_macos.sh
 ├─ run_windows.bat
 └─ server.py
-```
+````
 
 ### Description of Directories and Key Files
 
@@ -214,37 +215,37 @@ WilmerAI
 This is the application's core logic.
 
 * **`api/`**: The API entry point. Houses the Flask server (`app.py`, `api_server.py`) and modular handlers (e.g.,
-  `openai_api_handler.py`) for different API schemas. It acts as a compatibility and translation layer. The *
-  *`workflow_gateway.py`** file provides the single, standardized bridge to the backend workflow engine.
+  `openai_api_handler.py`) for different API schemas. It acts as a compatibility and translation layer. The \*
+  *`workflow_gateway.py`*\* file provides the single, standardized bridge to the backend workflow engine.
 * **`llmapis/`**: The abstraction layer for communicating with external LLM backends. It translates requests and parses
   responses, abstracting away API differences. This layer's job is to return **raw, unformatted data** from the backing
   APIs. The `$LlmApiService$` in `llm_api.py` is the main entry point, acting as a factory to select the correct handler
   from `handlers/impl/`.
 * **`services/`**: Contains stateless, reusable business logic. Key services include:
-    * `$response_builder_service.py$`: The **single source of truth** for constructing all API-specific JSON responses
-      and streaming chunks, ensuring schema compliance.
-    * `$MemoryService$`: Centralizes all logic for memory retrieval (reading) from memory files or the vector database.
-    * `$LLMDispatchService$`: Orchestrates the final call to the `$LlmApiService$` to get a response from a language
-      model.
+  \* `$response_builder_service.py$`: The **single source of truth** for constructing all API-specific JSON responses
+  and streaming chunks, ensuring schema compliance.
+  \* `$MemoryService$`: Centralizes all logic for memory retrieval (reading) from memory files or the vector database.
+  \* `$LLMDispatchService$`: Orchestrates the final call to the `$LlmApiService$` to get a response from a language
+  model.
 * **`utilities/`**: A collection of stateless helper modules.
-    * `streaming_utils.py`: Contains logic for response cleaning, including `post_process_llm_output` for non-streaming
-      text and `$StreamingThinkRemover$` for stateful stream cleaning.
-    * `vector_db_utils.py`: The abstraction layer for the SQLite FTS5 vector memory database.
+  \* `streaming_utils.py`: Contains logic for response cleaning, including `post_process_llm_output` for non-streaming
+  text and `$StreamingThinkRemover$` for stateful stream cleaning.
+  \* `vector_db_utils.py`: The abstraction layer for the SQLite FTS5 vector memory database.
 * **`workflows/`**: The heart of the workflow engine. This is the most important directory for understanding the
   project's logic.
-    * **`managers/`**: Contains the `$WorkflowManager$` (high-level orchestrator that builds the node handler registry)
-      and `$WorkflowVariableManager$` (handles variable substitution).
-    * **`processors/`**: Contains the `$WorkflowProcessor$`, the low-level execution engine. Its most critical function
-      is to create a new, fully populated **`$ExecutionContext$` for each node** before dispatching it to the correct
-      handler.
-    * **`handlers/`**: Contains classes that implement the logic for each node `type` (e.g., `$StandardNodeHandler$`,
-      `$ToolNodeHandler$`). This is the **primary extension point** for adding new capabilities.
-    * **`streaming/`**: Contains the crucial **`$StreamingResponseHandler$`**. This class encapsulates all logic for
-      cleaning and formatting a raw LLM stream into a final, client-ready SSE stream.
-    * **`models/`**: Defines core data structures. The key file is **`$execution_context.py$`**, which defines the
-      central dataclass for passing state to all node handlers.
-    * **`tools/`**: Contains implementations of complex tools callable by the `$ToolNodeHandler$`, such as the RAG
-      memory creation tool (`slow_but_quality_rag_tool.py`) and a dynamic Python module loader.
+  \* **`managers/`**: Contains the `$WorkflowManager$` (high-level orchestrator that builds the node handler registry)
+  and `$WorkflowVariableManager$` (handles variable substitution).
+  \* **`processors/`**: Contains the `$WorkflowProcessor$`, the low-level execution engine. Its most critical function
+  is to create a new, fully populated **`$ExecutionContext$` for each node** before dispatching it to the correct
+  handler.
+  \* **`handlers/`**: Contains classes that implement the logic for each node `type` (e.g., `$StandardNodeHandler$`,
+  `$ToolNodeHandler$`). This is the **primary extension point** for adding new capabilities.
+  \* **`streaming/`**: Contains the crucial **`$StreamingResponseHandler$`**. This class encapsulates all logic for
+  cleaning and formatting a raw LLM stream into a final, client-ready SSE stream.
+  \* **`models/`**: Defines core data structures. The key file is **`$execution_context.py$`**, which defines the
+  central dataclass for passing state to all node handlers.
+  \* **`tools/`**: Contains implementations of complex tools callable by the `$ToolNodeHandler$`, such as the RAG
+  memory creation tool (`slow_but_quality_rag_tool.py`) and a dynamic Python module loader.
 
 #### **`Public/`**
 
@@ -308,3 +309,31 @@ Main script of the app.
   the raw, unmodified response is received from the `llmapis` layer. This logic is implemented in parallel by
   `post_process_llm_output` (for non-streaming) and the `$StreamingResponseHandler$` (for streaming) to ensure
   consistent behavior.
+
+-----
+
+## 5\. Unit Testing
+
+The project includes a comprehensive unit testing suite to ensure code quality and prevent regressions. The tests are
+built using the `pytest` framework.
+
+### Setup
+
+To run the tests, you must first install the required development dependencies from the `requirements-test.txt` file
+located in the project root.
+
+```bash
+pip install -r requirements-test.txt
+```
+
+### Running the Tests
+
+To execute the entire test suite and generate a code coverage report, run the following command from the project's root
+directory:
+
+```bash
+pytest --cov=Middleware --cov-report=term-missing
+```
+
+This command will run all tests and print a report to the console, highlighting any lines of code in the `Middleware`
+directory that are not covered by the tests.

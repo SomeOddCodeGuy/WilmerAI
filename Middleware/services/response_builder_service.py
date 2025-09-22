@@ -3,7 +3,7 @@
 import hashlib
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 
 from Middleware.api import api_helpers
@@ -263,7 +263,7 @@ class ResponseBuilderService:
         """
         return {
             "model": model_name,
-            "created_at": datetime.utcnow().isoformat() + 'Z',
+            "created_at": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "message": {
                 "role": "assistant",
                 "content": full_text
@@ -287,7 +287,7 @@ class ResponseBuilderService:
         """
         return {
             "model": model_name,
-            "created_at": datetime.utcnow().isoformat() + 'Z',
+            "created_at": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "message": {"role": "assistant", "content": ""},
             "done_reason": "stop",
             "done": True, "total_duration": 0, "load_duration": 0,
@@ -310,7 +310,7 @@ class ResponseBuilderService:
         """
         return {
             "model": self._get_model_name(),
-            "created_at": datetime.utcnow().isoformat() + 'Z',
+            "created_at": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "response": token,
             "done": finish_reason == "stop"
         }
@@ -328,7 +328,7 @@ class ResponseBuilderService:
         """
         return {
             "model": self._get_model_name(),
-            "created_at": datetime.utcnow().isoformat() + 'Z',
+            "created_at": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "message": {
                 "role": "assistant",
                 "content": token

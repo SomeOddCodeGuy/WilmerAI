@@ -1,27 +1,23 @@
 # /Middleware/utilities/prompt_template_utils.py
 
+import re
 from copy import deepcopy
 from typing import List, Dict
 
-import re
-
 from Middleware.utilities.config_utils import load_template_from_json
 from Middleware.utilities.prompt_extraction_utils import separate_messages
-from Middleware.utilities.text_utils import rough_estimate_token_length
 from Middleware.utilities.prompt_extraction_utils import template
+from Middleware.utilities.text_utils import rough_estimate_token_length
 
-# Centralized tag replacement logic
-TAG_REPLACEMENTS = {re.escape(k): ' ' for k in template.values()}
-TAG_PATTERN = re.compile('|'.join(TAG_REPLACEMENTS.keys()))
+TAG_PATTERN = re.compile('|'.join(map(re.escape, template.values())))
 
 
 def strip_tags(input_string: str) -> str:
     """
     Removes template tags from the input string.
 
-    This function uses a precompiled regular expression to find and replace
-    template tags with spaces. The tags are defined in the `template` dictionary
-    from `prompt_extraction_utils`.
+    This function uses a precompiled regular expression to find and remove
+    template tags defined in the `template` dictionary.
 
     Args:
         input_string (str): The string from which to strip the tags.
@@ -29,7 +25,8 @@ def strip_tags(input_string: str) -> str:
     Returns:
         str: The input string with all template tags removed.
     """
-    return TAG_PATTERN.sub(lambda match: TAG_REPLACEMENTS[match.group(0)], input_string)
+    return TAG_PATTERN.sub('', input_string)
+
 
 def format_system_prompts(messages: List[Dict[str, str]], llm_handler, chat_prompt_template_name: str) -> dict:
     """

@@ -43,13 +43,18 @@ def setup_database_functions(connection: sqlite3.Connection, decay_rate: float =
             """Calculates a score based on how many days old a memory is. Newer is higher."""
             try:
                 date_added = datetime.datetime.fromisoformat(date_added_str)
+                # We rely on datetime.datetime.now(tz) returning an aware object.
+                # We explicitly reference the module 'datetime' here so it can be patched in tests.
                 now_utc = datetime.datetime.now(datetime.timezone.utc)
 
                 if date_added.tzinfo is None:
+                    # Assume naive dates are UTC
                     date_added_utc = date_added.replace(tzinfo=datetime.timezone.utc)
                 else:
                     date_added_utc = date_added.astimezone(datetime.timezone.utc)
 
+                # The subtraction requires both datetimes to be aware.
+                # A TypeError will be caught if one is naive (e.g., due to incorrect mocking).
                 days_old = (now_utc - date_added_utc).total_seconds() / (24 * 3600)
 
                 days_old = max(0.0, days_old)
@@ -57,8 +62,11 @@ def setup_database_functions(connection: sqlite3.Connection, decay_rate: float =
                 boost = 1.0 + (max_boost_inner - 1.0) * math.exp(-decay_rate_inner * days_old)
                 return boost
             except (ValueError, TypeError) as e:
-                logger.warning(f"Error calculating recency score for date '{date_added_str}': {e}")
-                return 1.0
+                # Log the error and the potential problematic now_utc value for debugging
+                now_utc_val = locals().get('now_utc', 'N/A')
+                logger.warning(
+                    f"Error calculating recency score for date '{date_added_str}': {e}. Now_utc value: {now_utc_val}")
+                return 1.0  # Return neutral boost on error
 
         return recency_score
 
@@ -70,6 +78,7 @@ def setup_database_functions(connection: sqlite3.Connection, decay_rate: float =
 def get_db_connection(discussion_id: str) -> Optional[sqlite3.Connection]:
     """
     Establishes a connection to a discussion-specific SQLite database.
+    Handles both standard file paths and SQLite URIs (e.g., for testing).
 
     Args:
         discussion_id (str): The unique identifier for the discussion.
@@ -78,8 +87,12 @@ def get_db_connection(discussion_id: str) -> Optional[sqlite3.Connection]:
         Optional[sqlite3.Connection]: A database connection object if successful, otherwise None.
     """
     db_path = _get_db_path(discussion_id)
+    # Check if the path is a SQLite URI
+    is_uri = db_path.startswith("file:")
+
     try:
-        conn = sqlite3.connect(db_path, check_same_thread=False)
+        # Set uri=True if it's a URI, otherwise False
+        conn = sqlite3.connect(db_path, check_same_thread=False, uri=is_uri)
         conn.row_factory = sqlite3.Row
         setup_database_functions(conn)
         return conn
@@ -123,6 +136,7 @@ def initialize_vector_db(discussion_id: str):
             );
         ''')
         # Table to track the last processed message hash.
+        # Using DATETIME type for timestamp storage.
         conn.execute('''
             CREATE TABLE IF NOT EXISTS vector_memory_hash_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -142,7 +156,7 @@ def initialize_vector_db(discussion_id: str):
 
 def add_memory_to_vector_db(discussion_id: str, memory_text: str, metadata_json_str: str):
     """
-    Adds a new memory and its FTS index entry to the database.
+    Adds a new memory and its FTS index entry to the database in a transaction.
 
     Args:
         discussion_id (str): The identifier for the discussion to add the memory to.
@@ -156,17 +170,25 @@ def add_memory_to_vector_db(discussion_id: str, memory_text: str, metadata_json_
 
     try:
         cursor = conn.cursor()
+        # Store the timestamp as an ISO 8601 string in UTC
         date_added = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+        # 1. Insert into the main memories table
         cursor.execute(
             'INSERT INTO memories (discussion_id, memory_text, date_added, metadata_json) VALUES (?, ?, ?, ?)',
             (discussion_id, memory_text, date_added, metadata_json_str)
         )
         memory_id = cursor.lastrowid
+
+        # 2. Parse metadata (this might raise JSONDecodeError)
         metadata = json.loads(metadata_json_str)
 
         def format_for_fts(data):
+            """Helper to format metadata fields (especially lists) for FTS indexing."""
             if isinstance(data, list):
+                # Join list items with spaces, removing internal quotes to prevent FTS syntax issues
                 return ' '.join(str(item).replace('"', '') for item in data)
+            # Return strings as is, or empty string if None
             return data if data else ''
 
         title = metadata.get('title', '')
@@ -174,6 +196,7 @@ def add_memory_to_vector_db(discussion_id: str, memory_text: str, metadata_json_
         entities = format_for_fts(metadata.get('entities', []))
         key_phrases = format_for_fts(metadata.get('key_phrases', []))
 
+        # 3. Insert into the FTS table
         cursor.execute(
             '''
             INSERT INTO memories_fts (rowid, title, summary, entities, key_phrases, memory_text_unweighted) 
@@ -181,12 +204,21 @@ def add_memory_to_vector_db(discussion_id: str, memory_text: str, metadata_json_
             ''',
             (memory_id, title, summary, entities, key_phrases, memory_text)
         )
+
+        # Commit the transaction
         conn.commit()
         logger.debug(f"Added vector memory for discussion_id {discussion_id} with memory_id {memory_id}")
+
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse metadata JSON: {e}. Content: {metadata_json_str}")
+        # Explicitly rollback if JSON parsing fails after the first insert succeeded
+        if conn:
+            conn.rollback()
     except Exception as e:
         logger.error(f"Failed to add memory to vector DB for '{discussion_id}': {e}", exc_info=True)
+        # Explicitly rollback on other exceptions
+        if conn:
+            conn.rollback()
     finally:
         if conn:
             conn.close()
@@ -206,8 +238,11 @@ def _sanitize_fts5_term(term: str) -> str:
     Returns:
         str: A sanitized search term safe for FTS5 queries.
     """
+    # Replace hyphens with spaces
     term = term.replace('-', ' ')
+    # Escape internal double quotes by doubling them
     sanitized_term = term.strip().replace('"', '""')
+    # Wrap the whole term in quotes
     return f'"{sanitized_term}"'
 
 
@@ -229,19 +264,28 @@ def search_memories_by_keyword(discussion_id: str, search_query: str, limit: int
     conn = get_db_connection(discussion_id)
     if conn is None:
         return []
+
     try:
         cursor = conn.cursor()
+
+        # 1. Parse input
         keywords = [k.strip() for k in search_query.split(';') if k.strip()]
         if not keywords:
             return []
+
+        # 2. Enforce limit
         if len(keywords) > MAX_KEYWORDS_FOR_SEARCH:
             logger.warning(
                 f"Received {len(keywords)} keywords. Truncating to the first {MAX_KEYWORDS_FOR_SEARCH} to prevent SQLite query complexity errors."
             )
             keywords = keywords[:MAX_KEYWORDS_FOR_SEARCH]
+
+        # 3. Build FTS MATCH query
         sanitized_terms = [_sanitize_fts5_term(k) for k in keywords]
+        # Combine terms with OR logic
         final_query = ' OR '.join(sanitized_terms)
 
+        # 4. Execute SQL query
         sql_query = """
             SELECT
                 m.*,
@@ -254,9 +298,9 @@ def search_memories_by_keyword(discussion_id: str, search_query: str, limit: int
         """
         cursor.execute(sql_query, (final_query, limit))
         rows = cursor.fetchall()
-        if rows is None:
-            return []
-        return rows
+
+        return rows if rows else []
+
     except Exception as e:
         logger.error(f"Failed to search memories in DB for '{discussion_id}': {e}", exc_info=True)
         return []
@@ -279,6 +323,7 @@ def get_vector_check_hash_history(discussion_id: str, limit: int = 10) -> List[s
     conn = get_db_connection(discussion_id)
     if conn is None:
         return []
+
     try:
         cursor = conn.cursor()
         cursor.execute(
@@ -302,7 +347,7 @@ def get_vector_check_hash_history(discussion_id: str, limit: int = 10) -> List[s
 
 def add_vector_check_hash(discussion_id: str, message_hash: str):
     """
-    Adds a new processed message hash to the historical log.
+    Adds a new processed message hash to the historical log in a transaction.
 
     Args:
         discussion_id (str): The identifier for the discussion.
@@ -311,18 +356,24 @@ def add_vector_check_hash(discussion_id: str, message_hash: str):
     conn = get_db_connection(discussion_id)
     if conn is None:
         return
+
     try:
+        # Explicitly convert the datetime object to an ISO 8601 string
+        timestamp_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
         conn.execute(
             '''
             INSERT INTO vector_memory_hash_log (discussion_id, message_hash, timestamp)
             VALUES (?, ?, ?)
             ''',
-            (discussion_id, message_hash, datetime.datetime.now(datetime.timezone.utc))
+            (discussion_id, message_hash, timestamp_iso)
         )
         conn.commit()
         logger.debug(f"Added new vector check hash to log for {discussion_id}")
     except Exception as e:
         logger.error(f"Failed to add vector check hash for {discussion_id}: {e}")
+        if conn:
+            conn.rollback()
     finally:
         if conn:
             conn.close()

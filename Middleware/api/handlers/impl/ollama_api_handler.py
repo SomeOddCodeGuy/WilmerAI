@@ -32,8 +32,8 @@ class GenerateAPI(MethodView):
 
         Returns:
             Union[Response, Dict[str, Any]]: A Flask Response object for a streaming
-                                             response, or a dictionary for a non-streaming
-                                             response.
+                                            response, or a dictionary for a non-streaming
+                                            response.
         """
         instance_global_variables.API_TYPE = "ollamagenerate"
         logger.debug("GenerateAPI request received")
@@ -48,10 +48,17 @@ class GenerateAPI(MethodView):
         system: str = data.get("system", "")
         stream: bool = data.get("stream", True)
 
+        # Combine system and user prompt for processing
+        full_prompt = prompt
         if system:
-            prompt = system + prompt
+            full_prompt = system + prompt
 
-        messages = parse_conversation(prompt)
+        # Attempt to parse tagged conversation format
+        messages = parse_conversation(full_prompt)
+
+        if not messages and full_prompt:
+            messages = [{"role": "user", "content": full_prompt}]
+
         images = data.get("images", [])
         if images:
             for image_base64 in images:

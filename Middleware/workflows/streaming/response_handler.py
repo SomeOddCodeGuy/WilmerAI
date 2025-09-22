@@ -1,7 +1,7 @@
 # /Middleware/workflows/streaming/response_handler.py
 
 import logging
-from typing import Dict, Generator, Any
+from typing import Dict, Generator, Any, Optional
 
 from Middleware.api import api_helpers
 from Middleware.common import instance_global_variables
@@ -18,13 +18,14 @@ class StreamingResponseHandler:
     client-facing Server-Sent Event (SSE) stream.
     """
 
-    def __init__(self, endpoint_config: Dict, workflow_node_config: Dict):
+    def __init__(self, endpoint_config: Dict, workflow_node_config: Dict, generation_prompt: Optional[str] = None):
         """
         Initializes the StreamingResponseHandler.
 
         Args:
             endpoint_config (Dict): Configuration dictionary for the API endpoint.
             workflow_node_config (Dict): Configuration dictionary for the specific workflow node.
+            generation_prompt (Optional[str]): The generation prompt used, if any (for group chat logic).
         """
         self.endpoint_config = endpoint_config
         self.workflow_node_config = workflow_node_config
@@ -32,9 +33,13 @@ class StreamingResponseHandler:
         self.remover = StreamingThinkRemover(self.endpoint_config)
         self.full_response_text = ""
 
+        # Store the generation prompt and state for reconstruction
+        self.generation_prompt = generation_prompt
+        self._reconstruction_applied = False
+
         # State for prefix removal
         self._prefix_buffer = ""
-        self._prefixes_stripped = False
+        self._prefixes_processed = False
 
         self.workflow_custom_enabled = self.workflow_node_config.get("removeCustomTextFromResponseStart", False)
         self.endpoint_custom_enabled = self.endpoint_config.get("removeCustomTextFromResponseStartEndpointWide", False)
@@ -45,16 +50,14 @@ class StreamingResponseHandler:
         elif self.workflow_custom_enabled or self.endpoint_custom_enabled:
             self._prefix_buffer_limit = 100
         else:
-            self._prefix_buffer_limit = 100  # Default buffer for other prefix removals
+            self._prefix_buffer_limit = 100
 
-        self._should_buffer_for_prefixes = self._is_prefix_stripping_needed()
+        # Buffer if stripping is needed OR if reconstruction might be needed
+        self._should_buffer_for_prefixes = self._is_prefix_stripping_needed() or (self.generation_prompt is not None)
 
     def _is_prefix_stripping_needed(self) -> bool:
         """
         Checks if any prefix stripping logic is enabled in the configuration.
-
-        Returns:
-            bool: True if any prefix stripping option is active, otherwise False.
         """
         if self.endpoint_config.get("trimBeginningAndEndLineBreaks", False):
             return True
@@ -66,40 +69,52 @@ class StreamingResponseHandler:
             return True
         return False
 
-    def _strip_prefixes_from_buffer(self) -> str:
+    def _process_prefixes_from_buffer(self) -> str:
         """
-        Processes the accumulated prefix buffer to remove all configured prefixes.
+        Processes the accumulated prefix buffer to apply group chat reconstruction
+        and then remove all configured prefixes.
+        """
+        content = self._prefix_buffer
 
-        Returns:
-            str: The buffer content with all relevant prefixes removed.
-        """
-        content = self._prefix_buffer.lstrip()
+        # --- 1. Reconstruction Logic (New Behavior First) ---
+        if self.generation_prompt and not self._reconstruction_applied:
+            trimmed_prompt = self.generation_prompt.strip()
+            content_lstripped = content.lstrip()
+
+            # Check if the content starts with a word ending in a colon
+            first_word = content_lstripped.split(' ', 1)[0]
+            llm_has_prefix = first_word.endswith(':')
+
+            if not llm_has_prefix:
+                logger.debug(f"Reconstructing streaming group chat message. Prepended prompt: '{trimmed_prompt}'")
+                # Prepend the prompt. If content was only whitespace, this results in "Prompt ".
+                # Otherwise, it's "Prompt content".
+                content = f"{trimmed_prompt} {content_lstripped}"
+                self._reconstruction_applied = True  # Flag that we have performed this action
+
+        # --- 2. Stripping Logic (Existing Behavior on potentially modified content) ---
+        content = content.lstrip()
 
         # Workflow-level Custom Text
         if self.workflow_custom_enabled:
             custom_texts = self.workflow_node_config.get("responseStartTextToRemove", [])
-            # Handle legacy string values
             if isinstance(custom_texts, str):
                 custom_texts = [custom_texts]
-
             for custom_text in custom_texts:
                 if custom_text and content.startswith(custom_text):
                     content = content[len(custom_text):].lstrip()
-                    break  # Stop after first match
+                    break
 
         # Endpoint-level Custom Text
         if self.endpoint_custom_enabled:
             custom_texts_endpoint = self.endpoint_config.get("responseStartTextToRemoveEndpointWide", [])
-            # Handle legacy string values
             if isinstance(custom_texts_endpoint, str):
                 custom_texts_endpoint = [custom_texts_endpoint]
-
             for custom_text_raw in custom_texts_endpoint:
                 custom_text = custom_text_raw.strip()
-
                 if custom_text and content.startswith(custom_text):
                     content = content[len(custom_text):].lstrip()
-                    break  # Stop after first match
+                    break
 
         # Timestamp
         if self.workflow_node_config.get("addDiscussionIdTimestampsForLLM", False):
@@ -119,16 +134,6 @@ class StreamingResponseHandler:
     def process_stream(self, raw_dict_generator: Generator[Dict[str, Any], None, None]) -> Generator[str, None, None]:
         """
         Processes a raw dictionary stream from an LLM and yields formatted SSE strings.
-
-        This method handles <think> tag removal, prefix stripping, and formats
-        the output into a client-ready Server-Sent Event (SSE) stream.
-
-        Args:
-            raw_dict_generator (Generator[Dict[str, Any], None, None]): A generator that yields raw
-                dictionary chunks from the LLM.
-
-        Yields:
-            Generator[str, None, None]: A generator that yields formatted SSE string events.
         """
         for data_chunk in raw_dict_generator:
             content_delta = data_chunk.get("token") or ""
@@ -137,11 +142,11 @@ class StreamingResponseHandler:
             content_from_remover = self.remover.process_delta(content_delta)
             content_to_yield = ""
 
-            if self._should_buffer_for_prefixes and not self._prefixes_stripped:
+            if self._should_buffer_for_prefixes and not self._prefixes_processed:
                 self._prefix_buffer += content_from_remover
                 if len(self._prefix_buffer) >= self._prefix_buffer_limit or finish_reason:
-                    content_to_yield = self._strip_prefixes_from_buffer()
-                    self._prefixes_stripped = True
+                    content_to_yield = self._process_prefixes_from_buffer()
+                    self._prefixes_processed = True
             else:
                 content_to_yield = content_from_remover
 
@@ -156,9 +161,9 @@ class StreamingResponseHandler:
                 break
 
         final_content = self.remover.finalize()
-        if self._should_buffer_for_prefixes and not self._prefixes_stripped:
+        if self._should_buffer_for_prefixes and not self._prefixes_processed:
             self._prefix_buffer += final_content
-            final_content_to_yield = self._strip_prefixes_from_buffer()
+            final_content_to_yield = self._process_prefixes_from_buffer()
         else:
             final_content_to_yield = final_content
 

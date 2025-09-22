@@ -158,8 +158,8 @@ class OpenAIApiChatImageSpecificHandler(OpenAiApiHandler):
         if OpenAIApiChatImageSpecificHandler.is_base64_image(content):
             try:
                 decoded_data = base64.b64decode(content)
-                image = Image.open(io.BytesIO(decoded_data))
-                image_format = image.format.lower() if image.format else 'jpeg'
+                with Image.open(io.BytesIO(decoded_data)) as image:
+                    image_format = image.format.lower() if image.format else 'jpeg'
                 data_uri = f"data:image/{image_format};base64,{content}"
                 return {"type": "image_url", "image_url": {"url": data_uri}}
             except (binascii.Error, ValueError, Image.UnidentifiedImageError):

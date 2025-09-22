@@ -3,6 +3,7 @@
 import logging
 import os
 import sqlite3
+import textwrap  # Import the textwrap module
 import traceback
 from datetime import datetime, timedelta
 
@@ -56,13 +57,14 @@ class LockingService:
 
         Returns:
             sqlite3.Connection | None: A database connection object, or None if
-                                       the connection failed.
+                                        the connection failed.
         """
         try:
             conn = sqlite3.connect(self.db_path)
             return conn
         except sqlite3.OperationalError as e:
-            logger.error(f"Failed to connect to database at {self.db_path}. Please check the path and permissions. Error: {e}")
+            logger.error(
+                f"Failed to connect to database at {self.db_path}. Please check the path and permissions. Error: {e}")
             return None
 
     def _initialize_database(self):
@@ -73,7 +75,7 @@ class LockingService:
         they do not already exist.
         """
         if not os.path.exists(os.path.dirname(self.db_path)) and os.path.dirname(self.db_path) != '':
-             os.makedirs(os.path.dirname(self.db_path))
+            os.makedirs(os.path.dirname(self.db_path))
 
         conn = self._get_db_connection()
         if conn:
@@ -94,7 +96,8 @@ class LockingService:
         Args:
             cursor (sqlite3.Cursor): The cursor object for executing SQL commands.
         """
-        cursor.execute(f'''
+        # Use textwrap.dedent to remove leading whitespace
+        create_table_query = textwrap.dedent(f'''
             CREATE TABLE IF NOT EXISTS {self.TABLE_NAME} (
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
                 WilmerSessionId NVARCHAR(50),
@@ -103,6 +106,7 @@ class LockingService:
                 ExpirationDate DATETIME
             )
         ''')
+        cursor.execute(create_table_query)
 
     def create_node_lock(self, wilmer_session_id: str, workflow_id: str, workflow_lock_id: str):
         """
@@ -124,11 +128,13 @@ class LockingService:
         try:
             cursor = conn.cursor()
             expiration_date = datetime.now() + timedelta(minutes=10)
-            cursor.execute(f'''
+            # Use textwrap.dedent here as well
+            insert_query = textwrap.dedent(f'''
                 INSERT INTO {self.TABLE_NAME}
                 (WilmerSessionId, WorkflowId, WorkflowLockId, ExpirationDate)
                 VALUES (?, ?, ?, ?)
-            ''', (wilmer_session_id, workflow_id, workflow_lock_id, expiration_date))
+            ''')
+            cursor.execute(insert_query, (wilmer_session_id, workflow_id, workflow_lock_id, expiration_date))
             conn.commit()
         finally:
             conn.close()
@@ -190,14 +196,13 @@ class LockingService:
         """
         conn = self._get_db_connection()
         if conn is None:
-            return False # No DB means no lock
+            return False  # No DB means no lock
 
         try:
             cursor = conn.cursor()
-            cursor.execute(f'''
-                SELECT ExpirationDate FROM {self.TABLE_NAME}
-                WHERE WorkflowLockId = ?
-            ''', (workflow_lock_id,))
+            # This query is single-line, so no dedent needed
+            select_query = f'SELECT ExpirationDate FROM {self.TABLE_NAME} WHERE WorkflowLockId = ?'
+            cursor.execute(select_query, (workflow_lock_id,))
             result = cursor.fetchone()
 
             if result:
@@ -234,10 +239,12 @@ class LockingService:
 
             try:
                 cursor = conn.cursor()
-                cursor.execute(f'''
+                # Use textwrap.dedent for consistency and clarity
+                delete_query = textwrap.dedent(f'''
                     DELETE FROM {self.TABLE_NAME}
                     WHERE WilmerSessionId != ?
-                ''', (current_wilmer_session_id,))
+                ''')
+                cursor.execute(delete_query, (current_wilmer_session_id,))
                 conn.commit()
             finally:
                 conn.close()

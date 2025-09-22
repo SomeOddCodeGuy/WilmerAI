@@ -130,6 +130,7 @@ class SubWorkflowHandler(BaseHandler):
             Any: The result returned by the executed sub-workflow.
         """
         logger.info("Conditional Custom Workflow initiated")
+
         conditional_key = context.config.get("conditionalKey")
         raw_key_value = self.workflow_variable_service.apply_variables(conditional_key,
                                                                        context) if conditional_key else ""
@@ -137,18 +138,28 @@ class SubWorkflowHandler(BaseHandler):
 
         workflow_map = {k.lower(): v for k, v in context.config.get("conditionalWorkflows", {}).items()}
         workflow_name = workflow_map.get(key_value, workflow_map.get("default", "No_Workflow_Name_Supplied"))
+
         logger.info(f"Resolved conditionalKey='{raw_key_value}' => workflow_name='{workflow_name}'")
 
         workflow_user_folder_override = context.config.get("workflowUserFolderOverride")
-        route_overrides = context.config.get("routeOverrides", {}).get(key_value.capitalize(), {})
 
-        system_prompt, prompt, non_responder, allow_streaming = self._prepare_workflow_overrides(context,
-                                                                                                 overrides_config=route_overrides)
+        # Get route overrides for the specific key
+        route_overrides_map = {k.lower(): v for k, v in context.config.get("routeOverrides", {}).items()}
+        route_overrides = route_overrides_map.get(key_value, {})
+
+        system_prompt, prompt, non_responder, allow_streaming = self._prepare_workflow_overrides(
+            context, overrides_config=route_overrides
+        )
+
         scoped_inputs = self._prepare_scoped_inputs(context)
 
         return self.workflow_manager.run_custom_workflow(
-            workflow_name=workflow_name, request_id=context.request_id, discussion_id=context.discussion_id,
-            messages=context.messages, non_responder=non_responder, is_streaming=allow_streaming,
+            workflow_name=workflow_name,
+            request_id=context.request_id,
+            discussion_id=context.discussion_id,
+            messages=context.messages,
+            non_responder=non_responder,
+            is_streaming=allow_streaming,
             first_node_system_prompt_override=system_prompt,
             first_node_prompt_override=prompt,
             scoped_inputs=scoped_inputs,

@@ -4,6 +4,9 @@ import importlib
 import inspect
 import logging
 import os
+from typing import Optional
+
+from flask import Flask  # Import Flask for type hinting
 
 from Middleware.api.app import app
 from Middleware.api.handlers.base.base_api_handler import BaseApiHandler
@@ -21,8 +24,16 @@ class ApiServer:
     each handler. It then starts the Flask web server to listen for incoming requests.
     """
 
-    def __init__(self):
-        self.app = app
+    def __init__(self, app_instance: Optional[Flask] = None):
+        """
+        Initializes the ApiServer.
+
+        Args:
+            app_instance (Optional[Flask]): A Flask app instance. If None,
+                                            the global app is used. This allows
+                                            for dependency injection during testing.
+        """
+        self.app = app_instance if app_instance is not None else app
         self._discover_and_register_handlers()
 
     def _discover_and_register_handlers(self):

@@ -31,43 +31,37 @@ def extract_last_n_turns(messages: List[Dict[str, str]], n: int, include_sysmes:
 
     Args:
         messages (List[Dict[str, str]]): The list of conversation messages. Each message
-                                         is a dictionary with a 'role' and 'content'.
+                                        is a dictionary with a 'role' and 'content'.
         n (int): The number of messages (turns) to extract from the end of the list.
         include_sysmes (bool, optional): If `True`, includes system messages in the
                                          extracted list, excluding only those at the
                                          very beginning of the conversation. If `False`,
                                          all system messages are excluded. Defaults to `True`.
         remove_all_systems_override (bool, optional): If `True`, overrides the
-                                                      `include_sysmes` parameter and
-                                                      removes all system messages.
-                                                      Defaults to `False`.
+                                                       `include_sysmes` parameter and
+                                                       removes all system messages.
+                                                       Defaults to `False`.
 
     Returns:
         List[Dict[str, str]]: A list containing the last `n` messages based on the
                               specified system message handling rules.
     """
-
-    if not messages:
+    if not messages or n == 0:
         return []
 
     filtered_messages = [message for message in messages if message["role"] != "images"]
 
-    # If remove_all_systems_override is True, filter out all system messages
     if remove_all_systems_override:
         filtered_messages = [message for message in filtered_messages if message["role"] != "system"]
-        return filtered_messages[-n:]  # Return the last n non-system messages
+        return filtered_messages[-n:]
 
-    # If include_sysmes is False, filter out all system messages
     if not include_sysmes:
         filtered_messages = [message for message in filtered_messages if message["role"] != "system"]
     else:
-        # Find the first non-system message and slice from that point to exclude leading system messages
         first_non_system_index = next((i for i, message in enumerate(filtered_messages) if message["role"] != "system"),
                                       0)
-        filtered_messages = filtered_messages[
-                            first_non_system_index:]  # Slice from the first non-system message onwards
+        filtered_messages = filtered_messages[first_non_system_index:]
 
-    # Return only the last n messages from the filtered list
     return filtered_messages[-n:]
 
 
@@ -83,13 +77,13 @@ def extract_last_n_turns_as_string(messages: List[Dict[str, Any]], n: int, inclu
 
     Args:
         messages (List[Dict[str, Any]]): The list of conversation messages.
-                                         Each message is a dictionary with a 'role' and 'content'.
+                                          Each message is a dictionary with a 'role' and 'content'.
         n (int): The number of messages (turns) to extract.
         include_sysmes (bool, optional): Controls the inclusion of system messages.
                                          See `extract_last_n_turns` for details. Defaults to `True`.
         remove_all_systems_override (bool, optional): If `True`, all system messages
-                                                      are removed. See `extract_last_n_turns`
-                                                      for details. Defaults to `False`.
+                                                       are removed. See `extract_last_n_turns`
+                                                       for details. Defaults to `False`.
 
     Returns:
         str: The content of the last `n` messages joined as a single string.
@@ -98,12 +92,10 @@ def extract_last_n_turns_as_string(messages: List[Dict[str, Any]], n: int, inclu
     if not messages:
         return ""
 
-    # Use the existing helper to get the correct list subset based on system message handling
     last_n_messages = extract_last_n_turns(
         messages, n, include_sysmes, remove_all_systems_override
     )
 
-    # Format the extracted messages by joining their content
     formatted_lines = []
     for message in last_n_messages:
         content = message.get("content", "")
@@ -122,7 +114,7 @@ def extract_discussion_id(messages: List[Dict[str, str]]) -> Optional[str]:
 
     Args:
         messages (List[Dict[str, str]]): The list of messages, where each message
-                                         is a dictionary containing a 'content' key.
+                                          is a dictionary containing a 'content' key.
 
     Returns:
         Optional[str]: The extracted discussion ID as a string if found, otherwise `None`.
@@ -145,7 +137,7 @@ def remove_discussion_id_tag(messages: List[Dict[str, str]]) -> List[Dict[str, s
 
     Args:
         messages (List[Dict[str, str]]): The list of messages that may contain
-                                         the discussion ID tag.
+                                          the discussion ID tag.
 
     Returns:
         List[Dict[str, str]]: The original list of messages with the discussion
@@ -186,18 +178,18 @@ def separate_messages(messages: List[Dict[str, str]], separate_sysmes: bool = Fa
 
     Args:
         messages (List[Dict[str, str]]): A list of messages, where each message
-                                         is a dictionary with a 'role' and 'content'.
+                                          is a dictionary with a 'role' and 'content'.
         separate_sysmes (bool, optional): If `True`, only initial system messages
-                                         are extracted into the system prompt. Subsequent
-                                         system messages are treated as part of the
-                                         conversation. If `False`, all system messages
-                                         are concatenated into the system prompt.
-                                         Defaults to `False`.
+                                          are extracted into the system prompt. Subsequent
+                                          system messages are treated as part of the
+                                          conversation. If `False`, all system messages
+                                          are concatenated into the system prompt.
+                                          Defaults to `False`.
 
     Returns:
         Tuple[str, List[Dict[str, str]]]: A tuple containing:
-                                          - `str`: The concatenated system prompt.
-                                          - `List[Dict[str, str]]`: The remaining conversation messages.
+                                           - `str`: The concatenated system prompt.
+                                           - `List[Dict[str, str]]`: The remaining conversation messages.
 
     Raises:
         ValueError: If a message in the input list is missing the 'role' or 'content' key.
@@ -239,7 +231,6 @@ def parse_conversation(input_string: str) -> List[Dict[str, str]]:
         "Assistant": "assistant"
     }
 
-    # Regex pattern to extract role and content
     pattern = r'\[Beg_(\w+)\](.*?)(?=\[Beg_\w+\]|$)'
     matches = re.findall(pattern, input_string, flags=re.DOTALL)
 
@@ -281,13 +272,21 @@ def extract_initial_system_prompt(input_string: str, begin_sys: str) -> Tuple[st
                          - `str`: The remaining part of the string after the
                                   system prompt and its tag have been removed.
     """
-    start_index = input_string.find(begin_sys)
-    if start_index != -1:
-        system_prompt = input_string[start_index + len(begin_sys):].strip()
-        remaining_string = input_string[start_index:].replace(system_prompt, "", 1).strip()
+    if not input_string.startswith(begin_sys):
+        return "", input_string
+
+    # Find the end of the system prompt, which is the start of the next tag or the end of the string
+    rest_of_string = input_string[len(begin_sys):]
+    next_tag_match = re.search(r'\[Beg_\w+\]', rest_of_string)
+
+    if next_tag_match:
+        split_index = next_tag_match.start()
+        system_prompt = rest_of_string[:split_index].strip()
+        remaining_string = rest_of_string[split_index:].strip()
     else:
-        system_prompt = ""
-        remaining_string = input_string
+        system_prompt = rest_of_string.strip()
+        remaining_string = ""
+
     return system_prompt, remaining_string
 
 
@@ -306,4 +305,6 @@ def process_remaining_string(remaining_string: str, template: Dict[str, str]) ->
     Returns:
         str: The processed string with the `Begin_Sys` tag removed.
     """
-    return remaining_string.replace(template["Begin_Sys"], "", 1).strip()
+    if remaining_string.startswith(template["Begin_Sys"]):
+        return remaining_string[len(template["Begin_Sys"]):].strip()
+    return remaining_string.strip()

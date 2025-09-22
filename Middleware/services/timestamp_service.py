@@ -1,19 +1,43 @@
 # /Middleware/services/timestamp_service.py
 
 import logging
-from datetime import datetime
 from typing import List, Dict
 
 from Middleware.utilities.config_utils import get_discussion_timestamp_file_path
-from Middleware.utilities.datetime_utils import current_timestamp, subtract_minutes_from_timestamp, \
-    format_relative_time_ago, format_relative_time_string
+from Middleware.utilities.datetime_utils import (
+    current_timestamp,
+    format_relative_time_ago,
+    format_relative_time_string,
+    add_seconds_to_timestamp,
+    parse_timestamp_string
+)
 from Middleware.utilities.file_utils import load_timestamp_file, save_timestamp_file
 from Middleware.utilities.hashing_utils import hash_single_message
 
 logger = logging.getLogger(__name__)
 
-# A constant key used to temporarily store a timestamp before the final message hash is known.
+# Define the placeholder hash for the new logic.
 PLACEHOLDER_HASH = "PLACEHOLDER_TIMESTAMP_HASH_0000"
+# Define the legacy placeholder hash for migration/cleanup purposes.
+LEGACY_PLACEHOLDER_HASH = "PLACEHOLDER_TIMESTAMP_HASH_0000"
+
+
+def _is_generation_prompt(message: Dict[str, str]) -> bool:
+    """
+    Heuristic check to determine if a message is likely a generation prompt
+    (e.g., "CharacterName:").
+
+    Args:
+        message (Dict[str, str]): The message dictionary to check.
+
+    Returns:
+        bool: True if the message is a likely generation prompt, False otherwise.
+    """
+    content = message.get('content', '').strip()
+    if len(content) < 100 and content.endswith(':'):
+        logger.debug(f"Detected generation prompt: '{content}'")
+        return True
+    return False
 
 
 class TimestampService:
@@ -23,26 +47,184 @@ class TimestampService:
 
     def save_placeholder_timestamp(self, discussion_id: str):
         """
-        Saves a timestamp with a placeholder hash for the most recent assistant response.
-
-        This captures the timestamp at the moment of generation, to be finalized
-        on the next turn when the message's final content is known.
+        Saves a placeholder timestamp to be committed later.
+        This marks the beginning of an assistant's response generation.
 
         Args:
             discussion_id (str): The unique identifier for the conversation.
         """
         if not discussion_id:
             return
-        logger.debug("Saving placeholder timestamp for discussion_id: %s", discussion_id)
+
+        timestamp_to_save = current_timestamp()
         timestamp_file = get_discussion_timestamp_file_path(discussion_id)
         timestamps = load_timestamp_file(timestamp_file)
-        timestamps[PLACEHOLDER_HASH] = current_timestamp()
+
+        logger.debug("Saving placeholder timestamp for discussion_id: %s", discussion_id)
+        timestamps[PLACEHOLDER_HASH] = timestamp_to_save
         save_timestamp_file(timestamp_file, timestamps)
 
-    def track_message_timestamps(self, messages: List[Dict[str, str]], discussion_id: str,
-                                 use_relative_time: bool = False) -> List[Dict[str, str]]:
+    def commit_assistant_response(self, discussion_id: str, content: str):
         """
-        Processes a list of messages to add absolute or relative timestamps.
+        Commits the final assistant response content, associating it with the
+        previously saved placeholder timestamp.
+
+        Args:
+            discussion_id (str): The unique identifier for the conversation.
+            content (str): The content of the assistant's response.
+        """
+        if not discussion_id:
+            return
+
+        timestamp_file = get_discussion_timestamp_file_path(discussion_id)
+        timestamps = load_timestamp_file(timestamp_file)
+
+        if PLACEHOLDER_HASH in timestamps:
+            placeholder_time = timestamps.pop(PLACEHOLDER_HASH)
+            if content:
+                message_hash = hash_single_message({'role': 'assistant', 'content': content})
+                logger.debug("Committing placeholder timestamp for hash: %s", message_hash)
+                timestamps[message_hash] = placeholder_time
+            else:
+                logger.debug("Cleared placeholder for empty assistant response.")
+            save_timestamp_file(timestamp_file, timestamps)
+        elif content:
+            logger.warning("Attempted to commit assistant response without a placeholder. Saving with current time.")
+            message_hash = hash_single_message({'role': 'assistant', 'content': content})
+            timestamps[message_hash] = current_timestamp()
+            save_timestamp_file(timestamp_file, timestamps)
+
+    def save_specific_timestamp(self, discussion_id: str, content: str, timestamp: str):
+        """
+        Saves a specific timestamp for a given message content hash.
+        Overrides existing timestamps if they differ (e.g., updating a bootstrapped time).
+
+        Args:
+            discussion_id (str): The unique identifier for the conversation.
+            content (str): The content of the message to be hashed.
+            timestamp (str): The timestamp string to save.
+        """
+        if not discussion_id or not content or not timestamp:
+            return
+
+        logger.debug("Saving specific timestamp for discussion_id: %s", discussion_id)
+
+        message_hash = hash_single_message({'role': 'assistant', 'content': content})
+
+        timestamp_file = get_discussion_timestamp_file_path(discussion_id)
+        timestamps = load_timestamp_file(timestamp_file)
+        timestamps_updated = False
+
+        if LEGACY_PLACEHOLDER_HASH in timestamps:
+            del timestamps[LEGACY_PLACEHOLDER_HASH]
+            timestamps_updated = True
+
+        if message_hash not in timestamps or timestamps[message_hash] != timestamp:
+            if message_hash in timestamps:
+                logger.debug("Updating existing timestamp for hash: %s. Old: %s, New: %s",
+                             message_hash, timestamps[message_hash], timestamp)
+            else:
+                logger.debug("Timestamp saved for hash: %s", message_hash)
+            timestamps[message_hash] = timestamp
+            timestamps_updated = True
+        else:
+            logger.debug("Timestamp already exists and matches for hash: %s.", message_hash)
+
+        if timestamps_updated:
+            save_timestamp_file(timestamp_file, timestamps)
+
+    def resolve_and_track_history(self, messages: List[Dict[str, str]], discussion_id: str):
+        """
+        Ensures the timestamp file is up-to-date based on the incoming history.
+        Resolves pending placeholders from previous turns and tracks hashes for new messages.
+        Does NOT modify the content of the messages list. Should be called once at the start of a request.
+
+        Args:
+            messages (List[Dict[str, str]]): The list of conversation messages.
+            discussion_id (str): The unique identifier for the conversation.
+        """
+        logger.debug("Resolving and tracking timestamp history for discussion_id: %s.", discussion_id)
+
+        if not discussion_id:
+            return
+
+        timestamp_file = get_discussion_timestamp_file_path(discussion_id)
+        timestamps = load_timestamp_file(timestamp_file)
+        timestamps_updated = False
+
+        # --- Phase 0: Resolve placeholder from a previous turn ---
+        if PLACEHOLDER_HASH in timestamps:
+            logger.debug("Found pending placeholder. Attempting to resolve.")
+            placeholder_time = timestamps[PLACEHOLDER_HASH]
+            resolved = False
+
+            for i in range(len(messages) - 1, -1, -1):
+                message = messages[i]
+                if message.get('role', '').lower() == 'assistant':
+                    if i == len(messages) - 1 and _is_generation_prompt(message):
+                        continue
+
+                    msg_hash = hash_single_message(message)
+                    if msg_hash not in timestamps:
+                        logger.info("Applying pending placeholder to last assistant message (hash: %s)", msg_hash)
+                        timestamps[msg_hash] = placeholder_time
+                    else:
+                        logger.debug("Last valid assistant message already tracked.")
+
+                    resolved = True
+                    break
+
+            if not resolved:
+                logger.warning(
+                    "Could not find a suitable assistant message to resolve pending placeholder (e.g., chat started with assistant, or only system messages present).")
+
+            del timestamps[PLACEHOLDER_HASH]
+            timestamps_updated = True
+
+        # Clean up legacy placeholder
+        if LEGACY_PLACEHOLDER_HASH in timestamps:
+            del timestamps[LEGACY_PLACEHOLDER_HASH]
+            timestamps_updated = True
+
+        # --- Phase 1: Chronological Resolution (Backward Iteration) ---
+
+        time_anchor = current_timestamp()
+
+        for i in range(len(messages) - 1, -1, -1):
+            message = messages[i]
+            role = message.get('role', '').lower()
+
+            if role in ['system', 'systemmes']:
+                continue
+
+            if i == len(messages) - 1 and _is_generation_prompt(message):
+                continue
+
+            msg_hash = hash_single_message(message)
+
+            if msg_hash in timestamps:
+                time_anchor = timestamps[msg_hash]
+            else:
+                timestamps_updated = True
+                timestamps[msg_hash] = time_anchor
+                logger.debug(f"Assigning timestamp {time_anchor} to new message (Index: {i}, Role: {role})")
+
+            new_anchor = add_seconds_to_timestamp(time_anchor, -1)
+
+            if new_anchor == time_anchor:
+                logger.warning(f"Failed to decrement time anchor '{time_anchor}'. Backfill accuracy might be affected.")
+            else:
+                time_anchor = new_anchor
+
+        if timestamps_updated:
+            save_timestamp_file(timestamp_file, timestamps)
+            logger.debug("Timestamps file updated for discussion_id: %s", discussion_id)
+
+    def format_messages_with_timestamps(self, messages: List[Dict[str, str]], discussion_id: str,
+                                        use_relative_time: bool = False) -> List[Dict[str, str]]:
+        """
+        Applies timestamp formatting to the content of the messages list.
+        Assumes that resolve_and_track_history has already been run for this request.
 
         Args:
             messages (List[Dict[str, str]]): The list of conversation messages.
@@ -52,118 +234,37 @@ class TimestampService:
         Returns:
             List[Dict[str, str]]: The list of messages with timestamps prepended to their content.
         """
-        logger.debug("Processing timestamps for discussion_id: %s. Relative time: %s", discussion_id, use_relative_time)
+        logger.debug("Formatting messages with timestamps for discussion_id: %s. Relative time: %s", discussion_id,
+                     use_relative_time)
+
+        if not discussion_id:
+            return messages
 
         timestamp_file = get_discussion_timestamp_file_path(discussion_id)
         timestamps = load_timestamp_file(timestamp_file)
-        placeholder_ts = timestamps.pop(PLACEHOLDER_HASH, None)
-        timestamps_updated = placeholder_ts is not None
-
-        message_hashes = [
-            hash_single_message(msg) if msg['role'] not in ['system', 'systemMes'] else None
-            for msg in messages
-        ]
 
         def format_timestamp(ts_str):
             if use_relative_time:
                 return format_relative_time_ago(ts_str)
             return ts_str
 
-        # First pass: apply all known timestamps from the file
-        for idx, message in enumerate(messages):
-            msg_hash = message_hashes[idx]
-            if msg_hash and msg_hash in timestamps:
-                formatted_ts = format_timestamp(timestamps[msg_hash])
-                message['content'] = f"{formatted_ts} {message['content']}"
+        for i, message in enumerate(messages):
+            role = message.get('role', '').lower()
 
-        non_system_messages_indices = [i for i, h in enumerate(message_hashes) if h is not None]
-        handled_case = False
+            if role in ['system', 'systemmes']:
+                continue
 
-        # Case 1: Group chat or User turn with a generation prompt.
-        # This is identified by the last two (or more) messages being untimestamped.
-        if len(non_system_messages_indices) >= 2:
-            second_last_idx = non_system_messages_indices[-2]
-            last_idx = non_system_messages_indices[-1]
-            hash2 = message_hashes[second_last_idx]
-            hash1 = message_hashes[last_idx]
+            if i == len(messages) - 1 and _is_generation_prompt(message):
+                continue
 
-            if (hash2 and hash2 not in timestamps) and (hash1 and hash1 not in timestamps):
-                logger.debug("Handling multi-message untimestamped scenario (group chat or user+gen_prompt).")
-                handled_case = True
+            msg_hash = hash_single_message(message)
 
-                # First, apply placeholder to the prior assistant message (now at -3, if it exists).
-                if placeholder_ts and len(non_system_messages_indices) >= 3:
-                    third_last_idx = non_system_messages_indices[-3]
-                    hash3 = message_hashes[third_last_idx]
-                    if hash3 and hash3 not in timestamps:
-                        logger.debug(f"Applying placeholder timestamp to message index {third_last_idx}.")
-                        messages[third_last_idx][
-                            'content'] = f"{format_timestamp(placeholder_ts)} {messages[third_last_idx]['content']}"
-                        timestamps[hash3] = placeholder_ts
-                        timestamps_updated = True
+            if msg_hash in timestamps:
+                resolved_ts = timestamps[msg_hash]
+                formatted_ts = format_timestamp(resolved_ts)
 
-                # Second, handle the message at -2.
-                msg_to_timestamp = messages[second_last_idx]
-                # If it's a user message, it gets the current time.
-                if 'user' in msg_to_timestamp['role'].lower():
-                    ts = current_timestamp()
-                    messages[second_last_idx][
-                        'content'] = f"{format_timestamp(ts)} {messages[second_last_idx]['content']}"
-                    timestamps[hash2] = ts
-                # If it's an assistant message (group chat), it gets the placeholder.
-                elif placeholder_ts:
-                    messages[second_last_idx][
-                        'content'] = f"{format_timestamp(placeholder_ts)} {messages[second_last_idx]['content']}"
-                    timestamps[hash2] = placeholder_ts
-
-                timestamps_updated = True
-                # The last message is a generation prompt and is intentionally ignored.
-
-        # Case 2: Simple user turn or regeneration.
-        if not handled_case:
-            # Apply placeholder to the second-to-last message if it's untimestamped (normal backfill).
-            if placeholder_ts and len(non_system_messages_indices) >= 2:
-                target_idx = non_system_messages_indices[-2]
-                target_hash = message_hashes[target_idx]
-                if target_hash and target_hash not in timestamps:
-                    logger.debug(f"Applying placeholder timestamp to message index {target_idx}.")
-                    messages[target_idx][
-                        'content'] = f"{format_timestamp(placeholder_ts)} {messages[target_idx]['content']}"
-                    timestamps[target_hash] = placeholder_ts
-                    timestamps_updated = True
-
-            # Timestamp the newest message if it's a new user turn.
-            if len(non_system_messages_indices) >= 1:
-                last_msg_idx = non_system_messages_indices[-1]
-                last_msg_hash = message_hashes[last_msg_idx]
-                last_msg = messages[last_msg_idx]
-
-                # This prevents timestamping generation prompts during regeneration.
-                if (last_msg_hash and last_msg_hash not in timestamps) and 'user' in last_msg['role'].lower():
-                    logger.debug(f"Applying current timestamp to newest user message index {last_msg_idx}.")
-                    new_ts = current_timestamp()
-                    messages[last_msg_idx][
-                        'content'] = f"{format_timestamp(new_ts)} {messages[last_msg_idx]['content']}"
-                    timestamps[last_msg_hash] = new_ts
-                    timestamps_updated = True
-
-        # Case 3: Bootstrapping a new conversation.
-        if len(non_system_messages_indices) >= 2 and \
-                message_hashes[non_system_messages_indices[0]] not in timestamps and \
-                message_hashes[non_system_messages_indices[1]] not in timestamps:
-            oldest_idx, second_oldest_idx = non_system_messages_indices[:2]
-            oldest_time = subtract_minutes_from_timestamp(2)
-            messages[oldest_idx]['content'] = f"{format_timestamp(oldest_time)} {messages[oldest_idx]['content']}"
-            timestamps[message_hashes[oldest_idx]] = oldest_time
-            second_time = current_timestamp()
-            messages[second_oldest_idx][
-                'content'] = f"{format_timestamp(second_time)} {messages[second_oldest_idx]['content']}"
-            timestamps[message_hashes[second_oldest_idx]] = second_time
-            timestamps_updated = True
-
-        if timestamps_updated:
-            save_timestamp_file(timestamp_file, timestamps)
-            logger.debug("Timestamps file updated for discussion_id: %s", discussion_id)
+                if not message['content'].startswith(formatted_ts):
+                    message['content'] = f"{formatted_ts} {message['content']}"
 
         return messages
 
@@ -183,22 +284,27 @@ class TimestampService:
         timestamp_file_path = get_discussion_timestamp_file_path(discussion_id)
         timestamps_data = load_timestamp_file(timestamp_file_path)
 
-        if not timestamps_data:
+        data_to_process = timestamps_data
+        if timestamps_data and (LEGACY_PLACEHOLDER_HASH in timestamps_data or PLACEHOLDER_HASH in timestamps_data):
+            data_to_process = timestamps_data.copy()
+            data_to_process.pop(LEGACY_PLACEHOLDER_HASH, None)
+            data_to_process.pop(PLACEHOLDER_HASH, None)
+
+        if not data_to_process:
             return ""
 
         datetime_objects = []
-        for ts_str in timestamps_data.values():
-            try:
-                clean_ts_str = ts_str.strip("()")
-                datetime_objects.append(datetime.strptime(clean_ts_str, "%A, %Y-%m-%d %H:%M:%S"))
-            except (ValueError, TypeError):
-                continue
+        for ts_str in data_to_process.values():
+            dt_obj = parse_timestamp_string(ts_str)
+            if dt_obj:
+                datetime_objects.append(dt_obj)
 
         if not datetime_objects:
             return ""
 
         start_time = min(datetime_objects)
         most_recent_time = max(datetime_objects)
+
         start_relative = format_relative_time_string(start_time)
         recent_relative = format_relative_time_string(most_recent_time)
 
