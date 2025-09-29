@@ -105,19 +105,30 @@ gathering a wide range of context on a topic.
 
 #### `OfflineWikiApiPartialArticle`
 
-This node retrieves the single best-matching article for the query but returns only its summary (typically the first
-paragraph). This is useful for conserving context space when only a brief overview is needed.
+This node retrieves one or more of the best-matching article summaries (typically the first paragraph). This is useful
+for gathering multiple brief overviews on a topic while conserving context space.
 
 * **JSON Example**
   ```json
   {
-    "title": "Get Photosynthesis Summary",
-    "agentName": "PhotoSummary",
+    "title": "Get Photosynthesis Summaries",
+    "agentName": "PhotoSummaries",
     "type": "OfflineWikiApiPartialArticle",
-    "promptToSearch": "What is photosynthesis?"
+    "promptToSearch": "What is photosynthesis?",
+    "num_results": 2
   }
   ```
-* **Output Format**: A single string containing the summary text of the best-matching article.
+* **Output Format**: A single string containing all returned summaries, formatted with titles and separated by a
+  delimiter.
+  ```
+  Title: Photosynthesis
+  Photosynthesis is a process used by plants...
+
+  --- END SUMMARY ---
+
+  Title: Chloroplast
+  A chloroplast is a type of membrane-bound organelle...
+  ```
 
 #### `OfflineWikiApiFullArticle`
 
@@ -139,7 +150,9 @@ This node retrieves the first full article returned by the search query. It uses
 
 ### **Advanced Configuration**
 
-The `OfflineWikiApiTopNFullArticles` node type supports optional parameters to fine-tune its search behavior.
+#### `OfflineWikiApiTopNFullArticles`
+
+This node type supports optional parameters to fine-tune its search behavior.
 
 * `"percentile"`: **(Float, Optional)**
 
@@ -159,3 +172,18 @@ The `OfflineWikiApiTopNFullArticles` node type supports optional parameters to f
       be useful to ensure the most relevant information is preserved when an LLM truncates long context from the
       beginning.
     * **Default**: `3`
+
+#### `OfflineWikiApiPartialArticle`
+
+This node type supports optional parameters to fine-tune its search behavior.
+
+* `"percentile"`: **(Float, Optional)**
+
+    * **Purpose**: Sets the minimum relevance score (from 0.0 to 1.0) for an article to be included in the initial
+      search results. Higher values make the search stricter.
+    * **Default**: `0.5`
+
+* `"num_results"`: **(Integer, Optional)**
+
+    * **Purpose**: The number of article summaries to retrieve.
+    * **Default**: `1`

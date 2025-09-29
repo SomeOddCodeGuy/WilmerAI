@@ -241,3 +241,40 @@ Below are the only fields that support variables. Any other fields on nodes will
 * `promptToSearch` (and similar input fields on specialized nodes)
 * `filepath` (in `GetCustomFile` and `SaveCustomFile`, the handlers specifically process variables for this field)
 * `scoped_variables` (in `CustomWorkflow` nodes, to pass the variables into the workflow being called)
+
+#### Important note about nodes that support `returnToUser`
+
+The `returnToUser` boolean is special, and more disruptive than it may appear. Wilmer has a concept of responding
+nodes and non-responding nodes. Responding nodes are the only nodes that respect the 'streaming' flag send from the
+front-end, and will always return their output directly to the user. Most nodes could be a responder.
+
+What determines if a node is a responder is generally that the node is the very last in the main workflow. So workflows
+that generate child workflows via custom workflow nodes- the last node in a child node is not guaranteed to be a
+responder. For example, consider the below workflow:
+
+* Node 1: Analyze user context (determine what the user wants)
+* Node 2: Generate keywords to search wikipedia
+* Node 3: Custom workflow: calls the "search_wikipedia" workflow, passing in the keywords from Node 2
+    * Node 3-1: Search wikipedia
+    * Node 3-2: Summarize Wikipedia results
+* Node 4: Takes the output of Node 3, and continues the conversation with the user.
+
+In the above example- Node 3-2, the final node of `search_wikipedia` is NOT a responder. Why? Because even though
+it is the last node in that workflow, that workflow was not the last node in the main, calling, workflow. The
+real responding node is Node 4 of the main workflow.
+
+Alternatively- if Node 4 did not exist, Node 3-2 would automatically be the responding node, since it is the last
+node that will run in the main workflow, even if it exists in a child workflow.
+
+All of this occurs automatically, without the `returnToUser` flag set. That flag can be left at false, or removed
+all-together, and the response of the last node will still occur.
+
+The `returnToUser` flag is specifically designed to OVERRIDE this default behavior. If you were to list Node 3-2,
+the last node of the child workflow `search_wikipedia`, as `returnToUser`, that node's output would be streamed to
+the user. Because every request to Wilmer can only have a single node respond to the user, this means Node 4 will
+not send its response to the user; that work will simply be lost.
+
+**In the vast majority of cases, you do not need to include returnToUser on any node, and do not need to set it to
+true. That field was specifically created for a very niche use-case where the user would want to have work continue
+after a response was sent, such as the lengthy process of generating memories, while a workflow lock node allows the
+user to continue talking to the LLM in the meantime. As such- do not use this unless you are CERTAIN you need it.**

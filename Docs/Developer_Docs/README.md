@@ -25,8 +25,9 @@ conversational agents.
   to manage state between nodes.
 * **Extensible Node System:** New functionality is added by creating new Node Handler classes that operate on the
   `$ExecutionContext$`, making the system highly adaptable.
-* **Flexible API Compatibility:** Exposes OpenAI- and Ollama-compatible endpoints. It uses a dedicated *
-  *`$ResponseBuilderService$`** as the single source of truth for all outgoing API schemas, ensuring responses match the
+* **Flexible API Compatibility:** Exposes OpenAI- and Ollama-compatible endpoints. It uses a dedicated \*
+  \*`$ResponseBuilderService$`\*\* as the single source of truth for all outgoing API schemas, ensuring responses match
+  the
   client's expectations.
 * **Stateful Conversation Management:** Manages short-term and long-term memory using a `discussionId` to track
   conversational context. This includes summarized memory chunks, rolling chat summaries, and a discussion-specific
@@ -62,8 +63,8 @@ A typical request in WilmerAI follows this path, transforming a client request i
 5. **Execution Delegation:** The manager delegates control to the `$WorkflowProcessor$`, the core engine that executes
    the workflow step-by-step.
 
-6. **Node Execution Loop:** The `$WorkflowProcessor$` iterates through each node in the workflow configuration. For *
-   *each node**, it performs the following steps:
+6. **Node Execution Loop:** The `$WorkflowProcessor$` iterates through each node in the workflow configuration. For \*
+   \*each node\*\*, it performs the following steps:
    a. It assembles a new, comprehensive **`$ExecutionContext$`** object, populating it with the node's config, the full
    conversation history, all available variables, and service references.
    b. It reads the node's `type` and uses the handler registry to select the appropriate **Node Handler**.
@@ -76,8 +77,8 @@ A typical request in WilmerAI follows this path, transforming a client request i
 
 8. **Response Cleaning:** The `$WorkflowProcessor$` receives the raw output from the designated **responder node** and
    orchestrates the final cleaning:
-   a. For **streaming** responses (`stream=true`), it passes the raw data generator to the *
-   *`$StreamingResponseHandler$`**. This handler processes the stream chunk-by-chunk—removing `<think>` tags and
+   a. For **streaming** responses (`stream=true`), it passes the raw data generator to the \*
+   \*`$StreamingResponseHandler$`\*\*. This handler processes the stream chunk-by-chunk—removing `<think>` tags and
    stripping prefixes—to produce a clean stream.
    b. For **non-streaming** responses (`stream=false`), it passes the complete raw text to the `post_process_llm_output`
    utility function, which applies the identical cleaning logic all at once.
@@ -206,7 +207,7 @@ WilmerAI
 ├─ run_macos.sh
 ├─ run_windows.bat
 └─ server.py
-````
+```
 
 ### Description of Directories and Key Files
 
@@ -216,7 +217,7 @@ This is the application's core logic.
 
 * **`api/`**: The API entry point. Houses the Flask server (`app.py`, `api_server.py`) and modular handlers (e.g.,
   `openai_api_handler.py`) for different API schemas. It acts as a compatibility and translation layer. The \*
-  *`workflow_gateway.py`*\* file provides the single, standardized bridge to the backend workflow engine.
+  \*`workflow_gateway.py`\*\* file provides the single, standardized bridge to the backend workflow engine.
 * **`llmapis/`**: The abstraction layer for communicating with external LLM backends. It translates requests and parses
   responses, abstracting away API differences. This layer's job is to return **raw, unformatted data** from the backing
   APIs. The `$LlmApiService$` in `llm_api.py` is the main entry point, acting as a factory to select the correct handler
@@ -271,8 +272,8 @@ Contains all user-facing JSON configuration files.
 Scripts to automatically generate a venv, install the requirements.txt for the app, and run the application by calling
 server.py. Takes two optional parameters:
 
-- `--ConfigDirectory` - String input that specifies where the Public/Configs folder is at.
-- `--User` - String input that specifies the name of the user you'd like to start the app as.
+* `--ConfigDirectory` - String input that specifies where the Public/Configs folder is at.
+* `--User` - String input that specifies the name of the user you'd like to start the app as.
 
 ### **`server.py`**
 

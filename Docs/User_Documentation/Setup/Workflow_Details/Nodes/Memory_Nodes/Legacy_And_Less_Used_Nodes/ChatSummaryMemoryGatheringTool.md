@@ -1,4 +1,4 @@
-## The `ChatSummaryMemoryGatheringTool` Node
+## The `ChatSummaryMemoryGatheringTool` Node (LEGACY)
 
 This guide provides a comprehensive, code-validated overview of the `ChatSummaryMemoryGatheringTool` node. It details
 this specialized retriever's precise execution logic, properties, and its role in advanced, custom memory-management

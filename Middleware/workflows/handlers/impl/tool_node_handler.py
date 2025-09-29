@@ -1,4 +1,3 @@
-# /Middleware/workflows/handlers/impl/tool_node_handler.py
 import logging
 import traceback
 from copy import deepcopy
@@ -193,8 +192,22 @@ class ToolNodeHandler(BaseHandler):
                 return "\n\n--- END ARTICLE ---\n\n".join(formatted_articles)
 
             elif node_type == "OfflineWikiApiPartialArticle":
-                results = self.offline_wiki_api_client.get_wiki_summary_by_prompt(variabled_prompt)
-                return results[0] if results else f"No summary found for '{variabled_prompt}'."
+                results = self.offline_wiki_api_client.get_wiki_summary_by_prompt(
+                    variabled_prompt,
+                    percentile=config.get("percentile", 0.5),
+                    num_results=config.get("num_results", 1)
+                )
+                if not results or not isinstance(results, list):
+                    return f"No summary found for '{variabled_prompt}'."
+
+                # Format each summary with title and text, joined by delimiter
+                formatted_summaries = []
+                for summary in results:
+                    title = summary.get("title", "Untitled Summary")
+                    text = summary.get("text", "No text available.")
+                    formatted_summaries.append(f"Title: {title}\n{text}")
+
+                return "\n\n--- END SUMMARY ---\n\n".join(formatted_summaries)
 
             else:  # Fallback for "OfflineWikiApiFullArticle"
                 results = self.offline_wiki_api_client.get_full_wiki_article_by_prompt(variabled_prompt)

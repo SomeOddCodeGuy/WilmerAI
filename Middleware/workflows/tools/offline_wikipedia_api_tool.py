@@ -63,13 +63,13 @@ class OfflineWikiApiClient:
             num_results (int): The number of results to return. Default is 1.
 
         Returns:
-            list: A list of summary texts.
+            list: A list of summary objects (dict) or a list with a single error string.
 
         Raises:
             Exception: If the API request fails (except for 404s which return a not found message).
         """
         if not self.use_offline_wiki_api:
-            return ["No additional information provided"]
+            return [{"title": "Offline Wiki Disabled", "text": "No additional information provided"}]
 
         url = f"{self.base_url}/summaries"
         params = {
@@ -81,11 +81,11 @@ class OfflineWikiApiClient:
         logger.info(f"Response Status Code: {response.status_code}")
         logger.info(f"Response Text: {response.text}")
         if response.status_code == 200:
-            results = response.json()
-            return [result.get('text', "No text element found") for result in results]
+            return response.json()
         elif response.status_code == 404:
             # For 404 errors, return a message about article not being found
-            return [f"No summaries found for '{prompt}'. The information may not be available in the offline database."]
+            return [{"title": "Not Found",
+                     "text": f"No summaries found for '{prompt}'. The information may not be available in the offline database."}]
         else:
             raise Exception(f"Error: {response.status_code}, {response.text}")
 

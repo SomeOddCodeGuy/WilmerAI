@@ -1,0 +1,14 @@
+{
+  "example_variable": "This isn't going to be used but I'm making it to show you",
+  "nodes": [
+    {
+      "displayOnlyComment": "This is a proof of concept on a recursive coding workflow. This user will eventually be deleted, but I'm saving this up to github to toy around with it more.",
+      "title": "Run General Workflow",
+      "type": "CustomWorkflow",
+      "workflowName": "Recursive_Coding_Orchestrator",
+      "workflowUserFolderOverride": "_common",
+      "scoped_variables": [
+      ]
+    }
+  ]
+}

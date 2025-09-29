@@ -1,4 +1,4 @@
-# Middleware/workflows/managers/workflow_manager.py
+# /Middleware/workflows/managers/workflow_manager.py
 
 import json
 import logging
@@ -205,6 +205,9 @@ class WorkflowManager:
             "SaveCustomFile": specialized_node_handler,
             "ImageProcessor": specialized_node_handler,
             "StaticResponse": specialized_node_handler,
+            "ArithmeticProcessor": specialized_node_handler,
+            "Conditional": specialized_node_handler,
+            "StringConcatenator": specialized_node_handler,
         }
 
     def run_workflow(self, messages, request_id, discussionId: str = None, stream: bool = False,

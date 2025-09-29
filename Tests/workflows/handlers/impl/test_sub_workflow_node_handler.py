@@ -387,7 +387,7 @@ def test_handle_conditional_applies_route_overrides(mocker, sub_workflow_handler
         "conditionalKey": "{var}",
         "conditionalWorkflows": {"route_a": "WorkflowA"},
         "routeOverrides": {
-            # Using a different case to confirm the case-insensitive logic works
+            # The logic in the handler now lowercases the keys for matching
             "ROUTE_A": route_overrides_config
         }
     }
@@ -473,6 +473,129 @@ def test_handle_conditional_empty_workflows_map(mocker, sub_workflow_handler, mo
     assert call_args.kwargs['workflow_name'] == "No_Workflow_Name_Supplied"
 
 
+# ---------------------------------------------------------------------------
+# START: Tests for 'UseDefaultContentInsteadOfWorkflow' feature
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("is_streaming", [True, False])
+def test_handle_conditional_uses_default_content_when_no_match(mocker, sub_workflow_handler, mock_variable_service,
+                                                               mock_workflow_manager, is_streaming):
+    """
+    Verify it returns static default content when no workflow matches, for both streaming and non-streaming.
+    """
+    # Mock the static content streamer for the streaming case
+    mock_streamer = mocker.patch('Middleware.workflows.handlers.impl.sub_workflow_handler.stream_static_content',
+                                 return_value="stream_generator")
+
+    # When apply_variables is called for the conditional key, return a value that won't match.
+    # When called for the default content, it should just return the content itself.
+    def apply_vars_side_effect(value, context):
+        if value == "{some_variable}":
+            return "unmatched_route"
+        if value == "Sorry, no match found.":
+            return "Sorry, no match found."
+        return value
+
+    mock_variable_service.apply_variables.side_effect = apply_vars_side_effect
+
+    config = {
+        "conditionalKey": "{some_variable}",
+        "conditionalWorkflows": {
+            "route_a": "WorkflowA"
+        },
+        "UseDefaultContentInsteadOfWorkflow": "Sorry, no match found."
+    }
+    context = create_mock_context(config, stream=is_streaming)
+
+    result = sub_workflow_handler.handle_conditional_custom_workflow(context)
+
+    # Assertions
+    mock_workflow_manager.run_custom_workflow.assert_not_called()
+    if is_streaming:
+        mock_streamer.assert_called_once_with("Sorry, no match found.")
+        assert result == "stream_generator"
+    else:
+        mock_streamer.assert_not_called()
+        assert result == "Sorry, no match found."
+
+
+@pytest.mark.parametrize("is_streaming", [True, False])
+def test_handle_conditional_uses_default_content_with_variables(mocker, sub_workflow_handler, mock_variable_service,
+                                                                mock_workflow_manager, is_streaming):
+    """
+    Verify it resolves variables in default content, for both streaming and non-streaming.
+    """
+    mock_streamer = mocker.patch('Middleware.workflows.handlers.impl.sub_workflow_handler.stream_static_content',
+                                 return_value="stream_generator")
+
+    # Define mock behavior for the variable service
+    def apply_vars_side_effect(value, context):
+        if value == "{some_variable}":
+            return "unmatched_route"
+        if value == "Sorry, {agent1Output} is not supported.":
+            return "Sorry, Rust is not supported."
+        return value
+
+    mock_variable_service.apply_variables.side_effect = apply_vars_side_effect
+
+    config = {
+        "conditionalKey": "{some_variable}",
+        "conditionalWorkflows": {"route_a": "WorkflowA"},
+        "UseDefaultContentInsteadOfWorkflow": "Sorry, {agent1Output} is not supported."
+    }
+    context = create_mock_context(config, stream=is_streaming, agent_outputs={"agent1Output": "Rust"})
+
+    result = sub_workflow_handler.handle_conditional_custom_workflow(context)
+
+    mock_workflow_manager.run_custom_workflow.assert_not_called()
+    # Ensure apply_variables was called for the default content template
+    mock_variable_service.apply_variables.assert_any_call("Sorry, {agent1Output} is not supported.", context)
+
+    if is_streaming:
+        mock_streamer.assert_called_once_with("Sorry, Rust is not supported.")
+        assert result == "stream_generator"
+    else:
+        mock_streamer.assert_not_called()
+        assert result == "Sorry, Rust is not supported."
+
+
+def test_handle_conditional_ignores_default_content_when_match_found(mocker, sub_workflow_handler,
+                                                                     mock_variable_service, mock_workflow_manager):
+    """
+    Verify 'UseDefaultContentInsteadOfWorkflow' is ignored if a direct workflow match is found.
+    """
+    mocker.patch.object(sub_workflow_handler, '_prepare_workflow_overrides', return_value=(None, None, True, False))
+    mocker.patch.object(sub_workflow_handler, '_prepare_scoped_inputs', return_value=[])
+    mock_streamer = mocker.patch('Middleware.workflows.handlers.impl.sub_workflow_handler.stream_static_content')
+
+    # Simulate resolving the conditional key to a matching route
+    mock_variable_service.apply_variables.return_value = "route_a"
+
+    config = {
+        "conditionalKey": "{some_variable}",
+        "conditionalWorkflows": {
+            "route_a": "WorkflowA"
+        },
+        "UseDefaultContentInsteadOfWorkflow": "This should be ignored."
+    }
+    context = create_mock_context(config)
+
+    sub_workflow_handler.handle_conditional_custom_workflow(context)
+
+    # Assertions
+    mock_workflow_manager.run_custom_workflow.assert_called_once()
+    call_args = mock_workflow_manager.run_custom_workflow.call_args
+    assert call_args.kwargs['workflow_name'] == "WorkflowA"
+    mock_streamer.assert_not_called()
+    # Make sure the variable service was not called on the default content
+    for call_obj in mock_variable_service.apply_variables.call_args_list:
+        assert call_obj.args[0] != "This should be ignored."
+
+
+# -------------------------------------------------------------------------
+# END: Tests for 'UseDefaultContentInsteadOfWorkflow' feature
+# -------------------------------------------------------------------------
+
 # ----------------------------------------
 # Integration tests
 # ----------------------------------------
@@ -535,10 +658,10 @@ def test_full_conditional_workflow_flow_non_streaming(sub_workflow_handler, mock
             "default": "DefaultWorkflow"
         },
         "routeOverrides": {
-            "api": {
+            "API": {
                 "systemPromptOverride": "API System Prompt"
             },
-            "database": {
+            "Database": {
                 "promptOverride": "Database Prompt"
             }
         },

@@ -1,0 +1,42 @@
+{
+  "MAX_ITERATIONS": "4",
+  "nodes": [
+    {
+      "title": "1. Analyze User Request and Context",
+      "type": "Standard",
+      "endpointName": "General-Endpoint",
+      "preset": "Factual_Preset",
+      "maxResponseSizeInTokens": 8000,
+      "systemPrompt": "You are an expert software architect and requirements analyst. Your task is to perform an exhaustive analysis of the user's request within the context of the ongoing conversation. This analysis will serve as the foundational blueprint for an iterative coding process. Accuracy and completeness are paramount.",
+      "prompt": "Please consider the recent conversation history:\n\n<conversation_history>\n{chat_user_prompt_last_ten}\n</conversation_history>\n\nAnalyze the conversation and the user's latest request by addressing ALL of the following points in extreme detail:\n\n1. **Objective and Scope:** What is the precise goal the user is trying to achieve? Define the scope of the task.\n2. **Core Requirements and Constraints:** Deconstruct the request into a precise list of functional requirements and technical constraints (language, libraries, patterns, etc.).\n3. **Existing Codebase (CRITICAL):** If the conversation history contains ANY relevant code snippets or files that must be used or modified, you MUST reproduce them here VERBATIM, fully and completely. Failure to include the complete, unaltered code will make subsequent steps impossible. Clearly delineate the code (e.g., <existing_code_filename>...</existing_code_filename>). If no existing code is present, state this explicitly.\n4. **Success Criteria:** How will we determine if the request has been successfully fulfilled?\n\nProvide your complete analysis now. This output will be passed directly to the coding agents.",
+      "addDiscussionIdTimestampsForLLM": false
+    },
+    {
+      "title": "2. Initial Coding Attempt",
+      "type": "Standard",
+      "endpointName": "Coding-Endpoint",
+      "preset": "Coder_Preset",
+      "maxResponseSizeInTokens": 12000,
+      "systemPrompt": "You are an expert-level programmer. You will be provided with a detailed analysis of a coding task. Your job is to generate the complete, correct, and efficient code required to fulfill the request. Adhere strictly to best practices and the requirements outlined in the analysis.",
+      "prompt": "A detailed analysis of the task requirements and context has been performed. Please review the analysis carefully:\n\n<task_analysis>\n{agent1Output}\n</task_analysis>\n\n### Guidelines ###\n* Ensure your response is complete and directly addresses all requirements.\n* If the task involves modifying existing code (provided in the analysis), ensure you apply the changes correctly.\n* Provide the complete code artifact, along with necessary explanations, exactly as it should be presented to the user.\n\nPlease generate the initial response and code now.",
+      "addDiscussionIdTimestampsForLLM": false
+    },
+    {
+      "title": "3. Initialize Iteration Counter",
+      "type": "StaticResponse",
+      "content": "0"
+    },
+    {
+      "title": "4. Call Recursive Core",
+      "type": "CustomWorkflow",
+      "workflowName": "Recursive_Coding_Core",
+      "workflowUserFolderOverride": "_common",
+      "scoped_variables": [
+        "{agent1Output}",
+        "{agent2Output}",
+        "{agent3Output}",
+        "{MAX_ITERATIONS}"
+      ]
+    }
+  ]
+}

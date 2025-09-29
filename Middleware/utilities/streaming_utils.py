@@ -2,9 +2,40 @@
 
 import logging
 import re
-from typing import Dict
+import time
+from typing import Any, Dict, Generator
 
 logger = logging.getLogger(__name__)
+
+
+def stream_static_content(content: str) -> Generator[Dict[str, Any], None, None]:
+    """
+    A generator that yields a static string token by token (words and whitespace)
+    to simulate a stream. This preserves all original formatting like newlines.
+    This mimics the raw output format of an LLM API handler.
+    """
+    # Use re.split to split by whitespace while keeping the delimiters (whitespace).
+    # This ensures that newlines, tabs, and multiple spaces are preserved.
+    tokens = re.split(r'(\s+)', content)
+
+    if not tokens:
+        yield {'token': '', 'finish_reason': 'stop'}
+        return
+
+    words_per_second = 50
+    delay = 1.0 / words_per_second
+
+    for token in tokens:
+        # Don't process empty strings that can result from re.split
+        if token:
+            # Only sleep for actual words, not for whitespace, to make the stream feel natural.
+            if not token.isspace():
+                time.sleep(delay)
+            # Yield the token (which could be a word or whitespace like ' ' or '\n\n')
+            yield {'token': token, 'finish_reason': None}
+
+    # Signal the end of the stream
+    yield {'token': '', 'finish_reason': 'stop'}
 
 
 class StreamingThinkRemover:
@@ -135,8 +166,8 @@ class StreamingThinkRemover:
 
         if self.expect_only_closing and not self._thinking_handled:
             logger.warning(
-                "Finalizing stream in 'expectOnlyClosing' mode without ever finding a closing tag. Discarding buffer.")
-            return ""
+                "Finalizing stream in 'expectOnlyClosing' mode without ever finding a closing tag. Returning buffered content.")
+            return self._buffer
 
         if self._in_think_block:
             match = self.close_tag_re.search(self._buffer)
@@ -160,7 +191,7 @@ def remove_thinking_from_text(text: str, endpoint_config: Dict) -> str:
 
     Returns:
         str: The text with the thinking block removed, or the original text if
-             the removal conditions are not met.
+                 the removal conditions are not met.
     """
     if not endpoint_config.get("removeThinking", False) or not text:
         return text
@@ -181,8 +212,8 @@ def remove_thinking_from_text(text: str, endpoint_config: Dict) -> str:
             logger.debug("Non-streaming 'ClosingTagOnly' mode: Found closing tag, removing preceding text.")
             return text[match.end():]  # type: ignore
         else:
-            logger.debug("Non-streaming 'ClosingTagOnly' mode: No closing tag found, returning empty string.")
-            return ""
+            logger.debug("Non-streaming 'ClosingTagOnly' mode: No closing tag found, returning original text.")
+            return text
     else:
         open_tag_re = re.compile(re.escape(start_think_tag), re.IGNORECASE)
         open_match = open_tag_re.search(text, 0, min(len(text), grace_period))
@@ -217,7 +248,7 @@ def post_process_llm_output(text: str, endpoint_config: Dict, workflow_node_conf
     from Middleware.api import api_helpers
     from Middleware.utilities.config_utils import get_is_chat_complete_add_user_assistant, \
         get_is_chat_complete_add_missing_assistant
-    
+
     processed_text = remove_thinking_from_text(text, endpoint_config)
     content = processed_text.lstrip()
 
