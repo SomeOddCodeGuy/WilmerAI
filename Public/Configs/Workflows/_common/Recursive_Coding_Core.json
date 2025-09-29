@@ -1,0 +1,85 @@
+{
+  "nodes": [
+    {
+      "title": "R1. Safety Valve: Check Max Iterations",
+      "type": "Conditional",
+      "condition": "{agent3Input} >= {agent4Input}"
+    },
+    {
+      "title": "R2. Fast Code Review (The Auditor)",
+      "type": "Standard",
+      "endpointName": "Coding-Fast-Endpoint",
+      "preset": "Worker_LowTemp_Preset",
+      "maxResponseSizeInTokens": 4000,
+      "systemPrompt": "You are a strict, detail-oriented code auditor. Your task is to review a proposed coding response against the original task analysis. Identify any errors, inefficiencies, deviations from requirements, or potential bugs. You identify issues; you do not propose solutions.",
+      "prompt": "The original task analysis is provided below:\n\n<task_analysis>\n{agent1Input}\n</task_analysis>\n\nThe current proposed response (Iteration {agent3Input}) is provided below:\n\n<proposed_response>\n{agent2Input}\n</proposed_response>\n\n### Audit Instructions ###\n1. Compare the proposed response against the task analysis.\n2. Identify any requirement that has not been met or has been implemented incorrectly.\n3. Scrutinize the code for bugs, logic errors, and performance issues.\n\nProvide a concise, actionable audit report listing all identified issues.",
+      "addDiscussionIdTimestampsForLLM": false
+    },
+    {
+      "title": "R3. Strategic Synthesis (The Lead Architect - Main LLM)",
+      "type": "Standard",
+      "endpointName": "Coding-Endpoint",
+      "preset": "Coder_Preset",
+      "maxResponseSizeInTokens": 6000,
+      "systemPrompt": "You are the Lead Architect. Your role is to synthesize feedback, perform deep analysis, and define the strategy for the next iteration. You have the authority to reject flawed feedback from the Auditor. You do NOT write the code here; you define the plan for the code.",
+      "prompt": "The original task analysis:\n\n<task_analysis>\n{agent1Input}\n</task_analysis>\n\nThe current proposed response (Iteration {agent3Input}):\n\n<proposed_response>\n{agent2Input}\n</proposed_response>\n\nA code auditor provided the following critique:\n\n<audit_report>\n{agent2Output}\n</audit_report>\n\n### Strategy Instructions ###\nYour task is to analyze this information and formulate a precise Action Plan for the next iteration. Address the following steps in detail:\n\n1. **Evaluate Audit Report:** Critically assess the <audit_report>. Identify any feedback that is incorrect or counterproductive. Explicitly state which feedback you will ACCEPT and which you will REJECT, with justification.\n2. **Deep Strategic Review:** Perform your own in-depth review of the <proposed_response>. Identify any deeper logic errors, architectural issues, or superior approaches that the audit missed.\n3. **Define Action Plan:** Synthesize the accepted feedback and your own findings into a detailed list of exact changes required for the next iteration.\n\nProvide your detailed strategic analysis and action plan now.",
+      "addDiscussionIdTimestampsForLLM": false
+    },
+    {
+      "title": "R4. Execute Refinement (The Lead Developer - Main LLM)",
+      "type": "Standard",
+      "endpointName": "Coding-Endpoint",
+      "preset": "Coder_Preset",
+      "maxResponseSizeInTokens": 12000,
+      "systemPrompt": "You are the Lead Developer. Your task is to execute the refinement plan precisely and generate the improved response.",
+      "prompt": "The current proposed response (Iteration {agent3Input}) is below:\n\n<current_response>\n{agent2Input}\n</current_response>\n\nThe Lead Architect has generated a detailed strategic analysis and action plan for refinement:\n\n<refinement_action_plan>\n{agent3Output}\n</refinement_action_plan>\n\nExecute the <refinement_action_plan> exactly as described. Apply the necessary changes to the <current_response>.\n\nRespond with the new, refined response in its entirety, exactly as it should be presented to the user. Do not include any preamble or meta-commentary about the changes made.",
+      "addDiscussionIdTimestampsForLLM": false
+    },
+    {
+      "title": "R5. Stop Condition Analysis (The Project Manager - Main LLM)",
+      "type": "Standard",
+      "endpointName": "Coding-Endpoint",
+      "preset": "Worker_LowTemp_Preset",
+      "maxResponseSizeInTokens": 2000,
+      "systemPrompt": "You are the Project Manager. Your task is to evaluate the latest refined response and determine if the project objectives have been fully met. You must decide whether further refinement is necessary or if the process should stop.",
+      "prompt": "The original task analysis:\n\n<task_analysis>\n{agent1Input}\n</task_analysis>\n\nThe latest refined response:\n\n<refined_response>\n{agent4Output}\n</refined_response>\n\n### Decision Criteria ###\n* Are all requirements from the analysis fulfilled correctly?\n* Is the code optimal, efficient, and free of errors?\n* Is the response complete and ready for delivery?\n\nAnalyze the refined response and determine if further iteration is required. Conclude your analysis with your final decision on the very last line: CONTINUE or STOP.",
+      "addDiscussionIdTimestampsForLLM": false
+    },
+    {
+      "title": "R6. Extraction of Decision",
+      "type": "Standard",
+      "endpointName": "Worker-Endpoint",
+      "preset": "Worker_LowTemp_Preset",
+      "maxResponseSizeInTokens": 100,
+      "systemPrompt": "Extract the final decision word from the provided text. Respond ONLY with the word CONTINUE or STOP.",
+      "prompt": "Extract the decision from the following analysis:\n\n<analysis>\n{agent5Output}\n</analysis>\n\nRespond with ONLY the word CONTINUE or STOP.",
+      "addDiscussionIdTimestampsForLLM": false
+    },
+    {
+      "title": "R7. Increment Counter",
+      "type": "ArithmeticProcessor",
+      "expression": "{agent3Input} + 1"
+    },
+    {
+      "title": "R8. Evaluate Loop Condition",
+      "type": "Conditional",
+      "condition": "{agent1Output} == FALSE AND {agent6Output} == CONTINUE"
+    },
+    {
+      "title": "R9. The Recursive Branch",
+      "type": "ConditionalCustomWorkflow",
+      "workflowUserFolderOverride": "_common",
+      "conditionalKey": "{agent8Output}",
+      "conditionalWorkflows": {
+        "TRUE": "Recursive_Coding_Core",
+        "FALSE": "Recursive_Coding_Finalizer"
+      },
+      "scoped_variables": [
+        "{agent1Input}",
+        "{agent4Output}",
+        "{agent7Output}",
+        "{agent4Input}"
+      ]
+    }
+  ]
+}

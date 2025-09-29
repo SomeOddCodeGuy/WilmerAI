@@ -1,5 +1,3 @@
-# tests/workflows/handlers/impl/test_tool_node_handler.py
-
 from unittest.mock import MagicMock
 
 import pytest
@@ -178,10 +176,6 @@ def test_handle_python_module_raises_no_module_path(tool_node_handler, execution
          "Best article text"),
         ("OfflineWikiApiBestFullArticle", "get_top_full_wiki_article_by_prompt", [],
          "No additional information provided about 'resolved_Test Query'"),
-        # Partial Article (Summary)
-        ("OfflineWikiApiPartialArticle", "get_wiki_summary_by_prompt", ["Article summary"], "Article summary"),
-        ("OfflineWikiApiPartialArticle", "get_wiki_summary_by_prompt", [],
-         "No summary found for 'resolved_Test Query'."),
         # Full Article (Fallback)
         ("OfflineWikiApiFullArticle", "get_full_wiki_article_by_prompt", ["Full article text"], "Full article text"),
         ("OfflineWikiApiFullArticle", "get_full_wiki_article_by_prompt", [],
@@ -201,6 +195,44 @@ def test_handle_offline_wiki_node_simple_cases(tool_node_handler, execution_cont
 
     mock_client_method.assert_called_once_with("resolved_Test Query")
     assert result == expected_result
+
+
+def test_handle_offline_wiki_partial_article_success(tool_node_handler, execution_context):
+    """
+    Tests the specific logic for the OfflineWikiApiPartialArticle node with successful results.
+    """
+    execution_context.config = {
+        "type": "OfflineWikiApiPartialArticle",
+        "promptToSearch": "AI Summary",
+        "percentile": 0.7,
+        "num_results": 2
+    }
+    client_return = [
+        {"title": "Summary One", "text": "This is the first summary."},
+        {"title": "Summary Two", "text": "This is the second summary."}
+    ]
+    tool_node_handler.offline_wiki_api_client.get_wiki_summary_by_prompt.return_value = client_return
+
+    result = tool_node_handler._handle_offline_wiki_node(execution_context)
+
+    tool_node_handler.offline_wiki_api_client.get_wiki_summary_by_prompt.assert_called_once_with(
+        "resolved_AI Summary", percentile=0.7, num_results=2
+    )
+
+    expected_output = "Title: Summary One\nThis is the first summary.\n\n--- END SUMMARY ---\n\nTitle: Summary Two\nThis is the second summary."
+    assert result == expected_output
+
+
+def test_handle_offline_wiki_partial_article_no_results(tool_node_handler, execution_context):
+    """
+    Tests the 'no results' case for the Partial Article node.
+    """
+    execution_context.config = {"type": "OfflineWikiApiPartialArticle", "promptToSearch": "Obscure Summary"}
+    tool_node_handler.offline_wiki_api_client.get_wiki_summary_by_prompt.return_value = []
+
+    result = tool_node_handler._handle_offline_wiki_node(execution_context)
+
+    assert result == "No summary found for 'resolved_Obscure Summary'."
 
 
 def test_handle_offline_wiki_top_n_articles(tool_node_handler, execution_context):

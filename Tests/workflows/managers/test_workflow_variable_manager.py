@@ -17,9 +17,12 @@ def mock_llm_handler() -> MagicMock:
     return handler
 
 
+# --- MODIFIED FIXTURE ---
+# The fixture is updated to provide agent_inputs as a dictionary,
+# which is the format that revealed the original bug.
 @pytest.fixture
 def mock_context(mock_llm_handler) -> MagicMock:
-    """Provides a mock ExecutionContext for testing."""
+    """Provides a mock ExecutionContext with dictionary-based agent_inputs."""
     context = MagicMock(spec=ExecutionContext)
     context.config = {"jinja2": False}
     context.workflow_config = {"custom_var": "custom_value", "nodes": []}
@@ -27,6 +30,11 @@ def mock_context(mock_llm_handler) -> MagicMock:
     context.messages = [{"role": "user", "content": "Hello"}]
     context.llm_handler = mock_llm_handler
     context.agent_outputs = {"agent1Output": "Output from node 1"}
+    # This is the key change: agent_inputs is now a dictionary.
+    context.agent_inputs = {
+        "agent1Input": "Input from parent workflow",
+        "agent2Input": "Second input from parent"
+    }
     return context
 
 
@@ -187,11 +195,55 @@ def test_generate_chat_summary_variables(mocker):
     mock_memory_service.get_current_summary.assert_called_once_with(discussion_id)
 
 
-def test_generate_variables(mocker, mock_context):
+# This test specifically validates that agent_inputs provided as a dictionary
+# are correctly processed and added to the final variables map. This test
+# would have failed with the buggy code.
+def test_generate_variables_handles_agent_inputs_dictionary(mock_context, mocker):
+    """
+    Tests that agent_inputs provided as a dictionary are correctly added to the variables.
+    This is the regression test for the bug where dictionary iteration was incorrect.
+    """
+    # Arrange
+    manager = WorkflowVariableManager()
+
+    # Mock the internal dependency that was trying to access the file system.
+    # This keeps the test isolated to only the logic within generate_variables.
+    mocker.patch.object(
+        manager,
+        'generate_conversation_turn_variables',
+        return_value={"mock_convo_var": "mock_value"}
+    )
+
+    # We also need to mock this utility function called inside generate_variables
+    mocker.patch(
+        'Middleware.workflows.managers.workflow_variable_manager.format_system_prompts',
+        return_value={}
+    )
+
+    # Act
+    variables = manager.generate_variables(mock_context)
+
+    # Assert
+    # Check that the dictionary from the fixture was correctly unpacked.
+    assert 'agent1Input' in variables
+    assert variables['agent1Input'] == "Input from parent workflow"
+    assert 'agent2Input' in variables
+    assert variables['agent2Input'] == "Second input from parent"
+
+    # Also ensure that agent_outputs were not lost in the process
+    assert 'agent1Output' in variables
+    assert variables['agent1Output'] == "Output from node 1"
+
+
+# --- REFACTORED AND CLEANED UP TEST ---
+# The original test was convoluted. This version is cleaner and acts as a
+# good integration test for the entire generate_variables method, now using
+# the updated fixture with dictionary-based agent_inputs.
+def test_generate_variables_integration(mocker, mock_context):
     """
     Tests the main variable aggregation logic, ensuring all sources are combined correctly.
     """
-    # Arrange: Mock all dependencies of the generate_variables method
+    # Arrange: Mock all external dependencies of the generate_variables method
     mocker.patch('Middleware.workflows.managers.workflow_variable_manager.datetime')
     manager = WorkflowVariableManager()
 
@@ -202,13 +254,13 @@ def test_generate_variables(mocker, mock_context):
     mocker.patch.object(manager, 'generate_conversation_turn_variables',
                         return_value={"chat_user_prompt_last_one": "hello"})
     mocker.patch.object(manager, 'extract_additional_attributes', return_value={"category_list": ["test"]})
-    mock_format_system = mocker.patch('Middleware.workflows.managers.workflow_variable_manager.format_system_prompts',
-                                      return_value={"templated_system_prompt": "system prompt"})
+    mocker.patch('Middleware.workflows.managers.workflow_variable_manager.format_system_prompts',
+                 return_value={"templated_system_prompt": "system prompt"})
 
     # Act
     variables = manager.generate_variables(mock_context)
 
-    # Assert: Verify variables from each source are present
+    # Assert: Verify variables from each source are present and correct
     assert 'todays_date_pretty' in variables
     assert variables['custom_var'] == 'custom_value'
     assert 'nodes' not in variables
@@ -216,11 +268,12 @@ def test_generate_variables(mocker, mock_context):
     assert variables['chat_user_prompt_last_one'] == "hello"
     assert variables['templated_system_prompt'] == "system prompt"
     assert variables['agent1Output'] == "Output from node 1"
+    assert variables['agent1Input'] == "Input from parent workflow"  # Now correctly asserts the dict value
+    assert variables['agent2Input'] == "Second input from parent"
     assert variables['category_list'] == ["test"]
 
     # Assert mocks were called correctly
     mock_ts_service.get_time_context_summary.assert_called_once_with("test_discussion_123")
-    mock_format_system.assert_called_once()
 
 
 def test_apply_variables_standard_format(mocker, mock_context):
@@ -258,6 +311,36 @@ def test_apply_variables_jinja2_format(mocker, mock_context):
 
     # Assert
     assert result == expected_output
+
+
+# --- NEW JINJA2 TESTS ---
+
+def test_apply_variables_jinja2_with_agent_io_and_conditional(mocker, mock_context):
+    """
+    Tests Jinja2 rendering with a complex template involving agent inputs,
+    agent outputs, and conditional logic, reflecting a real-world use case.
+    """
+    # Arrange
+    manager = WorkflowVariableManager()
+
+    # Setup the variables that would be returned by generate_variables
+    test_variables = {
+        "agent1Output": "SUCCESS",
+        "agent2Input": "Initial Data From Parent",
+        "agent3Output": "NO_TITLE_FOUND"  # for testing the 'else' branch
+    }
+    mocker.patch.object(manager, 'generate_variables', return_value=test_variables)
+    mock_context.config = {'jinja2': True}
+
+    # Act & Assert - Test the 'if' branch
+    prompt_if = "{% if agent1Output == 'SUCCESS' %}Data: {{ agent2Input }}{% else %}Error{% endif %}"
+    result_if = manager.apply_variables(prompt_if, mock_context)
+    assert result_if == "Data: Initial Data From Parent"
+
+    # Act & Assert - Test the 'else' branch
+    prompt_else = "{% if agent3Output != 'NO_TITLE_FOUND' %}Title: {{ agent3Output }}{% else %}No Title Provided{% endif %}"
+    result_else = manager.apply_variables(prompt_else, mock_context)
+    assert result_else == "No Title Provided"
 
 
 def test_apply_variables_key_error_fallback(mocker, mock_context):

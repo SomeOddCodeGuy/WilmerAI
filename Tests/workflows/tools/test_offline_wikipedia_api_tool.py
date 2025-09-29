@@ -127,14 +127,15 @@ def test_get_wiki_summary_by_prompt_api_disabled(mock_get_user_config):
     mock_get_user_config.return_value = {'useOfflineWikiApi': False}
     client = OfflineWikiApiClient()
     result = client.get_wiki_summary_by_prompt("any prompt")
-    assert result == ["No additional information provided"]
+    assert result == [{"title": "Offline Wiki Disabled", "text": "No additional information provided"}]
 
 
 def test_get_wiki_summary_by_prompt_success(mock_get_user_config, mock_requests_get):
     """Tests a successful call to the /summaries endpoint."""
     mock_get_user_config.return_value = {'useOfflineWikiApi': True}
     mock_response = Mock(status_code=200)
-    mock_response.json.return_value = [{'text': 'Summary 1'}, {'text': 'Summary 2'}]
+    expected_response = [{'title': 'Summary 1', 'text': 'Content 1'}, {'title': 'Summary 2', 'text': 'Content 2'}]
+    mock_response.json.return_value = expected_response
     mock_requests_get.return_value = mock_response
 
     client = OfflineWikiApiClient()
@@ -142,7 +143,7 @@ def test_get_wiki_summary_by_prompt_success(mock_get_user_config, mock_requests_
 
     expected_params = {'prompt': 'AI history', 'percentile': 0.6, 'num_results': 2}
     mock_requests_get.assert_called_once_with("http://127.0.0.1:5728/summaries", params=expected_params)
-    assert result == ['Summary 1', 'Summary 2']
+    assert result == expected_response
 
 
 def test_get_wiki_summary_by_prompt_not_found(mock_get_user_config, mock_requests_get):
@@ -153,8 +154,10 @@ def test_get_wiki_summary_by_prompt_not_found(mock_get_user_config, mock_request
     client = OfflineWikiApiClient()
     result = client.get_wiki_summary_by_prompt("Obscure topic")
 
-    expected_message = [
-        "No summaries found for 'Obscure topic'. The information may not be available in the offline database."]
+    expected_message = [{
+        "title": "Not Found",
+        "text": "No summaries found for 'Obscure topic'. The information may not be available in the offline database."
+    }]
     assert result == expected_message
 
 

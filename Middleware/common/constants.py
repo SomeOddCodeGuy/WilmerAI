@@ -1,4 +1,4 @@
-# Middleware/common/constants.py
+# /Middleware/common/constants.py
 
 VALID_NODE_TYPES = [
     "Standard", "ConversationMemory", "FullChatSummary", "RecentMemory",
@@ -8,5 +8,6 @@ VALID_NODE_TYPES = [
     "SlowButQualityRAG", "QualityMemory", "PythonModule", "OfflineWikiApiFullArticle",
     "OfflineWikiApiBestFullArticle", "OfflineWikiApiTopNFullArticles", "OfflineWikiApiPartialArticle",
     "WorkflowLock", "CustomWorkflow", "ConditionalCustomWorkflow", "GetCustomFile", "ImageProcessor",
-    "VectorMemorySearch", "SaveCustomFile", "StaticResponse"
+    "VectorMemorySearch", "SaveCustomFile", "StaticResponse", "ArithmeticProcessor", "Conditional",
+    "StringConcatenator"
 ]

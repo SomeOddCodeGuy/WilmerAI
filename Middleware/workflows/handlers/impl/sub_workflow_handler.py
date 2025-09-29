@@ -3,6 +3,7 @@
 import logging
 from typing import Any, List, Dict, Optional
 
+from Middleware.utilities.streaming_utils import stream_static_content
 from Middleware.workflows.handlers.base.base_workflow_node_handler import BaseHandler
 from Middleware.workflows.models.execution_context import ExecutionContext
 
@@ -121,13 +122,14 @@ class SubWorkflowHandler(BaseHandler):
 
     def handle_conditional_custom_workflow(self, context: ExecutionContext):
         """
-        Selects and executes a sub-workflow based on a resolved conditional value.
+        Selects and executes a sub-workflow based on a resolved conditional value. If no match is found,
+        it can return default content or fall back to a default workflow.
 
         Args:
             context (ExecutionContext): The current node's execution context.
 
         Returns:
-            Any: The result returned by the executed sub-workflow.
+            Any: The result returned by the executed sub-workflow or the resolved default content.
         """
         logger.info("Conditional Custom Workflow initiated")
 
@@ -137,9 +139,32 @@ class SubWorkflowHandler(BaseHandler):
         key_value = raw_key_value.strip().lower()
 
         workflow_map = {k.lower(): v for k, v in context.config.get("conditionalWorkflows", {}).items()}
-        workflow_name = workflow_map.get(key_value, workflow_map.get("default", "No_Workflow_Name_Supplied"))
+        workflow_name = workflow_map.get(key_value)
 
-        logger.info(f"Resolved conditionalKey='{raw_key_value}' => workflow_name='{workflow_name}'")
+        if not workflow_name:
+            # No direct match found. Check for default content before default workflow.
+            default_content_template = context.config.get("UseDefaultContentInsteadOfWorkflow")
+
+            if default_content_template is not None:
+                logger.info(
+                    f"No workflow match for conditionalKey='{raw_key_value}'. Using 'UseDefaultContentInsteadOfWorkflow'."
+                )
+                resolved_content = self.workflow_variable_service.apply_variables(
+                    str(default_content_template), context
+                )
+
+                if context.stream:
+                    logger.debug("Returning default content as a stream.")
+                    return stream_static_content(resolved_content)
+                else:
+                    logger.debug("Returning default content as a single string.")
+                    return resolved_content
+
+            # No default content provided, so fall back to the default workflow.
+            workflow_name = workflow_map.get("default", "No_Workflow_Name_Supplied")
+            logger.info(f"No direct match for '{raw_key_value}', falling back to default workflow: '{workflow_name}'")
+        else:
+            logger.info(f"Resolved conditionalKey='{raw_key_value}' => workflow_name='{workflow_name}'")
 
         workflow_user_folder_override = context.config.get("workflowUserFolderOverride")
 

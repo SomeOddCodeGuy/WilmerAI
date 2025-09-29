@@ -164,5 +164,3 @@ specialized workflows (e.g., those called by the `QualityMemory` node).
 * **`[Memory_file]`**, **`[Full_Memory_file]`**, **`[Chat_Summary]`**: Represent various memory files for file-based
   memory generation.
 * **`[LATEST_MEMORIES]`**, **`[CHAT_SUMMARY]`**: Used specifically by the `chatSummarySummarizer` node type.
-
-

@@ -163,6 +163,10 @@ class WorkflowVariableManager:
         # --- Inter-node variables ({agentXInput} and {agentXOutput}) ---
         variables.update(context.agent_outputs or {})
 
+        # --- Inter-node input variables ({agentXInput}) ---
+        if context.agent_inputs:
+            variables.update(context.agent_inputs)
+
         # --- Other dynamic attributes ---
         variables.update(self.extract_additional_attributes())
 

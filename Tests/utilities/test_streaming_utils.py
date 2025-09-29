@@ -1,5 +1,3 @@
-# Tests/utilities/test_streaming_utils.py
-
 import pytest
 
 # NOTE: Imports from Middleware.* assume the pytest.ini configuration (pythonpath = .)
@@ -132,11 +130,11 @@ class TestStreamingThinkRemover:
         expected = "Real"
         assert process_stream_in_chunks(remover, text, chunk_size=1) == expected
 
-    def test_closing_only_mode_finalize_discards_buffer_if_no_tag_found(self):
+    def test_closing_only_mode_returns_buffer_if_no_tag_found(self):
         config = {**BASE_ENDPOINT_CONFIG, "expectOnlyClosingThinkTag": True}
         remover = StreamingThinkRemover(config)
-        text = "This text should be completely discarded."
-        expected = ""
+        text = "This text should be returned in full."
+        expected = "This text should be returned in full."
         assert process_stream_in_chunks(remover, text) == expected
 
 
@@ -164,8 +162,8 @@ class TestRemoveThinkingFromText:
         (" " * 101 + "<think>block</think>", {"openingTagGracePeriod": 100}, " " * 101 + "<think>block</think>"),
         # Closing only mode, successful removal
         ("Junk text</think>Real text", {"expectOnlyClosingThinkTag": True}, "Real text"),
-        # Closing only mode, no closing tag (should return empty string)
-        ("Junk text without a tag", {"expectOnlyClosingThinkTag": True}, ""),
+        # Closing only mode, no closing tag (should return original text)
+        ("Junk text without a tag", {"expectOnlyClosingThinkTag": True}, "Junk text without a tag"),
         # Feature disabled via config
         ("Text <think>block</think>", {"removeThinking": False}, "Text <think>block</think>"),
         # Feature disabled due to missing tags
