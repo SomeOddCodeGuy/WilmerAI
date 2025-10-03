@@ -160,7 +160,7 @@ including proprietary APIs, depending on how you build your workflow.
 
 ## User Documentation
 
-User Documentation can be found by going to [/Docs/_User_Documentation/](Docs/_User_Documentation/README.md)
+User Documentation can be found by going to [/Docs/User_Documentation/](Docs/User_Documentation/README.md)
 
 ## Developer Documentation
 
@@ -176,16 +176,16 @@ Helpful developer docs can be found in [/Docs/Developer_Docs/](Docs/Developer_Do
 
 #### WilmerAI
 
-Hop into the [User Documents Setup Starting Guide](Docs/_User_Documentation/Setup/_Getting-Start_Wilmer-Api.md) to get
+Hop into the [User Documents Setup Starting Guide](Docs/User_Documentation/Setup/_Getting-Start_Wilmer-Api.md) to get
 step by step rundown of how to quickly set up the API.
 
 #### Wilmer with Open WebUI
 
-[You can click here to find a written guide for setting up Wilmer with Open WebUI](Docs/_User_Documentation/Setup/Open-WebUI.md)
+[You can click here to find a written guide for setting up Wilmer with Open WebUI](Docs/User_Documentation/Setup/Open-WebUI.md)
 
 #### Wilmer With SillyTavern
 
-[You can click here to find a written guide for setting up Wilmer with SillyTavern](Docs/_User_Documentation/Setup/SillyTavern.md).
+[You can click here to find a written guide for setting up Wilmer with SillyTavern](Docs/User_Documentation/Setup/SillyTavern.md).
 
 
 ---
