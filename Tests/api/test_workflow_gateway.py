@@ -48,10 +48,11 @@ def test_handle_user_prompt_uses_categorization_when_custom_workflow_is_inactive
     mock_service_instance = mock_dependencies['PromptCategorizationService'].return_value
     mock_service_instance.get_prompt_category.return_value = "categorized_response"
 
+    request_id = "test-request-id-123"
     messages = [{"role": "user", "content": "Hello"}]
 
     # Act
-    result = handle_user_prompt(messages, stream=False)
+    result = handle_user_prompt(request_id, messages, stream=False)
 
     # Assert
     mock_dependencies['PromptCategorizationService'].assert_called_once()
@@ -60,6 +61,7 @@ def test_handle_user_prompt_uses_categorization_when_custom_workflow_is_inactive
     call_args = mock_service_instance.get_prompt_category.call_args[1]
     assert call_args['messages'] == messages
     assert call_args['stream'] is False
+    assert call_args['request_id'] == request_id
     assert call_args['discussion_id'] == 'test-discussion-id'
     assert result == "categorized_response"
     mock_dependencies['WorkflowManager'].run_custom_workflow.assert_not_called()
@@ -73,16 +75,18 @@ def test_handle_user_prompt_uses_custom_workflow_when_active(mock_dependencies):
     mock_dependencies['get_custom_workflow_is_active'].return_value = True
     mock_dependencies['get_active_custom_workflow_name'].return_value = 'TestCustomWorkflow'
     mock_dependencies['WorkflowManager'].run_custom_workflow.return_value = "custom_workflow_response"
+    request_id = "test-request-id-456"
     messages = [{"role": "user", "content": "Hi there"}]
 
     # Act
-    result = handle_user_prompt(messages, stream=True)
+    result = handle_user_prompt(request_id, messages, stream=True)
 
     # Assert
     mock_dependencies['WorkflowManager'].run_custom_workflow.assert_called_once()
     # Check that correct arguments were passed
     call_args = mock_dependencies['WorkflowManager'].run_custom_workflow.call_args[1]
     assert call_args['workflow_name'] == 'TestCustomWorkflow'
+    assert call_args['request_id'] == request_id
     assert call_args['messages'] == messages
     assert call_args['is_streaming'] is True
     assert call_args['discussion_id'] == 'test-discussion-id'

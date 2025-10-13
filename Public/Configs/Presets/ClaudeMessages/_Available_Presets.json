@@ -1,0 +1,18 @@
+{
+  "temperature": 0.5,
+  "top_p": 1.0,
+  "top_k": null,
+  "stop_sequences": [],
+  "metadata": {
+    "user_id": "client-id-12345",
+    "session_id": "session-xyz-67890",
+    "request_type": "financial_chart_analysis"
+  },
+  "tool_choice": {
+    "type": "auto"
+  },
+  "thinking": {
+    "type": "disabled",
+    "budget_tokens": 4096
+  }
+}

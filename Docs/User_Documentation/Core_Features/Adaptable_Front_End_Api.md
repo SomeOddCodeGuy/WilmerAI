@@ -40,8 +40,10 @@ This is a widely adopted standard and provides significant flexibility. By point
 WilmerAI's address, you can use the following endpoints:
 
 * **`/v1/chat/completions`**: The primary endpoint for chat-based interactions. It supports message histories with
-  roles (`user`, `assistant`).
-* **`/v1/completions`**: The legacy endpoint for single-prompt text completion.
+  roles (`user`, `assistant`). Supports cancellation via client disconnection (close the HTTP connection to stop
+  the request).
+* **`/v1/completions`**: The legacy endpoint for single-prompt text completion. Supports cancellation via client
+  disconnection.
 * **`/v1/models`**: Allows clients to query for a list of available models, which can be configured within WilmerAI.
 
 ### Ollama API Compatibility
@@ -50,7 +52,10 @@ For users whose tools and scripts are already integrated with the Ollama ecosyst
 
 * **`/api/chat`**: The standard endpoint for Ollama chat models.
 * **`/api/generate`**: Used for direct text generation with a single prompt.
-* **`/api/tags`**: Provides a list of available models, mirroring the behavior of a local Ollama server.
+* **`/api/tags`**: Provides a list of available models, mirroring the behavior of a local Ollama server
+* **`DELETE /api/chat`** and **`DELETE /api/generate`**: Cancel an in-progress request by sending a DELETE request with
+  a JSON body containing `{"request_id": "your-request-id"}`. This immediately stops the request, even during prompt
+  processing or streaming responses.
 
 -----
 
@@ -66,8 +71,8 @@ a single block.
 
 ### Stateful Conversation Memory
 
-WilmerAI can track conversation history across multiple requests. To enable this, include the `[DiscussionId]` tag in
-the **first user message** of your API call.
+WilmerAI can track conversation history across multiple requests. To enable this, include the `[DiscussionId]` tag
+anywhere in your API call.
 
 For example:
 
@@ -77,7 +82,7 @@ For example:
   "messages": [
     {
       "role": "user",
-      "content": "[DiscussionId] my-unique-chat-session-123\n\nHello, who are you?"
+      "content": "[DiscussionId]my-unique-chat-session-123[/DiscussionId]\n\nHello, who are you?"
     }
   ]
 }

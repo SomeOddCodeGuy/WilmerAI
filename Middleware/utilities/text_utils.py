@@ -376,3 +376,65 @@ def replace_delimiter_in_file(filepath: str, delimit_on: str, delimit_replacer: 
     except IOError:
         logger.error(f"Error: An IOError occurred while reading the file at {filepath}.")
         raise
+
+
+def redact_sensitive_data(data, redaction_text='***REDACTED***'):
+    """Redacts sensitive information from data structures for safe logging.
+
+    This function recursively processes dictionaries and lists to redact values
+    associated with keys that typically contain sensitive information such as
+    API keys, passwords, tokens, and secrets. The original data structure is
+    not modified; a deep copy with redacted values is returned.
+
+    Sensitive keys detected (case-insensitive):
+    - apiKey, api_key, apikey
+    - password, passwd, pwd
+    - token, access_token, refresh_token, auth_token
+    - secret, client_secret, api_secret
+    - authorization, auth
+
+    Args:
+        data: The data structure to redact. Can be a dict, list, or any other type.
+        redaction_text (str): The text to replace sensitive values with.
+                             Defaults to '***REDACTED***'.
+
+    Returns:
+        The data structure with sensitive values redacted. For non-dict/list types,
+        returns the original value unchanged.
+
+    Example:
+        >>> config = {'apiKey': 'secret123', 'endpoint': 'https://api.example.com'}
+        >>> redact_sensitive_data(config)
+        {'apiKey': '***REDACTED***', 'endpoint': 'https://api.example.com'}
+    """
+    # List of sensitive key patterns (case-insensitive)
+    sensitive_keys = {
+        'apikey', 'api_key', 'apikey',
+        'password', 'passwd', 'pwd',
+        'token', 'access_token', 'refresh_token', 'auth_token', 'bearer_token',
+        'secret', 'client_secret', 'api_secret',
+        'authorization', 'auth',
+        'private_key', 'privatekey'
+    }
+
+    def _redact_recursive(obj):
+        """Recursively redact sensitive data in nested structures."""
+        if isinstance(obj, dict):
+            redacted = {}
+            for key, value in obj.items():
+                # Check if key matches any sensitive pattern (case-insensitive)
+                if key.lower() in sensitive_keys:
+                    redacted[key] = redaction_text
+                else:
+                    # Recursively process nested structures
+                    redacted[key] = _redact_recursive(value)
+            return redacted
+        elif isinstance(obj, list):
+            return [_redact_recursive(item) for item in obj]
+        elif isinstance(obj, tuple):
+            return tuple(_redact_recursive(item) for item in obj)
+        else:
+            # Return primitive types unchanged
+            return obj
+
+    return _redact_recursive(data)

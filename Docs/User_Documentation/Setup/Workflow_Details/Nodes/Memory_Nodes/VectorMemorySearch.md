@@ -13,6 +13,10 @@ specific facts, topics, or details from any point in a long conversation's histo
 will return the error message `"Cannot perform VectorMemorySearch without a discussionId."` and will not perform a
 search.
 
+> Example: "[DiscussionId]my_chat_2123[/DiscussionId] How are you?"
+> That discussionid can be anywhere in the conversation. Wilmer will find it and strip it out,
+> then utilitize it. In this case, your discussionid is my_chat_2123.
+
 -----
 
 ### Internal Execution Flow

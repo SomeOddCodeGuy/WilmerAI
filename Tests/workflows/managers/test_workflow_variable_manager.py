@@ -361,3 +361,228 @@ def test_apply_variables_key_error_fallback(mocker, mock_context):
     assert result == prompt
     mock_log_warning.assert_called_once()
     assert "A key error occurred" in mock_log_warning.call_args[0][0]
+
+
+# --- NEW TESTS FOR apply_early_variables METHOD ---
+# These tests verify the functionality we added to support early variable
+# substitution for endpointName and preset fields
+
+class TestApplyEarlyVariables:
+    """Tests for the apply_early_variables method that handles early substitution without llm_handler."""
+
+    def test_apply_early_variables_with_agent_inputs(self):
+        """Tests that agent input variables are correctly substituted."""
+        # Arrange
+        manager = WorkflowVariableManager()
+        agent_inputs = {
+            "agent1Input": "MyEndpoint",
+            "agent2Input": "MyPreset"
+        }
+        prompt = "{agent1Input}/{agent2Input}"
+
+        # Act
+        result = manager.apply_early_variables(prompt, agent_inputs=agent_inputs)
+
+        # Assert
+        assert result == "MyEndpoint/MyPreset"
+
+    def test_apply_early_variables_with_workflow_config(self):
+        """Tests that workflow config variables are correctly substituted."""
+        # Arrange
+        manager = WorkflowVariableManager()
+        workflow_config = {
+            "endpoint": "TestEndpoint",
+            "preset": "TestPreset",
+            "nodes": ["should_be_ignored"]  # nodes should be excluded
+        }
+        prompt = "{endpoint}_with_{preset}"
+
+        # Act
+        result = manager.apply_early_variables(prompt, workflow_config=workflow_config)
+
+        # Assert
+        assert result == "TestEndpoint_with_TestPreset"
+
+    def test_apply_early_variables_with_both_sources(self):
+        """Tests that both agent inputs and workflow config variables work together."""
+        # Arrange
+        manager = WorkflowVariableManager()
+        agent_inputs = {"agent1Input": "Dynamic"}
+        workflow_config = {"baseUrl": "https://api.example.com"}
+        prompt = "{baseUrl}/v1/{agent1Input}"
+
+        # Act
+        result = manager.apply_early_variables(
+            prompt,
+            agent_inputs=agent_inputs,
+            workflow_config=workflow_config
+        )
+
+        # Assert
+        assert result == "https://api.example.com/v1/Dynamic"
+
+    def test_apply_early_variables_missing_variable(self, mocker):
+        """Tests that missing variables are handled gracefully with partial substitution and warning."""
+        # Arrange
+        mock_logger = mocker.patch('Middleware.workflows.managers.workflow_variable_manager.logger.warning')
+        manager = WorkflowVariableManager()
+        agent_inputs = {"agent1Input": "Present"}
+        prompt = "{agent1Input}/{missingVariable}"
+
+        # Act
+        result = manager.apply_early_variables(prompt, agent_inputs=agent_inputs)
+
+        # Assert
+        assert result == "Present/{missingVariable}"  # Partial substitution - substitutes what it can
+        mock_logger.assert_called_once()
+        assert "Variables not available for early substitution" in mock_logger.call_args[0][0]
+
+    def test_apply_early_variables_no_variables_in_prompt(self):
+        """Tests that prompts without variables are returned unchanged."""
+        # Arrange
+        manager = WorkflowVariableManager()
+        agent_inputs = {"agent1Input": "Value"}
+        prompt = "StaticEndpointName"
+
+        # Act
+        result = manager.apply_early_variables(prompt, agent_inputs=agent_inputs)
+
+        # Assert
+        assert result == "StaticEndpointName"
+
+    def test_apply_early_variables_empty_inputs(self):
+        """Tests that empty inputs don't cause errors."""
+        # Arrange
+        manager = WorkflowVariableManager()
+        prompt = "{agent1Input}"
+
+        # Act
+        result = manager.apply_early_variables(prompt, agent_inputs=None, workflow_config=None)
+
+        # Assert
+        assert result == "{agent1Input}"  # Returns original since no variables available
+
+    def test_apply_early_variables_malformed_brackets(self, mocker):
+        """Tests that malformed variable syntax is handled gracefully."""
+        # Arrange
+        mock_logger = mocker.patch('Middleware.workflows.managers.workflow_variable_manager.logger.warning')
+        manager = WorkflowVariableManager()
+        agent_inputs = {"agent1Input": "Value"}
+        prompt = "{agent1Input} and {unclosed and {{double}}"
+
+        # Act
+        result = manager.apply_early_variables(prompt, agent_inputs=agent_inputs)
+
+        # Assert
+        # Should handle the valid variable and return original for invalid parts
+        mock_logger.assert_called()
+        assert "Error during early variable substitution" in mock_logger.call_args[0][0]
+
+    def test_apply_early_variables_complex_template_pattern(self):
+        """Tests a complex real-world pattern with multiple variables."""
+        # Arrange
+        manager = WorkflowVariableManager()
+        agent_inputs = {
+            "agent1Input": "General-Fast-Endpoint",
+            "agent2Input": "Factual_Preset"
+        }
+        workflow_config = {
+            "version": "v1",
+            "environment": "production"
+        }
+        prompt = "{environment}/{version}/{agent1Input}?preset={agent2Input}"
+
+        # Act
+        result = manager.apply_early_variables(
+            prompt,
+            agent_inputs=agent_inputs,
+            workflow_config=workflow_config
+        )
+
+        # Assert
+        assert result == "production/v1/General-Fast-Endpoint?preset=Factual_Preset"
+
+    def test_apply_early_variables_nodes_excluded_from_workflow_config(self):
+        """Tests that 'nodes' key is properly excluded from workflow config."""
+        # Arrange
+        manager = WorkflowVariableManager()
+        workflow_config = {
+            "validKey": "validValue",
+            "nodes": [{"type": "Standard"}]  # Should be excluded
+        }
+        prompt = "{validKey} and {nodes}"
+
+        # Act
+        result = manager.apply_early_variables(prompt, workflow_config=workflow_config)
+
+        # Assert
+        # validKey should work, nodes should not
+        assert "{nodes}" in result  # nodes variable should remain unsubstituted
+        assert "validValue" in result
+
+    def test_apply_early_variables_priority_when_duplicate_keys(self):
+        """Tests that agent_inputs take priority over workflow_config when keys conflict."""
+        # Arrange
+        manager = WorkflowVariableManager()
+        agent_inputs = {"endpoint": "FromAgent"}
+        workflow_config = {"endpoint": "FromWorkflow"}
+        prompt = "{endpoint}"
+
+        # Act
+        result = manager.apply_early_variables(
+            prompt,
+            agent_inputs=agent_inputs,
+            workflow_config=workflow_config
+        )
+
+        # Assert
+        # agent_inputs should override workflow_config
+        assert result == "FromAgent"
+
+    def test_apply_early_variables_special_characters_in_values(self):
+        """Tests that special characters in values don't break substitution."""
+        # Arrange
+        manager = WorkflowVariableManager()
+        agent_inputs = {
+            "agent1Input": "endpoint-with-dash_and_underscore.v1",
+            "agent2Input": "preset@2.0"
+        }
+        prompt = "{agent1Input}:{agent2Input}"
+
+        # Act
+        result = manager.apply_early_variables(prompt, agent_inputs=agent_inputs)
+
+        # Assert
+        assert result == "endpoint-with-dash_and_underscore.v1:preset@2.0"
+
+    def test_apply_early_variables_numeric_values(self):
+        """Tests that numeric values in the config are handled correctly."""
+        # Arrange
+        manager = WorkflowVariableManager()
+        workflow_config = {
+            "port": 8080,
+            "version": 2
+        }
+        prompt = "http://localhost:{port}/api/v{version}"
+
+        # Act
+        result = manager.apply_early_variables(prompt, workflow_config=workflow_config)
+
+        # Assert
+        assert result == "http://localhost:8080/api/v2"
+
+    def test_apply_early_variables_none_values(self):
+        """Tests that None values in inputs are handled correctly."""
+        # Arrange
+        manager = WorkflowVariableManager()
+        agent_inputs = {
+            "agent1Input": None,
+            "agent2Input": "NotNone"
+        }
+        prompt = "{agent1Input}/{agent2Input}"
+
+        # Act
+        result = manager.apply_early_variables(prompt, agent_inputs=agent_inputs)
+
+        # Assert
+        assert result == "None/NotNone"  # None is converted to string "None"

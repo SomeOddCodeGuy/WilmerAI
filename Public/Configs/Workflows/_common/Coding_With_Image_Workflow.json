@@ -19,7 +19,7 @@
     "prompt": "",
     "lastMessagesToSendInsteadOfPrompt": 25,
     "endpointName": "Coding-Endpoint",
-    "preset": "Factual_Preset",
+    "preset": "Coder_Preset",
     "maxResponseSizeInTokens": 6000,
     "addUserTurnTemplate": false,
     "addDiscussionIdTimestampsForLLM": false,

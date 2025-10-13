@@ -2,7 +2,6 @@
 
 import copy
 import logging
-import uuid
 from functools import wraps
 from typing import Any, Dict, List, Generator, Optional, Union
 
@@ -20,18 +19,18 @@ logger = logging.getLogger(__name__)
 response_builder = ResponseBuilderService()
 
 
-def handle_user_prompt(prompt_collection: List[Dict[str, Any]], stream: bool) -> Union[str, Generator[str, None, None]]:
+def handle_user_prompt(request_id: str, prompt_collection: List[Dict[str, Any]], stream: bool) -> Union[str, Generator[str, None, None]]:
     """
     Processes a user prompt by routing it to the appropriate workflow.
 
     Args:
+        request_id (str): The unique identifier for this request.
         prompt_collection (List[Dict[str, Any]]): The list of messages representing the conversation.
         stream (bool): A flag indicating whether to return a streaming response.
 
     Returns:
         Union[str, Generator[str, None, None]]: The complete response string or a generator for streaming chunks.
     """
-    request_id = str(uuid.uuid4())
     discussion_id = extract_discussion_id(prompt_collection)
 
     sanitized_messages = replace_brackets_in_list(prompt_collection)

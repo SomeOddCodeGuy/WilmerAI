@@ -33,8 +33,8 @@ An **API Type** file functions as a driver for an LLM's API. Different backends 
 OpenAI uses `"max_tokens"` to limit response length, while Ollama uses `"num_predict"`.
 
 The API Type file maps these different property names to a common internal standard. This allows WilmerAI to support
-Ollama, OpenAI, KoboldCpp, and more without changing its core code. You tell your Endpoint to use the correct API Type
-file, and WilmerAI handles the translation.
+Ollama, OpenAI, Anthropic Claude, KoboldCpp, and more without changing its core code. You tell your Endpoint to use the
+correct API Type file, and WilmerAI handles the translation.
 
 Support for a new LLM backend can be added by creating a new API Type file that describes its schema.
 
@@ -105,3 +105,31 @@ To connect a model in your workflow:
 
 The node is now configured to send its request to the LLM defined in `MyLocalModel.json`, using the API rules from the
 `Ollama` API Type and the generation settings from the `Creative` preset.
+
+-----
+
+### Advanced Usage: Dynamic Endpoints and Presets
+
+For more dynamic workflows, the `endpointName` and `presetName` fields can also accept variables defined at the top of
+your workflow or passed in from a parent workflow.
+
+This allows you to create flexible workflows that can switch models based on initial parameters. For example, you could
+define a `{default_model}` variable and reference it in multiple nodes.
+
+ ```json
+ {
+  "variables": {
+    "default_model": "MyLocalModel",
+    "default_preset": "My_Preset"
+  },
+  "nodes": [
+    {
+      "title": "Respond to User",
+      "type": "Standard",
+      "endpointName": "{default_model}",
+      "presetName": "{default_preset}",
+      "returnToUser": true
+    }
+  ]
+}
+ ```

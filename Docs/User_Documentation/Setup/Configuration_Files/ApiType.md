@@ -36,6 +36,7 @@ Each `ApiTypes` JSON file contains a single object with the following key-value 
       list of messages.
     * `"openAIV1Completion"`: For legacy APIs following the OpenAI `/v1/completions` standard, which takes a single
       flattened prompt string.
+    * `"claudeMessages"`: For the Anthropic Claude Messages API, which uses a structured list of messages.
     * `"koboldCppGenerate"`: For the KoboldCpp `/api/v1/generate` endpoint. This is a completions-style API.
     * `"ollamaApiChat"`: For the Ollama `/api/chat` endpoint, which uses a message list and a nested `options` object
       for parameters.
@@ -121,6 +122,7 @@ Here is a fully-commented example for an Ollama Chat API (`/api/chat`).
 
 #### Pre-defined ApiTypes
 
+- **`Claude`**: For Anthropic's Claude Messages API. Chat completion API supporting structured message lists
 - **`KoboldCpp`**: For KoboldCpp's text completion api. Does not send images to the server
 - **`KoboldCppImageSpecific`**: For KoboldCpp's text completion REST api. Same as `KoboldCpp`, but sends images for
   vision models to process

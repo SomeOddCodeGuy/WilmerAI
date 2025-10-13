@@ -2,10 +2,26 @@
 
 import json
 import logging
+import uuid
+
+# Dynamic eventlet imports
+try:
+    import eventlet
+    from eventlet.queue import Queue as EventletQueue, Empty as EventletQueueEmpty
+
+    EVENTLET_AVAILABLE = True
+except ImportError:
+    EVENTLET_AVAILABLE = False
+    import queue
+
+    Queue = queue.Queue
+    EventletQueueEmpty = queue.Empty
+
 from typing import Any, Dict, Union, List
 
-from flask import jsonify, request, Response
+from flask import jsonify, request, Response, g, stream_with_context
 from flask.views import MethodView
+from werkzeug.exceptions import ClientDisconnected
 
 from Middleware.api.app import app
 from Middleware.api.handlers.base.base_api_handler import BaseApiHandler
@@ -18,6 +34,156 @@ from Middleware.utilities.prompt_extraction_utils import parse_conversation
 
 logger = logging.getLogger(__name__)
 response_builder = ResponseBuilderService()
+
+# Configuration for the heartbeat mechanism
+# 1 second was chosen because Wilmer won't react to an abort from the front-end until the next interval.
+# In an attempt to save the user some tokens, we want that reaction as fast as possible so we dont risk
+# kicking off another workflow node and processing another prompt. No guarantee this will work, but we
+# want to try
+HEARTBEAT_INTERVAL = 1  # seconds
+HEARTBEAT_MESSAGE = b':\n\n'
+
+
+def _stream_with_eventlet_optimized(request_id: str, messages: List[Dict], stream: bool) -> Response:
+    """
+    Optimized streaming implementation for Eventlet with disconnect detection during prefill.
+
+    Uses a queue-based approach where a background greenlet reads from handle_user_prompt()
+    and the main generator uses timeouts to detect when heartbeats are needed.
+    """
+    logger.info(f"OpenAI starting Eventlet optimized streaming for request_id: {request_id}")
+    from Middleware.services.cancellation_service import cancellation_service
+
+    event_queue = EventletQueue()
+    stop_signal = eventlet.event.Event()
+    reader_greenlet = None
+
+    def backend_reader():
+        """Background greenlet that reads from handle_user_prompt and queues chunks."""
+        try:
+            for chunk in handle_user_prompt(request_id, messages, stream):
+                if stop_signal.ready():
+                    break
+                event_queue.put(("data", chunk))
+        except Exception as e:
+            if request_id and cancellation_service.is_cancelled(request_id):
+                logger.info(f"Backend streaming stopped due to cancellation for request_id {request_id}.")
+            else:
+                logger.error(f"Error in backend reader greenlet for request_id {request_id}: {e}", exc_info=True)
+                event_queue.put(("error", e))
+        finally:
+            if not stop_signal.ready():
+                stop_signal.send(True)
+
+    reader_greenlet = eventlet.spawn(backend_reader)
+
+    def streaming_generator():
+        """Main generator consumed by Eventlet WSGI."""
+        try:
+            while not stop_signal.ready() or not event_queue.empty():
+                try:
+                    msg_type, data = event_queue.get(timeout=HEARTBEAT_INTERVAL)
+
+                    if msg_type == "error":
+                        raise data
+                    elif msg_type == "data":
+                        if isinstance(data, str):
+                            yield data.encode('utf-8')
+                        else:
+                            yield data
+
+                        eventlet.sleep(0)
+
+                except EventletQueueEmpty:
+                    if not stop_signal.ready():
+                        yield HEARTBEAT_MESSAGE
+                        eventlet.sleep(0)
+
+        except (GeneratorExit, ClientDisconnected, BrokenPipeError, ConnectionError) as e:
+            logger.info(f"Client disconnected from OpenAI streaming request {request_id}. Error: {type(e).__name__}.")
+            if request_id and not cancellation_service.is_cancelled(request_id):
+                cancellation_service.request_cancellation(request_id)
+            raise
+        except Exception as e:
+            if request_id and cancellation_service.is_cancelled(request_id):
+                logger.info(f"Backend streaming stopped due to cancellation for request_id {request_id}.")
+            else:
+                logger.error(f"Unexpected error in OpenAI streaming generator: {e}", exc_info=True)
+            raise
+        finally:
+            if not stop_signal.ready():
+                stop_signal.send(True)
+            if reader_greenlet:
+                reader_greenlet.kill()
+
+    response = Response(
+        streaming_generator(),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+        }
+    )
+    # Remove hop-by-hop headers that violate WSGI/PEP 3333
+    response.headers.pop('Connection', None)
+    return response
+
+
+def _stream_response_fallback(request_id: str, messages: List[Dict], stream: bool) -> Response:
+    """Fallback streaming for non-Eventlet environments."""
+    logger.info(f"OpenAI starting fallback (synchronous) streaming for request_id: {request_id}")
+    from Middleware.services.cancellation_service import cancellation_service
+
+    def streaming_generator():
+        logger.debug(f"OpenAI Fallback Generator starting for request_id: {request_id}")
+        try:
+            for chunk in handle_user_prompt(request_id, messages, stream):
+                if isinstance(chunk, str):
+                    yield chunk.encode('utf-8')
+                else:
+                    yield chunk
+        except (GeneratorExit, ClientDisconnected, BrokenPipeError, ConnectionError) as e:
+            if request_id:
+                if not cancellation_service.is_cancelled(request_id):
+                    logger.warning(
+                        f"Client disconnected from OpenAI (Fallback) streaming request {request_id}. Error: {type(e).__name__}. Cancellation might be delayed during prefill.")
+                    cancellation_service.request_cancellation(request_id)
+            raise
+        except Exception as e:
+            if request_id and cancellation_service.is_cancelled(request_id):
+                logger.info(
+                    f"Backend streaming stopped due to cancellation for request_id {request_id}. Exiting generator.")
+                return
+            logger.error(f"Unexpected error in OpenAI streaming response: {e}", exc_info=True)
+            raise
+
+    response = Response(
+        stream_with_context(streaming_generator()),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+        }
+    )
+    # Remove hop-by-hop headers that violate WSGI/PEP 3333
+    response.headers.pop('Connection', None)
+    return response
+
+
+def _handle_streaming_request(request_id: str, messages: List[Dict], stream: bool) -> Response:
+    """Main entry point for streaming, dynamically choosing the implementation."""
+    is_eventlet_active = EVENTLET_AVAILABLE and eventlet.patcher.is_monkey_patched('socket')
+
+    if is_eventlet_active:
+        return _stream_with_eventlet_optimized(request_id, messages, stream)
+    else:
+        if not EVENTLET_AVAILABLE:
+            logger.warning(
+                "Eventlet not installed. Falling back to synchronous streaming. Disconnect detection during prefill may be unreliable.")
+        else:
+            logger.debug(
+                "Eventlet installed but monkey patching is not active (not running via run_eventlet.py). Falling back to synchronous streaming.")
+        return _stream_response_fallback(request_id, messages, stream)
 
 
 class ModelsAPI(MethodView):
@@ -48,18 +214,22 @@ class CompletionsAPI(MethodView):
                                              streaming response or a single JSON
                                              object.
         """
+        # Generate Request ID immediately and store it in the context
+        request_id = str(uuid.uuid4())
+        g.current_request_id = request_id
+
         instance_global_variables.API_TYPE = "openaicompletion"
-        logger.info("CompletionsAPI request received")
+        logger.info(f"CompletionsAPI request received (ID: {request_id})")
         data: Dict[str, Any] = request.json
-        logger.debug(f"CompletionsAPI request received: {json.dumps(_sanitize_log_data(data))}")
+        logger.debug(f"CompletionsAPI request received (ID: {request_id}): {json.dumps(_sanitize_log_data(data))}")
         prompt: str = data.get("prompt", "")
         stream: bool = data.get("stream", True)
         messages = parse_conversation(prompt)
 
         if stream:
-            return Response(handle_user_prompt(messages, True), content_type='application/json')
+            return _handle_streaming_request(request_id, messages, stream)
         else:
-            return_response: str = handle_user_prompt(messages, False)
+            return_response: str = handle_user_prompt(request_id, messages, False)
             response = response_builder.build_openai_completion_response(return_response)
             return jsonify(response)
 
@@ -86,11 +256,17 @@ class ChatCompletionsAPI(MethodView):
             ValueError: If the request payload lacks a 'messages' field, or if
                         any message is missing 'role' or 'content'.
         """
+        # Generate Request ID immediately and store it in the context
+        request_id = str(uuid.uuid4())
+        g.current_request_id = request_id
+
         instance_global_variables.API_TYPE = "openaichatcompletion"
         add_user_assistant = get_is_chat_complete_add_user_assistant()
         add_missing_assistant = get_is_chat_complete_add_missing_assistant()
         request_data: Dict[str, Any] = request.get_json()
-        logger.info(f"ChatCompletionsAPI request received: {json.dumps(_sanitize_log_data(request_data))}")
+        logger.info(
+            f"ChatCompletionsAPI request received (ID: {request_id}): {json.dumps(_sanitize_log_data(request_data))}")
+        logger.info(f"ChatCompletionsAPI.post() called - stream={request_data.get('stream', False)}")
 
         stream: bool = request_data.get("stream", False)
         if 'messages' not in request_data:
@@ -118,12 +294,10 @@ class ChatCompletionsAPI(MethodView):
                 transformed_messages.append({"role": "assistant", "content": ""})
 
         if stream:
-            return Response(
-                handle_user_prompt(transformed_messages, stream),
-                mimetype='text/event-stream'
-            )
+            logger.info(f"ChatCompletionsAPI starting streaming response for request_id: {request_id}")
+            return _handle_streaming_request(request_id, transformed_messages, stream)
         else:
-            return_response = handle_user_prompt(transformed_messages, stream=False)
+            return_response = handle_user_prompt(request_id, transformed_messages, stream=False)
             response = response_builder.build_openai_chat_completion_response(return_response)
             return jsonify(response)
 

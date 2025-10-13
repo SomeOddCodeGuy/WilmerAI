@@ -1,4 +1,8 @@
 # server.py
+# NOTE: When using Eventlet, monkey-patching is handled by run_eventlet.py
+# Do NOT monkey-patch here as it must happen before ANY imports
+
+import sys
 import argparse
 import logging
 import os
@@ -14,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 def parse_arguments():
+    """Parse command-line arguments for configuration."""
     parser = argparse.ArgumentParser(description="Process configuration directory and user arguments.")
     parser.add_argument("--ConfigDirectory", type=str, help="Custom path to the configuration directory")
     parser.add_argument("--User", type=str, help="User to run Wilmer as")
@@ -22,12 +27,12 @@ def parse_arguments():
     args = parser.parse_args()
 
     if len(args.positional) > 0 and args.positional[0].strip():
-        instance_global_variables.CONFIG_DIRECTORY = args.positional[0].strip()
+        instance_global_variables.CONFIG_DIRECTORY = args.positional[0].strip().rstrip('/\\')
     if len(args.positional) > 1 and args.positional[1].strip():
         instance_global_variables.USER = args.positional[1].strip()
 
     if args.ConfigDirectory and args.ConfigDirectory.strip():
-        instance_global_variables.CONFIG_DIRECTORY = args.ConfigDirectory.strip()
+        instance_global_variables.CONFIG_DIRECTORY = args.ConfigDirectory.strip().rstrip('/\\')
     if args.User and args.User.strip():
         instance_global_variables.USER = args.User.strip()
 
@@ -40,8 +45,18 @@ def parse_arguments():
         )
 
 
-if __name__ == '__main__':
-    parse_arguments()
+def initialize_app():
+    """
+    Initialize the application: configure logging, clean up locks, and create ApiServer.
+    This function is called at module level so WSGI servers can import the initialized app.
+
+    Note: When run via WSGI server (Eventlet/Waitress), the launcher script sets
+    instance_global_variables before importing this module. When run directly,
+    parse_arguments() sets them.
+    """
+    # Parse arguments if running directly
+    if __name__ == '__main__':
+        parse_arguments()
 
     locking_service = LockingService()
 
@@ -71,9 +86,35 @@ if __name__ == '__main__':
     )
     locking_service.delete_old_locks(instance_global_variables.INSTANCE_ID)
 
-    logger.info("Starting API Server")
+    logger.info("Initializing API Server")
 
-    # Instantiate the new ApiServer and run it
+    # Instantiate the new ApiServer
     server = ApiServer()
+    return server
+
+
+# Initialize the server at module level
+# When imported by WSGI servers (Eventlet/Waitress), this creates the Flask app
+server = initialize_app()
+
+# Expose the Flask app for WSGI servers
+# WSGI servers (Eventlet, Waitress, etc.) will import this 'application' object
+application = server.app
+
+
+def get_application():
+    """
+    Returns the initialized Flask application.
+    This function is used by waitress-serve on Windows with the --call flag.
+
+    Returns:
+        Flask: The initialized Flask application instance.
+    """
+    return application
+
+
+if __name__ == '__main__':
+    # When run directly (not via Eventlet/Waitress), start the Flask development server
+    logger.info("Starting Flask development server (use Eventlet/Waitress for production)")
     # Set debug=True to enable auto-reloading if desired.
     server.run(debug=False)

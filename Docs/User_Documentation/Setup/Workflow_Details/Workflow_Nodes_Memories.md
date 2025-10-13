@@ -198,8 +198,8 @@ cohesive summary. It uses two special placeholders, `[CHAT_SUMMARY]` and `[LATES
 * **`loopIfMemoriesExceed`**: (Optional) The batch size for processing new memories in a loop. Defaults to `3`.
 * **`systemPrompt` / `prompt`**: (Required) Prompts for the summarization LLM. Must contain the `[CHAT_SUMMARY]` and
   `[LATEST_MEMORIES]` placeholders.
-* **`endpointName`**: (Optional) The LLM endpoint to use for summarization.
-* **`preset`**: (Optional) The generation preset to use.
+* **`endpointName`**: (Optional) The LLM endpoint to use for summarization. **Supports LIMITED variables: only `{agent#Input}` and static workflow variables, NOT `{agent#Output}`.**
+* **`preset`**: (Optional) The generation preset to use. **Supports LIMITED variables like endpointName.**
 
 #### **Actions & Output**
 

@@ -26,7 +26,7 @@ class OllamaGenerateApiHandler(BaseCompletionsHandler):
         Returns:
             str: The complete URL for the Ollama `/api/generate` endpoint.
         """
-        return f"{self.base_url}/api/generate"
+        return f"{self.base_url.rstrip('/')}/api/generate"
 
     def _prepare_payload(self, conversation: Optional[List[Dict[str, str]]], system_prompt: Optional[str],
                          prompt: Optional[str]) -> Dict:

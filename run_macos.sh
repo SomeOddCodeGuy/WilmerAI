@@ -33,10 +33,17 @@ if [ ! $? -eq 0 ]; then
 fi
 echo "Dependencies installed successfully."
 
-echo "Starting the application..."
-python3 server.py "$@"
+echo ""
+echo "========================================="
+echo "Starting WilmerAI with Eventlet"
+echo "(Production WSGI server)"
+echo "========================================="
+echo ""
+
+# Pass all arguments directly to run_eventlet.py
+# This maintains WilmerAI's existing argument parsing and config system
+python3 run_eventlet.py "$@"
 if [ ! $? -eq 0 ]; then
     echo "Failed to start the application."
     exit 1
 fi
-echo "Application started successfully."

@@ -1,0 +1,8 @@
+{
+  "nameForDisplayOnly": "MLX Server Example",
+  "type": "openAIChatCompletion",
+  "presetType": "OpenAiCompatibleApis",
+  "truncateLengthPropertyName": null,
+  "maxNewTokensPropertyName": "max_tokens",
+  "streamPropertyName": "stream"
+}

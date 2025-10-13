@@ -54,7 +54,8 @@ defined by a workflow.
 3. **Delegation to Processor:** The Manager creates an instance of `$WorkflowProcessor$`, injecting all dependencies,
    the full workflow configuration, the handler registry, and the request data.
 4. **Execution Loop:** The `$WorkflowProcessor.execute()` method is called, which begins iterating through each node
-   defined in the workflow's configuration.
+   defined in the workflow's configuration. At the start of each iteration, the processor checks if a cancellation has
+   been requested for this workflow execution and raises an `EarlyTerminationException` if so.
 5. **Context Creation:** For each node in the loop, the `$WorkflowProcessor$` **assembles a new `ExecutionContext`
    object**. This object is populated with the node's specific configuration, the full conversation history, the
    top-level workflow configuration, all available agent inputs and outputs, the appropriate LLM handler for that node,

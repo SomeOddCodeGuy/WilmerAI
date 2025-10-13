@@ -1,3 +1,5 @@
+# Middleware/workflows/processors/workflows_processor.py
+
 import logging
 import time
 from copy import deepcopy
@@ -7,6 +9,7 @@ from Middleware.common import instance_global_variables
 from Middleware.common.constants import VALID_NODE_TYPES
 from Middleware.exceptions.early_termination_exception import EarlyTerminationException
 from Middleware.models.llm_handler import LlmHandler
+from Middleware.services.cancellation_service import cancellation_service
 from Middleware.services.llm_service import LlmHandlerService
 from Middleware.services.locking_service import LockingService
 from Middleware.services.timestamp_service import TimestampService
@@ -129,6 +132,12 @@ class WorkflowProcessor:
 
         try:
             for idx, config in enumerate(self.configs):
+                # Check for cancellation at the start of each node execution
+                if cancellation_service.is_cancelled(self.request_id):
+                    logger.warning(f"Request {self.request_id} has been cancelled. Terminating workflow early.")
+                    cancellation_service.acknowledge_cancellation(self.request_id)
+                    raise EarlyTerminationException(f"Workflow execution cancelled for request {self.request_id}")
+
                 logger.info(
                     f'------Workflow {self.workflow_config_name}; step {idx}; node type: {config.get("type", "Standard")}')
 
@@ -181,10 +190,23 @@ class WorkflowProcessor:
                             result = "".join(full_response_list)
                             logger.info("\n\nOutput from the LLM (raw SSE stream from sub-workflow): %s", result)
                         else:
-                            endpoint_name = config.get("endpointName")
+                            # Apply early variable substitution for endpointName if needed
+                            endpoint_name_template = config.get("endpointName")
+                            if endpoint_name_template and ('{' in endpoint_name_template or '{{' in endpoint_name_template):
+                                # Apply variable substitution
+                                endpoint_name = self.workflow_variable_service.apply_early_variables(
+                                    endpoint_name_template,
+                                    agent_inputs=self.agent_inputs,
+                                    workflow_config=self.workflow_file_config
+                                )
+                                logger.debug(f"Resolved endpointName for streaming from '{endpoint_name_template}' to '{endpoint_name}'")
+                            else:
+                                endpoint_name = endpoint_name_template
+
                             endpoint_config = get_endpoint_config(endpoint_name) if endpoint_name else {}
                             stream_handler = StreamingResponseHandler(endpoint_config, config,
-                                                                      generation_prompt=generation_prompt)
+                                                                      generation_prompt=generation_prompt,
+                                                                      request_id=self.request_id)
                             yield from stream_handler.process_stream(result_gen)
                             result = stream_handler.full_response_text
                             logger.info("\n\nOutput from the LLM: %s", result)
@@ -231,9 +253,38 @@ class WorkflowProcessor:
         endpoint_config = {}
 
         if "endpointName" in config and config.get("endpointName"):
-            endpoint_name = config["endpointName"]
+            # Apply early variable substitution for endpointName if it contains variables
+            # Only agent inputs and static workflow variables are available at this point
+            # Agent outputs are NOT available yet since they come from node execution
+            endpoint_name_template = config["endpointName"]
+
+            # Check if endpointName contains variables
+            if '{' in endpoint_name_template or '{{' in endpoint_name_template:
+                # Use the new apply_early_variables method that doesn't need llm_handler
+                endpoint_name = self.workflow_variable_service.apply_early_variables(
+                    endpoint_name_template,
+                    agent_inputs=self.agent_inputs,
+                    workflow_config=self.workflow_file_config
+                )
+                logger.debug(f"Resolved endpointName from '{endpoint_name_template}' to '{endpoint_name}'")
+            else:
+                # No variables in endpointName, use it as-is
+                endpoint_name = endpoint_name_template
+
+            # Also apply to preset if it exists and contains variables
+            preset_template = config.get("preset")
+            if preset_template and ('{' in preset_template or '{{' in preset_template):
+                # Use the new apply_early_variables method for preset as well
+                preset = self.workflow_variable_service.apply_early_variables(
+                    preset_template,
+                    agent_inputs=self.agent_inputs,
+                    workflow_config=self.workflow_file_config
+                )
+                logger.debug(f"Resolved preset from '{preset_template}' to '{preset}'")
+            else:
+                preset = preset_template
+
             endpoint_config = get_endpoint_config(endpoint_name)
-            preset = config.get("preset")
             add_user_prompt = config.get('addUserTurnTemplate', False)
             force_gen_prompt = config.get('forceGenerationPromptIfEndpointAllows', False)
             block_gen_prompt = config.get('blockGenerationPrompt', False)

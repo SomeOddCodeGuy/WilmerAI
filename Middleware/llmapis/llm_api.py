@@ -8,6 +8,7 @@ from copy import deepcopy
 from typing import Dict, Generator, List, Optional, Union, Any
 
 from Middleware.llmapis.handlers.base.base_llm_api_handler import LlmApiHandler
+from Middleware.llmapis.handlers.impl.claude_api_handler import ClaudeApiHandler
 from Middleware.llmapis.handlers.impl.koboldcpp_api_handler import KoboldCppApiHandler
 from Middleware.llmapis.handlers.impl.koboldcpp_api_image_specific_handler import KoboldCppImageSpecificApiHandler
 from Middleware.llmapis.handlers.impl.ollama_chat_api_handler import OllamaChatHandler
@@ -51,12 +52,14 @@ class LlmApiService:
         self.api_type_config = get_api_type_config(self.endpoint_file.get("apiTypeConfigFileName", ""))
         llm_type = self.api_type_config["type"]
         preset_type = self.api_type_config.get("presetType", "")
+        logger.debug(f"API type: {llm_type}, Preset type: {preset_type}, Preset name: {presetname}")
         preset_file = get_openai_preset_path(presetname, preset_type, True)
         logger.info("Loading preset at {}".format(preset_file))
 
         if not os.path.exists(preset_file):
-            logger.debug("No preset file found at {}. Pulling preset file without username".format(preset_file))
+            logger.warning(f"No preset file found at {preset_file}. Trying fallback without user subdirectory.")
             preset_file = get_openai_preset_path(presetname, preset_type)
+            logger.debug(f"Fallback preset path: {preset_file}")
             if not os.path.exists(preset_file):
                 raise FileNotFoundError(f"The preset file {preset_file} does not exist.")
 
@@ -103,6 +106,8 @@ class LlmApiService:
 
         if self.llm_type == "openAIChatCompletion":
             return OpenAiApiHandler(**common_args, dont_include_model=self.dont_include_model)
+        elif self.llm_type == "claudeMessages":
+            return ClaudeApiHandler(**common_args, dont_include_model=self.dont_include_model)
         elif self.llm_type == "koboldCppGenerate":
             return KoboldCppApiHandler(**common_args)
         elif self.llm_type == "koboldCppGenerateImageSpecific":
@@ -126,6 +131,7 @@ class LlmApiService:
             system_prompt: Optional[str] = None,
             prompt: Optional[str] = None,
             llm_takes_images: bool = False,
+            request_id: Optional[str] = None,
     ) -> Union[Generator[Dict[str, Any], None, None], str]:
         """
         Sends a prompt or conversation to the LLM and returns the raw response.
@@ -135,6 +141,7 @@ class LlmApiService:
             system_prompt (Optional[str]): The system prompt.
             prompt (Optional[str]): The user prompt.
             llm_takes_images (bool): Flag indicating if the LLM can process images.
+            request_id (Optional[str]): The request ID for cancellation tracking.
 
         Returns:
             Union[Generator[Dict[str, Any], None, None], str]: A generator yielding raw data
@@ -174,6 +181,7 @@ class LlmApiService:
                             conversation=conversation_copy,
                             system_prompt=system_prompt_to_pass,
                             prompt=prompt_to_pass,
+                            request_id=request_id,
                         )
                     finally:
                         self.is_busy_flag = False
@@ -184,6 +192,7 @@ class LlmApiService:
                     conversation=conversation_copy,
                     system_prompt=system_prompt_to_pass,
                     prompt=prompt_to_pass,
+                    request_id=request_id,
                 )
                 self.is_busy_flag = False
                 return response

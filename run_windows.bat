@@ -41,10 +41,27 @@ if %ERRORLEVEL% NEQ 0 (
 )
 echo Dependencies installed successfully.
 
-echo Starting the application with ConfigDirectory=%CONFIG_DIR% and User=%USER%...
-python server.py "%CONFIG_DIR%" "%USER%"
+echo.
+echo ========================================
+echo Starting WilmerAI with Waitress
+echo (Production WSGI server for Windows)
+echo ========================================
+echo.
+
+REM Pass arguments to run_waitress.py to maintain WilmerAI's config system
+if not "%CONFIG_DIR%"=="" (
+    if not "%USER%"=="" (
+        python run_waitress.py --ConfigDirectory "%CONFIG_DIR%" --User "%USER%"
+    ) else (
+        python run_waitress.py --ConfigDirectory "%CONFIG_DIR%"
+    )
+) else if not "%USER%"=="" (
+    python run_waitress.py --User "%USER%"
+) else (
+    python run_waitress.py
+)
+
 if %ERRORLEVEL% NEQ 0 (
     echo Failed to start the application.
     exit /b %ERRORLEVEL%
 )
-echo Application started successfully.
