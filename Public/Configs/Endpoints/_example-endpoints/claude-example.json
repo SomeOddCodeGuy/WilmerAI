@@ -1,0 +1,23 @@
+{
+  "modelNameForDisplayOnly": "Claude 4.5 Sonnet Example",
+  "endpoint": "https://api.anthropic.com/",
+  "apiKey": "Your API Key Here",
+  "apiTypeConfigFileName": "Claude",
+  "maxContextTokenSize": 65535,
+  "modelNameToSendToAPI": "claude-3-5-sonnet-20240620",
+  "promptTemplate": "chatml",
+  "addGenerationPrompt": true,
+  "trimBeginningAndEndLineBreaks": true,
+  "dontIncludeModel": false,
+  "removeThinking": false,
+  "startThinkTag": "<think>",
+  "endThinkTag": "</think>",
+  "expectOnlyClosingThinkTag": false,
+  "addTextToStartOfSystem": false,
+  "textToAddToStartOfSystem": "/no_think ",
+  "addTextToStartOfPrompt": false,
+  "textToAddToStartOfPrompt": "/think_no",
+  "addTextToStartOfCompletion": false,
+  "textToAddToStartOfCompletion": "<think>\n</think>\n",
+  "ensureTextAddedToAssistantWhenChatCompletion": false
+}

@@ -1,6 +1,7 @@
 # Tests/utilities/test_file_utils.py
 
 import json
+import os
 from pathlib import Path
 from unittest.mock import MagicMock, mock_open
 
@@ -373,18 +374,22 @@ class TestPathConstructionFunctions:
 
     def test_get_logger_filename(self, mocker):
         # Arrange
-        mocker.patch('os.path.abspath', return_value='/project/Middleware/utilities/file_utils.py')
+        # Use platform-specific paths consistently
+        project_root = os.path.normpath('/project')
+        expected_path = os.path.join(project_root, 'logs', 'wilmerai.log')
+
+        mocker.patch('os.path.abspath', return_value=os.path.join(project_root, 'Middleware', 'utilities', 'file_utils.py'))
         mocker.patch('os.path.dirname', side_effect=[
-            '/project/Middleware/utilities',
-            '/project/Middleware',
-            '/project',
+            os.path.join(project_root, 'Middleware', 'utilities'),
+            os.path.join(project_root, 'Middleware'),
+            project_root,
         ])
-        mocker.patch('os.path.join', return_value='/project/logs/wilmerai.log')
+        mocker.patch('os.path.join', side_effect=os.path.join)
         mocker.patch('Middleware.utilities.file_utils._resolve_case_insensitive_path',
-                     return_value=Path('/project/logs/wilmerai.log'))
+                     return_value=Path(expected_path))
 
         # Act
         result = get_logger_filename()
 
         # Assert
-        assert result == '/project/logs/wilmerai.log'
+        assert result == expected_path

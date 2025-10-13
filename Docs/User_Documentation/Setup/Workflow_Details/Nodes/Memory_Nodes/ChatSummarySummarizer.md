@@ -47,6 +47,8 @@ These are special, context-specific keywords that are essential for this node to
 |:------------------------------|:--------|:----------|:-------------------------------------------------------------------------------------------------------------------------------------|
 | **`type`**                    | String  | ✅ Yes     | Must be exactly `"chatSummarySummarizer"`.                                                                                           |
 | **`systemPrompt` / `prompt`** | String  | ✅ Yes     | The prompts for the summarization LLM. **Must** use the `[CHAT_SUMMARY]` and `[LATEST_MEMORIES]` placeholders to function correctly. |
+| **`endpointName`**            | String  | ❌ No      | The LLM endpoint to use for summarization. **Supports LIMITED variables: only `{agent#Input}` from parent workflows and static workflow variables, NOT `{agent#Output}`.**|
+| **`preset`**                  | String  | ❌ No      | The generation preset to use. **Supports LIMITED variables like endpointName.**                                                      |
 | **`minMemoriesPerSummary`**   | Integer | ❌ No      | **Default: `3`**. The minimum number of new memory chunks required to trigger a summary update at all.                               |
 | **`loopIfMemoriesExceed`**    | Integer | ❌ No      | **Default: `3`**. The batch size for processing new memories. If 7 new memories exist, it will run 3 times (3, 3, 1).                |
 

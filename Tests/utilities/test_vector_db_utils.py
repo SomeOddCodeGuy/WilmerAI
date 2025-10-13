@@ -594,11 +594,13 @@ def test_add_and_get_vector_check_hash_history(memory_db_path):
     """
     Tests adding and retrieving message hashes, ensuring correct order (LIFO) and isolation.
     """
+    import time
     hashes = ["hash1", "hash2", "hash3", "hash4", "hash5"]
 
-    # Add hashes sequentially
+    # Add hashes sequentially with small delays to ensure distinct timestamps
     for h in hashes:
         add_vector_check_hash(TEST_DISCUSSION_ID, h)
+        time.sleep(0.001)  # 1ms delay to ensure different timestamps
 
     # Get full history (should be most recent first)
     history = get_vector_check_hash_history(TEST_DISCUSSION_ID, limit=10)

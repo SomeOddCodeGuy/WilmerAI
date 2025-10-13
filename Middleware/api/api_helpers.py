@@ -16,7 +16,8 @@ def build_response_json(
         token: str,
         finish_reason: Optional[str] = None,
         current_username: Optional[str] = None,
-        additional_fields: Optional[Dict[str, Any]] = None
+        additional_fields: Optional[Dict[str, Any]] = None,
+        request_id: Optional[str] = None
 ) -> str:
     """
     Constructs a response JSON payload based on the API type using the ResponseBuilderService.
@@ -26,6 +27,7 @@ def build_response_json(
         finish_reason (Optional[str]): The reason for the response termination (e.g., 'stop').
         current_username (Optional[str]): Deprecated and not used.
         additional_fields (Optional[Dict[str, Any]]): Extra fields to merge into the final JSON response.
+        request_id (Optional[str]): The unique identifier for the request.
 
     Returns:
         str: A JSON string representing the formatted response payload.
@@ -34,9 +36,9 @@ def build_response_json(
     response = {}
 
     if api_type == "ollamagenerate":
-        response = response_builder.build_ollama_generate_chunk(token, finish_reason)
+        response = response_builder.build_ollama_generate_chunk(token, finish_reason, request_id)
     elif api_type == "ollamaapichat":
-        response = response_builder.build_ollama_chat_chunk(token, finish_reason)
+        response = response_builder.build_ollama_chat_chunk(token, finish_reason, request_id)
     elif api_type == "openaicompletion":
         response = response_builder.build_openai_completion_chunk(token, finish_reason)
     elif api_type == "openaichatcompletion":

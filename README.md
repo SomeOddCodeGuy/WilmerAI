@@ -158,6 +158,78 @@ including proprietary APIs, depending on how you build your workflow.
 
 ---
 
+- **Privacy First Development:** At its core, Wilmer is continually designed with the
+  principle of being completely private. Socg uses this application constantly, and doesn't
+  want his information getting blasted out to the net any more than anyone else does. As such,
+  every decision that is made is focused on the idea that the only incoming and outgoing calls
+  from Wilmer should be things that the user expects, and actively configured themselves.
+
+----
+
+#### Privacy Check
+
+To confirm Wilmer's privacy, Claude Code using 4.1 Opus was requested to do an end to end check 
+of the codebase version released on 2025-10-12 to confirm that there are no external calls being made. 
+
+This was Claude's response:
+```text
+  Chris, I've thoroughly reviewed the codebase, and I can confirm that WilmerAI makes NO external calls 
+  beyond what you explicitly expect. Here's what I verified:
+
+  ✅ No Telemetry or External Tracking
+
+  - Eventlet and Waitress servers: No telemetry, analytics, or external connections found
+  - Server files (run_eventlet.py, run_waitress.py, server.py): Clean, no external calls
+  - No hardcoded external URLs: No external services are contacted without user configuration
+  - No tracking/analytics code: Searched for telemetry-related keywords throughout the codebase - all 
+    uses of "tracking" refer to internal request tracking for cancellation
+
+  ✅ All External Connections Are User-Controlled
+
+  The ONLY external network connections made are:
+
+  1. Front-end to WilmerAI (incoming connections from your chosen front-end like Open WebUI)
+  2. WilmerAI to configured LLM APIs (only the endpoints YOU specify in configuration files)
+  3. Optional user-configured tools:
+    - Offline Wikipedia API: Only connects if configured, defaults to localhost
+    - MCP Tools (MCPO): Only connects to user-configured MCP servers
+
+  ✅ Key Evidence
+
+  - All HTTP requests in base_llm_api_handler.py:105,258 use self.base_url which comes from YOUR endpoint configuration
+  - The Wikipedia tool at offline_wikipedia_api_tool.py:26 uses URLs from YOUR configuration
+  - The MCP discoverer at mcp_service_discoverer.py:17 gets its URL from YOUR configuration or environment variables
+  - No other requests.get/post calls exist in the middleware that aren't to user-configured services
+
+  ✅ Heartbeat Mechanism is Local Only
+
+  The heartbeat intervals (now back at 1 second based on your latest changes) are purely for maintaining the connection 
+  between the front-end and WilmerAI. These are NOT external pings or telemetry - they're just keep-alive messages within the existing
+  connection to detect client disconnections faster.
+
+  Bottom Line
+
+  WilmerAI is completely private and makes zero unexpected external connections. The application only communicates with:
+  - Your front-end (bidirectional)
+  - Your configured LLM endpoints
+  - Your optional configured tools (Wikipedia API, MCP servers)
+
+  There is no telemetry, no phone-home functionality, no analytics, and no external services contacted without your explicit configuration. 
+  The eventlet and waitress servers themselves are also clean - they're just WSGI servers that handle the connections       
+  you initiate.
+```
+
+[Source Image](Doc_Resources/Media/Images/Wilmer_Privacy_Claude_Code_2025-10-12.png)
+
+>NOTE:Claude doesn't know what the Offline Wikipedia Text Api is, so it thinks we're making a call 
+> to the actual wiki api.
+
+> While I do not have the tools to make a 100% guarantee claim there is not a third party
+> library doing something I'm not expecting, I wanted to make a point
+> that this is something that is important to me. I highly recommend, if you have
+> any concerns, that you run your own analysis of the codebase and app. Please open an issue
+> if you ever find anything that I've missed.
+
 ## User Documentation
 
 User Documentation can be found by going to [/Docs/User_Documentation/](Docs/User_Documentation/README.md)
@@ -178,6 +250,7 @@ Helpful developer docs can be found in [/Docs/Developer_Docs/](Docs/Developer_Do
 
 Hop into the [User Documents Setup Starting Guide](Docs/User_Documentation/Setup/_Getting-Start_Wilmer-Api.md) to get
 step by step rundown of how to quickly set up the API.
+
 
 #### Wilmer with Open WebUI
 
@@ -246,6 +319,7 @@ Wilmer exposes the following APIs that other apps can connect to it with:
 On the backend, Wilmer is capable to connecting to various APIs, where it will send its prompts to LLMs. Wilmer
 currently is capable of connecting to the following API types:
 
+- Claude API (Anthropic Messages API)
 - OpenAI Compatible v1/completions
 - OpenAI Compatible chat/completions
 - Ollama Compatible api/generate
@@ -296,7 +370,7 @@ WilmerAI.Project@gmail.com
 
 ## Third Party Libraries
 
-WilmerAI imports five libraries within its requirements.txt, and imports the libraries via import statements; it does
+WilmerAI imports several libraries within its requirements.txt, and imports the libraries via import statements; it does
 not extend or modify the source of those libraries.
 
 The libraries are:
@@ -307,6 +381,8 @@ The libraries are:
 * urllib3: https://github.com/urllib3/urllib3/
 * jinja2: https://github.com/pallets/jinja
 * pillow: https://github.com/python-pillow/Pillow
+* eventlet: https://github.com/eventlet/eventlet
+* waitress: https://github.com/Pylons/waitress
 
 Further information on their licensing can be found within the README of the ThirdParty-Licenses folder, as well as the
 full text of each license and their NOTICE files, if applicable, with relevant last updated dates for each.

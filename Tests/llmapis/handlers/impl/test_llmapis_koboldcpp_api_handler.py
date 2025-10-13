@@ -197,6 +197,7 @@ def test_handle_streaming_success(mocker, base_handler_args):
 
     # Mock the context manager for `with session.post(...)`
     mock_response = MagicMock()
+    mock_response.status_code = 200  # Mock successful HTTP response
     mock_response.iter_lines.return_value = iter(mock_stream_response)
     mock_context_manager = MagicMock()
     mock_context_manager.__enter__.return_value = mock_response

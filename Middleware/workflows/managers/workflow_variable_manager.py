@@ -71,6 +71,57 @@ class WorkflowVariableManager:
         self.memory_service = MemoryService()
         self.timestamp_service = TimestampService()
 
+    def apply_early_variables(self, prompt: str, agent_inputs: Dict[str, Any] = None,
+                              workflow_config: Dict[str, Any] = None) -> str:
+        """
+        Applies only early-available variables to a prompt string.
+
+        This method is used for early substitution of endpointName and preset fields,
+        where only agent inputs and static workflow variables are available.
+        Does NOT require or use llm_handler, avoiding the need for conversation variables.
+
+        Args:
+            prompt (str): The prompt string containing placeholders.
+            agent_inputs (Dict[str, Any]): Agent input variables from parent workflows.
+            workflow_config (Dict[str, Any]): Static workflow configuration variables.
+
+        Returns:
+            str: The resolved prompt string with early variables substituted.
+        """
+        variables = {}
+
+        # Add workflow config variables first (excluding nodes)
+        if workflow_config:
+            for key, value in workflow_config.items():
+                if key != "nodes":
+                    variables[key] = value
+
+        # Add agent inputs after, so they override workflow config if there are duplicates
+        if agent_inputs:
+            variables.update(agent_inputs)
+
+        # Apply simple string formatting with partial substitution support
+        try:
+            return prompt.format(**variables)
+        except KeyError as e:
+            # Handle partial substitution - try to substitute what we can
+            import re
+            result = prompt
+            for key, value in variables.items():
+                # Replace both {key} and {{key}} patterns
+                result = re.sub(r'\{' + re.escape(key) + r'\}', str(value), result)
+            if result != prompt:
+                # Some variables were substituted
+                missing_vars = re.findall(r'\{([^}]+)\}', result)
+                if missing_vars:
+                    logger.warning(f"Variables not available for early substitution: {missing_vars}")
+            else:
+                logger.warning(f"No variables could be substituted. Available: {list(variables.keys())}")
+            return result
+        except Exception as e:
+            logger.warning(f"Error during early variable substitution: {e}")
+            return prompt
+
     def apply_variables(self, prompt: str, context: ExecutionContext,
                         remove_all_system_override=None) -> str:
         """

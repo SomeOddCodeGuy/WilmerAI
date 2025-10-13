@@ -83,7 +83,8 @@ class LLMDispatchService:
 
             return llm_handler.llm.get_response_from_llm(
                 conversation=conversation_arg, system_prompt=system_prompt,
-                prompt=prompt, llm_takes_images=llm_takes_images
+                prompt=prompt, llm_takes_images=llm_takes_images,
+                request_id=getattr(context, 'request_id', None)
             )
         else:
             # === CHAT API LOGIC ===
@@ -102,5 +103,6 @@ class LLMDispatchService:
                 collection.append(image_message)
 
             return llm_handler.llm.get_response_from_llm(
-                conversation=collection, llm_takes_images=llm_takes_images
+                conversation=collection, llm_takes_images=llm_takes_images,
+                request_id=getattr(context, 'request_id', None)
             )

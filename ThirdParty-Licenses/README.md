@@ -55,3 +55,19 @@ _Last Updated: 2025-08-17_
 * License Type: `MIT-CMU`
 * Code: https://github.com/python-pillow/Pillow/
 * License: https://github.com/python-pillow/Pillow/
+
+### eventlet:
+
+_Last Updated: 2025-10-12_
+
+* License Type: `MIT License`
+* Code: https://github.com/eventlet/eventlet
+* License: https://github.com/eventlet/eventlet/blob/master/LICENSE
+
+### waitress:
+
+_Last Updated: 2025-10-12_
+
+* License Type: `Zope Public License (ZPL) Version 2.1`
+* Code: https://github.com/Pylons/waitress
+* License: https://github.com/Pylons/waitress/blob/main/LICENSE.txt

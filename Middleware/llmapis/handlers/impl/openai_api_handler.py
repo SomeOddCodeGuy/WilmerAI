@@ -40,7 +40,7 @@ class OpenAiApiHandler(BaseChatCompletionsHandler):
         Returns:
             str: The complete URL for the standard `/v1/chat/completions` endpoint.
         """
-        return f"{self.base_url}/v1/chat/completions"
+        return f"{self.base_url.rstrip('/')}/v1/chat/completions"
 
     def _process_stream_data(self, data_str: str) -> Optional[Dict[str, Any]]:
         """

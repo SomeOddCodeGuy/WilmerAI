@@ -29,7 +29,8 @@ class KoboldCppApiHandler(BaseCompletionsHandler):
         Returns:
             str: The complete URL for the KoboldCpp API endpoint.
         """
-        return f"{self.base_url}/api/extra/generate/stream" if self.stream else f"{self.base_url}/api/v1/generate"
+        base = self.base_url.rstrip('/')
+        return f"{base}/api/extra/generate/stream" if self.stream else f"{base}/api/v1/generate"
 
     @property
     def _iterate_by_lines(self) -> bool:

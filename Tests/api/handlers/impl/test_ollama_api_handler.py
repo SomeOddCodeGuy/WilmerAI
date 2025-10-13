@@ -14,8 +14,10 @@ def test_generate_non_streaming(client, mocker):
     assert response.status_code == 200
     assert response.json["response"] == "Ollama response."
     mock_handle_prompt.assert_called_once()
-    # Verifying the transformed messages list
-    called_messages = mock_handle_prompt.call_args[0][0]
+    # Verifying the transformed messages list (now the second argument after request_id)
+    called_request_id = mock_handle_prompt.call_args[0][0]
+    called_messages = mock_handle_prompt.call_args[0][1]
+    assert isinstance(called_request_id, str)  # Should be a UUID string
     assert called_messages == [{'role': 'user', 'content': 'Why is the sky blue?'}]
 
 
@@ -37,8 +39,10 @@ def test_chat_streaming(client, mocker):
     response = client.post('/api/chat', json=payload)
 
     assert response.status_code == 200
-    assert 'text/event-stream' in response.content_type
-    assert b'{"content": "chunk1"}\n{"content": "chunk2"}\n' in response.data
+    assert 'application/x-ndjson' in response.content_type
+    # The watchdog implementation may add keep-alive newlines
+    assert b'{"content": "chunk1"}' in response.data
+    assert b'{"content": "chunk2"}' in response.data
 
 
 def test_get_tags(client, mocker):
@@ -66,8 +70,8 @@ def test_generate_streaming(client, mocker):
     response = client.post('/api/generate', json=payload)
 
     assert response.status_code == 200
-    # Note: The Ollama /generate endpoint often uses 'application/json' even for streaming line-delimited JSON
-    assert 'application/json' in response.content_type
+    # Note: The Ollama /generate endpoint now uses 'application/x-ndjson' for streaming line-delimited JSON
+    assert 'application/x-ndjson' in response.content_type
     assert b'{"response": "chunk1"}{"response": "chunk2"}' in response.data
     mock_handle_prompt.assert_called_once()
 
@@ -111,7 +115,10 @@ def test_chat_message_transformation_logic(client, mocker):
     }
     client.post('/api/chat', json=payload)
 
-    called_messages = mock_handle_prompt.call_args[0][0]
+    # Now the first argument is request_id, second is messages
+    called_request_id = mock_handle_prompt.call_args[0][0]
+    called_messages = mock_handle_prompt.call_args[0][1]
+    assert isinstance(called_request_id, str)  # Should be a UUID string
     expected_messages = [
         {'role': 'user', 'content': 'User: Hello'},
         {'role': 'assistant', 'content': 'Assistant: Hi there!'},
@@ -134,7 +141,10 @@ def test_generate_with_images(client, mocker):
     }
     client.post('/api/generate', json=payload)
 
-    called_messages = mock_handle_prompt.call_args[0][0]
+    # Now the first argument is request_id, second is messages
+    called_request_id = mock_handle_prompt.call_args[0][0]
+    called_messages = mock_handle_prompt.call_args[0][1]
+    assert isinstance(called_request_id, str)  # Should be a UUID string
     expected_messages = [
         {'role': 'user', 'content': "What's in this image?"},
         {'role': 'images', 'content': 'base64_encoded_string_1'},

@@ -25,7 +25,7 @@ class OpenAiCompletionsApiHandler(BaseCompletionsHandler):
         Returns:
             str: The complete URL for the `/v1/completions` endpoint.
         """
-        return f"{self.base_url}/v1/completions"
+        return f"{self.base_url.rstrip('/')}/v1/completions"
 
     def _prepare_payload(self, conversation: Optional[List[Dict[str, str]]], system_prompt: Optional[str],
                          prompt: Optional[str]) -> Dict:

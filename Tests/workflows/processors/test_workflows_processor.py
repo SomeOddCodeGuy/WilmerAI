@@ -393,3 +393,333 @@ class TestWorkflowProcessorHelpers:
         """Tests the logic for reconstructing group chat messages for non-streaming responses."""
         processor = workflow_processor_factory(configs=[])
         assert processor._reconstruct_non_streaming(llm_output, gen_prompt) == expected
+
+
+class TestEndpointAndPresetVariableSubstitution:
+    """Tests for endpoint and preset variable substitution - covering the critical gap that caused the bug."""
+
+    def test_both_hardcoded_no_variables(self, workflow_processor_factory, mock_node_handlers,
+                                        mock_llm_handler_service, mock_workflow_variable_service):
+        """Verifies that BOTH hardcoded endpoints and presets WITHOUT variables work correctly - most common case."""
+        config = [{"type": "Standard", "endpointName": "HardcodedEndpoint", "preset": "HardcodedPreset"}]
+        mock_node_handlers["Standard"].handle.return_value = "Response"
+        processor = workflow_processor_factory(configs=config, stream=False)
+
+        list(processor.execute())
+
+        # CRITICAL: apply_early_variables should NOT be called at all for fully hardcoded configs
+        mock_workflow_variable_service.apply_early_variables.assert_not_called()
+        # The endpoint and preset should be used directly
+        mock_llm_handler_service.load_model_from_config.assert_called_once_with(
+            "HardcodedEndpoint", "HardcodedPreset", False, 4096, 400, addGenerationPrompt=ANY
+        )
+
+    def test_hardcoded_endpoint_variable_preset(self, workflow_processor_factory, mock_node_handlers,
+                                               mock_llm_handler_service, mock_workflow_variable_service):
+        """Verifies that hardcoded endpoint with variable preset works correctly."""
+        config = [{"type": "Standard", "endpointName": "HardcodedEndpoint", "preset": "{agent1Input}"}]
+        mock_node_handlers["Standard"].handle.return_value = "Response"
+        mock_workflow_variable_service.apply_early_variables.return_value = "DynamicPreset"
+        processor = workflow_processor_factory(configs=config, stream=False,
+                                              scoped_inputs=["MyPreset"])
+
+        list(processor.execute())
+
+        # apply_early_variables should be called ONLY for the preset, not the endpoint
+        mock_workflow_variable_service.apply_early_variables.assert_called_once()
+        call_args = mock_workflow_variable_service.apply_early_variables.call_args[0]
+        assert call_args[0] == "{agent1Input}"  # Only the preset
+
+        # The hardcoded endpoint with resolved preset should be used
+        mock_llm_handler_service.load_model_from_config.assert_called_once_with(
+            "HardcodedEndpoint", "DynamicPreset", False, 4096, 400, addGenerationPrompt=ANY
+        )
+
+    def test_endpoint_with_agent_input_variable(self, workflow_processor_factory, mock_node_handlers,
+                                               mock_llm_handler_service, mock_workflow_variable_service):
+        """Verifies that endpoints with {agentXInput} variables are substituted correctly."""
+        config = [{"type": "Standard", "endpointName": "{agent1Input}", "preset": "DefaultPreset"}]
+        mock_node_handlers["Standard"].handle.return_value = "Response"
+        mock_workflow_variable_service.apply_early_variables.return_value = "ResolvedEndpoint"
+        processor = workflow_processor_factory(configs=config, stream=False,
+                                              scoped_inputs=["MyDynamicEndpoint"])
+
+        list(processor.execute())
+
+        # apply_early_variables should be called for the endpoint with variables
+        mock_workflow_variable_service.apply_early_variables.assert_called_once()
+        call_args = mock_workflow_variable_service.apply_early_variables.call_args
+        assert call_args[0][0] == "{agent1Input}"  # First positional arg is the prompt
+        # Check keyword arguments
+        assert call_args[1]['agent_inputs'] == {"agent1Input": "MyDynamicEndpoint"}
+        assert 'workflow_config' in call_args[1]
+
+        # The resolved endpoint should be used
+        mock_llm_handler_service.load_model_from_config.assert_called_once_with(
+            "ResolvedEndpoint", "DefaultPreset", False, 4096, 400, addGenerationPrompt=ANY
+        )
+
+    def test_endpoint_with_workflow_config_variable(self, workflow_processor_factory, mock_node_handlers,
+                                                   mock_llm_handler_service, mock_workflow_variable_service):
+        """Verifies that endpoints with static workflow config variables are substituted correctly."""
+        config = [{"type": "Standard", "endpointName": "{top_level_var}_endpoint", "preset": "DefaultPreset"}]
+        mock_node_handlers["Standard"].handle.return_value = "Response"
+        mock_workflow_variable_service.apply_early_variables.return_value = "value_endpoint"
+        processor = workflow_processor_factory(configs=config, stream=False)
+
+        list(processor.execute())
+
+        # apply_variables should be called
+        mock_workflow_variable_service.apply_early_variables.assert_called_once()
+        call_args = mock_workflow_variable_service.apply_early_variables.call_args
+        assert call_args[0][0] == "{top_level_var}_endpoint"
+        # Check keyword arguments
+        assert 'workflow_config' in call_args[1]
+        assert call_args[1]['workflow_config']['top_level_var'] == 'value'
+
+        # The resolved endpoint should be used
+        mock_llm_handler_service.load_model_from_config.assert_called_once_with(
+            "value_endpoint", "DefaultPreset", False, 4096, 400, addGenerationPrompt=ANY
+        )
+
+    def test_hardcoded_preset_no_variables(self, workflow_processor_factory, mock_node_handlers,
+                                           mock_llm_handler_service, mock_workflow_variable_service):
+        """Verifies that hardcoded presets WITHOUT variables work correctly and don't trigger substitution."""
+        config = [{"type": "Standard", "endpointName": "{agent1Input}", "preset": "HardcodedPreset"}]
+        mock_node_handlers["Standard"].handle.return_value = "Response"
+        mock_workflow_variable_service.apply_early_variables.return_value = "DynamicEndpoint"
+        processor = workflow_processor_factory(configs=config, stream=False,
+                                              scoped_inputs=["DynamicEndpoint"])
+
+        list(processor.execute())
+
+        # apply_variables should be called ONLY for the endpoint, not the preset
+        mock_workflow_variable_service.apply_early_variables.assert_called_once()
+        call_args = mock_workflow_variable_service.apply_early_variables.call_args[0]
+        assert call_args[0] == "{agent1Input}"  # Only the endpoint
+
+        # The hardcoded preset should be used directly
+        mock_llm_handler_service.load_model_from_config.assert_called_once_with(
+            "DynamicEndpoint", "HardcodedPreset", False, 4096, 400, addGenerationPrompt=ANY
+        )
+
+    def test_preset_with_variables(self, workflow_processor_factory, mock_node_handlers,
+                                  mock_llm_handler_service, mock_workflow_variable_service):
+        """Verifies that presets with variables are substituted correctly."""
+        config = [{"type": "Standard", "endpointName": "MyEndpoint", "preset": "{agent1Input}_preset"}]
+        mock_node_handlers["Standard"].handle.return_value = "Response"
+        mock_workflow_variable_service.apply_early_variables.return_value = "Dynamic_preset"
+        processor = workflow_processor_factory(configs=config, stream=False,
+                                              scoped_inputs=["Dynamic"])
+
+        list(processor.execute())
+
+        # apply_variables should be called for the preset with variables
+        mock_workflow_variable_service.apply_early_variables.assert_called_once()
+        call_args = mock_workflow_variable_service.apply_early_variables.call_args[0]
+        assert call_args[0] == "{agent1Input}_preset"
+
+        # The resolved preset should be used
+        mock_llm_handler_service.load_model_from_config.assert_called_once_with(
+            "MyEndpoint", "Dynamic_preset", False, 4096, 400, addGenerationPrompt=ANY
+        )
+
+    def test_both_endpoint_and_preset_with_variables(self, workflow_processor_factory, mock_node_handlers,
+                                                     mock_llm_handler_service, mock_workflow_variable_service):
+        """Verifies that both endpoint and preset can have variables simultaneously."""
+        config = [{"type": "Standard", "endpointName": "{agent1Input}", "preset": "{agent2Input}"}]
+        mock_node_handlers["Standard"].handle.return_value = "Response"
+        mock_workflow_variable_service.apply_early_variables.side_effect = ["DynamicEndpoint", "DynamicPreset"]
+        processor = workflow_processor_factory(configs=config, stream=False,
+                                              scoped_inputs=["EndpointFromParent", "PresetFromParent"])
+
+        list(processor.execute())
+
+        # apply_variables should be called twice (once for endpoint, once for preset)
+        assert mock_workflow_variable_service.apply_early_variables.call_count == 2
+
+        # First call for endpoint
+        first_call = mock_workflow_variable_service.apply_early_variables.call_args_list[0][0]
+        assert first_call[0] == "{agent1Input}"
+
+        # Second call for preset
+        second_call = mock_workflow_variable_service.apply_early_variables.call_args_list[1][0]
+        assert second_call[0] == "{agent2Input}"
+
+        # Both resolved values should be used
+        mock_llm_handler_service.load_model_from_config.assert_called_once_with(
+            "DynamicEndpoint", "DynamicPreset", False, 4096, 400, addGenerationPrompt=ANY
+        )
+
+    def test_mixed_hardcoded_and_variable_presets(self, workflow_processor_factory, mock_node_handlers,
+                                                  mock_llm_handler_service, mock_workflow_variable_service):
+        """Verifies that hardcoded preset with variable endpoint works correctly."""
+        config = [{"type": "Standard", "endpointName": "{agent1Input}", "preset": "StaticPreset"}]
+        mock_node_handlers["Standard"].handle.return_value = "Response"
+        mock_workflow_variable_service.apply_early_variables.return_value = "ResolvedEndpoint"
+        processor = workflow_processor_factory(configs=config, stream=False,
+                                              scoped_inputs=["DynamicEnd"])
+
+        list(processor.execute())
+
+        # apply_variables should be called only once (for endpoint, not preset)
+        mock_workflow_variable_service.apply_early_variables.assert_called_once()
+        call_args = mock_workflow_variable_service.apply_early_variables.call_args[0]
+        assert call_args[0] == "{agent1Input}"
+
+        # Resolved endpoint with static preset
+        mock_llm_handler_service.load_model_from_config.assert_called_once_with(
+            "ResolvedEndpoint", "StaticPreset", False, 4096, 400, addGenerationPrompt=ANY
+        )
+
+    def test_jinja2_template_in_endpoint(self, workflow_processor_factory, mock_node_handlers,
+                                        mock_llm_handler_service, mock_workflow_variable_service):
+        """Verifies that Jinja2 templates in endpoints are detected and processed."""
+        config = [{"type": "Standard",
+                  "endpointName": "{% if agent1Input == 'fast' %}FastEndpoint{% else %}SlowEndpoint{% endif %}",
+                  "preset": "DefaultPreset"}]
+        mock_node_handlers["Standard"].handle.return_value = "Response"
+        mock_workflow_variable_service.apply_early_variables.return_value = "FastEndpoint"
+        processor = workflow_processor_factory(configs=config, stream=False,
+                                              scoped_inputs=["fast"])
+
+        list(processor.execute())
+
+        # apply_variables should be called for Jinja2 template
+        mock_workflow_variable_service.apply_early_variables.assert_called_once()
+        call_args = mock_workflow_variable_service.apply_early_variables.call_args[0]
+        assert "{% if" in call_args[0]
+
+        mock_llm_handler_service.load_model_from_config.assert_called_once_with(
+            "FastEndpoint", "DefaultPreset", False, 4096, 400, addGenerationPrompt=ANY
+        )
+
+    def test_missing_endpoint_fallback(self, workflow_processor_factory, mock_node_handlers):
+        """Verifies that nodes without endpointName still work (using default LlmHandler)."""
+        config = [{"type": "Standard"}]  # No endpointName
+        mock_node_handlers["Standard"].handle.return_value = "Response"
+        processor = workflow_processor_factory(configs=config, stream=False)
+
+        result = list(processor.execute())
+
+        assert result == ["Response"]
+        mock_node_handlers["Standard"].handle.assert_called_once()
+        # Should create a default LlmHandler instead
+        context = mock_node_handlers["Standard"].handle.call_args[0][0]
+        assert context.llm_handler is not None
+
+    def test_empty_string_endpoint(self, workflow_processor_factory, mock_node_handlers):
+        """Verifies that empty string endpoints are handled gracefully."""
+        config = [{"type": "Standard", "endpointName": ""}]  # Empty string
+        mock_node_handlers["Standard"].handle.return_value = "Response"
+        processor = workflow_processor_factory(configs=config, stream=False)
+
+        result = list(processor.execute())
+
+        assert result == ["Response"]
+        mock_node_handlers["Standard"].handle.assert_called_once()
+
+    def test_endpoint_variable_not_available_for_agent_output(self, workflow_processor_factory, mock_node_handlers,
+                                                              mock_llm_handler_service, mock_workflow_variable_service):
+        """Verifies that {agentXOutput} variables are NOT available in endpoint substitution context."""
+        # This test documents the intentional limitation
+        config = [
+            {"type": "Standard", "endpointName": "FirstEndpoint"},
+            {"type": "Standard", "endpointName": "{agent1Output}"}  # This should not have agent1Output available
+        ]
+        mock_node_handlers["Standard"].handle.side_effect = ["FirstOutput", "SecondOutput"]
+        mock_workflow_variable_service.apply_early_variables.return_value = "{agent1Output}"  # Unresolved
+        processor = workflow_processor_factory(configs=config, stream=False)
+
+        list(processor.execute())
+
+        # For the second node, verify agent_inputs doesn't contain agent1Output
+        # (agent outputs are not passed to apply_early_variables at all)
+        if mock_workflow_variable_service.apply_early_variables.called:
+            second_call = mock_workflow_variable_service.apply_early_variables.call_args_list[-1]
+            # apply_early_variables doesn't receive agent_outputs at all
+            assert 'agent_outputs' not in second_call[1]
+            # agent_inputs should not contain agent1Output
+            assert 'agent1Output' not in second_call[1].get('agent_inputs', {})
+
+    def test_multiple_nodes_mixed_variables(self, workflow_processor_factory, mock_node_handlers,
+                                           mock_llm_handler_service, mock_workflow_variable_service):
+        """Tests a complex workflow with multiple nodes having different variable patterns."""
+        config = [
+            {"type": "Standard", "endpointName": "StaticEndpoint", "preset": "StaticPreset"},
+            {"type": "Standard", "endpointName": "{agent1Input}", "preset": "{top_level_var}"},
+            {"type": "Tool"},  # No endpoint
+            {"type": "Standard", "endpointName": "Another{agent2Input}Endpoint", "preset": "Static"}
+        ]
+        mock_node_handlers["Standard"].handle.return_value = "Response"
+        mock_node_handlers["Tool"].handle.return_value = "ToolResponse"
+        mock_workflow_variable_service.apply_early_variables.side_effect = [
+            "ResolvedFromInput", "value",  # Node 2
+            "AnotherSecondInputEndpoint"   # Node 4
+        ]
+        processor = workflow_processor_factory(configs=config, stream=False,
+                                              scoped_inputs=["FirstInput", "SecondInput"])
+
+        list(processor.execute())
+
+        # Node 1: No substitution (static)
+        # Node 2: Two substitutions (endpoint and preset)
+        # Node 3: No endpoint
+        # Node 4: One substitution (endpoint with variable)
+        assert mock_workflow_variable_service.apply_early_variables.call_count == 3
+
+    def test_special_characters_in_hardcoded_endpoint(self, workflow_processor_factory, mock_node_handlers,
+                                                      mock_llm_handler_service, mock_workflow_variable_service):
+        """Verifies that special characters in hardcoded endpoints don't trigger substitution."""
+        # Endpoints with special chars but no { or {{
+        config = [{"type": "Standard", "endpointName": "endpoint-with-dash_and_underscore.v1", "preset": "preset@2"}]
+        mock_node_handlers["Standard"].handle.return_value = "Response"
+        processor = workflow_processor_factory(configs=config, stream=False)
+
+        list(processor.execute())
+
+        # Should not trigger substitution
+        mock_workflow_variable_service.apply_early_variables.assert_not_called()
+        mock_llm_handler_service.load_model_from_config.assert_called_once_with(
+            "endpoint-with-dash_and_underscore.v1", "preset@2", False, 4096, 400, addGenerationPrompt=ANY
+        )
+
+    @patch('Middleware.workflows.processors.workflows_processor.StreamingResponseHandler')
+    @patch('Middleware.workflows.processors.workflows_processor.get_endpoint_config')
+    def test_streaming_endpoint_variable_substitution(self, mock_get_endpoint_config, mock_stream_handler_cls,
+                                                      workflow_processor_factory, mock_node_handlers,
+                                                      mock_llm_handler_service, mock_workflow_variable_service):
+        """Verifies that endpoint variables are substituted in the streaming path before getting config."""
+        # This test specifically covers the bug where {agent1Input} was not substituted in streaming mode
+        config = [{"type": "Standard", "endpointName": "{agent1Input}", "returnToUser": True}]
+
+        # Setup the mocks
+        mock_node_handlers["Standard"].handle.return_value = (x for x in ["chunk1", "chunk2"])  # Generator
+        mock_workflow_variable_service.apply_early_variables.return_value = "ResolvedEndpoint"
+        mock_get_endpoint_config.return_value = {"some": "config"}
+
+        mock_stream_handler_instance = mock_stream_handler_cls.return_value
+        mock_stream_handler_instance.process_stream.return_value = (x for x in ["processed1", "processed2"])
+        mock_stream_handler_instance.full_response_text = "Full response"
+
+        processor = workflow_processor_factory(configs=config, stream=True,
+                                              scoped_inputs=["MyEndpoint"])
+
+        list(processor.execute())
+
+        # Verify that apply_early_variables was called TWICE:
+        # 1. Once in _process_section for loading the model
+        # 2. Once in the streaming path before getting endpoint config
+        assert mock_workflow_variable_service.apply_early_variables.call_count == 2
+
+        # Both calls should be for the same endpoint template
+        for call in mock_workflow_variable_service.apply_early_variables.call_args_list:
+            assert call[0][0] == "{agent1Input}"
+
+        # Verify get_endpoint_config was called with the RESOLVED endpoint name, not the template
+        mock_get_endpoint_config.assert_called_with("ResolvedEndpoint")
+
+        # Verify StreamingResponseHandler was created with the correct config
+        mock_stream_handler_cls.assert_called_once()
+        call_args = mock_stream_handler_cls.call_args[0]
+        assert call_args[0] == {"some": "config"}  # The resolved endpoint config

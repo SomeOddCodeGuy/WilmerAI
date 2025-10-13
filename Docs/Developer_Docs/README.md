@@ -5,7 +5,8 @@
 ## 1\. Project Overview
 
 WilmerAI is a Python-based **middleware system** designed to act as a bridge between user-facing clients (e.g.,
-SillyTavern, OpenWebUI) and various Large Language Model (LLM) backends (e.g., OpenAI, Ollama, KoboldCPP). Its primary
+SillyTavern, OpenWebUI) and various Large Language Model (LLM) backends (e.g., OpenAI, Anthropic Claude, Ollama,
+KoboldCPP). Its primary
 function is to process user prompts by leveraging a modular and extensible **node-based workflow engine**.
 
 The architecture is centered on the **`$ExecutionContext$`** object. This data structure encapsulates all runtime
@@ -97,92 +98,110 @@ Outputs from **non-responding nodes** are saved internally by the `$WorkflowProc
 ```plaintext
 WilmerAI
 │
-├─ Middleware
-│  ├─ api
-│  │  ├─ handlers
-│  │  │  ├─ base
-│  │  │  │  └─ base_api_handler.py
-│  │  │  └─ impl
-│  │  │     ├─ ollama_api_handler.py
-│  │  │     └─ openai_api_handler.py
-│  │  ├─ __init__.py
-│  │  ├─ api_helpers.py
-│  │  ├─ api_server.py
-│  │  ├─ app.py
-│  │  └─ workflow_gateway.py
-│  ├─ common
-│  │  ├─ constants.py
-│  │  ├─ instance_global_variables.py
-│  │  └─ __init__.py
-│  ├─ exceptions
-│  │  ├─ early_termination_exception.py
-│  │  └─ __init__.py
-│  ├─ llmapis
-│  │  ├─ handlers
-│  │  │  ├─ base
-│  │  │  │  ├─ base_chat_completions_handler.py
-│  │  │  │  ├─ base_completions_handler.py
-│  │  │  │  └─ base_llm_api_handler.py
-│  │  │  └─ impl
-│  │  │     ├─ koboldcpp_api_handler.py
-│  │  │     ├─ koboldcpp_api_image_specific_handler.py
-│  │  │     ├─ ollama_chat_api_handler.py
-│  │  │     ├─ ollama_chat_api_image_specific_handler.py
-│  │  │     ├─ ollama_generate_api_handler.py
-│  │  │     ├─ openai_api_handler.py
-│  │  │     ├─ openai_chat_api_image_specific_handler.py
-│  │  │     └─ openai_completions_api_handler.py
-│  │  └─ llm_api.py
-│  ├─ models
-│  │  ├─ llm_handler.py
-│  │  └─ __init__.py
-│  ├─ services
-│  │  ├─ llm_dispatch_service.py
-│  │  ├─ llm_service.py
-│  │  ├─ locking_service.py
-│  │  ├─ memory_service.py
-│  │  ├─ prompt_categorization_service.py
-│  │  ├─ response_builder_service.py
-│  │  ├─ timestamp_service.py
-│  │  └─ __init__.py
-│  ├─ utilities
-│  │  ├─ config_utils.py
-│  │  ├─ datetime_utils.py
-│  │  ├─ file_utils.py
-│  │  ├─ hashing_utils.py
-│  │  ├─ prompt_extraction_utils.py
-│  │  ├─ prompt_template_utils.py
-│  │  ├─ prompt_utils.py
-│  │  ├─ search_utils.py
-│  │  ├─ streaming_utils.py
-│  │  ├─ text_utils.py
-│  │  ├─ vector_db_utils.py
-│  │  └─ __init__.py
-│  └─ workflows
-│     ├─ handlers
-│     │  ├─ base
-│     │  │  └─ base_workflow_node_handler.py
-│     │  └─ impl
-│     │     ├─ memory_node_handler.py
-│     │     ├─ specialized_node_handler.py
-│     │     ├─ standard_node_handler.py
-│     │     ├─ sub_workflow_handler.py
-│     │     └─ tool_node_handler.py
-│     ├─ managers
-│     │  ├─ workflow_manager.py
-│     │  └─ workflow_variable_manager.py
-│     ├─ models
-│     │  └─ execution_context.py
-│     ├─ processors
-│     │  └─ workflows_processor.py
-│     ├─ streaming
-│     │  ├─ __init__.py
-│     │  └─ response_handler.py
-│     ├─ tools
-│     │  ├─ dynamic_module_loader.py
-│     │  ├─ offline_wikipedia_api_tool.py
-│     │  └─ slow_but_quality_rag_tool.py
-│     └─ __init__.py
+├── Middleware/
+│   ├── api/
+│   │   ├── handlers/
+│   │   │   ├── base/
+│   │   │   │   ├── __init__.py
+│   │   │   │   └── base_api_handler.py
+│   │   │   ├── impl/
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── ollama_api_handler.py
+│   │   │   │   └── openai_api_handler.py
+│   │   │   └── __init__.py
+│   │   ├── __init__.py
+│   │   ├── api_helpers.py
+│   │   ├── api_server.py
+│   │   ├── app.py
+│   │   └── workflow_gateway.py
+│   ├── common/
+│   │   ├── __init__.py
+│   │   ├── constants.py
+│   │   └── instance_global_variables.py
+│   ├── exceptions/
+│   │   ├── __init__.py
+│   │   └── early_termination_exception.py
+│   ├── llmapis/
+│   │   ├── handlers/
+│   │   │   ├── base/
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── base_chat_completions_handler.py
+│   │   │   │   ├── base_completions_handler.py
+│   │   │   │   └── base_llm_api_handler.py
+│   │   │   ├── impl/
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── claude_api_handler.py
+│   │   │   │   ├── koboldcpp_api_handler.py
+│   │   │   │   ├── koboldcpp_api_image_specific_handler.py
+│   │   │   │   ├── ollama_chat_api_handler.py
+│   │   │   │   ├── ollama_chat_api_image_specific_handler.py
+│   │   │   │   ├── ollama_generate_api_handler.py
+│   │   │   │   ├── openai_api_handler.py
+│   │   │   │   ├── openai_chat_api_image_specific_handler.py
+│   │   │   │   └── openai_completions_api_handler.py
+│   │   │   └── __init__.py
+│   │   ├── __init__.py
+│   │   └── llm_api.py
+│   ├── models/
+│   │   ├── __init__.py
+│   │   └── llm_handler.py
+│   ├── services/
+│   │   ├── __init__.py
+│   │   ├── cancellation_service.py
+│   │   ├── llm_dispatch_service.py
+│   │   ├── llm_service.py
+│   │   ├── locking_service.py
+│   │   ├── memory_service.py
+│   │   ├── prompt_categorization_service.py
+│   │   ├── response_builder_service.py
+│   │   └── timestamp_service.py
+│   ├── utilities/
+│   │   ├── __init__.py
+│   │   ├── config_utils.py
+│   │   ├── datetime_utils.py
+│   │   ├── file_utils.py
+│   │   ├── hashing_utils.py
+│   │   ├── prompt_extraction_utils.py
+│   │   ├── prompt_manipulation_utils.py
+│   │   ├── prompt_template_utils.py
+│   │   ├── search_utils.py
+│   │   ├── streaming_utils.py
+│   │   ├── text_utils.py
+│   │   └── vector_db_utils.py
+│   ├── workflows/
+│   │   ├── handlers/
+│   │   │   ├── base/
+│   │   │   │   ├── __init__.py
+│   │   │   │   └── base_workflow_node_handler.py
+│   │   │   ├── impl/
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── memory_node_handler.py
+│   │   │   │   ├── specialized_node_handler.py
+│   │   │   │   ├── standard_node_handler.py
+│   │   │   │   ├── sub_workflow_handler.py
+│   │   │   │   └── tool_node_handler.py
+│   │   │   └── __init__.py
+│   │   ├── managers/
+│   │   │   ├── __init__.py
+│   │   │   ├── workflow_manager.py
+│   │   │   └── workflow_variable_manager.py
+│   │   ├── models/
+│   │   │   ├── __init__.py
+│   │   │   └── execution_context.py
+│   │   ├── processors/
+│   │   │   ├── __init__.py
+│   │   │   └── workflows_processor.py
+│   │   ├── streaming/
+│   │   │   ├── __init__.py
+│   │   │   └── response_handler.py
+│   │   ├── tools/
+│   │   │   ├── __init__.py
+│   │   │   ├── dynamic_module_loader.py
+│   │   │   ├── offline_wikipedia_api_tool.py
+│   │   │   ├── parallel_llm_processing_tool.py
+│   │   │   └── slow_but_quality_rag_tool.py
+│   │   └── __init__.py
+│   └── __init__.py
 │
 ├─ Public
 │  └─ Configs
@@ -201,12 +220,88 @@ WilmerAI
 │     └─ Workflows
 │        ├─ folders named after usernames
 │        └─ ...
-├─ tests/
+├── Tests/
+│   ├── api/
+│   │   ├── handlers/
+│   │   │   └── impl/
+│   │   │       ├── test_api_cancellation.py
+│   │   │       ├── test_ollama_api_handler.py
+│   │   │       └── test_openai_api_handler.py
+│   │   ├── test_api_helpers.py
+│   │   ├── test_api_server.py
+│   │   └── test_workflow_gateway.py
+│   ├── integration/
+│   │   └── test_nested_workflow_cancellation.py
+│   ├── llmapis/
+│   │   ├── handlers/
+│   │   │   ├── base/
+│   │   │   │   ├── test_base_chat_completions_handler.py
+│   │   │   │   └── test_base_llm_api_handler_cancellation.py
+│   │   │   └── impl/
+│   │   │       ├── test_llmapis_claude_api_handler.py
+│   │   │       ├── test_llmapis_koboldcpp_api_handler.py
+│   │   │       ├── test_llmapis_koboldcpp_api_image_specific_handler.py
+│   │   │       ├── test_llmapis_ollama_chat_api_handler.py
+│   │   │       ├── test_llmapis_ollama_chat_api_image_specific_handler.py
+│   │   │       ├── test_llmapis_ollama_generate_api_handler.py
+│   │   │       ├── test_llmapis_openai_chat_api_image_specific_handler.py
+│   │   │       ├── test_llmapis_openai_chat_handler.py
+│   │   │       └── test_llmapis_openai_completions_api_handler.py
+│   │   └── test_llm_api.py
+│   ├── services/
+│   │   ├── test_cancellation_service.py
+│   │   ├── test_llm_dispatch_service.py
+│   │   ├── test_llm_service.py
+│   │   ├── test_locking_service.py
+│   │   ├── test_memory_service.py
+│   │   ├── test_prompt_categorization_service.py
+│   │   ├── test_response_builder_service.py
+│   │   └── test_timestamp_service.py
+│   ├── utilities/
+│   │   ├── test_config_utils.py
+│   │   ├── test_datetime_utils.py
+│   │   ├── test_file_utils.py
+│   │   ├── test_hashing_utils.py
+│   │   ├── test_prompt_extraction_utils.py
+│   │   ├── test_prompt_manipulation_utils.py
+│   │   ├── test_prompt_template_utils.py
+│   │   ├── test_search_utils.py
+│   │   ├── test_streaming_utils.py
+│   │   ├── test_text_utils.py
+│   │   └── test_vector_db_utils.py
+│   ├── workflows/
+│   │   ├── handlers/
+│   │   │   └── impl/
+│   │   │       ├── test_memory_node_handler.py
+│   │   │       ├── test_specialized_node_handler.py
+│   │   │       ├── test_standard_node_handler.py
+│   │   │       ├── test_sub_workflow_node_handler.py
+│   │   │       └── test_tool_node_handler.py
+│   │   ├── managers/
+│   │   │   ├── test_workflow_manager.py
+│   │   │   └── test_workflow_variable_manager.py
+│   │   ├── processors/
+│   │   │   ├── test_workflow_processor_cancellation.py
+│   │   │   └── test_workflows_processor.py
+│   │   ├── streaming/
+│   │   │   └── test_response_handler.py
+│   │   └── tools/
+│   │       ├── test_dynamic_module_loader.py
+│   │       ├── test_offline_wikipedia_api_tool.py
+│   │       └── test_slow_but_quality_rag_tool.py
+│   └── conftest.py
 │
-├─ run_linux.sh
-├─ run_macos.sh
-├─ run_windows.bat
-└─ server.py
+├── CONTRIBUTING.md
+├── LICENSE
+├── README.md
+├── pytest.ini
+├── requirements-test.txt
+├── requirements.txt
+├── run_eventlet.py
+├── run_waitress.py
+├── run_macos.sh
+├── run_windows.bat
+└── server.py
 ```
 
 ### Description of Directories and Key Files
@@ -313,7 +408,254 @@ Main script of the app.
 
 -----
 
-## 5\. Unit Testing
+## 5\. Request Cancellation Feature
+
+WilmerAI includes a comprehensive request cancellation system that allows clients to abort in-progress workflows
+gracefully. This feature is critical for improving user experience and resource management, enabling clients to
+terminate long-running requests that are no longer needed.
+
+### Architecture Overview
+
+The cancellation system is built around a central **`CancellationService`** singleton that maintains a thread-safe
+registry of cancelled request IDs. Cancellation checks are integrated at multiple layers of the stack:
+
+1. **API Layer**: Handles incoming cancellation requests via API-specific mechanisms
+2. **Workflow Processor**: Checks for cancellation at the start of each node execution
+3. **LLM API Layer**: Monitors for cancellation during streaming responses from backend LLMs
+
+### API-Specific Cancellation Mechanisms
+
+To maintain compatibility with the APIs WilmerAI emulates, cancellation is implemented differently for each API type:
+
+#### Ollama API (DELETE Endpoint)
+
+Ollama-compatible endpoints support cancellation via DELETE requests. This is a **WilmerAI-specific extension** to
+handle the multi-request environment.
+
+**Endpoints:**
+
+- `DELETE /api/chat`
+- `DELETE /api/generate`
+
+**Request Format:**
+
+```json
+{
+  "request_id": "the-request-id-to-cancel"
+}
+```
+
+**Response Format:**
+
+```json
+{
+  "status": "cancelled",
+  "request_id": "the-request-id-to-cancel"
+}
+```
+
+**Example:**
+
+```bash
+curl -X DELETE http://localhost:5000/api/chat \
+  -H "Content-Type: application/json" \
+  -d '{"request_id": "abc-123"}'
+```
+
+**Important Notes:**
+
+- The client must track and provide the `request_id` when cancelling
+- The `request_id` is generated internally by WilmerAI when the request starts
+- Clients should store the `request_id` from the initial request to enable cancellation
+
+#### OpenAI API (Client Disconnection)
+
+OpenAI-compatible endpoints handle cancellation via **client disconnection**. When a client closes the SSE (Server-Sent
+Events) stream, WilmerAI detects the disconnection and triggers cancellation automatically.
+
+**Endpoints:**
+
+- `/chat/completions` (streaming mode)
+- `/v1/completions` (streaming mode)
+- `/completions` (streaming mode)
+
+**How It Works:**
+
+1. Client initiates a streaming request
+2. WilmerAI stores the `request_id` in Flask's `g` context object
+3. If the client closes the connection, Flask raises a `ClientDisconnected`, `BrokenPipeError`, or `ConnectionError`
+   exception
+4. WilmerAI's exception handler catches this and calls `cancellation_service.request_cancellation()`
+5. The backend workflow and LLM stream are terminated
+
+**Example (JavaScript):**
+
+```javascript
+// Create an AbortController to enable cancellation
+const controller = new AbortController();
+
+// Start streaming request
+fetch('http://localhost:5000/chat/completions', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+        messages: [{role: 'user', content: 'Hello'}],
+        stream: true
+    }),
+    signal: controller.signal
+});
+
+// Cancel the request by aborting the signal
+controller.abort();
+```
+
+**Exception Types Handled:**
+
+- `ClientDisconnected` (Werkzeug)
+- `BrokenPipeError` (Python built-in)
+- `ConnectionError` (Python built-in)
+- `GeneratorExit` (Python built-in)
+
+### Internal Cancellation Flow
+
+When a cancellation is requested (via either mechanism), the following sequence occurs:
+
+1. **Registration**: `cancellation_service.request_cancellation(request_id)` adds the ID to the internal set
+2. **Workflow Check**: At the start of each node in `WorkflowProcessor.execute()`, the system
+   checks `cancellation_service.is_cancelled(request_id)`
+3. **Early Termination**: If cancelled, the processor calls `cancellation_service.acknowledge_cancellation(request_id)`
+   and raises `EarlyTerminationException`
+4. **LLM Stream Termination**: During LLM streaming in `BaseLlmApiHandler.handle_streaming()`, each chunk is preceded by
+   a cancellation check
+5. **Cleanup**: The `finally` block in `WorkflowProcessor.execute()` ensures locks are released
+
+### Nested Workflow Cancellation
+
+Cancellation works correctly with nested workflows (a workflow that calls another workflow via `CustomWorkflow` nodes):
+
+- All nested workflows share the same `request_id`
+- A cancellation signal propagates through all levels
+- Both parent and child workflows check for cancellation at each node
+- If a child workflow is cancelled, it raises `EarlyTerminationException`, which terminates the parent
+
+**Example Scenario:**
+
+```
+Parent Workflow (request_id: abc-123)
+  ├─ Node 1: Standard
+  ├─ Node 2: CustomWorkflow ──> Child Workflow (same request_id)
+  │                                ├─ Node 1: Standard
+  │                                └─ Node 2: Standard [CANCELLED HERE]
+  └─ Node 3: Standard [NEVER EXECUTED]
+```
+
+### CancellationService API
+
+The `CancellationService` is a singleton located at `Middleware/services/cancellation_service.py`.
+
+**Methods:**
+
+- **`request_cancellation(request_id: str)`**: Marks a request for cancellation
+  ```python
+  from Middleware.services.cancellation_service import cancellation_service
+  cancellation_service.request_cancellation("my-request-id")
+  ```
+
+- **`is_cancelled(request_id: str) -> bool`**: Checks if a request is cancelled
+  ```python
+  if cancellation_service.is_cancelled(request_id):
+      # Handle cancellation
+  ```
+
+- **`acknowledge_cancellation(request_id: str)`**: Removes a request from the registry after processing
+  ```python
+  cancellation_service.acknowledge_cancellation(request_id)
+  ```
+
+- **`get_all_cancelled_requests() -> Set[str]`**: Returns a copy of all cancelled request IDs (useful for debugging)
+
+**Thread Safety:**
+All methods are thread-safe and use internal locking to prevent race conditions.
+
+### Developer Integration Guide
+
+If you're adding a new API handler or modifying the workflow execution, follow these guidelines:
+
+#### For API Handlers
+
+1. **Streaming Responses**: Wrap streaming generators in a try-except block to catch disconnect exceptions
+   ```python
+   from Middleware.services.cancellation_service import cancellation_service
+   from werkzeug.exceptions import ClientDisconnected
+   from flask import g
+
+   def streaming_with_cancellation_handling():
+       try:
+           for chunk in handle_user_prompt(messages, stream=True):
+               yield chunk
+       except (GeneratorExit, ClientDisconnected, BrokenPipeError, ConnectionError):
+           request_id = getattr(g, 'current_request_id', None)
+           if request_id:
+               cancellation_service.request_cancellation(request_id)
+           raise
+   ```
+
+2. **Dedicated Cancellation Endpoints**: If your API has a native cancellation mechanism, implement it
+   ```python
+   class CancelAPI(MethodView):
+       @staticmethod
+       def delete():
+           from Middleware.services.cancellation_service import cancellation_service
+           request_data = request.get_json()
+           request_id = request_data.get("request_id")
+           cancellation_service.request_cancellation(request_id)
+           return jsonify({"status": "cancelled", "request_id": request_id}), 200
+   ```
+
+#### For Workflow Processors
+
+Add cancellation checks at the start of long-running operations:
+
+```python
+from Middleware.services.cancellation_service import cancellation_service
+
+if cancellation_service.is_cancelled(self.request_id):
+    cancellation_service.acknowledge_cancellation(self.request_id)
+    raise EarlyTerminationException(f"Request {self.request_id} cancelled")
+```
+
+#### For LLM API Handlers
+
+Pass `request_id` through the call chain and check during streaming:
+
+```python
+for line in response.iter_lines():
+    if request_id and cancellation_service.is_cancelled(request_id):
+        logger.info(f"Request {request_id} cancelled. Stopping LLM stream.")
+        break
+    # Process line...
+```
+
+### Testing
+
+Comprehensive unit tests are provided in:
+
+- `tests/services/test_cancellation_service.py` - Service-level tests
+- `tests/api/handlers/impl/test_api_cancellation.py` - API handler tests
+- `tests/workflows/processors/test_workflow_processor_cancellation.py` - Workflow processor tests
+- `tests/llmapis/handlers/base/test_base_llm_api_handler_cancellation.py` - LLM API layer tests
+- `tests/integration/test_nested_workflow_cancellation.py` - End-to-end integration tests
+
+Run tests with:
+
+```bash
+pytest tests/services/test_cancellation_service.py -v
+pytest tests/ -k cancellation -v
+```
+
+-----
+
+## 6\. Unit Testing
 
 The project includes a comprehensive unit testing suite to ensure code quality and prevent regressions. The tests are
 built using the `pytest` framework.

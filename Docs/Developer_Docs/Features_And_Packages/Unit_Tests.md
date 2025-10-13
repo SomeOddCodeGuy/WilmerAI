@@ -55,47 +55,76 @@ locate tests corresponding to a specific module.
 ```plaintext
 WilmerAI
 │
-└─ Tests/           # All tests live here
-   ├─ api/           
-   │  ├─ handlers/
-   │     └─ impl/
-   │        ├─ test_ollama_api_handler.py
-   │        └─ test_openai_api_handler.py
-   │  ├─ test_api_helpers.py
-   │  ├─ test_api_server.py      
-   │  └─ test_workflow_gateway.py
-   ├─ llmapis/      
-   │  └─ handlers/
-   │     └─ impl/
-   │        ├─ test_koboldcpp_api_handler.py
-   │        ├─ test_koboldcpp_api_image_specific_handler.py
-   │        ├─ test_ollama_chat_api_handler.py
-   │        ├─ test_ollama_chat_api_image_specific_handler.py
-   │        ├─ test_ollama_generate_api_handler.py
-   │        ├─ test_openai_api_handler.py
-   │        ├─ test_openai_chat_api_image_specific_handler.py
-   │        └─ test_openai_completions_api_handler.py
-   │  └─ test_llm_api.py  
-   ├─ services/     
-   │  ├─ test_llm_dispatch_service.py   
-   │  ├─ test_llm_service.py
-   │  ├─ test_locking_service.py
-   │  ├─ test_prompt_categorization_service.py   
-   │  ├─ test_response_builder_service.py       
-   │  └─ test_timestamp_service.py
-   ├─ utilities/     
-   │  ├─ test_config_utils.py   
-   │  ├─ test_datetime_utils.py
-   │  ├─ test_file_utils.py
-   │  ├─ test_hashing_utils.py   
-   │  ├─ test_prompt_extraction_utils.py      
-   │  ├─ test_prompt_manipulation_utils.py     
-   │  ├─ test_prompt_template_utils.py
-   │  ├─ test_search_utils.py    
-   │  ├─ test_streaming_utils.py      
-   │  ├─ test_text_utils.py       
-   │  └─ test_vector_db_utils.py   
-   └─ conftest.py    # Central fixture configuration
+├── Tests/
+│   ├── api/
+│   │   ├── handlers/
+│   │   │   └── impl/
+│   │   │       ├── test_api_cancellation.py
+│   │   │       ├── test_ollama_api_handler.py
+│   │   │       └── test_openai_api_handler.py
+│   │   ├── test_api_helpers.py
+│   │   ├── test_api_server.py
+│   │   └── test_workflow_gateway.py
+│   ├── integration/
+│   │   └── test_nested_workflow_cancellation.py
+│   ├── llmapis/
+│   │   ├── handlers/
+│   │   │   ├── base/
+│   │   │   │   ├── test_base_chat_completions_handler.py
+│   │   │   │   └── test_base_llm_api_handler_cancellation.py
+│   │   │   └── impl/
+│   │   │       ├── test_llmapis_claude_api_handler.py
+│   │   │       ├── test_llmapis_koboldcpp_api_handler.py
+│   │   │       ├── test_llmapis_koboldcpp_api_image_specific_handler.py
+│   │   │       ├── test_llmapis_ollama_chat_api_handler.py
+│   │   │       ├── test_llmapis_ollama_chat_api_image_specific_handler.py
+│   │   │       ├── test_llmapis_ollama_generate_api_handler.py
+│   │   │       ├── test_llmapis_openai_chat_api_image_specific_handler.py
+│   │   │       ├── test_llmapis_openai_chat_handler.py
+│   │   │       └── test_llmapis_openai_completions_api_handler.py
+│   │   └── test_llm_api.py
+│   ├── services/
+│   │   ├── test_cancellation_service.py
+│   │   ├── test_llm_dispatch_service.py
+│   │   ├── test_llm_service.py
+│   │   ├── test_locking_service.py
+│   │   ├── test_memory_service.py
+│   │   ├── test_prompt_categorization_service.py
+│   │   ├── test_response_builder_service.py
+│   │   └── test_timestamp_service.py
+│   ├── utilities/
+│   │   ├── test_config_utils.py
+│   │   ├── test_datetime_utils.py
+│   │   ├── test_file_utils.py
+│   │   ├── test_hashing_utils.py
+│   │   ├── test_prompt_extraction_utils.py
+│   │   ├── test_prompt_manipulation_utils.py
+│   │   ├── test_prompt_template_utils.py
+│   │   ├── test_search_utils.py
+│   │   ├── test_streaming_utils.py
+│   │   ├── test_text_utils.py
+│   │   └── test_vector_db_utils.py
+│   ├── workflows/
+│   │   ├── handlers/
+│   │   │   └── impl/
+│   │   │       ├── test_memory_node_handler.py
+│   │   │       ├── test_specialized_node_handler.py
+│   │   │       ├── test_standard_node_handler.py
+│   │   │       ├── test_sub_workflow_node_handler.py
+│   │   │       └── test_tool_node_handler.py
+│   │   ├── managers/
+│   │   │   ├── test_workflow_manager.py
+│   │   │   └── test_workflow_variable_manager.py
+│   │   ├── processors/
+│   │   │   ├── test_workflow_processor_cancellation.py
+│   │   │   └── test_workflows_processor.py
+│   │   ├── streaming/
+│   │   │   └── test_response_handler.py
+│   │   └── tools/
+│   │       ├── test_dynamic_module_loader.py
+│   │       ├── test_offline_wikipedia_api_tool.py
+│   │       └── test_slow_but_quality_rag_tool.py
+│   └── conftest.py
 ```
 
 -----

@@ -5,7 +5,8 @@ to provide both chronological recall and relevant information retrieval by allow
 work in concert.
 
 The system separates memory creation from retrieval to maintain response speed. To use persistent memory, the
-`[DiscussionId]` tag must be included in the initial user message.
+`[DiscussionId]` tag must be included in a user or system message. It can be anywhere and
+Wilmer will find it.
 
 -----
 

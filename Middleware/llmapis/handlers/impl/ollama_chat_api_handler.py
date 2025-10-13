@@ -39,7 +39,7 @@ class OllamaChatHandler(BaseChatCompletionsHandler):
         Returns:
             str: The complete URL for the Ollama `/api/chat` endpoint.
         """
-        return f"{self.base_url}/api/chat"
+        return f"{self.base_url.rstrip('/')}/api/chat"
 
     def _prepare_payload(self, conversation: Optional[List[Dict[str, str]]], system_prompt: Optional[str],
                          prompt: Optional[str]) -> Dict:

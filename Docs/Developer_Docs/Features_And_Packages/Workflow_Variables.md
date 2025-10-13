@@ -141,6 +141,30 @@ The system is designed to make adding custom variables trivial by isolating the 
    iterates over the `workflow_config` dictionary, making each top-level key (except `"nodes"`) available for
    substitution.
 
+### Early Variable Substitution for `endpointName` and `preset`
+
+As of recent updates, the `endpointName` and `preset` fields support a special form of **early variable substitution**. This occurs in `WorkflowProcessor._process_section()` BEFORE the LLM handler is loaded and BEFORE nodes execute.
+
+**Technical Implementation:**
+- The processor creates a minimal `ExecutionContext` with only pre-execution variables
+- This context includes `agent_inputs` (from parent workflows) and `workflow_config` (static variables)
+- It explicitly excludes `agent_outputs` since no nodes have executed yet
+- Variables are applied to `endpointName` and `preset` using this limited context
+- The substituted values are then used to load the LLM handler
+
+**Available Variables for Early Substitution:**
+- `{agent#Input}` - Passed from parent workflows
+- Custom static variables from workflow JSON top-level
+- Date/time variables
+- Conversation history variables
+- `{time_context_summary}`
+
+**NOT Available:**
+- `{agent#Output}` - These don't exist until nodes execute
+- Any variable dependent on node execution results
+
+This design allows nested workflows to pass endpoint configurations while maintaining the architecture where the LLM handler is loaded before node execution.
+
 **File:** `/Middleware/workflows/managers/workflow_variable_manager.py`
 
 ```python

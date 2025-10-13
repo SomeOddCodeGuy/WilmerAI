@@ -6,6 +6,7 @@ from Middleware.llmapis.llm_api import LlmApiService
 from Middleware.models.llm_handler import LlmHandler
 from Middleware.utilities.config_utils import get_chat_template_name, \
     get_endpoint_config, get_api_type_config
+from Middleware.utilities.text_utils import redact_sensitive_data
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,7 @@ class LlmHandlerService:
         Returns:
             LlmHandler: The newly created and initialized `LlmHandler` instance.
         """
-        logger.info("Initialize llm handler config_data: {}".format(config_data))
+        logger.info("Initialize llm handler config_data: {}".format(redact_sensitive_data(config_data)))
         if (addGenerationPrompt is None):
             logger.debug("Add generation prompt is None")
             add_generation_prompt = config_data.get("addGenerationPrompt", False)

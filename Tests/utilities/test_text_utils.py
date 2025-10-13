@@ -20,6 +20,7 @@ from Middleware.utilities.text_utils import (
     replace_characters_in_string,
     tokenize,
     replace_delimiter_in_file,
+    redact_sensitive_data,
 )
 
 # Test data to be used across multiple tests
@@ -239,3 +240,189 @@ def test_replace_delimiter_in_file_io_error(mocker):
     mocker.patch("builtins.open", side_effect=IOError)
     with pytest.raises(IOError):
         replace_delimiter_in_file("bad/path.txt", ",", " ")
+
+
+class TestRedactSensitiveData:
+    """
+    Tests for the redact_sensitive_data function.
+    """
+
+    def test_redact_api_key(self):
+        """
+        Tests that API keys are redacted in dictionaries.
+        """
+        data = {
+            'apiKey': 'secret123',
+            'endpoint': 'https://api.example.com'
+        }
+        result = redact_sensitive_data(data)
+        assert result['apiKey'] == '***REDACTED***'
+        assert result['endpoint'] == 'https://api.example.com'
+
+    def test_redact_multiple_sensitive_fields(self):
+        """
+        Tests that multiple sensitive fields are redacted.
+        """
+        data = {
+            'apiKey': 'secret123',
+            'password': 'mypassword',
+            'token': 'token123',
+            'username': 'user',
+            'endpoint': 'https://api.example.com'
+        }
+        result = redact_sensitive_data(data)
+        assert result['apiKey'] == '***REDACTED***'
+        assert result['password'] == '***REDACTED***'
+        assert result['token'] == '***REDACTED***'
+        assert result['username'] == 'user'
+        assert result['endpoint'] == 'https://api.example.com'
+
+    def test_redact_case_insensitive(self):
+        """
+        Tests that redaction works case-insensitively.
+        """
+        data = {
+            'ApiKey': 'secret123',
+            'API_KEY': 'secret456',
+            'PASSWORD': 'mypassword',
+            'endpoint': 'https://api.example.com'
+        }
+        result = redact_sensitive_data(data)
+        assert result['ApiKey'] == '***REDACTED***'
+        assert result['API_KEY'] == '***REDACTED***'
+        assert result['PASSWORD'] == '***REDACTED***'
+        assert result['endpoint'] == 'https://api.example.com'
+
+    def test_redact_nested_dict(self):
+        """
+        Tests that redaction works recursively in nested dictionaries.
+        """
+        data = {
+            'config': {
+                'apiKey': 'secret123',
+                'endpoint': 'https://api.example.com'
+            },
+            'username': 'user'
+        }
+        result = redact_sensitive_data(data)
+        assert result['config']['apiKey'] == '***REDACTED***'
+        assert result['config']['endpoint'] == 'https://api.example.com'
+        assert result['username'] == 'user'
+
+    def test_redact_list_of_dicts(self):
+        """
+        Tests that redaction works on lists containing dictionaries.
+        """
+        data = [
+            {'apiKey': 'secret1', 'name': 'config1'},
+            {'apiKey': 'secret2', 'name': 'config2'}
+        ]
+        result = redact_sensitive_data(data)
+        assert result[0]['apiKey'] == '***REDACTED***'
+        assert result[0]['name'] == 'config1'
+        assert result[1]['apiKey'] == '***REDACTED***'
+        assert result[1]['name'] == 'config2'
+
+    def test_redact_mixed_nested_structure(self):
+        """
+        Tests redaction on complex nested structures.
+        """
+        data = {
+            'servers': [
+                {
+                    'name': 'server1',
+                    'credentials': {
+                        'apiKey': 'secret123',
+                        'secret': 'mysecret'
+                    }
+                },
+                {
+                    'name': 'server2',
+                    'credentials': {
+                        'password': 'pass456',
+                        'endpoint': 'https://api.example.com'
+                    }
+                }
+            ]
+        }
+        result = redact_sensitive_data(data)
+        assert result['servers'][0]['credentials']['apiKey'] == '***REDACTED***'
+        assert result['servers'][0]['credentials']['secret'] == '***REDACTED***'
+        assert result['servers'][0]['name'] == 'server1'
+        assert result['servers'][1]['credentials']['password'] == '***REDACTED***'
+        assert result['servers'][1]['credentials']['endpoint'] == 'https://api.example.com'
+
+    def test_redact_custom_text(self):
+        """
+        Tests that custom redaction text can be used.
+        """
+        data = {'apiKey': 'secret123', 'endpoint': 'https://api.example.com'}
+        result = redact_sensitive_data(data, redaction_text='[HIDDEN]')
+        assert result['apiKey'] == '[HIDDEN]'
+        assert result['endpoint'] == 'https://api.example.com'
+
+    def test_redact_empty_dict(self):
+        """
+        Tests that an empty dictionary is returned unchanged.
+        """
+        data = {}
+        result = redact_sensitive_data(data)
+        assert result == {}
+
+    def test_redact_no_sensitive_data(self):
+        """
+        Tests that dictionaries without sensitive data are unchanged.
+        """
+        data = {
+            'name': 'test',
+            'endpoint': 'https://api.example.com',
+            'timeout': 30
+        }
+        result = redact_sensitive_data(data)
+        assert result == data
+
+    def test_redact_primitive_types(self):
+        """
+        Tests that primitive types are returned unchanged.
+        """
+        assert redact_sensitive_data('string') == 'string'
+        assert redact_sensitive_data(123) == 123
+        assert redact_sensitive_data(True) is True
+        assert redact_sensitive_data(None) is None
+
+    def test_redact_tuple(self):
+        """
+        Tests that redaction works on tuples.
+        """
+        data = ({'apiKey': 'secret123'}, {'password': 'pass456'})
+        result = redact_sensitive_data(data)
+        assert isinstance(result, tuple)
+        assert result[0]['apiKey'] == '***REDACTED***'
+        assert result[1]['password'] == '***REDACTED***'
+
+    def test_redact_all_sensitive_key_variations(self):
+        """
+        Tests that all documented sensitive key variations are redacted.
+        """
+        data = {
+            'api_key': 'secret1',
+            'apikey': 'secret2',
+            'password': 'secret3',
+            'passwd': 'secret4',
+            'pwd': 'secret5',
+            'token': 'secret6',
+            'access_token': 'secret7',
+            'refresh_token': 'secret8',
+            'auth_token': 'secret9',
+            'bearer_token': 'secret10',
+            'secret': 'secret11',
+            'client_secret': 'secret12',
+            'api_secret': 'secret13',
+            'authorization': 'secret14',
+            'auth': 'secret15',
+            'private_key': 'secret16',
+            'privatekey': 'secret17'
+        }
+        result = redact_sensitive_data(data)
+        for key in data.keys():
+            assert result[key] == '***REDACTED***', f"Key '{key}' was not redacted"

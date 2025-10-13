@@ -1,0 +1,7 @@
+{
+  "temperature": 0.7,
+  "thinking": {
+    "type": "enabled",
+    "budget_tokens": 8192
+  }
+}

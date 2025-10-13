@@ -43,7 +43,12 @@ def test_chat_completions_non_streaming(client, mocker):
     assert response.status_code == 200
     assert response.json["id"] == "chatcmpl-123"
 
-    mock_handle_prompt.assert_called_once_with(expected_transformed_messages, stream=False)
+    # Check that handle_user_prompt was called with request_id and correct arguments
+    assert mock_handle_prompt.call_count == 1
+    call_args = mock_handle_prompt.call_args[0]
+    assert isinstance(call_args[0], str)  # First arg is request_id (UUID string)
+    assert call_args[1] == expected_transformed_messages
+    assert mock_handle_prompt.call_args[1] == {'stream': False}
 
     mock_builder.build_openai_chat_completion_response.assert_called_once_with("This is a test response.")
 
@@ -78,6 +83,13 @@ def test_chat_completions_streaming(client, mocker):
 
     assert response.status_code == 200
     assert 'text/event-stream' in response.content_type
-    assert b"data: chunk1\n\ndata: chunk2\n\n" in response.data
-    # Assert that the gateway was called with the TRANSFORMED messages
-    mock_handle_prompt.assert_called_once_with(expected_transformed_messages, True)
+    # The response may include keep-alive newlines from the watchdog
+    assert b"data: chunk1" in response.data
+    assert b"data: chunk2" in response.data
+
+    # Check that handle_user_prompt was called with request_id and correct arguments
+    assert mock_handle_prompt.call_count == 1
+    call_args = mock_handle_prompt.call_args[0]
+    assert isinstance(call_args[0], str)  # First arg is request_id (UUID string)
+    assert call_args[1] == expected_transformed_messages
+    assert call_args[2] == True  # stream=True

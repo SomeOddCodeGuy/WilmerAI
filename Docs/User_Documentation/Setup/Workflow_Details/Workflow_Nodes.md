@@ -19,11 +19,11 @@ response.
 |:--------------------------------------------|:--------|:---------|:-----------|:--------------------------------------------------------------------------------------------------------------------------------------|
 | **`type`**                                  | String  | Yes      | `Standard` | The node type. Best practice is to always include it for clarity.                                                                     |
 | **`title`**                                 | String  | No       | `""`       | A descriptive name for the node, used for logging and debugging.                                                                      |
-| **`endpointName`**                          | String  | Yes      | N/A        | The name of the LLM endpoint configuration to use for this node. **This field does not support variables.**                           |
-| **`preset`**                                | String  | No       | `null`     | The name of the generation preset to use. If omitted, the endpoint's default is used. **This field does not support variables.**      |
+| **`endpointName`**                          | String  | Yes      | N/A        | The name of the LLM endpoint configuration. **Supports LIMITED variables: only `{agent#Input}` and static workflow variables, NOT `{agent#Output}`.**  |
+| **`preset`**                                | String  | Yes      | N/A        | The name of the generation preset to use. If omitted, the endpoint's default is used. **Supports LIMITED variables like endpointName.** |
 | **`returnToUser`**                          | Boolean | No       | `false`    | If `true`, this node's output is sent to the user. Only one node per workflow can be a responder.                                     |
-| **`systemPrompt`**                          | String  | No       | `""`       | The system prompt or initial instruction set for the LLM. Supports variable substitution.                                             |
-| **`prompt`**                                | String  | No       | `""`       | The main user-facing prompt. If this is empty, the node will use `lastMessagesToSendInsteadOfPrompt`. Supports variable substitution. |
+| **`systemPrompt`**                          | String  | Yes      | N/A        | The system prompt or initial instruction set for the LLM. Supports variable substitution.                                             |
+| **`prompt`**                                | String  | Yes      | N/A        | The main user-facing prompt. If this is empty, the node will use `lastMessagesToSendInsteadOfPrompt`. Supports variable substitution. |
 | **`lastMessagesToSendInsteadOfPrompt`**     | Integer | No       | `5`        | If `prompt` is empty, this specifies how many recent conversational turns to use as the prompt.                                       |
 | **`maxResponseSizeInTokens`**               | Integer | No       | `400`      | Overrides the maximum number of tokens the LLM can generate for this node.                                                            |
 | **`maxContextTokenSize`**                   | Integer | No       | `4096`     | Overrides the maximum context window size (in tokens) for this node.                                                                  |
@@ -38,8 +38,9 @@ response.
 
 #### **Limitations and Key Usage Notes**
 
-* **Variable Support:** Variables are only supported in the `systemPrompt` and `prompt` fields. Configuration fields
-  like `endpointName` and `preset` must be static strings.
+* **Variable Support:** Full variables are supported in the `systemPrompt` and `prompt` fields. The `endpointName` and
+  `preset` fields support LIMITED variables (only `{agent#Input}` from parent workflows and static variables defined
+  in the workflow JSON, NOT `{agent#Output}` which doesn't exist yet).
 * **Responder Node:** Only one node in a workflow can have `returnToUser` set to `true`. If no node is designated, the
   last node in the workflow automatically becomes the responder.
 * **Prompt Fallback:** The node prioritizes the `prompt` field. If it's empty, it will fall back to using the
@@ -415,16 +416,17 @@ subsequent nodes.
 | Property               | Type    | Required | Default | Description                                                                                                       |
 |:-----------------------|:--------|:---------|:--------|:------------------------------------------------------------------------------------------------------------------|
 | **`type`**             | String  | Yes      | N/A     | Must be `"ImageProcessor"`.                                                                                       |
-| **`endpointName`**     | String  | Yes      | N/A     | The name of the vision-capable LLM endpoint. **Does not support variables.**                                      |
+| **`endpointName`**     | String  | Yes      | N/A     | The name of the vision-capable LLM endpoint. **Supports LIMITED variables: only `{agent#Input}` and static workflow variables, NOT `{agent#Output}`.**  |
 | **`systemPrompt`**     | String  | Yes      | N/A     | The system prompt for the vision LLM, instructing it on how to describe the image. Supports variables.            |
 | **`prompt`**           | String  | Yes      | N/A     | The user prompt for the vision LLM, guiding what to focus on. Supports variables.                                 |
-| **`preset`**           | String  | Yes      | N/A     | The generation preset for the vision LLM. **Does not support variables.**                                         |
+| **`preset`**           | String  | Yes      | N/A     | The generation preset for the vision LLM. **Supports LIMITED variables like endpointName.**                       |
 | **`addAsUserMessage`** | Boolean | No       | `false` | If `true`, injects the aggregated image description into the conversation history as a new user message.          |
 | **`message`**          | String  | No       | N/A     | A template string for the injected message. **Must contain the `[IMAGE_BLOCK]` placeholder.** Supports variables. |
 
 #### **Limitations and Key Usage Notes**
 
-* **Static Configuration:** `endpointName` and `preset` must be hardcoded strings.
+* **Limited Variable Support:** `endpointName` and `preset` support LIMITED variables (only `{agent#Input}` from parent
+  workflows and static variables, NOT `{agent#Output}` which doesn't exist yet).
 * **Sequential Processing:** The node processes images one by one and aggregates their descriptions into a single string
   output, separated by `\n-------------\n`.
 * **`[IMAGE_BLOCK]` Placeholder:** This special keyword is **only valid** inside the `message` property of this node. It

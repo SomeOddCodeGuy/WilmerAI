@@ -93,7 +93,8 @@ class TestLLMDispatchServiceCompletions:
             conversation=None,
             system_prompt="formatted_system",
             prompt="User instruction.",
-            llm_takes_images=False
+            llm_takes_images=False,
+            request_id=None  # Added for cancellation support
         )
 
     def test_dispatch_uses_last_n_messages_when_prompt_is_absent(self, mock_context, mocker):
@@ -127,7 +128,8 @@ class TestLLMDispatchServiceCompletions:
             conversation=None,
             system_prompt="formatted_system",
             prompt="formatted_last_3_turns",
-            llm_takes_images=False
+            llm_takes_images=False,
+            request_id=None
         )
 
     def test_dispatch_applies_all_template_flags(self, mock_context, mocker):
@@ -170,7 +172,8 @@ class TestLLMDispatchServiceCompletions:
             conversation=None,
             system_prompt="formatted_system",
             prompt="final_prompt",
-            llm_takes_images=False
+            llm_takes_images=False,
+            request_id=None
         )
 
     def test_dispatch_with_image_message(self, mock_context, mocker):
@@ -196,7 +199,8 @@ class TestLLMDispatchServiceCompletions:
             conversation=[SAMPLE_IMAGE_MESSAGE],
             system_prompt="formatted_system_for_image_test",
             prompt="Describe this image.",
-            llm_takes_images=True
+            llm_takes_images=True,
+            request_id=None
         )
 
 
@@ -228,7 +232,8 @@ class TestLLMDispatchServiceChat:
         # Assert
         mock_context.llm_handler.llm.get_response_from_llm.assert_called_once_with(
             conversation=expected_collection,
-            llm_takes_images=False
+            llm_takes_images=False,
+            request_id=None
         )
 
     def test_dispatch_uses_last_n_messages_when_prompt_is_absent(self, mock_context, mocker):
@@ -262,7 +267,8 @@ class TestLLMDispatchServiceChat:
         mock_extract.assert_called_once_with(mock_context.messages, 2, True)
         mock_context.llm_handler.llm.get_response_from_llm.assert_called_once_with(
             conversation=expected_collection,
-            llm_takes_images=False
+            llm_takes_images=False,
+            request_id=None
         )
 
     def test_dispatch_without_system_prompt(self, mock_context, mocker):
@@ -285,7 +291,8 @@ class TestLLMDispatchServiceChat:
         # Assert
         mock_context.llm_handler.llm.get_response_from_llm.assert_called_once_with(
             conversation=expected_collection,
-            llm_takes_images=False
+            llm_takes_images=False,
+            request_id=None
         )
 
     def test_dispatch_with_image_message(self, mock_context):
@@ -308,5 +315,6 @@ class TestLLMDispatchServiceChat:
         # Assert
         mock_context.llm_handler.llm.get_response_from_llm.assert_called_once_with(
             conversation=expected_collection,
-            llm_takes_images=True
+            llm_takes_images=True,
+            request_id=None
         )

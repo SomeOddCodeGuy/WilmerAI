@@ -9,6 +9,14 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3 import Retry
 
+try:
+    import eventlet
+    EVENTLET_AVAILABLE = True
+except ImportError:
+    EVENTLET_AVAILABLE = False
+
+
+from Middleware.services.cancellation_service import cancellation_service
 from Middleware.utilities.config_utils import get_config_property_if_exists
 
 logger = logging.getLogger(__name__)
@@ -132,30 +140,95 @@ class LlmApiHandler(ABC):
         return None
 
     def handle_streaming(self, conversation: Optional[List[Dict[str, str]]] = None, system_prompt: Optional[str] = None,
-                         prompt: Optional[str] = None) -> Generator[Dict[str, Any], None, None]:
+                         prompt: Optional[str] = None, request_id: Optional[str] = None) -> Generator[Dict[str, Any], None, None]:
         """
-        Manages a streaming request to the LLM API and yields parsed data chunks.
-
-        Args:
-            conversation (Optional[List[Dict[str, str]]]): The history of the conversation.
-            system_prompt (Optional[str]): A system-level instruction for the LLM.
-            prompt (Optional[str]): The latest user prompt to be processed.
-
-        Yields:
-            Dict[str, Any]: A dictionary containing the raw parsed data, typically
-            in the format {'token': str, 'finish_reason': str|None}.
+        Manages a streaming request to the LLM API.
+        When running under Eventlet, relies on monkey-patching for cooperative I/O.
         """
         payload = self._prepare_payload(conversation, system_prompt, prompt)
+        logger.debug(f"Payload being sent to LLM API: {payload}")
         url = self._get_api_endpoint_url()
 
+        # Check if already cancelled
+        if request_id and cancellation_service.is_cancelled(request_id):
+            logger.info(f"Request {request_id} was already cancelled before starting LLM request.")
+            try:
+                self.session.close()
+            except:
+                pass
+            return
+
+        # Check if Eventlet is active for logging purposes
+        is_eventlet_active = EVENTLET_AVAILABLE and eventlet.patcher.is_monkey_patched('socket')
+        if is_eventlet_active:
+            logger.info(f"Using Eventlet monkey-patched requests for streaming request_id: {request_id}")
+        else:
+            logger.info(f"Using standard synchronous streaming for request_id: {request_id}")
+
+        # --- Abort Callback Setup ---
+        response_to_abort = None
+
+        def abort_callback():
+            """Aggressively closes the HTTP session to interrupt the stream or prefill phase."""
+            nonlocal response_to_abort
+            logger.info(f"Abort callback triggered for request_id: {request_id}. Starting session close procedure.")
+
+            # Primary Mechanism: Close the session aggressively.
+            try:
+                logger.info(f"Closing the entire session for request_id: {request_id}")
+                self.session.adapters.clear()
+                self.session.close()
+                logger.info(f"Session closed successfully for request_id: {request_id}")
+            except Exception as e:
+                logger.error(f"Error closing session in abort callback for request_id {request_id}: {e}")
+
+            # Secondary cleanup
+            if response_to_abort is not None:
+                try:
+                    logger.debug(f"Closing response object for request_id: {request_id}")
+                    response_to_abort.close()
+                except Exception as e:
+                    logger.debug(f"Error closing response object in abort callback: {e}")
+                response_to_abort = None
+
+        if request_id:
+            logger.info(f"Registering abort callback for request_id: {request_id}")
+            cancellation_service.register_abort_callback(request_id, abort_callback)
+
+        # --- Streaming Logic ---
+        # When Eventlet is active, session.post() is monkey-patched to be cooperative
+        # The heartbeat mechanism in ollama_api_handler detects disconnects during prefill
         try:
-            with self.session.post(url, headers=self.headers, json=payload, stream=True, timeout=14400) as r:
-                r.raise_for_status()
-                logger.info(f"Streaming response status code: {r.status_code} from {self.__class__.__name__}")
-                r.encoding = "utf-8"
+            logger.info(f"Starting POST request for streaming request_id: {request_id}")
+            # This call is cooperative when Eventlet is active (monkey-patched)
+            with self.session.post(url, headers=self.headers, json=payload, stream=True, timeout=14400) as response:
+                response_to_abort = response
+
+                # Check for errors and capture the response body before raising
+                if response.status_code >= 400:
+                    error_body = response.text
+                    logger.error(f"HTTP {response.status_code} error from {self.__class__.__name__}")
+                    logger.error(f"Response body: {error_body}")
+                    response.raise_for_status()
+
+                logger.debug(f"Streaming response status code: {response.status_code} from {self.__class__.__name__}")
+                response.encoding = "utf-8"
+
                 current_event = None
 
-                for line in r.iter_lines(decode_unicode=True):
+                line_count = 0
+                for line in response.iter_lines(decode_unicode=True):
+                    # Check for cancellation before processing each line
+                    if request_id and cancellation_service.is_cancelled(request_id):
+                        logger.info(f"Request {request_id} cancelled. Stopping LLM stream.")
+                        break
+
+                    if is_eventlet_active and request_id and len(line.strip()) > 0:
+                        line_count += 1
+                        if line_count <= 3 or line_count % 20 == 0:
+                            logger.debug(f"LLM handler received line #{line_count} ({len(line)} chars) for {request_id}")
+
+                    # --- Line Processing Logic ---
                     if not line:
                         continue
 
@@ -165,13 +238,20 @@ class LlmApiHandler(ABC):
                     if self._iterate_by_lines:
                         data_str = line
                     else:
+                        # SSE parsing logic
                         if line.startswith("event:"):
-                            current_event = line.split(":", 1)[1].strip()
+                            try:
+                                current_event = line.split(":", 1)[1].strip()
+                            except IndexError:
+                                pass
                             continue
                         if line.startswith("data:"):
                             if self._required_event_name and current_event != self._required_event_name:
                                 continue
-                            data_str = line.split(":", 1)[1].strip()
+                            try:
+                                data_str = line.split(":", 1)[1].strip()
+                            except IndexError:
+                                pass
 
                     if data_str is None or data_str == '[DONE]':
                         continue
@@ -180,15 +260,36 @@ class LlmApiHandler(ABC):
                     if processed_data:
                         yield processed_data
                         if processed_data.get("finish_reason"):
+                            if is_eventlet_active:
+                                logger.debug(f"LLM handler completed normally after {line_count} lines for {request_id}")
                             return
 
-        except requests.RequestException as e:
-            logger.error(f"Request failed in {self.__class__.__name__}: {e}")
+                if is_eventlet_active and line_count > 0:
+                    logger.debug(f"LLM handler exited loop after {line_count} lines for {request_id}")
+
+        # Catch exceptions that occur during the request
+        except (requests.exceptions.RequestException, ConnectionError, OSError) as e:
+            # Check if the error occurred because we cancelled the request
+            if request_id and cancellation_service.is_cancelled(request_id):
+                logger.info(f"Request {request_id} encountered expected error due to cancellation. Exiting gracefully. (Error: {type(e).__name__})")
+                return
+            else:
+                # Genuine error - details already logged above if it was an HTTP error
+                logger.error(f"Error during streaming: {e}")
+                traceback.print_exc()
+                raise e
+        except Exception as e:
+            logger.error(f"Unexpected error during streaming: {e}")
             traceback.print_exc()
-            raise
+            raise e
+        finally:
+            # Clean up the abort callback
+            if request_id:
+                cancellation_service.unregister_abort_callbacks(request_id)
 
     def handle_non_streaming(self, conversation: Optional[List[Dict[str, str]]] = None,
-                             system_prompt: Optional[str] = None, prompt: Optional[str] = None) -> str:
+                             system_prompt: Optional[str] = None, prompt: Optional[str] = None,
+                             request_id: Optional[str] = None) -> str:
         """
         Manages a non-streaming request to the LLM API to get a complete response.
 
@@ -196,16 +297,66 @@ class LlmApiHandler(ABC):
             conversation (Optional[List[Dict[str, str]]]): The history of the conversation.
             system_prompt (Optional[str]): A system-level instruction for the LLM.
             prompt (Optional[str]): The latest user prompt to be processed.
+            request_id (Optional[str]): The request ID for cancellation tracking.
 
         Returns:
             str: The complete, raw text generated by the LLM.
         """
+        # Check if already cancelled before making the request
+        if request_id and cancellation_service.is_cancelled(request_id):
+            logger.info(f"Request {request_id} was already cancelled before starting LLM request.")
+            # Ensure session is closed if we return early
+            try:
+                self.session.close()
+            except:
+                pass
+            return ""
+
         payload = self._prepare_payload(conversation, system_prompt, prompt)
         url = self._get_api_endpoint_url()
         retries = 3
+
         for attempt in range(retries):
+            # Check for cancellation before each retry
+            if request_id and cancellation_service.is_cancelled(request_id):
+                logger.info(f"Request {request_id} was cancelled before attempt {attempt + 1}.")
+                return ""
+
+            response_to_abort = None
+
+            def abort_callback():
+                """Aggressively closes the HTTP connection to interrupt the request."""
+                nonlocal response_to_abort
+                logger.info(f"Abort callback invoked (non-streaming) for request_id: {request_id}. Forcefully closing the session.")
+
+                # Primary Mechanism: Close the session aggressively.
+                try:
+                    logger.info(f"Closing the entire session (non-streaming) for request_id: {request_id}")
+                    # Clearing adapters forces urllib3 to dispose of the connection pool immediately.
+                    self.session.adapters.clear()
+                    self.session.close()
+                    logger.info(f"Session closed successfully (non-streaming) for request_id: {request_id}")
+                except Exception as e:
+                    logger.error(f"Error closing session in abort callback (non-streaming): {e}")
+
+                # Secondary cleanup: Close the specific response object if it exists.
+                if response_to_abort is not None:
+                    try:
+                        logger.debug(f"Closing response object (non-streaming) for request_id: {request_id}")
+                        response_to_abort.close()
+                    except Exception as e:
+                        logger.debug(f"Error closing response object in abort callback (non-streaming): {e}")
+                    response_to_abort = None
+
+            # Register the abort callback if we have a request_id
+            if request_id:
+                cancellation_service.register_abort_callback(request_id, abort_callback)
+
             try:
+                # This call blocks. Closing the session will cause an exception here.
                 response = self.session.post(url, headers=self.headers, json=payload, timeout=14400)
+                response_to_abort = response
+
                 response.raise_for_status()
                 response_json = response.json()
                 result_text = self._parse_non_stream_response(response_json)
@@ -215,16 +366,30 @@ class LlmApiHandler(ABC):
                 logger.info("\n*****************************************************************************\n\n")
 
                 return result_text or ""
-            except requests.exceptions.RequestException as e:
+            except (requests.exceptions.RequestException, ConnectionError, OSError) as e:
+                # Check if this was due to cancellation (session closed by abort_callback)
+                if request_id and cancellation_service.is_cancelled(request_id):
+                    logger.info(f"Request {request_id} was cancelled during non-streaming request. Connection closed.")
+                    # Cleanup handled in finally
+                    return ""
+
                 logger.error(
                     f"Attempt {attempt + 1} of {retries} for {self.__class__.__name__} failed: {e}")
                 if attempt == retries - 1:
                     traceback.print_exc()
+                    # Cleanup handled in finally
                     raise
+
             except Exception as e:
                 logger.error(f"Unexpected error in {self.__class__.__name__}: {e}")
                 traceback.print_exc()
+                # Cleanup handled in finally
                 raise
+            finally:
+                # Ensure cleanup happens after every attempt (success or failure)
+                if request_id:
+                    cancellation_service.unregister_abort_callbacks(request_id)
+
         return ""
 
     def set_gen_input(self):
@@ -237,3 +402,6 @@ class LlmApiHandler(ABC):
             self.gen_input[self.stream_property_name] = self.stream
         if self.max_token_property_name:
             self.gen_input[self.max_token_property_name] = self.max_tokens
+            logger.debug(f"Added {self.max_token_property_name}={self.max_tokens} to gen_input")
+        else:
+            logger.warning(f"max_token_property_name is not set, max_tokens will not be included in payload")

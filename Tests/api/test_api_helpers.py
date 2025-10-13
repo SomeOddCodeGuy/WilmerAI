@@ -23,7 +23,11 @@ def test_build_response_json_dispatcher(mocker, monkeypatch, api_type, expected_
 
     result = api_helpers.build_response_json("test_token", "stop")
 
-    mock_method.assert_called_once_with("test_token", "stop")
+    # Ollama methods now accept request_id as third parameter (defaults to None)
+    if api_type in ("ollamagenerate", "ollamaapichat"):
+        mock_method.assert_called_once_with("test_token", "stop", None)
+    else:
+        mock_method.assert_called_once_with("test_token", "stop")
     assert json.loads(result) == {"status": "ok"}
 
 

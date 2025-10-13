@@ -58,15 +58,50 @@ You **CAN** use variables in fields that are treated as content for the node to 
 * `promptToSearch` (and similar input fields on specialized nodes)
 * `filepath` (in `GetCustomFile`, the handler specifically processes variables for this field)
 
+##### ⚠️ Fields with SPECIAL variable support (Early Substitution)
+
+**`endpointName`** and **`preset`** now support a LIMITED form of variable substitution. These fields use **early variable substitution**, which means they are processed BEFORE nodes execute. This creates important limitations:
+
+**ONLY these variables work in `endpointName` and `preset`:**
+* `{agent#Input}` - Values passed from parent workflows via `scoped_variables`
+* `{custom_variable}` - Static variables defined at the top level of your workflow JSON
+* Date/time variables like `{todays_date_pretty}`, `{current_time_12h}`, etc.
+* `{chat_user_prompt_last_one}` and other conversation history variables
+* `{time_context_summary}` (if a discussionId is present)
+
+**These variables DO NOT work in `endpointName` and `preset`:**
+* ❌ `{agent#Output}` - These don't exist yet since nodes haven't executed!
+* ❌ Any variable that depends on the output of another node
+
+**Example of CORRECT usage:**
+```json
+{
+  "coding_endpoint": "Creative-Fast-Endpoint",
+  "nodes": [{
+    "type": "Standard",
+    "endpointName": "{coding_endpoint}",
+    "preset": "{agent1Input}"
+  }]
+}
+```
+
+**Example of INCORRECT usage:**
+```json
+{
+  "nodes": [{
+    "type": "Standard",
+    "endpointName": "{agent1Output}",  // ❌ WILL FAIL - agent1Output doesn't exist yet!
+    "prompt": "..."
+  }]
+}
+```
+
 ##### ❌ Fields that DO NOT SUPPORT variables (Configuration)
 
 You **CANNOT** use variables in fields that define a node's configuration. These fields are read by the workflow engine
-*before* variables are processed. Using a variable here will cause the workflow to fail. **Always use hardcoded, static
-string values for them.**
+*before* any processing occurs. **Always use hardcoded, static string values for them.**
 
 * `type`
-* **`endpointName`** (This is a common mistake. It must be a static string).
-* `preset`
 * `returnToUser` (This is a boolean `true`/`false`, not a string).
 * `workflowName`
 * Keys within a `conditionalWorkflows` object.

@@ -222,18 +222,19 @@ class ResponseBuilderService:
         """
         return {"version": "0.9"}
 
-    def build_ollama_generate_response(self, full_text: str, model: str) -> Dict[str, Any]:
+    def build_ollama_generate_response(self, full_text: str, model: str, request_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Builds the final, non-streaming response for the Ollama-compatible /api/generate endpoint.
 
         Args:
             full_text (str): The complete generated text from the LLM.
             model (str): The name of the model that generated the response.
+            request_id (Optional[str]): The unique identifier for the request.
 
         Returns:
             Dict[str, Any]: The complete, non-streaming response object.
         """
-        return {
+        response = {
             "id": f"gen-{int(time.time())}",
             "object": "text_completion",
             "created": int(time.time()),
@@ -249,19 +250,23 @@ class ResponseBuilderService:
             ],
             "usage": {}
         }
+        if request_id:
+            response["request_id"] = request_id
+        return response
 
-    def build_ollama_chat_response(self, full_text: str, model_name: str) -> Dict[str, Any]:
+    def build_ollama_chat_response(self, full_text: str, model_name: str, request_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Builds the final, non-streaming response for the Ollama-compatible /api/chat endpoint.
 
         Args:
             full_text (str): The complete generated text from the LLM.
             model_name (str): The name of the model that generated the response.
+            request_id (Optional[str]): The unique identifier for the request.
 
         Returns:
             Dict[str, Any]: The complete, non-streaming chat response object.
         """
-        return {
+        response = {
             "model": model_name,
             "created_at": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "message": {
@@ -274,6 +279,9 @@ class ResponseBuilderService:
             "prompt_eval_count": 15, "prompt_eval_duration": 4000000,
             "eval_count": 392, "eval_duration": 4476000000
         }
+        if request_id:
+            response["request_id"] = request_id
+        return response
 
     def build_ollama_tool_call_response(self, model_name: str) -> Dict[str, Any]:
         """
@@ -297,36 +305,41 @@ class ResponseBuilderService:
 
     # --- Ollama Compatible Streaming Chunks ---
 
-    def build_ollama_generate_chunk(self, token: str, finish_reason: Optional[str]) -> Dict[str, Any]:
+    def build_ollama_generate_chunk(self, token: str, finish_reason: Optional[str], request_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Builds a single streaming chunk for the Ollama-compatible /api/generate endpoint.
 
         Args:
             token (str): The token to include in the chunk's 'response' field.
             finish_reason (Optional[str]): The reason the stream ended, if applicable.
+            request_id (Optional[str]): The unique identifier for the request.
 
         Returns:
             Dict[str, Any]: A dictionary representing a single generate event stream chunk.
         """
-        return {
+        response = {
             "model": self._get_model_name(),
             "created_at": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "response": token,
             "done": finish_reason == "stop"
         }
+        if request_id:
+            response["request_id"] = request_id
+        return response
 
-    def build_ollama_chat_chunk(self, token: str, finish_reason: Optional[str]) -> Dict[str, Any]:
+    def build_ollama_chat_chunk(self, token: str, finish_reason: Optional[str], request_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Builds a single streaming chunk for the Ollama-compatible /api/chat endpoint.
 
         Args:
             token (str): The token to include in the chunk's message content.
             finish_reason (Optional[str]): The reason the stream ended, if applicable.
+            request_id (Optional[str]): The unique identifier for the request.
 
         Returns:
             Dict[str, Any]: A dictionary representing a single chat event stream chunk.
         """
-        return {
+        response = {
             "model": self._get_model_name(),
             "created_at": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
             "message": {
@@ -335,3 +348,6 @@ class ResponseBuilderService:
             },
             "done": finish_reason == "stop"
         }
+        if request_id:
+            response["request_id"] = request_id
+        return response

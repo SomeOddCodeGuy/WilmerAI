@@ -199,7 +199,8 @@ class TestConfigUtils:
         path = config_utils.get_discussion_file_path('discussion123', 'memories')
 
         # Assert
-        assert path == '/mock/discussions/discussion123_memories.json'
+        expected = os.path.join('/mock/discussions', 'discussion123_memories.json')
+        assert path == expected
 
     def test_get_custom_dblite_filepath_with_config(self, mocker, mock_user_config):
         """
