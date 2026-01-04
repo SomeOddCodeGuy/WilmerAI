@@ -22,7 +22,7 @@ prompt overrides, giving you fine-grained control over how each selected sub-wor
 | **`UseDefaultContentInsteadOfWorkflow`** | String           | No       | `null`  | A string (supports variables) to return as output if no match is found in `conditionalWorkflows`. This takes precedence over the `"Default"` workflow. If the node is a responder, this content will be streamed. |
 | **`scoped_variables`**                   | Array of Strings | No       | `[]`    | **(Recommended)** A list of values to pass into whichever child workflow is chosen. Works identically to the `CustomWorkflow` node.                                                                               |
 | **`routeOverrides`**                     | Object           | No       | `{}`    | A dictionary specifying prompt overrides for each potential route. The keys here should correspond to the keys in `conditionalWorkflows`.                                                                         |
-| **`workflowUserFolderOverride`**         | String           | No       | `null`  | Specifies a user folder from which to load the selected workflow. Use `_common` for shared workflows.                                                                                                             |
+| **`workflowUserFolderOverride`**         | String           | No       | `null`  | Specifies a user folder from which to load the selected workflow. Use `_common` for shared workflows. This overrides the user-level `workflowConfigsSubDirectoryOverride` setting if both are specified.          |
 
 -----
 

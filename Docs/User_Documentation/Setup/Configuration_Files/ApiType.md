@@ -123,15 +123,19 @@ Here is a fully-commented example for an Ollama Chat API (`/api/chat`).
 #### Pre-defined ApiTypes
 
 - **`Claude`**: For Anthropic's Claude Messages API. Chat completion API supporting structured message lists
-- **`KoboldCpp`**: For KoboldCpp's text completion api. Does not send images to the server
-- **`KoboldCppImageSpecific`**: For KoboldCpp's text completion REST api. Same as `KoboldCpp`, but sends images for
-  vision models to process
-- **`LlamaCppServer`**: For Llama.cpp chat completion api. Does not send images
-- **`OllamaApiChat`**: For Ollama's chat completion api. Does not send images
-- **`OllamaApiChatImageSpecific`**: For Ollama's chat completion api. Supports images for vision model to process.
-- **`OllamaApiGenerate`**: For Ollama's text completion api. Does not send images
-- **`Open-AI-API`**: For standard OpenAI api compatible chat completion apis. Does not send images
-- **`OpenAIApiChatImageSpecific`**: For standard OpenAI api compatible chat completion apis. Supports images for vision
-  models to process
-- **`OpenAI-Compatible-Completions`**: For standard OpenAI api compatible text completion apis. Does not send images
-- **`Text-Generation-WebUI`**: For the Text Generation WebUI project's chat completion API. Does not send images
+- **`KoboldCpp`**: For KoboldCpp's text completion api. Supports images when used with the ImageProcessor node
+- **`LlamaCppServer`**: For Llama.cpp chat completion api
+- **`OllamaApiChat`**: For Ollama's chat completion api. Supports images when used with the ImageProcessor node
+- **`OllamaApiGenerate`**: For Ollama's text completion api
+- **`Open-AI-API`**: For standard OpenAI api compatible chat completion apis. Supports images when used with the
+  ImageProcessor node
+- **`OpenAI-Compatible-Completions`**: For standard OpenAI api compatible text completion apis
+- **`Text-Generation-WebUI`**: For the Text Generation WebUI project's chat completion API
+- **`mlx-lm`**: For Apple MLX model server
+
+#### Image Support
+
+Image processing is handled automatically by the ImageProcessor workflow node. When the ImageProcessor node is used,
+images are passed to the LLM and the handler formats them appropriately for each API type. For non-ImageProcessor nodes,
+images are automatically filtered out. This means you do not need separate "image-specific" API types - the same API
+type works for both text-only and vision-capable workflows.

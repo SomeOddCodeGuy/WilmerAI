@@ -1,0 +1,19 @@
+{
+  "RespondingModel": "Worker-Endpoint",
+  "RespondingPreset": "Worker-LowTemp-Preset",
+  "RespondingResponseTokenSize": "8000",
+  "nodes": [
+    {
+      "displayOnlyComment": "Example task workflow. You can find this and others in the _common folder. To replace, just change the workflowName.",
+      "title": "Run Task Workflow",
+      "type": "CustomWorkflow",
+      "workflowName": "Task",
+      "workflowUserFolderOverride": "_common",
+      "scoped_variables": [
+        "{RespondingModel}",
+        "{RespondingPreset}",
+        "{RespondingResponseTokenSize}"
+      ]
+    }
+  ]
+}

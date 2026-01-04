@@ -1,8 +1,0 @@
-{
-    "nameForDisplayOnly": "OpenAI api/chat Compatible API Specifically For Image Endpoints",
-    "type": "openAIApiChatImageSpecific",
-    "presetType": "OpenAiCompatibleApis",
-    "truncateLengthPropertyName": "max_tokens",
-    "maxNewTokensPropertyName": "max_tokens",
-    "streamPropertyName": "stream"
-}

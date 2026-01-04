@@ -143,9 +143,11 @@ such as a `$WorkflowProcessor$` or `$StreamingResponseHandler$`, which consume t
       JSON streaming.
     * **`$KoboldCppApiHandler$`**: Inherits from `$BaseCompletionsHandler$`. It implements `_get_api_endpoint_url` to
       return the correct Kobold endpoint.
-    * **`$OllamaApiChatImageSpecificHandler$`**: Extends `$OllamaChatHandler$`. It
-      overrides `_build_messages_from_conversation` to find image data and attach it to the last user message,
-      formatting it for Ollama's multimodal API.
+
+**Note on Image/Multimodal Support**: Standard handlers (`OllamaChatHandler`, `OpenAiApiHandler`, `KoboldCppApiHandler`)
+now handle images natively. When conversation messages include image data (role: "images"), the handlers'
+`_build_messages_from_conversation` methods detect and format images appropriately for each API. Separate "ImageSpecific"
+handlers are no longer needed and have been deprecated.
 
 -----
 

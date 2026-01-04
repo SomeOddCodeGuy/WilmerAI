@@ -168,13 +168,72 @@ class TestHandleGetCustomFile:
         result = specialized_handler.handle_get_custom_file(base_context)
         assert result == "No filepath specified"
 
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.load_custom_file', return_value="file content")
+    def test_applies_variables_to_filepath(self, mock_load_file, specialized_handler, base_context, mock_variable_service):
+        """Should apply variable substitution to the filepath before loading the file."""
+        # Configure the mock to return a resolved filepath with Discussion_Id substituted
+        mock_variable_service.apply_variables.side_effect = lambda path, ctx: path.replace(
+            "{Discussion_Id}", "conv-123"
+        ).replace("{YYYY_MM_DD}", "2025_12_07")
+
+        base_context.config = {"filepath": "/data/{Discussion_Id}_notes.txt"}
+
+        result = specialized_handler.handle_get_custom_file(base_context)
+
+        # Verify apply_variables was called with the filepath template
+        mock_variable_service.apply_variables.assert_called_once_with(
+            "/data/{Discussion_Id}_notes.txt", base_context
+        )
+        # Verify the resolved filepath was passed to load_custom_file
+        mock_load_file.assert_called_once_with(
+            filepath="/data/conv-123_notes.txt",
+            delimiter="\n",
+            custom_delimiter="\n"
+        )
+        assert result == "file content"
+
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.load_custom_file', return_value="dated content")
+    def test_applies_date_variable_to_filepath(self, mock_load_file, specialized_handler, base_context, mock_variable_service):
+        """Should substitute YYYY_MM_DD variable in the filepath."""
+        mock_variable_service.apply_variables.side_effect = lambda path, ctx: path.replace(
+            "{YYYY_MM_DD}", "2025_12_07"
+        )
+
+        base_context.config = {"filepath": "/logs/{YYYY_MM_DD}_actions.txt"}
+
+        result = specialized_handler.handle_get_custom_file(base_context)
+
+        mock_load_file.assert_called_once_with(
+            filepath="/logs/2025_12_07_actions.txt",
+            delimiter="\n",
+            custom_delimiter="\n"
+        )
+        assert result == "dated content"
+
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.load_custom_file', return_value="combined content")
+    def test_applies_multiple_variables_to_filepath(self, mock_load_file, specialized_handler, base_context, mock_variable_service):
+        """Should substitute multiple variables in the filepath."""
+        mock_variable_service.apply_variables.side_effect = lambda path, ctx: path.replace(
+            "{Discussion_Id}", "session-abc"
+        ).replace("{YYYY_MM_DD}", "2025_12_07")
+
+        base_context.config = {"filepath": "/data/{YYYY_MM_DD}/{Discussion_Id}_output.txt"}
+
+        specialized_handler.handle_get_custom_file(base_context)
+
+        mock_load_file.assert_called_once_with(
+            filepath="/data/2025_12_07/session-abc_output.txt",
+            delimiter="\n",
+            custom_delimiter="\n"
+        )
+
 
 class TestHandleSaveCustomFile:
     """Tests the 'SaveCustomFile' node logic."""
 
     @patch('Middleware.workflows.handlers.impl.specialized_node_handler.save_custom_file')
     def test_saves_file_successfully(self, mock_save_file, specialized_handler, base_context, mock_variable_service):
-        """Should resolve variables and call the save utility."""
+        """Should resolve variables in both filepath and content, then call the save utility."""
         base_context.config = {"filepath": "/path/save.txt", "content": "Hello {agent1Output}"}
         base_context.agent_outputs = {"agent1Output": "World"}
 
@@ -183,9 +242,10 @@ class TestHandleSaveCustomFile:
 
         result = specialized_handler.handle_save_custom_file(base_context)
 
-        mock_variable_service.apply_variables.assert_called_once_with(
-            "Hello {agent1Output}", base_context
-        )
+        # apply_variables should be called twice: once for filepath, once for content
+        assert mock_variable_service.apply_variables.call_count == 2
+        mock_variable_service.apply_variables.assert_any_call("/path/save.txt", base_context)
+        mock_variable_service.apply_variables.assert_any_call("Hello {agent1Output}", base_context)
         mock_save_file.assert_called_once_with(filepath="/path/save.txt", content=resolved_content)
         assert result == "File successfully saved to /path/save.txt"
 
@@ -208,6 +268,72 @@ class TestHandleSaveCustomFile:
         result = specialized_handler.handle_save_custom_file(base_context)
 
         assert "Error saving file: Disk full" in result
+
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.save_custom_file')
+    def test_applies_variables_to_filepath(self, mock_save_file, specialized_handler, base_context, mock_variable_service):
+        """Should apply variable substitution to the filepath before saving."""
+        # Configure mock to substitute variables in both filepath and content
+        def mock_apply(text, ctx):
+            return text.replace("{Discussion_Id}", "conv-456").replace("{agent1Output}", "result")
+
+        mock_variable_service.apply_variables.side_effect = mock_apply
+        base_context.config = {
+            "filepath": "/data/{Discussion_Id}_output.txt",
+            "content": "Output: {agent1Output}"
+        }
+
+        result = specialized_handler.handle_save_custom_file(base_context)
+
+        # Verify both filepath and content were processed through apply_variables
+        assert mock_variable_service.apply_variables.call_count == 2
+        mock_variable_service.apply_variables.assert_any_call("/data/{Discussion_Id}_output.txt", base_context)
+        mock_variable_service.apply_variables.assert_any_call("Output: {agent1Output}", base_context)
+
+        # Verify save was called with resolved values
+        mock_save_file.assert_called_once_with(
+            filepath="/data/conv-456_output.txt",
+            content="Output: result"
+        )
+        assert result == "File successfully saved to /data/conv-456_output.txt"
+
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.save_custom_file')
+    def test_applies_date_variable_to_filepath(self, mock_save_file, specialized_handler, base_context, mock_variable_service):
+        """Should substitute YYYY_MM_DD variable in the filepath when saving."""
+        def mock_apply(text, ctx):
+            return text.replace("{YYYY_MM_DD}", "2025_12_07")
+
+        mock_variable_service.apply_variables.side_effect = mock_apply
+        base_context.config = {
+            "filepath": "/logs/{YYYY_MM_DD}_report.txt",
+            "content": "Daily report"
+        }
+
+        result = specialized_handler.handle_save_custom_file(base_context)
+
+        mock_save_file.assert_called_once_with(
+            filepath="/logs/2025_12_07_report.txt",
+            content="Daily report"
+        )
+        assert "2025_12_07" in result
+
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.save_custom_file')
+    def test_applies_multiple_variables_to_filepath(self, mock_save_file, specialized_handler, base_context, mock_variable_service):
+        """Should substitute multiple variables in the filepath when saving."""
+        def mock_apply(text, ctx):
+            return text.replace("{Discussion_Id}", "session-xyz").replace("{YYYY_MM_DD}", "2025_12_07")
+
+        mock_variable_service.apply_variables.side_effect = mock_apply
+        base_context.config = {
+            "filepath": "/data/{YYYY_MM_DD}/{Discussion_Id}_summary.txt",
+            "content": "Summary content"
+        }
+
+        specialized_handler.handle_save_custom_file(base_context)
+
+        mock_save_file.assert_called_once_with(
+            filepath="/data/2025_12_07/session-xyz_summary.txt",
+            content="Summary content"
+        )
 
 
 class TestHandleImageProcessorNode:

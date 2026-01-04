@@ -21,7 +21,7 @@ The endpoints for the example users can be found in `Public/Configs/Endpoints/_e
   meaning large amounts of text with a high expectation of it to use that text properly.
 * `General-Rag-Fast-Endpoint`: A fast and light RAG model. Whatever the smallest and fastest model you have that handles
   its context window well, as it will be given large amounts of text and expected to use that text properly.
-* `Image-Endpoint`: Your vision model. Used with the workflows that have a Image Processing node at the start. None of
+* `Vision-Endpoint`: Your vision model. Used with the workflows that have an Image Processing node at the start. None of
   the example users do by default, but you can swap the workflows easily to include them
 * `Memory-Generation-Endpoint`: Model that has the best contextual understanding but also does RAG well. If its writing
   a memory, it needs to really 'get' what it's reading and what was happening/being said.
@@ -34,13 +34,16 @@ The endpoints for the example users can be found in `Public/Configs/Endpoints/_e
 
 #### Presets
 
-* `Coder_Preset`: A preset that should be set to whatever is best for code generation
-* `Factual_Preset`: A preset that should be set to whatever is good for general purpose work, like general models.
-* `Image_Preset`: A preset that should be set to whatever is good for vision models
-* `Reasoning_Preset`: Redundant to Thinker_Preset: should be set to whatever is good for reasoning/thinking models
-* `Responder_Preset`: A preset that should be set to something more creative, with values such as higher temp (0.8-1.2)
-* `Summarization_Preset` A preset that should be set to something best for RAG workflows, or generating memories
-  through text summarization
-* `Thinker_Preset`: Redundant to Reasoning_Preset. This is used more often, simply out of habit.
-* `Worker_LowTemp_Preset`: Preset for endpoints doing tasks that require near deterministic responses
-* `Worker_Preset`: Preset for endpoints doing general purpose tasks.
+* `Coding-Preset`: A preset configured for code generation with your best coding model.
+* `Coding-Fast-Preset`: A preset configured for quick coding tasks with a fast and light model.
+* `General-Preset`: A preset for general purpose work with your best generalist model.
+* `General-Fast-Preset`: A preset for quick general tasks with a fast and light model.
+* `General-Rag-Preset`: A preset for heavy RAG tasks requiring good context understanding.
+* `General-Rag-Fast-Preset`: A preset for quick RAG tasks with a fast model that handles context well.
+* `General-Reasoning-Preset`: A preset for reasoning/thinking models.
+* `Memory-Generation-Preset`: A preset for memory generation tasks requiring good contextual understanding.
+* `Responder-Preset`: A preset for creative responses, typically with higher temperature (0.8-1.2).
+* `Thinker-Preset`: A preset for models tasked with thinking through situations and providing breakdowns.
+* `Vision-Preset`: A preset configured for vision models.
+* `Worker-Preset`: A preset for general purpose workhorse tasks.
+* `Worker-LowTemp-Preset`: A preset for tasks requiring near deterministic responses.

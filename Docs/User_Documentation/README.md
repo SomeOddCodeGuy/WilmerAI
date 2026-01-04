@@ -174,7 +174,12 @@ Contains all user-facing JSON configuration files.
   routing. You specify the domains you are routing to here, and what workflows they correspond with.
 * **`Users/`**: Contains json files with all of the specific settings for a user, including things like what port the
   app runs on, where to connect to things like the offline wikipedia api, and where certain files are saved, go here.
-* **`Workflows/`**: Contains json files that define the sequence of nodes for each workflow.
+* **`Workflows/`**: Contains json files that define the sequence of nodes for each workflow. Workflows are organized
+  into subfolders, typically named after each user (e.g., `Workflows/<username>/`). The subfolder used can be
+  customized via the `workflowConfigsSubDirectoryOverride` setting in the User config.
+    * **`_shared/`**: A special folder for shared workflows. Workflows placed directly in `_shared/` are listed by the
+      `/v1/models` and `/api/tags` endpoints, allowing front-end applications to select them via the model dropdown.
+      See "Workflow Selection via Model Field" below for details.
 
 #### **`run_linux/run_macos/run_windows`**
 
@@ -187,3 +192,61 @@ server.py. Takes two optional parameters:
 #### **`server.py`**
 
 Main script of the app.
+
+-----
+
+## Workflow Selection via Model Field
+
+When loading a user that has `allowSharedWorkflows` set to true, WilmerAI allows front-end applications to select 
+specific workflows by using the model field in API requests. This enables users to switch between different workflows 
+directly from their front-end's model dropdown without changing configuration files.
+
+### How It Works
+
+1. **Models List Endpoints**: The `/v1/models` (OpenAI) and `/api/tags` (Ollama) endpoints return a list of available
+   workflows from `Public/Configs/Workflows/_shared/`. Each workflow is presented in `username:workflow` format.
+
+2. **Workflow Selection**: When your front-end sends a request with a model field like `"model": "chris:openwebui-coding"`,
+   WilmerAI extracts the workflow name and executes that workflow directly from the `_shared` folder.
+
+3. **Response Format**: Responses include the model in `username:workflow` format when a workflow override is active,
+   allowing your front-end to maintain the selected workflow across requests.
+
+### Folder Structure
+
+```
+Public/Configs/Workflows/
+├── _shared/
+│   ├── openwebui-coding/           # Listed by models endpoint as folder name
+│   │   └── _DefaultWorkflow.json   # Workflow loaded when folder is selected
+│   ├── openwebui-general/
+│   │   └── _DefaultWorkflow.json
+│   └── openwebui-task/
+│       └── _DefaultWorkflow.json
+├── chris/                          # Default user folder
+│   └── ...
+```
+
+### Usage
+
+1. Create a folder in `Public/Configs/Workflows/_shared/` with your workflow name (e.g., `openwebui-coding/`)
+2. Place a `_DefaultWorkflow.json` file inside the folder
+3. Folder names become the selectable model names (e.g., `openwebui-coding/` → `chris:openwebui-coding`)
+4. Query `/v1/models` or `/api/tags` from your front-end to see available workflows
+5. Select a workflow from the model dropdown in your front-end application
+
+### Model Field Formats
+
+The API accepts these model field formats:
+
+| Format | Example | Behavior |
+|--------|---------|----------|
+| `username:workflow` | `chris:openwebui-coding` | Uses the specified workflow |
+| `workflow` | `openwebui-coding` | Uses workflow if it exists in `_shared/` |
+| Anything else | `gpt-4` | Falls back to normal routing |
+
+### workflowConfigsSubDirectoryOverride
+
+The `workflowConfigsSubDirectoryOverride` user config setting creates subfolders within `_shared/`. For example,
+setting `"workflowConfigsSubDirectoryOverride": "coding-workflows"` loads workflows from `_shared/coding-workflows/`
+instead of the username folder.

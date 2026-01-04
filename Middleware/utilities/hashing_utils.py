@@ -85,12 +85,11 @@ def find_last_matching_hash_message(messagesOriginal: List[Dict[str, str]],
                                     hashed_chunks_original: List[Tuple[str, str]],
                                     skip_system: bool = False, turns_to_skip_looking_back=4) -> int:
     """
-    Finds the number of messages since the last one that matches a known hash.
+    Finds the number of NEW messages that need to be processed for memory generation.
 
-    This function is used to determine how many recent messages need to be
-    processed for conversation history or memory recall. It compares the hashes
-    of recent messages with a set of pre-calculated hashes. The search starts
-    from a specified number of messages from the end and moves backward.
+    This function searches backward through the conversation (skipping the lookback junk
+    messages) to find the last message that matches a stored memory hash. It returns
+    the count of messages AFTER the match, within the valid processing window.
 
     Args:
         messagesOriginal (List[Dict[str, str]]): The full list of message dictionaries in the conversation.
@@ -100,8 +99,9 @@ def find_last_matching_hash_message(messagesOriginal: List[Dict[str, str]],
         turns_to_skip_looking_back (int): The number of recent messages to skip before starting the hash search.
 
     Returns:
-        int: The number of messages that have occurred since the last matching hash was found.
-             If no match is found, it returns the total number of messages searched.
+        int: The number of NEW messages to process (after the last memorized message,
+             up to the lookback boundary). If no match is found, returns the count of
+             all messages up to the lookback boundary.
     """
     logger.debug("Searching for hashes")
 
@@ -113,18 +113,25 @@ def find_last_matching_hash_message(messagesOriginal: List[Dict[str, str]],
 
     current_message_hashes = [hash_single_message(message) for message in filtered_messages]
 
-    start_index = len(current_message_hashes) - turns_to_skip_looking_back
+    # The search boundary - we don't look at the "junk" messages at the end
+    search_boundary = len(current_message_hashes) - turns_to_skip_looking_back
 
-    # Iterate from the third-to-last message backwards
-    for i in range(start_index, -1, -1):
+    # Iterate from the search boundary backwards to find the last memorized message
+    for i in range(search_boundary, -1, -1):
         message_hash = current_message_hashes[i]
         logger.debug(f"Searching for Hash {i}: {message_hash}")
 
         # Compare hashes with the existing memory hashes
         if message_hash in (hash_tuple[1] for hash_tuple in hashed_chunks_original):
-            return len(current_message_hashes) - i  # Return the number of messages since the last memory
+            # Return count of NEW messages: from (matched + 1) to search_boundary (exclusive)
+            # Message at index i was already memorized, so new messages start at i+1
+            # Count = search_boundary - (i + 1) = search_boundary - i - 1
+            new_message_count = search_boundary - i - 1
+            logger.debug(f"Found match at index {i}. New messages to process: {new_message_count}")
+            return new_message_count
 
-    return len(current_message_hashes)  # If no match found, return the total number of messages
+    # No match found - all messages up to the boundary are "new"
+    return search_boundary
 
 
 # Helper functions to be used internally

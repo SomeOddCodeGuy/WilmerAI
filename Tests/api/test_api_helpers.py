@@ -70,3 +70,92 @@ def test_extract_text_from_chunk(chunk, expected_text):
 ])
 def test_remove_assistant_prefix(input_text, expected_output):
     assert api_helpers.remove_assistant_prefix(input_text) == expected_output
+
+
+class TestWorkflowOverride:
+    """Tests for workflow override functionality via model field."""
+
+    def test_get_model_name_without_override(self, mocker):
+        """Tests that get_model_name returns just username when no override is set."""
+        mocker.patch('Middleware.api.api_helpers.get_current_username', return_value='test_user')
+        mocker.patch('Middleware.common.instance_global_variables.WORKFLOW_OVERRIDE', None)
+        assert api_helpers.get_model_name() == 'test_user'
+
+    def test_get_model_name_with_override(self, mocker, monkeypatch):
+        """Tests that get_model_name returns username:workflow when override is set."""
+        mocker.patch('Middleware.api.api_helpers.get_current_username', return_value='test_user')
+        monkeypatch.setattr('Middleware.common.instance_global_variables.WORKFLOW_OVERRIDE', 'Coding_Workflow')
+        assert api_helpers.get_model_name() == 'test_user:Coding_Workflow'
+
+    def test_parse_model_field_none(self, mocker):
+        """Tests that parse_model_field returns None for None input."""
+        assert api_helpers.parse_model_field(None) is None
+
+    def test_parse_model_field_empty(self, mocker):
+        """Tests that parse_model_field returns None for empty string."""
+        assert api_helpers.parse_model_field('') is None
+
+    def test_parse_model_field_username_workflow_format(self, mocker):
+        """Tests that parse_model_field extracts workflow from username:workflow format."""
+        mocker.patch('Middleware.api.api_helpers.workflow_exists_in_shared_folder', return_value=True)
+        assert api_helpers.parse_model_field('test_user:Coding_Workflow') == 'Coding_Workflow'
+
+    def test_parse_model_field_username_workflow_not_found(self, mocker):
+        """Tests that parse_model_field returns None when workflow doesn't exist."""
+        mocker.patch('Middleware.api.api_helpers.workflow_exists_in_shared_folder', return_value=False)
+        assert api_helpers.parse_model_field('test_user:NonExistent') is None
+
+    def test_parse_model_field_workflow_only(self, mocker):
+        """Tests that parse_model_field can parse just a workflow name."""
+        mocker.patch('Middleware.api.api_helpers.workflow_exists_in_shared_folder', return_value=True)
+        assert api_helpers.parse_model_field('Coding_Workflow') == 'Coding_Workflow'
+
+    def test_parse_model_field_strips_latest_suffix(self, mocker):
+        """Tests that parse_model_field strips :latest suffix from Ollama models."""
+        mocker.patch('Middleware.api.api_helpers.workflow_exists_in_shared_folder', return_value=True)
+        assert api_helpers.parse_model_field('Coding_Workflow:latest') == 'Coding_Workflow'
+
+    def test_parse_model_field_username_workflow_latest(self, mocker):
+        """Tests parsing username:workflow:latest format."""
+        mocker.patch('Middleware.api.api_helpers.workflow_exists_in_shared_folder', return_value=True)
+        # After stripping :latest, becomes "test_user:Coding_Workflow"
+        assert api_helpers.parse_model_field('test_user:Coding_Workflow:latest') == 'Coding_Workflow'
+
+    def test_set_workflow_override(self, mocker, monkeypatch):
+        """Tests that set_workflow_override sets the global variable."""
+        mocker.patch('Middleware.api.api_helpers.parse_model_field', return_value='Test_Workflow')
+        monkeypatch.setattr('Middleware.common.instance_global_variables.WORKFLOW_OVERRIDE', None)
+
+        api_helpers.set_workflow_override('test_user:Test_Workflow')
+
+        from Middleware.common import instance_global_variables
+        assert instance_global_variables.WORKFLOW_OVERRIDE == 'Test_Workflow'
+
+    def test_set_workflow_override_none(self, mocker, monkeypatch):
+        """Tests that set_workflow_override handles None workflow."""
+        mocker.patch('Middleware.api.api_helpers.parse_model_field', return_value=None)
+        monkeypatch.setattr('Middleware.common.instance_global_variables.WORKFLOW_OVERRIDE', 'existing')
+
+        api_helpers.set_workflow_override('unknown_model')
+
+        from Middleware.common import instance_global_variables
+        assert instance_global_variables.WORKFLOW_OVERRIDE is None
+
+    def test_clear_workflow_override(self, monkeypatch):
+        """Tests that clear_workflow_override clears the global variable."""
+        monkeypatch.setattr('Middleware.common.instance_global_variables.WORKFLOW_OVERRIDE', 'Test_Workflow')
+
+        api_helpers.clear_workflow_override()
+
+        from Middleware.common import instance_global_variables
+        assert instance_global_variables.WORKFLOW_OVERRIDE is None
+
+    def test_get_active_workflow_override(self, monkeypatch):
+        """Tests that get_active_workflow_override returns the current value."""
+        monkeypatch.setattr('Middleware.common.instance_global_variables.WORKFLOW_OVERRIDE', 'Active_Workflow')
+        assert api_helpers.get_active_workflow_override() == 'Active_Workflow'
+
+    def test_get_active_workflow_override_none(self, monkeypatch):
+        """Tests that get_active_workflow_override returns None when not set."""
+        monkeypatch.setattr('Middleware.common.instance_global_variables.WORKFLOW_OVERRIDE', None)
+        assert api_helpers.get_active_workflow_override() is None

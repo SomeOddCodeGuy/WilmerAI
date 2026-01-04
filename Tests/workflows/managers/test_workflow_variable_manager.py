@@ -586,3 +586,138 @@ class TestApplyEarlyVariables:
 
         # Assert
         assert result == "None/NotNone"  # None is converted to string "None"
+
+
+# --- TESTS FOR NEW VARIABLES: Discussion_Id AND YYYY_MM_DD ---
+
+class TestDiscussionIdAndDateVariables:
+    """Tests for the Discussion_Id and YYYY_MM_DD variables added for filepath support."""
+
+    def test_generate_variables_includes_discussion_id(self, mocker, mock_context):
+        """Tests that Discussion_Id variable is populated from the context's discussion_id."""
+        # Arrange
+        manager = WorkflowVariableManager()
+        mock_context.discussion_id = "my-unique-conversation-123"
+
+        mocker.patch.object(manager, 'generate_conversation_turn_variables', return_value={})
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.format_system_prompts', return_value={})
+
+        # Act
+        variables = manager.generate_variables(mock_context)
+
+        # Assert
+        assert 'Discussion_Id' in variables
+        assert variables['Discussion_Id'] == "my-unique-conversation-123"
+
+    def test_generate_variables_discussion_id_empty_when_none(self, mocker, mock_context):
+        """Tests that Discussion_Id is an empty string when discussion_id is None."""
+        # Arrange
+        manager = WorkflowVariableManager()
+        mock_context.discussion_id = None
+
+        mocker.patch.object(manager, 'generate_conversation_turn_variables', return_value={})
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.format_system_prompts', return_value={})
+
+        # Act
+        variables = manager.generate_variables(mock_context)
+
+        # Assert
+        assert 'Discussion_Id' in variables
+        assert variables['Discussion_Id'] == ''
+
+    def test_generate_variables_includes_yyyy_mm_dd(self, mocker, mock_context):
+        """Tests that YYYY_MM_DD variable is generated in the correct format."""
+        # Arrange
+        from datetime import datetime
+        mock_datetime = mocker.patch('Middleware.workflows.managers.workflow_variable_manager.datetime')
+        mock_now = MagicMock()
+        mock_now.strftime.side_effect = lambda fmt: {
+            '%B %d, %Y': 'December 07, 2025',
+            '%Y-%m-%d': '2025-12-07',
+            '%Y_%m_%d': '2025_12_07',
+            '%I:%M %p': '03:30 PM',
+            '%H:%M': '15:30',
+            '%B': 'December',
+            '%A': 'Sunday',
+            '%d': '07'
+        }.get(fmt, fmt)
+        mock_datetime.now.return_value = mock_now
+
+        manager = WorkflowVariableManager()
+        mocker.patch.object(manager, 'generate_conversation_turn_variables', return_value={})
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.format_system_prompts', return_value={})
+
+        # Act
+        variables = manager.generate_variables(mock_context)
+
+        # Assert
+        assert 'YYYY_MM_DD' in variables
+        assert variables['YYYY_MM_DD'] == '2025_12_07'
+
+    def test_apply_variables_with_discussion_id_in_filepath(self, mocker, mock_context):
+        """Tests that Discussion_Id can be substituted in a filepath-like string."""
+        # Arrange
+        manager = WorkflowVariableManager()
+        mocker.patch.object(manager, 'generate_variables', return_value={
+            'Discussion_Id': 'conv-456',
+            'YYYY_MM_DD': '2025_12_07'
+        })
+        mock_context.config = {'jinja2': False}
+        filepath_template = "/data/sessions/{Discussion_Id}/notes.txt"
+
+        # Act
+        result = manager.apply_variables(filepath_template, mock_context)
+
+        # Assert
+        assert result == "/data/sessions/conv-456/notes.txt"
+
+    def test_apply_variables_with_yyyy_mm_dd_in_filepath(self, mocker, mock_context):
+        """Tests that YYYY_MM_DD can be substituted in a filepath-like string."""
+        # Arrange
+        manager = WorkflowVariableManager()
+        mocker.patch.object(manager, 'generate_variables', return_value={
+            'Discussion_Id': 'conv-789',
+            'YYYY_MM_DD': '2025_12_07'
+        })
+        mock_context.config = {'jinja2': False}
+        filepath_template = "/logs/{YYYY_MM_DD}_actions.txt"
+
+        # Act
+        result = manager.apply_variables(filepath_template, mock_context)
+
+        # Assert
+        assert result == "/logs/2025_12_07_actions.txt"
+
+    def test_apply_variables_with_both_variables_in_filepath(self, mocker, mock_context):
+        """Tests that both Discussion_Id and YYYY_MM_DD can be used together in a filepath."""
+        # Arrange
+        manager = WorkflowVariableManager()
+        mocker.patch.object(manager, 'generate_variables', return_value={
+            'Discussion_Id': 'session-abc',
+            'YYYY_MM_DD': '2025_12_07'
+        })
+        mock_context.config = {'jinja2': False}
+        filepath_template = "/data/{YYYY_MM_DD}/{Discussion_Id}_output.txt"
+
+        # Act
+        result = manager.apply_variables(filepath_template, mock_context)
+
+        # Assert
+        assert result == "/data/2025_12_07/session-abc_output.txt"
+
+    def test_apply_variables_empty_discussion_id_in_filepath(self, mocker, mock_context):
+        """Tests that an empty Discussion_Id results in empty string substitution."""
+        # Arrange
+        manager = WorkflowVariableManager()
+        mocker.patch.object(manager, 'generate_variables', return_value={
+            'Discussion_Id': '',
+            'YYYY_MM_DD': '2025_12_07'
+        })
+        mock_context.config = {'jinja2': False}
+        filepath_template = "/data/{Discussion_Id}_notes.txt"
+
+        # Act
+        result = manager.apply_variables(filepath_template, mock_context)
+
+        # Assert
+        assert result == "/data/_notes.txt"

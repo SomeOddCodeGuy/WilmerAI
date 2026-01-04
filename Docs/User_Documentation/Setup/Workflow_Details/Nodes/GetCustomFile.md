@@ -47,8 +47,12 @@ Each field is explained in detail below.
     * **Type**: `String`
     * **Required**: Yes
     * **Description**: The full, absolute or relative path to the text file you want to load. The file path resolution
-      is **case-insensitive**, meaning `C:\Docs\file.txt` will match `C:\docs\File.TXT`.
+      is **case-insensitive**, meaning `C:\Docs\file.txt` will match `C:\docs\File.TXT`. This field supports variable
+      substitution, allowing you to use placeholders like `{Discussion_Id}` and `{YYYY_MM_DD}` to create dynamic,
+      per-conversation or date-based file paths.
     * **Example**: `"D:\\WilmerAI\\Public\\lore\\world_history.txt"`
+    * **Example with variables**: `"/Users/socg/sessions/{Discussion_Id}_notes.txt"` or
+      `"/data/logs/{YYYY_MM_DD}_actions.txt"`
 
 * #### **`delimiter`**
 
@@ -118,6 +122,53 @@ Goal: Clear her name and expose the conspiracy.
 
 -----
 
+### Dynamic Filepath Example
+
+The `filepath` field supports workflow variable substitution, allowing you to create dynamic, per-conversation or
+date-based file paths. This is useful for loading session-specific notes, daily logs, or user-specific data.
+
+#### Available Variables for Filepaths
+
+* **`{Discussion_Id}`**: The unique identifier for the current conversation. Useful for per-session files.
+* **`{YYYY_MM_DD}`**: Today's date in underscore-separated format (e.g., `2025_12_07`). Useful for daily logs.
+* Any other workflow variable (e.g., `{agent1Output}`, custom variables defined in the workflow JSON).
+
+#### Example: Loading Per-Conversation Notes
+
+```json
+{
+  "title": "Load Session Notes",
+  "type": "GetCustomFile",
+  "filepath": "/data/sessions/{Discussion_Id}_notes.txt"
+}
+```
+
+If the `Discussion_Id` is `conv-abc-123`, this will load the file `/data/sessions/conv-abc-123_notes.txt`.
+
+#### Example: Loading Daily Action Items
+
+```json
+{
+  "title": "Load Today's Actions",
+  "type": "GetCustomFile",
+  "filepath": "/data/logs/{YYYY_MM_DD}_actions.txt"
+}
+```
+
+If today is December 7, 2025, this will load the file `/data/logs/2025_12_07_actions.txt`.
+
+#### Example: Combining Multiple Variables
+
+```json
+{
+  "title": "Load Session-Specific Daily Log",
+  "type": "GetCustomFile",
+  "filepath": "/data/{YYYY_MM_DD}/{Discussion_Id}_log.txt"
+}
+```
+
+-----
+
 ### Behavior and Edge Cases
 
 It's crucial to understand how the node behaves in specific situations:
@@ -125,9 +176,13 @@ It's crucial to understand how the node behaves in specific situations:
 * **Output Variable**: The entire text content of the file (after delimiter replacement) is returned as a single string.
   This output is then assigned to a variable based on the node's position in the workflow (e.g., `{agent1Output}`,
   `{agent2Output}`, etc.).
-* **File Not Found**: If the path in `filepath` does not lead to an existing file, the node will return the string:
-  `"Custom instruction file did not exist"`.
+* **Variable Substitution**: The `filepath` field is processed through the workflow variable manager before the file is
+  loaded. This means you can use any available workflow variable in the path.
+* **File Not Found**: If the path in `filepath` does not lead to an existing file (after variable substitution), the
+  node will return the string: `"Custom instruction file did not exist"`.
 * **Empty File**: If the file is found but is completely empty, the node will return the string:
   `"No additional information added"`.
 * **Missing `filepath`**: If the `filepath` field is missing from the configuration, the node will return the string:
   `"No filepath specified"`.
+* **Empty Discussion_Id**: If `{Discussion_Id}` is used but no discussion ID is present in the context, it will be
+  replaced with an empty string, which may result in an invalid filepath.

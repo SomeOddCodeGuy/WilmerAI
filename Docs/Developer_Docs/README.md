@@ -132,12 +132,9 @@ WilmerAI
 │   │   │   │   ├── __init__.py
 │   │   │   │   ├── claude_api_handler.py
 │   │   │   │   ├── koboldcpp_api_handler.py
-│   │   │   │   ├── koboldcpp_api_image_specific_handler.py
 │   │   │   │   ├── ollama_chat_api_handler.py
-│   │   │   │   ├── ollama_chat_api_image_specific_handler.py
 │   │   │   │   ├── ollama_generate_api_handler.py
 │   │   │   │   ├── openai_api_handler.py
-│   │   │   │   ├── openai_chat_api_image_specific_handler.py
 │   │   │   │   └── openai_completions_api_handler.py
 │   │   │   └── __init__.py
 │   │   ├── __init__.py
@@ -240,11 +237,8 @@ WilmerAI
 │   │   │   └── impl/
 │   │   │       ├── test_llmapis_claude_api_handler.py
 │   │   │       ├── test_llmapis_koboldcpp_api_handler.py
-│   │   │       ├── test_llmapis_koboldcpp_api_image_specific_handler.py
 │   │   │       ├── test_llmapis_ollama_chat_api_handler.py
-│   │   │       ├── test_llmapis_ollama_chat_api_image_specific_handler.py
 │   │   │       ├── test_llmapis_ollama_generate_api_handler.py
-│   │   │       ├── test_llmapis_openai_chat_api_image_specific_handler.py
 │   │   │       ├── test_llmapis_openai_chat_handler.py
 │   │   │       └── test_llmapis_openai_completions_api_handler.py
 │   │   └── test_llm_api.py
@@ -339,7 +333,7 @@ This is the application's core logic.
   \* **`streaming/`**: Contains the crucial **`$StreamingResponseHandler$`**. This class encapsulates all logic for
   cleaning and formatting a raw LLM stream into a final, client-ready SSE stream.
   \* **`models/`**: Defines core data structures. The key file is **`$execution_context.py$`**, which defines the
-  central dataclass for passing state to all node handlers.
+  `ExecutionContext` dataclass for passing state to all node handlers, and `NodeExecutionInfo` for tracking node execution metrics used in logging.
   \* **`tools/`**: Contains implementations of complex tools callable by the `$ToolNodeHandler$`, such as the RAG
   memory creation tool (`slow_but_quality_rag_tool.py`) and a dynamic Python module loader.
 
@@ -360,7 +354,16 @@ Contains all user-facing JSON configuration files.
 * **`Users/`**: Contains json files with all of the specific settings for a user, including things like what port
   the app runs on, where to connect to things like the offline wikipedia api, and where certain files are saved, go
   here.
-* **`Workflows/`**: Contains json files that define the sequence of nodes for each workflow.
+* **`Workflows/`**: Contains json files that define the sequence of nodes for each workflow. Workflows are organized
+  into subfolders, typically named after each user (e.g., `Workflows/<username>/`). The subfolder used can be
+  customized via the `workflowConfigsSubDirectoryOverride` setting in the User config.
+    * **`_shared/`**: A special folder for shared workflows. Workflows placed directly in `_shared/` (or its subfolders)
+      are listed by the `/v1/models` and `/api/tags` endpoints when `allowSharedWorkflows` is enabled, allowing
+      front-end applications to select them via the model dropdown. The folder name can be customized via
+      `sharedWorkflowsSubDirectoryOverride` in the User config.
+    * **`_overrides/`**: A folder for user-specific workflow folder overrides. When `workflowConfigsSubDirectoryOverride`
+      is set in the User config (e.g., to `coding-workflows`), workflows are loaded from `_overrides/coding-workflows/`
+      instead of the user's default folder.
 
 ### **`run_linux/run_macos/run_windows`**
 

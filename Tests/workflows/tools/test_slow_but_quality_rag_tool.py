@@ -71,14 +71,15 @@ class TestSlowButQualityRAGTool:
         """Tests vector memory generation using the sub-workflow path."""
         tool = SlowButQualityRAGTool()
         config = {'vectorMemoryWorkflowName': 'test-vector-workflow'}
-        text_chunks = ["first chunk", "second chunk"]
+        # Now passing hashed_chunks (tuples of text, hash) instead of just text_chunks
+        hashed_chunks = [("first chunk", "hash1"), ("second chunk", "hash2")]
 
         # Mock workflow manager returns a JSON string, and the parser returns a valid dict
         mock_context.workflow_manager.run_custom_workflow.return_value = '{"title": "Test", "summary": "A test summary.", "entities": [], "key_phrases": []}'
         mock_parse_json.return_value = {"title": "Test", "summary": "A test summary.", "entities": [],
                                         "key_phrases": []}
 
-        tool.generate_and_store_vector_memories(text_chunks, config, mock_context)
+        tool.generate_and_store_vector_memories(hashed_chunks, config, mock_context)
 
         # Assert that the workflow manager was called for each chunk
         assert mock_context.workflow_manager.run_custom_workflow.call_count == 2
@@ -91,13 +92,18 @@ class TestSlowButQualityRAGTool:
             scoped_inputs=["second chunk"]
         )
 
-        # Assert that the database utility was called to add the memory
+        # Assert that the database utility was called to add the memory for each chunk
         assert mock_vector_db.add_memory_to_vector_db.call_count == 2
         mock_vector_db.add_memory_to_vector_db.assert_called_with(
             mock_context.discussion_id,
             "A test summary.",
             json.dumps({"title": "Test", "summary": "A test summary.", "entities": [], "key_phrases": []})
         )
+
+        # Assert that a hash was logged after each successful chunk (resumability)
+        assert mock_vector_db.add_vector_check_hash.call_count == 2
+        mock_vector_db.add_vector_check_hash.assert_any_call(mock_context.discussion_id, "hash1")
+        mock_vector_db.add_vector_check_hash.assert_any_call(mock_context.discussion_id, "hash2")
 
     @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.vector_db_utils')
     @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.SlowButQualityRAGTool.process_single_chunk')
@@ -109,7 +115,8 @@ class TestSlowButQualityRAGTool:
         """Tests vector memory generation using the direct LLM call path."""
         tool = SlowButQualityRAGTool()
         config = {'vectorMemoryEndpointName': 'test-endpoint', 'vectorMemoryPreset': 'test-preset'}
-        text_chunks = ["a single chunk"]
+        # Now passing hashed_chunks (tuples of text, hash) instead of just text_chunks
+        hashed_chunks = [("a single chunk", "chunk_hash")]
 
         mock_process_chunk.return_value = '```json\n{"title": "Direct", "summary": "Direct summary.", "entities": ["a"], "key_phrases": ["b"]}\n```'
 
@@ -117,7 +124,7 @@ class TestSlowButQualityRAGTool:
         with patch.object(SlowButQualityRAGTool, '_parse_llm_json_output',
                           return_value={"title": "Direct", "summary": "Direct summary.", "entities": ["a"],
                                         "key_phrases": ["b"]}) as mock_parser:
-            tool.generate_and_store_vector_memories(text_chunks, config, mock_context)
+            tool.generate_and_store_vector_memories(hashed_chunks, config, mock_context)
 
         # Assert that an LLM handler was initialized
         mock_llm_service.return_value.initialize_llm_handler.assert_called_once()
@@ -131,6 +138,8 @@ class TestSlowButQualityRAGTool:
             "Direct summary.",
             json.dumps({"title": "Direct", "summary": "Direct summary.", "entities": ["a"], "key_phrases": ["b"]})
         )
+        # Assert that a hash was logged after successful processing (resumability)
+        mock_vector_db.add_vector_check_hash.assert_called_once_with(mock_context.discussion_id, "chunk_hash")
 
     def test_perform_keyword_search_routes_correctly(self, mock_context):
         """Tests that perform_keyword_search calls the correct sub-method based on target."""
@@ -203,22 +212,24 @@ class TestSlowButQualityRAGTool:
         ]
 
         mock_vector_db.get_vector_check_hash_history.return_value = ["hash_of_message_1"]
-        mock_chunker.return_value = [("Processed chunk text for msg 2 and 3", "some_hash")]
+        # The chunker returns tuples of (text, hash), which are now passed directly to generate_and_store_vector_memories
+        mock_chunker.return_value = [("Processed chunk text for msg 2 and 3", "hash_from_last_chunk")]
 
         with patch('Middleware.workflows.tools.slow_but_quality_rag_tool.hash_single_message') as mock_hasher:
             mock_hasher.side_effect = lambda msg: f"hash_of_{msg['content']}"
 
-            with patch.object(tool, 'generate_and_store_vector_memories') as mock_generate:
+            with patch.object(tool, 'generate_and_store_vector_memories', return_value=1) as mock_generate:
                 tool.handle_discussion_id_flow(mock_context)
 
                 mock_generate.assert_called_once()
                 call_args, _ = mock_generate.call_args
-                text_chunks_arg = call_args[0]
-                assert text_chunks_arg == ["Processed chunk text for msg 2 and 3"]
+                # Now receives hashed_chunks (tuples) instead of text_chunks
+                hashed_chunks_arg = call_args[0]
+                assert hashed_chunks_arg == [("Processed chunk text for msg 2 and 3", "hash_from_last_chunk")]
 
-                mock_vector_db.add_vector_check_hash.assert_called_once_with(
-                    mock_context.discussion_id, "hash_of_message 3"
-                )
+                # Hash logging is now handled INSIDE generate_and_store_vector_memories per-chunk,
+                # so handle_discussion_id_flow no longer calls add_vector_check_hash directly
+                mock_vector_db.add_vector_check_hash.assert_not_called()
 
     @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.load_config')
     @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.read_chunks_with_hashes', return_value=[])
@@ -336,9 +347,10 @@ class TestSlowButQualityRAGTool:
             f"hash_of_message_{HASH_INSIDE_WINDOW}"
         ]
 
-        mock_chunker.return_value = [("Processed new chunk", "some_hash")]
+        # The chunker returns tuples of (text, hash), now passed directly to generate_and_store_vector_memories
+        mock_chunker.return_value = [("Processed new chunk", "hash_from_last_chunk")]
 
-        with patch.object(tool, 'generate_and_store_vector_memories') as mock_generate:
+        with patch.object(tool, 'generate_and_store_vector_memories', return_value=1) as mock_generate:
             tool.handle_discussion_id_flow(mock_context)
 
             EXPECTED_NEW_MESSAGES = mock_context.messages[11:13]
@@ -349,7 +361,88 @@ class TestSlowButQualityRAGTool:
             assert messages_arg == EXPECTED_NEW_MESSAGES
 
             mock_generate.assert_called_once()
+            # Verify hashed_chunks are passed (not text_chunks)
+            gen_call_args, _ = mock_generate.call_args
+            assert gen_call_args[0] == [("Processed new chunk", "hash_from_last_chunk")]
 
-            mock_vector_db.add_vector_check_hash.assert_called_once_with(
-                mock_context.discussion_id, "hash_of_message_12"
-            )
+            # Hash logging is now handled INSIDE generate_and_store_vector_memories per-chunk,
+            # so handle_discussion_id_flow no longer calls add_vector_check_hash directly
+            mock_vector_db.add_vector_check_hash.assert_not_called()
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.load_config')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.vector_db_utils')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.chunk_messages_with_hashes')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.hash_single_message')
+    def test_vector_hash_not_updated_when_no_memories_stored(
+            self, mock_hasher, mock_chunker, mock_vector_db, mock_load_config, mock_context
+    ):
+        """
+        Tests that the vector memory hash is NOT updated when generate_and_store_vector_memories
+        returns 0 (no memories were actually stored). This prevents the "walking hash" bug where
+        the hash advances even though no memories were created.
+
+        Note: With the resumability change, hashes are now written per-chunk INSIDE
+        generate_and_store_vector_memories. This test verifies that handle_discussion_id_flow
+        correctly passes hashed_chunks and that the method is called appropriately.
+        """
+        tool = SlowButQualityRAGTool()
+
+        mock_load_config.return_value = {
+            'useVectorForQualityMemory': True,
+            'vectorMemoryLookBackTurns': 1,
+            'vectorMemoryMaxMessagesBetweenChunks': 5,
+            'vectorMemoryChunkEstimatedTokenSize': 1000
+        }
+
+        mock_context.messages = [{"role": "user", "content": f"message_{i}"} for i in range(10)]
+        mock_hasher.side_effect = lambda msg: f"hash_of_{msg['content']}"
+        mock_vector_db.get_vector_check_hash_history.return_value = ["hash_of_message_5"]
+        mock_chunker.return_value = [("Some chunk text", "some_hash")]
+
+        # Simulate the case where generate_and_store_vector_memories stores 0 memories
+        with patch.object(tool, 'generate_and_store_vector_memories', return_value=0) as mock_generate:
+            tool.handle_discussion_id_flow(mock_context)
+
+            mock_generate.assert_called_once()
+            # Verify hashed_chunks are passed correctly
+            gen_call_args, _ = mock_generate.call_args
+            assert gen_call_args[0] == [("Some chunk text", "some_hash")]
+            # Hash logging is handled INSIDE generate_and_store_vector_memories,
+            # so handle_discussion_id_flow doesn't call it directly
+            mock_vector_db.add_vector_check_hash.assert_not_called()
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.load_config')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.vector_db_utils')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.chunk_messages_with_hashes')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.hash_single_message')
+    def test_vector_hash_not_updated_when_chunking_returns_empty(
+            self, mock_hasher, mock_chunker, mock_vector_db, mock_load_config, mock_context
+    ):
+        """
+        Tests that the vector memory hash is NOT updated when chunking returns an empty list
+        (messages didn't meet the threshold). This is the primary fix for the bug where
+        the hash would advance even when no chunks were created.
+        """
+        tool = SlowButQualityRAGTool()
+
+        mock_load_config.return_value = {
+            'useVectorForQualityMemory': True,
+            'vectorMemoryLookBackTurns': 1,
+            'vectorMemoryMaxMessagesBetweenChunks': 10,  # High threshold
+            'vectorMemoryChunkEstimatedTokenSize': 5000  # High threshold
+        }
+
+        mock_context.messages = [{"role": "user", "content": f"message_{i}"} for i in range(5)]
+        mock_hasher.side_effect = lambda msg: f"hash_of_{msg['content']}"
+        mock_vector_db.get_vector_check_hash_history.return_value = ["hash_of_message_0"]
+
+        # Simulate chunking returning empty list (messages below threshold)
+        mock_chunker.return_value = []
+
+        with patch.object(tool, 'generate_and_store_vector_memories') as mock_generate:
+            tool.handle_discussion_id_flow(mock_context)
+
+            # generate_and_store_vector_memories should NOT be called when chunks are empty
+            mock_generate.assert_not_called()
+            # Hash should NOT be updated
+            mock_vector_db.add_vector_check_hash.assert_not_called()

@@ -46,12 +46,13 @@ For each `Category Key`, the value is a nested JSON object containing the follow
 ##### `workflow`
 
 * **Description**: The name of the workflow file to execute if this category is selected. The system will look for this
-  file in the user's workflow directory (`Public/Configs/Workflows/<username>/`). The **`.json` extension must be
+  file in the user's workflow directory. By default, this is `Public/Configs/Workflows/<username>/`, but it can be
+  changed using the `workflowConfigsSubDirectoryOverride` setting in the User config. The **`.json` extension must be
   omitted**.
 * **Data Type**: `string`
 * **Required**: Yes
-* **Example**: A value of `"FactualWorkflow-With-RAG"` instructs the system to run the
-  `Public/Configs/Workflows/<username>/FactualWorkflow-With-RAG.json` file.
+* **Example**: A value of `"FactualWorkflow-With-RAG"` instructs the system to run the workflow file from the user's
+  configured workflow directory (e.g., `Public/Configs/Workflows/<username>/FactualWorkflow-With-RAG.json`).
 
 -----
 

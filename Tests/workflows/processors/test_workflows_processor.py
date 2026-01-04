@@ -8,7 +8,7 @@ import pytest
 from Middleware.exceptions.early_termination_exception import EarlyTerminationException
 from Middleware.services.llm_service import LlmHandlerService
 from Middleware.workflows.managers.workflow_variable_manager import WorkflowVariableManager
-from Middleware.workflows.models.execution_context import ExecutionContext
+from Middleware.workflows.models.execution_context import ExecutionContext, NodeExecutionInfo
 from Middleware.workflows.processors.workflows_processor import WorkflowProcessor
 
 # Define the set of types we expect to be valid during testing.
@@ -447,10 +447,13 @@ class TestEndpointAndPresetVariableSubstitution:
         list(processor.execute())
 
         # apply_early_variables should be called for the endpoint with variables
-        mock_workflow_variable_service.apply_early_variables.assert_called_once()
-        call_args = mock_workflow_variable_service.apply_early_variables.call_args
-        assert call_args[0][0] == "{agent1Input}"  # First positional arg is the prompt
-        # Check keyword arguments
+        # Called multiple times: once for node execution logging, once for processing
+        assert mock_workflow_variable_service.apply_early_variables.call_count >= 1
+        # Check that at least one call has the expected arguments
+        calls = mock_workflow_variable_service.apply_early_variables.call_args_list
+        endpoint_calls = [c for c in calls if c[0][0] == "{agent1Input}"]
+        assert len(endpoint_calls) >= 1
+        call_args = endpoint_calls[0]
         assert call_args[1]['agent_inputs'] == {"agent1Input": "MyDynamicEndpoint"}
         assert 'workflow_config' in call_args[1]
 
@@ -469,10 +472,12 @@ class TestEndpointAndPresetVariableSubstitution:
 
         list(processor.execute())
 
-        # apply_variables should be called
-        mock_workflow_variable_service.apply_early_variables.assert_called_once()
-        call_args = mock_workflow_variable_service.apply_early_variables.call_args
-        assert call_args[0][0] == "{top_level_var}_endpoint"
+        # apply_variables should be called (multiple times due to logging)
+        assert mock_workflow_variable_service.apply_early_variables.call_count >= 1
+        calls = mock_workflow_variable_service.apply_early_variables.call_args_list
+        endpoint_calls = [c for c in calls if c[0][0] == "{top_level_var}_endpoint"]
+        assert len(endpoint_calls) >= 1
+        call_args = endpoint_calls[0]
         # Check keyword arguments
         assert 'workflow_config' in call_args[1]
         assert call_args[1]['workflow_config']['top_level_var'] == 'value'
@@ -493,10 +498,14 @@ class TestEndpointAndPresetVariableSubstitution:
 
         list(processor.execute())
 
-        # apply_variables should be called ONLY for the endpoint, not the preset
-        mock_workflow_variable_service.apply_early_variables.assert_called_once()
-        call_args = mock_workflow_variable_service.apply_early_variables.call_args[0]
-        assert call_args[0] == "{agent1Input}"  # Only the endpoint
+        # apply_variables should be called for the endpoint (multiple times due to logging)
+        # but NOT for the preset since it has no variables
+        calls = mock_workflow_variable_service.apply_early_variables.call_args_list
+        endpoint_calls = [c for c in calls if c[0][0] == "{agent1Input}"]
+        assert len(endpoint_calls) >= 1  # Endpoint with variables was resolved
+        # Verify no preset calls (preset has no variables)
+        preset_calls = [c for c in calls if "HardcodedPreset" in c[0][0]]
+        assert len(preset_calls) == 0
 
         # The hardcoded preset should be used directly
         mock_llm_handler_service.load_model_from_config.assert_called_once_with(
@@ -515,9 +524,10 @@ class TestEndpointAndPresetVariableSubstitution:
         list(processor.execute())
 
         # apply_variables should be called for the preset with variables
-        mock_workflow_variable_service.apply_early_variables.assert_called_once()
-        call_args = mock_workflow_variable_service.apply_early_variables.call_args[0]
-        assert call_args[0] == "{agent1Input}_preset"
+        # Note: endpoint has no variables so only preset triggers substitution in _process_section
+        calls = mock_workflow_variable_service.apply_early_variables.call_args_list
+        preset_calls = [c for c in calls if c[0][0] == "{agent1Input}_preset"]
+        assert len(preset_calls) >= 1
 
         # The resolved preset should be used
         mock_llm_handler_service.load_model_from_config.assert_called_once_with(
@@ -529,22 +539,28 @@ class TestEndpointAndPresetVariableSubstitution:
         """Verifies that both endpoint and preset can have variables simultaneously."""
         config = [{"type": "Standard", "endpointName": "{agent1Input}", "preset": "{agent2Input}"}]
         mock_node_handlers["Standard"].handle.return_value = "Response"
-        mock_workflow_variable_service.apply_early_variables.side_effect = ["DynamicEndpoint", "DynamicPreset"]
+        # Now we need 3 return values: 1 for logging, 1 for endpoint in _process_section, 1 for preset
+        mock_workflow_variable_service.apply_early_variables.side_effect = [
+            "DynamicEndpoint",  # For _get_endpoint_details (logging)
+            "DynamicEndpoint",  # For endpoint in _process_section
+            "DynamicPreset"     # For preset in _process_section
+        ]
         processor = workflow_processor_factory(configs=config, stream=False,
                                               scoped_inputs=["EndpointFromParent", "PresetFromParent"])
 
         list(processor.execute())
 
-        # apply_variables should be called twice (once for endpoint, once for preset)
-        assert mock_workflow_variable_service.apply_early_variables.call_count == 2
+        # apply_variables is called 3 times: once for logging, once for endpoint, once for preset
+        assert mock_workflow_variable_service.apply_early_variables.call_count == 3
 
-        # First call for endpoint
-        first_call = mock_workflow_variable_service.apply_early_variables.call_args_list[0][0]
-        assert first_call[0] == "{agent1Input}"
+        # Check that endpoint was resolved (multiple times)
+        calls = mock_workflow_variable_service.apply_early_variables.call_args_list
+        endpoint_calls = [c for c in calls if c[0][0] == "{agent1Input}"]
+        assert len(endpoint_calls) >= 1
 
-        # Second call for preset
-        second_call = mock_workflow_variable_service.apply_early_variables.call_args_list[1][0]
-        assert second_call[0] == "{agent2Input}"
+        # Check that preset was resolved
+        preset_calls = [c for c in calls if c[0][0] == "{agent2Input}"]
+        assert len(preset_calls) >= 1
 
         # Both resolved values should be used
         mock_llm_handler_service.load_model_from_config.assert_called_once_with(
@@ -562,10 +578,11 @@ class TestEndpointAndPresetVariableSubstitution:
 
         list(processor.execute())
 
-        # apply_variables should be called only once (for endpoint, not preset)
-        mock_workflow_variable_service.apply_early_variables.assert_called_once()
-        call_args = mock_workflow_variable_service.apply_early_variables.call_args[0]
-        assert call_args[0] == "{agent1Input}"
+        # apply_variables should be called for endpoint (multiple times due to logging)
+        # but NOT for preset since it has no variables
+        calls = mock_workflow_variable_service.apply_early_variables.call_args_list
+        endpoint_calls = [c for c in calls if c[0][0] == "{agent1Input}"]
+        assert len(endpoint_calls) >= 1
 
         # Resolved endpoint with static preset
         mock_llm_handler_service.load_model_from_config.assert_called_once_with(
@@ -585,10 +602,10 @@ class TestEndpointAndPresetVariableSubstitution:
 
         list(processor.execute())
 
-        # apply_variables should be called for Jinja2 template
-        mock_workflow_variable_service.apply_early_variables.assert_called_once()
-        call_args = mock_workflow_variable_service.apply_early_variables.call_args[0]
-        assert "{% if" in call_args[0]
+        # apply_variables should be called for Jinja2 template (multiple times due to logging)
+        calls = mock_workflow_variable_service.apply_early_variables.call_args_list
+        jinja_calls = [c for c in calls if "{% if" in c[0][0]]
+        assert len(jinja_calls) >= 1
 
         mock_llm_handler_service.load_model_from_config.assert_called_once_with(
             "FastEndpoint", "DefaultPreset", False, 4096, 400, addGenerationPrompt=ANY
@@ -653,9 +670,14 @@ class TestEndpointAndPresetVariableSubstitution:
         ]
         mock_node_handlers["Standard"].handle.return_value = "Response"
         mock_node_handlers["Tool"].handle.return_value = "ToolResponse"
+        # Now we need more return values due to logging calls in _get_endpoint_details:
+        # Node 2: 1 for logging, 1 for endpoint, 1 for preset
+        # Node 4: 1 for logging, 1 for endpoint
         mock_workflow_variable_service.apply_early_variables.side_effect = [
-            "ResolvedFromInput", "value",  # Node 2
-            "AnotherSecondInputEndpoint"   # Node 4
+            "ResolvedFromInput",           # Node 2: logging (_get_endpoint_details)
+            "ResolvedFromInput", "value",  # Node 2: _process_section (endpoint, preset)
+            "AnotherSecondInputEndpoint",  # Node 4: logging (_get_endpoint_details)
+            "AnotherSecondInputEndpoint"   # Node 4: _process_section (endpoint)
         ]
         processor = workflow_processor_factory(configs=config, stream=False,
                                               scoped_inputs=["FirstInput", "SecondInput"])
@@ -663,10 +685,10 @@ class TestEndpointAndPresetVariableSubstitution:
         list(processor.execute())
 
         # Node 1: No substitution (static)
-        # Node 2: Two substitutions (endpoint and preset)
+        # Node 2: Three substitutions (logging + endpoint + preset)
         # Node 3: No endpoint
-        # Node 4: One substitution (endpoint with variable)
-        assert mock_workflow_variable_service.apply_early_variables.call_count == 3
+        # Node 4: Two substitutions (logging + endpoint with variable)
+        assert mock_workflow_variable_service.apply_early_variables.call_count == 5
 
     def test_special_characters_in_hardcoded_endpoint(self, workflow_processor_factory, mock_node_handlers,
                                                       mock_llm_handler_service, mock_workflow_variable_service):
@@ -707,12 +729,13 @@ class TestEndpointAndPresetVariableSubstitution:
 
         list(processor.execute())
 
-        # Verify that apply_early_variables was called TWICE:
-        # 1. Once in _process_section for loading the model
-        # 2. Once in the streaming path before getting endpoint config
-        assert mock_workflow_variable_service.apply_early_variables.call_count == 2
+        # Verify that apply_early_variables was called THREE times:
+        # 1. Once in _get_endpoint_details for node execution logging
+        # 2. Once in _process_section for loading the model
+        # 3. Once in the streaming path before getting endpoint config
+        assert mock_workflow_variable_service.apply_early_variables.call_count == 3
 
-        # Both calls should be for the same endpoint template
+        # All calls should be for the same endpoint template
         for call in mock_workflow_variable_service.apply_early_variables.call_args_list:
             assert call[0][0] == "{agent1Input}"
 
@@ -723,3 +746,395 @@ class TestEndpointAndPresetVariableSubstitution:
         mock_stream_handler_cls.assert_called_once()
         call_args = mock_stream_handler_cls.call_args[0]
         assert call_args[0] == {"some": "config"}  # The resolved endpoint config
+
+
+# ##################################
+# ##### NodeExecutionInfo Tests
+# ##################################
+
+
+class TestNodeExecutionInfo:
+    """Tests for the NodeExecutionInfo dataclass used to track node execution details."""
+
+    def test_basic_creation(self):
+        """Tests basic creation of a NodeExecutionInfo instance."""
+        info = NodeExecutionInfo(
+            node_index=1,
+            node_type="Standard",
+            node_name="Test Node",
+            endpoint_name="TestEndpoint",
+            endpoint_url="http://127.0.0.1:5001",
+            execution_time_seconds=10.5
+        )
+
+        assert info.node_index == 1
+        assert info.node_type == "Standard"
+        assert info.node_name == "Test Node"
+        assert info.endpoint_name == "TestEndpoint"
+        assert info.endpoint_url == "http://127.0.0.1:5001"
+        assert info.execution_time_seconds == 10.5
+
+    def test_format_time_plural_seconds(self):
+        """Tests time formatting for times greater than 1 second."""
+        info = NodeExecutionInfo(
+            node_index=1, node_type="Standard", node_name="Test",
+            endpoint_name="EP", endpoint_url="URL", execution_time_seconds=182.4
+        )
+        assert info.format_time() == "182.4 seconds"
+
+    def test_format_time_exactly_one_second(self):
+        """Tests time formatting for exactly 1 second."""
+        info = NodeExecutionInfo(
+            node_index=1, node_type="Standard", node_name="Test",
+            endpoint_name="EP", endpoint_url="URL", execution_time_seconds=1.0
+        )
+        assert info.format_time() == "1 second"
+
+    def test_format_time_less_than_one_second(self):
+        """Tests time formatting for times less than 1 second."""
+        info = NodeExecutionInfo(
+            node_index=1, node_type="Standard", node_name="Test",
+            endpoint_name="EP", endpoint_url="URL", execution_time_seconds=0.45
+        )
+        assert info.format_time() == "0.45 seconds"
+
+    def test_format_time_very_small(self):
+        """Tests time formatting for very small times."""
+        info = NodeExecutionInfo(
+            node_index=1, node_type="Standard", node_name="Test",
+            endpoint_name="EP", endpoint_url="URL", execution_time_seconds=0.001
+        )
+        assert info.format_time() == "0.00 seconds"
+
+    def test_str_representation_with_endpoint(self):
+        """Tests the __str__ method with an endpoint configured."""
+        info = NodeExecutionInfo(
+            node_index=1,
+            node_type="Standard",
+            node_name="Prepare User Response",
+            endpoint_name="Responder-Endpoint",
+            endpoint_url="http://127.0.0.1:5001",
+            execution_time_seconds=182.4
+        )
+        expected = "Node 1: Standard || 'Prepare User Response' || Responder-Endpoint || http://127.0.0.1:5001 || 182.4 seconds"
+        assert str(info) == expected
+
+    def test_str_representation_without_endpoint(self):
+        """Tests the __str__ method when no endpoint is configured."""
+        info = NodeExecutionInfo(
+            node_index=2,
+            node_type="GetCustomFile",
+            node_name="Custom File Grabber Two",
+            endpoint_name="N/A",
+            endpoint_url="N/A",
+            execution_time_seconds=1.0
+        )
+        expected = "Node 2: GetCustomFile || 'Custom File Grabber Two' || N/A || N/A || 1 second"
+        assert str(info) == expected
+
+    def test_str_representation_with_na_node_name(self):
+        """Tests the __str__ method when node name is N/A."""
+        info = NodeExecutionInfo(
+            node_index=3,
+            node_type="Tool",
+            node_name="N/A",
+            endpoint_name="N/A",
+            endpoint_url="N/A",
+            execution_time_seconds=0.15
+        )
+        expected = "Node 3: Tool || 'N/A' || N/A || N/A || 0.15 seconds"
+        assert str(info) == expected
+
+    def test_str_representation_for_custom_workflow(self):
+        """Tests the string representation for CustomWorkflow nodes."""
+        info = NodeExecutionInfo(
+            node_index=4,
+            node_type="CustomWorkflow",
+            node_name="Run Wikipedia Search -> WikiWorkflow",
+            endpoint_name="N/A",
+            endpoint_url="N/A",
+            execution_time_seconds=45.2
+        )
+        result = str(info)
+        assert "Node 4: CustomWorkflow" in result
+        assert "Run Wikipedia Search -> WikiWorkflow" in result
+        assert "45.2 seconds" in result
+
+    def test_str_representation_for_conditional_custom_workflow(self):
+        """Tests the string representation for ConditionalCustomWorkflow nodes."""
+        info = NodeExecutionInfo(
+            node_index=5,
+            node_type="ConditionalCustomWorkflow",
+            node_name="Route to Handler -> [WF1, WF2]",
+            endpoint_name="N/A",
+            endpoint_url="N/A",
+            execution_time_seconds=120.5
+        )
+        result = str(info)
+        assert "Node 5: ConditionalCustomWorkflow" in result
+        assert "Route to Handler -> [WF1, WF2]" in result
+        assert "120.5 seconds" in result
+
+
+class TestNodeExecutionLogging:
+    """Tests that verify node execution info is properly collected during workflow execution."""
+
+    @patch('Middleware.workflows.processors.workflows_processor.VALID_NODE_TYPES', MOCK_VALID_TYPES)
+    def test_node_execution_info_is_collected(self, workflow_processor_factory, mock_node_handlers,
+                                              mock_workflow_variable_service):
+        """Verifies that NodeExecutionInfo objects are created for each node."""
+        config = [
+            {"type": "Standard", "title": "First Node", "endpointName": "Endpoint1"},
+            {"type": "Standard", "agentName": "Second Agent", "endpointName": "Endpoint2"},
+            {"type": "Tool"}  # No title, agentName, or endpoint
+        ]
+        mock_node_handlers["Standard"].handle.return_value = "Response"
+        mock_node_handlers["Tool"].handle.return_value = "ToolResponse"
+
+        processor = workflow_processor_factory(configs=config, stream=False)
+
+        # Execute the workflow
+        list(processor.execute())
+
+        # All handlers should have been called
+        assert mock_node_handlers["Standard"].handle.call_count == 2
+        mock_node_handlers["Tool"].handle.assert_called_once()
+
+    @patch('Middleware.workflows.processors.workflows_processor.VALID_NODE_TYPES', MOCK_VALID_TYPES)
+    def test_get_node_name_prefers_title(self, workflow_processor_factory, mock_node_handlers):
+        """Verifies that _get_node_name prefers 'title' over 'agentName'."""
+        config = [{"type": "Standard", "title": "MyTitle", "agentName": "MyAgent"}]
+        mock_node_handlers["Standard"].handle.return_value = "Response"
+
+        processor = workflow_processor_factory(configs=config, stream=False)
+        node_name = processor._get_node_name(config[0])
+
+        assert node_name == "MyTitle"
+
+    @patch('Middleware.workflows.processors.workflows_processor.VALID_NODE_TYPES', MOCK_VALID_TYPES)
+    def test_get_node_name_falls_back_to_agent_name(self, workflow_processor_factory, mock_node_handlers):
+        """Verifies that _get_node_name falls back to 'agentName' when 'title' is not present."""
+        config = [{"type": "Standard", "agentName": "MyAgent"}]
+        mock_node_handlers["Standard"].handle.return_value = "Response"
+
+        processor = workflow_processor_factory(configs=config, stream=False)
+        node_name = processor._get_node_name(config[0])
+
+        assert node_name == "MyAgent"
+
+    @patch('Middleware.workflows.processors.workflows_processor.VALID_NODE_TYPES', MOCK_VALID_TYPES)
+    def test_get_node_name_returns_na_when_no_name(self, workflow_processor_factory, mock_node_handlers):
+        """Verifies that _get_node_name returns 'N/A' when neither 'title' nor 'agentName' is present."""
+        config = [{"type": "Standard"}]
+        mock_node_handlers["Standard"].handle.return_value = "Response"
+
+        processor = workflow_processor_factory(configs=config, stream=False)
+        node_name = processor._get_node_name(config[0])
+
+        assert node_name == "N/A"
+
+    @patch('Middleware.workflows.processors.workflows_processor.VALID_NODE_TYPES', MOCK_VALID_TYPES)
+    def test_get_endpoint_details_returns_na_when_no_endpoint(self, workflow_processor_factory, mock_node_handlers):
+        """Verifies that _get_endpoint_details returns 'N/A' for both values when no endpoint is configured."""
+        config = [{"type": "Standard"}]
+        mock_node_handlers["Standard"].handle.return_value = "Response"
+
+        processor = workflow_processor_factory(configs=config, stream=False)
+        endpoint_name, endpoint_url = processor._get_endpoint_details(config[0])
+
+        assert endpoint_name == "N/A"
+        assert endpoint_url == "N/A"
+
+    @patch('Middleware.workflows.processors.workflows_processor.get_endpoint_config')
+    @patch('Middleware.workflows.processors.workflows_processor.VALID_NODE_TYPES', MOCK_VALID_TYPES)
+    def test_get_endpoint_details_returns_endpoint_info(self, mock_get_endpoint_config,
+                                                        workflow_processor_factory, mock_node_handlers):
+        """Verifies that _get_endpoint_details returns endpoint name and URL when configured."""
+        config = [{"type": "Standard", "endpointName": "TestEndpoint"}]
+        mock_node_handlers["Standard"].handle.return_value = "Response"
+        mock_get_endpoint_config.return_value = {"endpoint": "http://localhost:8080"}
+
+        processor = workflow_processor_factory(configs=config, stream=False)
+        endpoint_name, endpoint_url = processor._get_endpoint_details(config[0])
+
+        assert endpoint_name == "TestEndpoint"
+        assert endpoint_url == "http://localhost:8080"
+
+    @patch('Middleware.workflows.processors.workflows_processor.get_endpoint_config')
+    @patch('Middleware.workflows.processors.workflows_processor.VALID_NODE_TYPES', MOCK_VALID_TYPES)
+    def test_get_endpoint_details_handles_exception(self, mock_get_endpoint_config,
+                                                    workflow_processor_factory, mock_node_handlers):
+        """Verifies that _get_endpoint_details handles exceptions gracefully."""
+        config = [{"type": "Standard", "endpointName": "BadEndpoint"}]
+        mock_node_handlers["Standard"].handle.return_value = "Response"
+        mock_get_endpoint_config.side_effect = Exception("Config not found")
+
+        processor = workflow_processor_factory(configs=config, stream=False)
+        endpoint_name, endpoint_url = processor._get_endpoint_details(config[0])
+
+        assert endpoint_name == "BadEndpoint"
+        assert endpoint_url == "N/A"
+
+    @patch('Middleware.workflows.processors.workflows_processor.VALID_NODE_TYPES', MOCK_VALID_TYPES)
+    def test_get_node_name_for_custom_workflow(self, workflow_processor_factory, mock_node_handlers):
+        """Verifies that _get_node_name appends workflow name for CustomWorkflow nodes."""
+        config = [{"type": "CustomWorkflow", "title": "Run Sub-Workflow", "workflowName": "MySubWorkflow"}]
+        mock_node_handlers["CustomWorkflow"].handle.return_value = "Response"
+
+        processor = workflow_processor_factory(configs=config, stream=False)
+        node_name = processor._get_node_name(config[0])
+
+        assert node_name == "Run Sub-Workflow -> MySubWorkflow"
+
+    @patch('Middleware.workflows.processors.workflows_processor.VALID_NODE_TYPES', MOCK_VALID_TYPES)
+    def test_get_node_name_for_conditional_custom_workflow(self, workflow_processor_factory, mock_node_handlers):
+        """Verifies that _get_node_name shows possible workflows for ConditionalCustomWorkflow nodes."""
+        config = [{
+            "type": "ConditionalCustomWorkflow",
+            "title": "Route to Workflow",
+            "conditionalWorkflows": {
+                "Option1": "Workflow1",
+                "Option2": "Workflow2",
+                "Default": "DefaultWorkflow"
+            }
+        }]
+        mock_node_handlers["CustomWorkflow"].handle.return_value = "Response"
+
+        processor = workflow_processor_factory(configs=config, stream=False)
+        node_name = processor._get_node_name(config[0])
+
+        assert node_name == "Route to Workflow -> [Workflow1, Workflow2, DefaultWorkflow]"
+
+    @patch('Middleware.workflows.processors.workflows_processor.VALID_NODE_TYPES', MOCK_VALID_TYPES)
+    def test_get_node_name_for_conditional_workflow_many_options(self, workflow_processor_factory, mock_node_handlers):
+        """Verifies that _get_node_name truncates when there are many conditional workflow options."""
+        config = [{
+            "type": "ConditionalCustomWorkflow",
+            "title": "Big Router",
+            "conditionalWorkflows": {
+                "A": "WF1",
+                "B": "WF2",
+                "C": "WF3",
+                "D": "WF4",
+                "E": "WF5"
+            }
+        }]
+        mock_node_handlers["CustomWorkflow"].handle.return_value = "Response"
+
+        processor = workflow_processor_factory(configs=config, stream=False)
+        node_name = processor._get_node_name(config[0])
+
+        # Should show first 2 and indicate there are more
+        assert "Big Router -> [WF1, WF2, +3 more]" == node_name
+
+
+class TestMaxResponseSizeVariableSubstitution:
+    """Tests for maxResponseSizeInTokens variable substitution."""
+
+    def test_integer_value_works_unchanged(self, workflow_processor_factory, mock_node_handlers,
+                                           mock_llm_handler_service, mock_workflow_variable_service):
+        """Verifies that integer maxResponseSizeInTokens values work as before (no regression)."""
+        config = [{"type": "Standard", "endpointName": "TestEndpoint", "maxResponseSizeInTokens": 8000}]
+        mock_node_handlers["Standard"].handle.return_value = "Response"
+        processor = workflow_processor_factory(configs=config, stream=False)
+
+        list(processor.execute())
+
+        # Should NOT call apply_early_variables for maxResponseSizeInTokens (it's an int, not a string with vars)
+        # The value should be passed directly
+        mock_llm_handler_service.load_model_from_config.assert_called_once_with(
+            "TestEndpoint", None, False, 4096, 8000, addGenerationPrompt=ANY
+        )
+
+    def test_string_variable_is_substituted_and_converted(self, workflow_processor_factory, mock_node_handlers,
+                                                          mock_llm_handler_service, mock_workflow_variable_service):
+        """Verifies that string variables in maxResponseSizeInTokens are substituted and converted to int."""
+        config = [{"type": "Standard", "endpointName": "TestEndpoint", "maxResponseSizeInTokens": "{agent1Input}"}]
+        mock_node_handlers["Standard"].handle.return_value = "Response"
+        mock_workflow_variable_service.apply_early_variables.return_value = "5000"
+        processor = workflow_processor_factory(configs=config, stream=False,
+                                              scoped_inputs=["5000"])
+
+        list(processor.execute())
+
+        # apply_early_variables should be called for the variable
+        calls = mock_workflow_variable_service.apply_early_variables.call_args_list
+        max_tokens_calls = [c for c in calls if c[0][0] == "{agent1Input}"]
+        assert len(max_tokens_calls) >= 1
+
+        # The resolved and converted value should be used
+        mock_llm_handler_service.load_model_from_config.assert_called_once_with(
+            "TestEndpoint", None, False, 4096, 5000, addGenerationPrompt=ANY
+        )
+
+    def test_invalid_string_falls_back_to_default(self, workflow_processor_factory, mock_node_handlers,
+                                                  mock_llm_handler_service, mock_workflow_variable_service, caplog):
+        """Verifies that non-integer resolved values fall back to 400 with an error log."""
+        config = [{"type": "Standard", "endpointName": "TestEndpoint", "maxResponseSizeInTokens": "{agent1Input}"}]
+        mock_node_handlers["Standard"].handle.return_value = "Response"
+        mock_workflow_variable_service.apply_early_variables.return_value = "not_a_number"
+        processor = workflow_processor_factory(configs=config, stream=False,
+                                              scoped_inputs=["not_a_number"])
+
+        list(processor.execute())
+
+        # Should fall back to default 400
+        mock_llm_handler_service.load_model_from_config.assert_called_once_with(
+            "TestEndpoint", None, False, 4096, 400, addGenerationPrompt=ANY
+        )
+        # Should log an error
+        assert "maxResponseSizeInTokens resolved to non-integer value" in caplog.text
+
+    def test_default_value_when_not_specified(self, workflow_processor_factory, mock_node_handlers,
+                                              mock_llm_handler_service):
+        """Verifies that missing maxResponseSizeInTokens defaults to 400."""
+        config = [{"type": "Standard", "endpointName": "TestEndpoint"}]  # No maxResponseSizeInTokens
+        mock_node_handlers["Standard"].handle.return_value = "Response"
+        processor = workflow_processor_factory(configs=config, stream=False)
+
+        list(processor.execute())
+
+        mock_llm_handler_service.load_model_from_config.assert_called_once_with(
+            "TestEndpoint", None, False, 4096, 400, addGenerationPrompt=ANY
+        )
+
+    def test_string_without_variables_is_converted(self, workflow_processor_factory, mock_node_handlers,
+                                                   mock_llm_handler_service, mock_workflow_variable_service):
+        """Verifies that plain string numbers without variables are converted to int."""
+        config = [{"type": "Standard", "endpointName": "TestEndpoint", "maxResponseSizeInTokens": "3000"}]
+        mock_node_handlers["Standard"].handle.return_value = "Response"
+        processor = workflow_processor_factory(configs=config, stream=False)
+
+        list(processor.execute())
+
+        # No variable substitution needed (no { or {{ in string)
+        # But still converts string to int
+        mock_llm_handler_service.load_model_from_config.assert_called_once_with(
+            "TestEndpoint", None, False, 4096, 3000, addGenerationPrompt=ANY
+        )
+
+    def test_combined_with_endpoint_and_preset_variables(self, workflow_processor_factory, mock_node_handlers,
+                                                         mock_llm_handler_service, mock_workflow_variable_service):
+        """Verifies that maxResponseSizeInTokens works alongside endpoint and preset variables."""
+        config = [{
+            "type": "Standard",
+            "endpointName": "{agent1Input}",
+            "preset": "{agent2Input}",
+            "maxResponseSizeInTokens": "{agent3Input}"
+        }]
+        mock_node_handlers["Standard"].handle.return_value = "Response"
+        mock_workflow_variable_service.apply_early_variables.side_effect = [
+            "ResolvedEndpoint",  # For logging
+            "ResolvedEndpoint",  # For endpoint
+            "ResolvedPreset",    # For preset
+            "6000"               # For maxResponseSizeInTokens
+        ]
+        processor = workflow_processor_factory(configs=config, stream=False,
+                                              scoped_inputs=["MyEndpoint", "MyPreset", "6000"])
+
+        list(processor.execute())
+
+        # All three should be resolved
+        mock_llm_handler_service.load_model_from_config.assert_called_once_with(
+            "ResolvedEndpoint", "ResolvedPreset", False, 4096, 6000, addGenerationPrompt=ANY
+        )

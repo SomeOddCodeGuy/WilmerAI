@@ -46,6 +46,7 @@ A variety of pre-formatted date and time strings are available.
 
 - `{todays_date_pretty}`: Example: `August 17, 2025`
 - `{todays_date_iso}`: Example: `2025-08-17`
+- `{YYYY_MM_DD}`: Example: `2025_08_17` (underscore-separated format, useful for filenames)
 - `{current_time_12h}`: Example: `7:09 PM`
 - `{current_time_24h}`: Example: `19:09`
 - `{current_month_full}`: Example: `August`
@@ -54,8 +55,32 @@ A variety of pre-formatted date and time strings are available.
 
 #### **Contextual Variables**
 
+- `{Discussion_Id}`: The unique identifier for the current conversation/discussion. Useful for creating per-conversation
+  files or organizing data by session. If no discussion ID is present, this will be an empty string.
 - `{time_context_summary}`: A human-readable summary of when the conversation started (e.g., "The user started this
   conversation a few minutes ago").
+
+#### **Dynamic File Path Variables**
+
+The `{Discussion_Id}` and `{YYYY_MM_DD}` variables are particularly useful with the `GetCustomFile` and `SaveCustomFile`
+nodes, which support variable substitution in their `filepath` fields. This enables per-conversation or date-based file
+storage patterns.
+
+**Implementation Details:**
+- The `filepath` field in both nodes is processed through `WorkflowVariableManager.apply_variables()` before the file
+  operation is performed.
+- See `specialized_node_handler.py` (`handle_get_custom_file` and `handle_save_custom_file` methods) for the
+  implementation.
+
+**Example Usage:**
+
+```json
+{
+  "type": "SaveCustomFile",
+  "filepath": "/data/{YYYY_MM_DD}/{Discussion_Id}_output.txt",
+  "content": "{agent1Output}"
+}
+```
 
 -----
 

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 
 from Middleware.api import api_helpers
+from Middleware.utilities import config_utils
 
 
 class ResponseBuilderService:
@@ -33,19 +34,44 @@ class ResponseBuilderService:
         """
         Builds the response payload for the OpenAI-compatible /v1/models endpoint.
 
+        If allowSharedWorkflows is enabled in user config, returns a list of
+        available workflow folders from _shared/. Otherwise, returns only the
+        username as a model.
+
         Returns:
             Dict[str, Any]: A dictionary representing the list of available models.
         """
+        # Use get_current_username() directly, not get_model_name(), to avoid
+        # including any active workflow override in the model list
+        username = config_utils.get_current_username()
+        current_time = int(time.time())
+
+        models_data = []
+
+        # Only list shared workflows if explicitly enabled in user config
+        if config_utils.get_allow_shared_workflows():
+            workflows = config_utils.get_available_shared_workflows()
+            for workflow in workflows:
+                model_id = f"{username}:{workflow}"
+                models_data.append({
+                    "id": model_id,
+                    "object": "model",
+                    "created": current_time,
+                    "owned_by": "Wilmer"
+                })
+
+        # If no workflows listed (either disabled or none found), return username
+        if not models_data:
+            models_data.append({
+                "id": username,
+                "object": "model",
+                "created": current_time,
+                "owned_by": "Wilmer"
+            })
+
         return {
             "object": "list",
-            "data": [
-                {
-                    "id": self._get_model_name(),
-                    "object": self._get_model_name(),
-                    "created": int(time.time()),
-                    "owned_by": "Wilmer"
-                }
-            ]
+            "data": models_data
         }
 
     def build_openai_completion_response(self, full_text: str) -> Dict[str, Any]:
@@ -193,25 +219,51 @@ class ResponseBuilderService:
         """
         Builds the response payload for the Ollama-compatible /api/tags endpoint.
 
+        If allowSharedWorkflows is enabled in user config, returns a list of
+        available workflow folders from _shared/. Otherwise, returns only the
+        username as a model.
+
         Returns:
             Dict[str, List[Dict[str, Any]]]: A dictionary containing a list of available models.
         """
-        model_name = self._get_model_name()
-        return {
-            "models": [
-                {
-                    "name": model_name,
-                    "model": model_name + ":latest",
+        # Use get_current_username() directly, not get_model_name(), to avoid
+        # including any active workflow override in the model list
+        username = config_utils.get_current_username()
+
+        models_list = []
+
+        # Only list shared workflows if explicitly enabled in user config
+        if config_utils.get_allow_shared_workflows():
+            workflows = config_utils.get_available_shared_workflows()
+            for workflow in workflows:
+                model_id = f"{username}:{workflow}"
+                models_list.append({
+                    "name": model_id,
+                    "model": model_id + ":latest",
                     "modified_at": "2024-11-23T00:00:00Z",
                     "size": 1,
-                    "digest": hashlib.sha256(model_name.encode('utf-8')).hexdigest(),
+                    "digest": hashlib.sha256(model_id.encode('utf-8')).hexdigest(),
                     "details": {
                         "format": "gguf", "family": "wilmer", "families": None,
                         "parameter_size": "N/A", "quantization_level": "Q8"
                     }
+                })
+
+        # If no workflows listed (either disabled or none found), return username
+        if not models_list:
+            models_list.append({
+                "name": username,
+                "model": username + ":latest",
+                "modified_at": "2024-11-23T00:00:00Z",
+                "size": 1,
+                "digest": hashlib.sha256(username.encode('utf-8')).hexdigest(),
+                "details": {
+                    "format": "gguf", "family": "wilmer", "families": None,
+                    "parameter_size": "N/A", "quantization_level": "Q8"
                 }
-            ]
-        }
+            })
+
+        return {"models": models_list}
 
     def build_ollama_version_response(self) -> Dict[str, str]:
         """

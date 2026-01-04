@@ -18,5 +18,7 @@
   "chatCompleteAddUserAssistant": true,
   "chatCompletionAddMissingAssistantGenerator": true,
   "endpointConfigsSubDirectory": "_example_users",
-  "presetConfigsSubDirectoryOverride": "_example_users"
+  "presetConfigsSubDirectoryOverride": "_example_users",
+  "allowSharedWorkflows": true,
+  "sharedWorkflowsSubDirectoryOverride": "_shared"
 }

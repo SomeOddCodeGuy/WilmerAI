@@ -117,56 +117,76 @@ def test_chunk_messages_with_hashes_first_message(mocker, sample_messages):
 
 
 @pytest.mark.parametrize(
-    "description, hashed_chunks, skip_system, expected_messages_since_match",
+    "description, hashed_chunks, skip_system, expected_new_messages",
     [
+        # 6 filtered messages (images removed), search_boundary = 6-4 = 2
+        # Match at index 1 means messages 0-1 already memorized
+        # New messages in valid range [0:2): none, since match is at boundary-1
         (
                 "Match found in the middle, including system messages",
                 [("text", hash_single_message({"role": "user", "content": "Hello, who are you?"}))],
                 False,
-                5
+                0  # search_boundary(2) - match_index(1) - 1 = 0
         ),
+        # 5 filtered messages (images + system removed), search_boundary = 5-4 = 1
+        # "Hello" is at filtered index 0, match found at 0
         (
                 "Match found, skipping system messages",
                 [("text", hash_single_message({"role": "user", "content": "Hello, who are you?"}))],
                 True,
-                5
+                0  # search_boundary(1) - match_index(0) - 1 = 0
         ),
+        # 6 filtered messages, search_boundary = 2, no match found
+        # All messages up to boundary are "new"
         (
-                "No match found, should return total message count",
+                "No match found, should return search boundary count",
                 [("text", "non_existent_hash")],
                 False,
-                6
+                2  # search_boundary = 2
         ),
+        # 5 filtered messages, search_boundary = 1, no match found
         (
-                "No match found, skipping system, should return filtered message count",
+                "No match found, skipping system, should return search boundary count",
                 [("text", "non_existent_hash")],
                 True,
-                5
+                1  # search_boundary = 1
         ),
+        # "Okay, thank you" is at filtered index 5, but search_boundary = 2
+        # So the match is OUTSIDE the search range (indices 2,1,0)
+        # No match found within valid range
         (
                 "Match found is skipped due to turns_to_skip_looking_back",
                 [("text", hash_single_message({"role": "user", "content": "Okay, thank you."}))],
                 False,
-                6
+                2  # No match in valid range, return search_boundary = 2
         )
     ]
 )
 def test_find_last_matching_hash_message(sample_messages, description, hashed_chunks, skip_system,
-                                         expected_messages_since_match):
+                                         expected_new_messages):
     """
     Tests various scenarios for finding the last matching hash.
+
+    The function returns the count of NEW messages to process, which is used in the calling code:
+        start_index = end_index - return_value
+        new_messages = messages[start_index:end_index]
+
+    This ensures we don't reprocess already-memorized messages.
     """
     result = find_last_matching_hash_message(sample_messages, hashed_chunks, skip_system)
-    assert result == expected_messages_since_match
+    assert result == expected_new_messages
 
 
 def test_find_last_matching_hash_message_filters_images_role(sample_messages):
     """
     Ensures that messages with the 'images' role are always filtered out, regardless of the skip_system flag.
+    Since the images message is filtered, its hash will never match, so we get all messages up to search_boundary.
     """
     hashed_chunks_with_image_hash = [
         ("text", hash_single_message({"role": "images", "content": "[image data]"}))
     ]
 
+    # 6 filtered messages (images removed), search_boundary = 6-4 = 2
+    # No match found (images hash won't match any filtered message)
     result = find_last_matching_hash_message(sample_messages, hashed_chunks_with_image_hash, skip_system=False)
-    assert result == 6
+    assert result == 2  # search_boundary

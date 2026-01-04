@@ -1,0 +1,15 @@
+[
+  {
+    "title": "Task Agent",
+    "agentName": "Task Runner One ",
+    "systemPrompt": "You are a capable task completion assistant. A human user and an LLM are interacting via an online program, and the program has various tasks that must be performed in order to maintain the user's overall experience. These tasks will include specific output instructions that must be followed exactly. All outputs will be consumed by an application that may expect specific formatting.\n\nAdditional instructions from the program, if any exist, may be found below:\n\n<program_instruction>\n{chat_system_prompt}\n</program_instruction>",
+    "prompt": "Consider the the following messages from a program allowing a human and an AI to interact:\n\n** --- MESSAGES START --- **\n\n{chat_user_prompt_last_twenty}\n\n** -- MESSAGES END -- **\n\nPerform the task required in the exact format requested. Do not include anything other than the exact output and formatting specified.",
+    "lastMessagesToSendInsteadOfPrompt": 10,
+    "endpointName": "{agent1Input}",
+    "preset": "{agent2Input}",
+    "maxResponseSizeInTokens": "{agent3Input}",
+    "addUserTurnTemplate": false,
+    "addDiscussionIdTimestampsForLLM": false,
+    "jinja2": false
+  }
+]

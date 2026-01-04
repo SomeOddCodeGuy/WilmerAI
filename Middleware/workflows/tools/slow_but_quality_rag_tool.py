@@ -63,18 +63,24 @@ class SlowButQualityRAGTool:
             logger.warning(f"Could not find a JSON block or object in the LLM output.")
             return None
 
-    def generate_and_store_vector_memories(self, text_chunks: List[str], config: Dict, context: ExecutionContext):
+    def generate_and_store_vector_memories(self, hashed_chunks: List[tuple], config: Dict,
+                                            context: ExecutionContext) -> int:
         """
         Generates and stores structured vector memories from text chunks.
 
         This method processes text chunks, generates structured JSON metadata using
         an LLM or a sub-workflow, and stores the resulting memory and metadata
-        in the discussion-specific vector database.
+        in the discussion-specific vector database. After each chunk is successfully
+        processed, the corresponding hash is written to the hash log, making the
+        process resumable if interrupted.
 
         Args:
-            text_chunks (List[str]): A list of conversation text chunks to process.
+            hashed_chunks (List[tuple]): A list of tuples, each containing (text_chunk, hash).
             config (Dict): The configuration dictionary for this memory operation.
             context (ExecutionContext): The current workflow execution context.
+
+        Returns:
+            int: The total number of memories successfully stored in the vector database.
         """
         rag_system_prompt = "You are an expert AI assistant that analyzes text and outputs a structured JSON object..."
         rag_prompt = """Analyze the following memory text and generate a JSON object...
@@ -100,7 +106,9 @@ JSON Output:"""
         temp_llm_context.llm_handler = llm_handler
         temp_llm_context.config = config  # Ensure the correct node config is used
 
-        for chunk in text_chunks:
+        total_memories_stored = 0
+
+        for chunk, chunk_hash in hashed_chunks:
             if not chunk.strip():
                 continue
 
@@ -144,10 +152,16 @@ JSON Output:"""
                             successful_adds += 1
 
                 if successful_adds > 0:
+                    # Write the hash immediately after successfully storing memories for this chunk
+                    # This makes the process resumable - if interrupted, we can pick up from the last hash
+                    vector_db_utils.add_vector_check_hash(context.discussion_id, chunk_hash)
                     logger.info(
-                        f"Successfully generated and stored {successful_adds} vector memory/memories for discussion {context.discussion_id}.")
+                        f"Successfully generated and stored {successful_adds} vector memory/memories for discussion {context.discussion_id}. Hash logged for resumability.")
+                    total_memories_stored += successful_adds
                 else:
                     logger.error(f"Received empty response from LLM/workflow for vector memory generation.")
+
+        return total_memories_stored
 
     def perform_keyword_search(self, keywords: str, target: str, context: ExecutionContext):
         """
@@ -280,9 +294,8 @@ JSON Output:"""
                 new_message_content_to_process = messages_copy[start_index:end_index]
 
             if new_message_content_to_process:
-                last_processed_message_for_hash_update = new_message_content_to_process[-1]
                 logger.info(
-                    f"Threshold met. Found {len(new_message_content_to_process)} new messages. Generating new vector memories.")
+                    f"Found {len(new_message_content_to_process)} new messages to consider for vector memory generation.")
 
                 chunk_size = discussion_id_workflow_config.get('vectorMemoryChunkEstimatedTokenSize', 1000)
                 max_messages = discussion_id_workflow_config.get('vectorMemoryMaxMessagesBetweenChunks', 5)
@@ -290,12 +303,17 @@ JSON Output:"""
                                                            max_messages_before_chunk=max_messages)
                 text_chunks = extract_text_blocks_from_hashed_chunks(hashed_chunks)
 
-                self.generate_and_store_vector_memories(text_chunks, discussion_id_workflow_config, context)
-
-                if last_processed_message_for_hash_update:
-                    new_hash = hash_single_message(last_processed_message_for_hash_update)
-                    # Use the new function to add the hash to the log
-                    vector_db_utils.add_vector_check_hash(context.discussion_id, new_hash)
+                if not text_chunks:
+                    logger.info(
+                        f"Messages did not meet chunking threshold (need {max_messages} messages or {chunk_size} estimated tokens). No memories generated.")
+                else:
+                    # Pass hashed_chunks so that hashes are written after each successful chunk,
+                    # making the process resumable if interrupted
+                    memories_stored = self.generate_and_store_vector_memories(hashed_chunks, discussion_id_workflow_config, context)
+                    if memories_stored > 0:
+                        logger.info(f"Completed vector memory generation. Total memories stored: {memories_stored}.")
+                    else:
+                        logger.warning("Chunking produced text but no memories were successfully stored.")
         else:
             # This is the file-based memory path
             logger.debug("Running file-based memory check.")

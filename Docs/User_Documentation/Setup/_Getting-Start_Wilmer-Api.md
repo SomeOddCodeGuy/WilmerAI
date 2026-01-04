@@ -56,7 +56,29 @@ You have two options for installation:
 
 -----
 
-### Step 3: Manage Your Configuration Files 💡
+### Step 2b: (Optional) Use the Setup Wizard
+
+WilmerAI includes an interactive setup wizard that can configure your LLM endpoints for you. If you'd rather not
+manually edit JSON files, the wizard provides a guided experience.
+
+**To run the setup wizard:**
+
+```bash
+python setup_wizard.py
+```
+
+The wizard will:
+
+1. Ask if you're using one model for everything or multiple models
+2. Guide you through selecting your API type (Ollama, OpenAI, KoboldCpp, etc.)
+3. Collect your LLM server URL and model name
+4. Automatically update all endpoint configuration files
+
+If you use the setup wizard, you can skip Step 5 (Configure Your LLM Endpoints) since the wizard handles that for you.
+
+-----
+
+### Step 3: Manage Your Configuration Files
 
 To avoid issues with future updates (like git conflicts), it's highly recommended to **move your configuration files out
 of the main WilmerAI directory.**
@@ -89,7 +111,11 @@ specify which user you want to run in Step 5.
 
 
 * **\_example\_general\_workflow**: This is a simple user that runs a single general purpose workflow. Simple, to the
-  point. Best used with direct and productive front ends like Open WebUI. Requires the Offline Wikipedia API
+  point. Best used with direct and productive front ends like Open WebUI. Requires the Offline Wikipedia API.
+
+  This user has **shared workflows enabled**, meaning it can load workflows from the `_shared` folder. Front-end
+  applications like Open WebUI can query the `/v1/models` endpoint to see available workflows and select them from
+  the model dropdown. See "Shared Workflows" below for more details.
 
 
 * **\_example\_coding\_workflow**: This is a simple user that runs a single coding workflow. Simple, to the point. Best
@@ -124,9 +150,12 @@ Most example users make use of [nested workflows](../Core_Features/Nested_Workfl
 example user is only a single node, which is pointing to another workflow found in the `_common` folder within
 Workflows. You can swap out the workflow that is called.
 
-For example- if `_example_general_workflow` user calls `General_Workflow_Multi_Step`, which has 4 or 5 nodes of work,
-but you want to only run `General_Workflow` which has a single node, you can simply change the name of the workflow
-called and it will swap to that.
+For example, if an example user calls `General_With_Vision`, you could swap it to `Coding_With_Vision` or `Task` by
+simply changing the `workflowName` in the user's `_DefaultWorkflow.json`. Common workflows in `_common` include:
+
+* `General_With_Vision` - General conversation with optional image support
+* `Coding_With_Vision` - Coding assistance with optional image support
+* `Task` - Task-oriented workflow
 
 That is not necessary for setting up the example users, and is optional. For the sake of a quick start, the user should
 not need to modify the workflow folder at all.
@@ -136,6 +165,9 @@ not need to modify the workflow folder at all.
 ### Step 5: Configure Your LLM Endpoints
 
 This is the most important step. All the example users share a single configuration folder for their LLM connections.
+
+> **Tip:** If you prefer a guided experience, run `python setup_wizard.py` instead of manually editing these files.
+> The setup wizard will configure all your endpoints interactively.
 
 1. Navigate to the **`Public/Configs/Endpoints/_example_users/`** directory (or the equivalent location you chose in the
    Pro-Tip step).
@@ -178,7 +210,7 @@ The endpoints for the example users can be found in `Public/Configs/Endpoints/_e
   meaning large amounts of text with a high expectation of it to use that text properly.
 * `General-Rag-Fast-Endpoint`: A fast and light RAG model. Whatever the smallest and fastest model you have that handles
   its context window well, as it will be given large amounts of text and expected to use that text properly.
-* `Image-Endpoint`: Your vision model. Used with the workflows that have a Image Processing node at the start. None of
+* `Vision-Endpoint`: Your vision model. Used with the workflows that have a Image Processing node at the start. None of
   the example users do by default, but you can swap the workflows easily to include them
 * `Memory-Generation-Endpoint`: Model that has the best contextual understanding but also does RAG well. If its writing
   a memory, it needs to really 'get' what it's reading and what was happening/being said.
@@ -224,6 +256,49 @@ However, a few users require minor edits:
 * **For `_example_game_bot_with_file_memory`:**
   This user will save memory files to a default directory. If you wish to change where conversation memory files are
   stored, you can set the `"discussionDirectory"` path in the user file. This is purely optional.
+
+-----
+
+### Shared Workflows (Open WebUI Integration)
+
+The `_example_general_workflow` user comes pre-configured with **shared workflows** enabled. This feature allows
+front-end applications like Open WebUI to select different workflows directly from the model dropdown.
+
+#### How It Works
+
+When shared workflows are enabled, the `/v1/models` and `/api/tags` endpoints return a list of available workflows
+from the `_shared` folder. Your front-end application can display these as selectable "models," allowing you to switch
+between different workflows without changing configuration files.
+
+#### Pre-configured Shared Workflows
+
+The `_shared` folder includes several ready-to-use workflows for Open WebUI:
+
+* `openwebui-general` - General conversation workflow
+* `openwebui-general-fast` - Faster general conversation (fewer processing steps)
+* `openwebui-general-reasoning` - General conversation with enhanced reasoning
+* `openwebui-coding` - Coding-focused workflow
+* `openwebui-task` - Task-oriented workflow
+
+#### Enabling Shared Workflows for Other Users
+
+To enable shared workflows for any user, add these settings to their user JSON file:
+
+```json
+"allowSharedWorkflows": true,
+"sharedWorkflowsSubDirectoryOverride": "_shared"
+```
+
+* `allowSharedWorkflows`: Set to `true` to enable the feature.
+* `sharedWorkflowsSubDirectoryOverride`: Specifies which folder under `Workflows/` to load shared workflows from.
+  The default `_shared` folder contains workflows designed for Open WebUI.
+
+#### Using Shared Workflows
+
+1. Connect your front-end (e.g., Open WebUI) to WilmerAI
+2. Query the models list (your front-end does this automatically)
+3. Select a workflow from the model dropdown (e.g., `chris:openwebui-coding`)
+4. Your requests will now use the selected workflow
 
 -----
 
