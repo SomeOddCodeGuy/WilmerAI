@@ -33,21 +33,16 @@ logic without requiring changes to your existing front-end tools.
 
 ---
 
-## Maintainer's Note — UPDATED 2025-09-21
+## Maintainer's Note — UPDATED 2026-01-04
 
 > **IMPORTANT:**  
-> Wilmer is once more accepting contributions. A six-month-long refactor was kicked off back in March of
-> 2025 to correct long-standing issues that resulted from me learning Python as I was first making this.
-> The code is now much easier to work in, is thoroughly documented, and currently has 92% unit test code
-> coverage. It's not perfect, but it's a good start. Now that it's out of the way, I can start adding even
-> more features and fleshing out the ones that exist.
+> Sorry for the slow releases lately! I've started a new job and haven't had quite as much free time as I did before.
+> However, I do expect in the coming months that I'll be able to put more time into this.
 >
-> For most of this year, I've only really had a few hours each weekend to put into this project, but things
-> are starting to quite down. As I start to get a bit more free time, I'm hoping I can begin to poking at this
-> in the late evenings as well.
->
-> To those who are still around: thanks for your patience with me. I've still got a lot of plans for this project,
-> and now that my schedule is clearing up, I plan to dig into them.
+> I can assure you that I haven't abandoned or forgotten this project. I use it daily. Claude Code has definitely
+> changed my opinion on agentic development, but I still use Wilmer for all of my regular chatbot stuff, which I
+> use often (especially for offline LLMs). I still have a lot I want to do with Wilmer, so I'm not remotely finished
+> yet.
 >
 > — Socg
 
