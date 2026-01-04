@@ -92,13 +92,22 @@ depends on whether the client requests a streaming or non-streaming response.
 
 #### `api_helpers.py`
 
-* **Responsibility**: Provides helper functions used across the API layer, primarily for handling streaming data.
+* **Responsibility**: Provides helper functions used across the API layer, primarily for handling streaming data and
+  workflow override management.
 * **Key Functions**:
     * `build_response_json()`: Constructs a **single streaming JSON chunk**. It acts as a dispatcher, calling the
       appropriate chunk-building method on the `ResponseBuilderService` based on the globally set `API_TYPE`.
     * `extract_text_from_chunk()`: Parses an incoming data chunk from an LLM backend and extracts the text content,
       handling multiple formats (SSE, plain JSON).
     * `sse_format()`: Formats a string into the correct Server-Sent Event (SSE) structure.
+    * `get_model_name()`: Returns the model identifier for API responses. When a workflow override is active, returns
+      `username:workflow` format; otherwise returns just the username.
+    * `parse_model_field()`: Parses the model field from incoming API requests and extracts a workflow name if one is
+      specified. Supports formats like `username:workflow`, `workflow`, and `username:workflow:latest`.
+    * `set_workflow_override()`: Sets the global workflow override from the model field. Called at the start of request
+      processing.
+    * `clear_workflow_override()`: Clears the workflow override. Called at the end of request processing.
+    * `get_active_workflow_override()`: Returns the currently active workflow override, if any.
 
 ### `Middleware/services/`
 
@@ -113,6 +122,9 @@ depends on whether the client requests a streaming or non-streaming response.
           schema-compliant dictionary.
         * **Streaming Chunk Methods**: Contains methods like `build_openai_chat_completion_chunk()`
           and `build_ollama_chat_chunk()` that create a single, schema-compliant JSON chunk for a streaming response.
+        * **Models List Methods**: `build_openai_models_response()` and `build_ollama_tags_response()` return lists of
+          available workflows from the `_shared` folder. Each workflow is presented in `username:workflow` format,
+          allowing front-end applications to select specific workflows via their model dropdown.
 
 ### `Middleware/api/handlers/`
 
@@ -151,7 +163,71 @@ depends on whether the client requests a streaming or non-streaming response.
 
 -----
 
-## 4\. How to Extend
+## 4\. Workflow Selection via Model Field
+
+WilmerAI allows front-end applications to select specific workflows by using the model field in API requests. This
+feature enables users to switch between different workflows without changing their configuration.
+
+### How It Works
+
+1. **Models List Endpoints**: The `/v1/models` (OpenAI) and `/api/tags` (Ollama) endpoints return a list of available
+   workflows from `Public/Configs/Workflows/_shared/`. Each workflow is presented in `username:workflow` format.
+
+2. **Request Processing**: When a request includes a model field containing a workflow name, the API handler:
+    * Calls `api_helpers.set_workflow_override()` to parse and store the workflow name
+    * The workflow gateway checks for an active override before using normal routing
+    * If a valid workflow is found in `_shared/`, it's executed directly
+
+3. **Response Format**: Responses include the model in `username:workflow` format when a workflow override is active,
+   allowing front-ends to maintain the selected workflow across requests.
+
+### Model Field Format
+
+The `parse_model_field()` function in `api_helpers.py` handles these formats:
+
+| Format | Example | Result |
+|--------|---------|--------|
+| `username:workflow` | `chris:openwebui-coding` | Extracts `openwebui-coding` |
+| `workflow` | `openwebui-coding` | Uses `openwebui-coding` if it exists in `_shared/` |
+| `username:workflow:latest` | `chris:openwebui-coding:latest` | Strips `:latest`, extracts `openwebui-coding` |
+| Non-matching | `gpt-4` | Returns `None`, uses normal routing |
+
+### Folder Structure
+
+```
+Public/Configs/Workflows/
+├── _shared/
+│   ├── openwebui-coding/           # Listed by models endpoint as folder name
+│   │   └── _DefaultWorkflow.json   # Workflow loaded when folder is selected
+│   ├── openwebui-general/
+│   │   └── _DefaultWorkflow.json
+│   └── openwebui-task/
+│       └── _DefaultWorkflow.json
+├── chris/                          # Default user folder
+│   └── ...
+```
+
+### Request Flow with Workflow Override
+
+1. Client queries `/v1/models` → receives list of `username:workflow` entries
+2. Client sends request with `"model": "chris:openwebui-coding"`
+3. Handler calls `api_helpers.set_workflow_override("chris:openwebui-coding")`
+4. `workflow_gateway.handle_user_prompt()` detects the override
+5. Workflow is loaded from `_shared/openwebui-coding/_DefaultWorkflow.json`
+6. Response includes `"model": "chris:openwebui-coding"`
+7. Handler calls `api_helpers.clear_workflow_override()` in `finally` block
+
+### Key Files
+
+* `api_helpers.py`: Contains `parse_model_field()`, `set_workflow_override()`, `clear_workflow_override()`
+* `instance_global_variables.py`: Contains `WORKFLOW_OVERRIDE` global variable
+* `workflow_gateway.py`: Checks for workflow override before normal routing
+* `config_utils.py`: Contains `get_shared_workflows_folder()`, `get_available_shared_workflows()`,
+  `workflow_exists_in_shared_folder()`
+
+-----
+
+## 5\. How to Extend
 
 The architecture makes it easy to add new functionality. The `ApiServer` automatically discovers new handlers, so in
 most cases, you only need to add new files without modifying existing ones.

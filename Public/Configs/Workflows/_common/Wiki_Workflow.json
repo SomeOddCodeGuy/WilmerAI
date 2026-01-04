@@ -6,7 +6,7 @@
     "prompt": "Please consider the below messages:\n\n<recent_conversation>\n{chat_user_prompt_last_ten}\n</recent_conversation>\n\nIn order to appropriately search for information to help respond to the user, it is important to first identify what to look up. Considering the full context of the messages provided, please specify exactly what topic the last message is speaking about. Do not simply assume that it is discussing the most recent messages; consider the entire context that has been provided and think deeply about what the user might really be saying.\nPlease respond clearly with what the user is saying or asking, and what specifically should be researched",
     "lastMessagesToSendInsteadOfPrompt": 5,
     "endpointName": "General-Rag-Fast-Endpoint",
-    "preset": "Worker_Preset",
+    "preset": "General-Rag-Fast-Preset",
     "maxResponseSizeInTokens": 500,
     "addUserTurnTemplate": true
   },
@@ -17,7 +17,7 @@
     "prompt": "A user has made a request of an AI assistant, and that request has been analyzed in order to determine what the topic of research should be.The analysis can be found below:\n\n<research_topic>\n{agent1Output}\n</research_topic>\n\n### Rules of the Research ###\n- There will be 4 articles that can be pulled from Wikipedia. This is the first of the four, meaning that the research can be further expanded upon the results of this query. As such, this search topic should focus on broad knowledge which can be narrowed down in future steps\n- The search mechanism for the wikipedia article is powered by a small language model, similar to BERT or e5-base. As such, complex queries will generally return bad results. In order to maximize the research value, unique, short and very specific queries need to written\n- The research is constrained only to Wikipedia, so encyclopedic knowledge will be the primary corpus of data available.\n\n### The Task ###\nGiven this information, please respond to the following in complete sentences.\nA) Given the topic and the rules, what information are you hoping to attain from this research round's wikipedia article?\nB) Given the constraints of the model that the wikipedia search uses, what very simple and short query should be utilized with the goal of finding the information you desire? Generate the most canonical, neutral, and likely-to-succeed broad topic search query for this topic. Do not include years, rankings, or adjectives.\n\nExample:\n- For the research topic of 'top MMORPGs in 2024', you would choose 'MMORPG'.\n- For the research topic of 'best sci-fi movies ever', you would choose 'Science fiction film'.",
     "lastMessagesToSendInsteadOfPrompt": 5,
     "endpointName": "General-Rag-Fast-Endpoint",
-    "preset": "Worker_Preset",
+    "preset": "General-Rag-Fast-Preset",
     "maxResponseSizeInTokens": 1000,
     "addUserTurnTemplate": true
   },
@@ -28,7 +28,7 @@
     "prompt": "The conversation topic is:\n\n<conversation_topic>\n{agent1Output}\n</conversation_topic>\n\nAn LLM has carefully broken down what query should be generated to search Wikipedia. The query can be found below:\n\n<llm_research_proposal>\n{agent2Output}\n</llm_research_proposal>\n\nPlease carefully consider the information, and generate a query, which will be sent verbatim to Wikipedia. Please respond ONLY with the query.",
     "lastMessagesToSendInsteadOfPrompt": 5,
     "endpointName": "General-Rag-Fast-Endpoint",
-    "preset": "Worker_Preset",
+    "preset": "General-Rag-Fast-Preset",
     "maxResponseSizeInTokens": 300,
     "addUserTurnTemplate": true
   },
@@ -50,7 +50,7 @@
     "prompt": "",
     "lastMessagesToSendInsteadOfPrompt": 10,
     "endpointName": "General-Rag-Fast-Endpoint",
-    "preset": "Factual_Preset",
+    "preset": "General-Rag-Fast-Preset",
     "maxResponseSizeInTokens": 4000,
     "addUserTurnTemplate": false,
     "forceGenerationPromptIfEndpointAllows": false,

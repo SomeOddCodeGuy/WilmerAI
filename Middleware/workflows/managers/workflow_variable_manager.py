@@ -178,6 +178,7 @@ class WorkflowVariableManager:
         # --- Date and time variables ---
         variables['todays_date_pretty'] = now.strftime('%B %d, %Y')
         variables['todays_date_iso'] = now.strftime('%Y-%m-%d')
+        variables['YYYY_MM_DD'] = now.strftime('%Y_%m_%d')
         variables['current_time_12h'] = now.strftime('%I:%M %p').lstrip('0')
         variables['current_time_24h'] = now.strftime('%H:%M')
         variables['current_month_full'] = now.strftime('%B')
@@ -192,8 +193,10 @@ class WorkflowVariableManager:
 
         # --- Context-specific variables ---
         if context.discussion_id:
+            variables['Discussion_Id'] = context.discussion_id
             variables['time_context_summary'] = self.timestamp_service.get_time_context_summary(context.discussion_id)
         else:
+            variables['Discussion_Id'] = ''
             variables['time_context_summary'] = ''
 
         # --- Conversation history variables ---

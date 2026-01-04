@@ -9,6 +9,41 @@ if False:
 
 
 @dataclass
+class NodeExecutionInfo:
+    """
+    Tracks execution details for a single node in a workflow.
+
+    Attributes:
+        node_index (int): The 1-based index of the node in the workflow.
+        node_type (str): The type of the node (e.g., "Standard", "GetCustomFile").
+        node_name (str): The title or agentName of the node, or "N/A" if not available.
+        endpoint_name (str): The name of the endpoint used, or "N/A" if not applicable.
+        endpoint_url (str): The URL of the endpoint (host:port), or "N/A" if not applicable.
+        execution_time_seconds (float): The time taken to execute the node in seconds.
+    """
+    node_index: int
+    node_type: str
+    node_name: str
+    endpoint_name: str
+    endpoint_url: str
+    execution_time_seconds: float
+
+    def format_time(self) -> str:
+        """Returns a formatted time string with appropriate units."""
+        if self.execution_time_seconds == 1.0:
+            return "1 second"
+        elif self.execution_time_seconds < 1.0:
+            return f"{self.execution_time_seconds:.2f} seconds"
+        else:
+            return f"{self.execution_time_seconds:.1f} seconds"
+
+    def __str__(self) -> str:
+        return (f"Node {self.node_index}: {self.node_type} || "
+                f"'{self.node_name}' || {self.endpoint_name} || "
+                f"{self.endpoint_url} || {self.format_time()}")
+
+
+@dataclass
 class ExecutionContext:
     """
     A unified context object holding all state for a single node's execution.

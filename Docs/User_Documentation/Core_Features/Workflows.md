@@ -108,8 +108,9 @@ available node categories and some key examples.
 
 * **`Standard`**: The most common type; makes a direct call to an LLM.
 * **`PythonModule`**: Executes a custom Python script and returns its string output.
-* **`GetCustomFile`**: Reads the content of a local text file.
-* **`SaveCustomFile`**: Saves a string to a local text file.
+* **`GetCustomFile`**: Reads the content of a local text file. Supports variables in the filepath, including
+  `{Discussion_Id}` and `{YYYY_MM_DD}` for dynamic paths.
+* **`SaveCustomFile`**: Saves a string to a local text file. Supports variables in both `filepath` and `content`.
 * **`ImageProcessor`**: Generates a text description for an image supplied by the user.
 * **`StaticResponse`**: Responds back with a hardcoded string that is defined on the node itself.
 

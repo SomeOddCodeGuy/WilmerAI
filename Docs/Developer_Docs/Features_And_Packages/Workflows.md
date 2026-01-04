@@ -101,6 +101,13 @@ This section details the responsibility of each key file in the `Middleware/work
     - **Details:** Contains the main `execute()` loop. Its most critical function is to create a new, fully populated
       `ExecutionContext` for each node before dispatching it to the correct handler. It also maintains the
       `agent_outputs` dictionary to manage state between nodes.
+    - **Node Execution Logging:** At the end of each workflow, logs an INFO-level summary of all executed nodes using
+      `NodeExecutionInfo` objects. The summary includes node index, type, name (from `title` or `agentName`), endpoint
+      details, and execution time. Helper methods include `_get_node_name()` (extracts display name, showing workflow
+      destinations for sub-workflow nodes), `_get_endpoint_details()` (resolves endpoint name/URL with variable
+      substitution), and `_log_node_execution_summary()` (formats and logs the summary).
+    - **Variable Substitution:** The `maxResponseSizeInTokens` field supports workflow variable substitution (e.g.,
+      `{agent#Input}`), allowing parent workflows to dynamically control response size limits for child workflows.
 
 #### `handlers/`
 
@@ -130,10 +137,12 @@ This section details the responsibility of each key file in the `Middleware/work
 
 #### `models/`
 
-- **`execution_context.py` (`$ExecutionContext$`)**
-    - **Responsibility:** Defines the data structure for the central context object.
-    - **Details:** A `dataclass` that holds all runtime state for a single node's execution, including request IDs,
-      node/workflow configs, messages, agent inputs/outputs, and service handlers.
+- **`execution_context.py`**
+    - **`ExecutionContext`:** A `dataclass` that holds all runtime state for a single node's execution, including
+      request IDs, node/workflow configs, messages, agent inputs/outputs, and service handlers.
+    - **`NodeExecutionInfo`:** A `dataclass` for tracking node execution metrics used in logging. Contains fields for
+      `node_index`, `node_type`, `node_name`, `endpoint_name`, `endpoint_url`, and `execution_time_seconds`. Includes
+      a `format_time()` method that returns human-readable time strings and a `__str__()` method for formatted log output.
 
 -----
 

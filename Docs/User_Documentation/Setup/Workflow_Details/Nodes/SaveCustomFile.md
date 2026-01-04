@@ -46,7 +46,11 @@ Each field is explained in detail below.
     * **Type**: `String`
     * **Required**: Yes
     * **Description**: The full, absolute or relative path where the file will be saved. If the parent directories do
-      not exist, the node will attempt to create them.
+      not exist, the node will attempt to create them. This field supports variable substitution, allowing you to use
+      placeholders like `{Discussion_Id}` and `{YYYY_MM_DD}` to create dynamic, per-conversation or date-based file
+      paths.
+    * **Example with variables**: `"/Users/socg/sessions/{Discussion_Id}_output.txt"` or
+      `"/data/logs/{YYYY_MM_DD}_report.txt"`
 
 * #### **`content`**
 
@@ -96,12 +100,64 @@ File successfully saved to D:\WilmerAI\Characters\jax_the_pirate.txt
 
 -----
 
+### Dynamic Filepath Example
+
+The `filepath` field supports workflow variable substitution, allowing you to create dynamic, per-conversation or
+date-based file paths. This is useful for saving session-specific outputs, daily reports, or user-specific data.
+
+#### Available Variables for Filepaths
+
+* **`{Discussion_Id}`**: The unique identifier for the current conversation. Useful for per-session files.
+* **`{YYYY_MM_DD}`**: Today's date in underscore-separated format (e.g., `2025_12_07`). Useful for daily logs.
+* Any other workflow variable (e.g., `{agent1Output}`, custom variables defined in the workflow JSON).
+
+#### Example: Saving Per-Conversation Output
+
+```json
+{
+  "title": "Save Session Summary",
+  "type": "SaveCustomFile",
+  "filepath": "/data/sessions/{Discussion_Id}_summary.txt",
+  "content": "Session Summary:\n{agent1Output}"
+}
+```
+
+If the `Discussion_Id` is `conv-abc-123`, this will save to `/data/sessions/conv-abc-123_summary.txt`.
+
+#### Example: Saving Daily Reports
+
+```json
+{
+  "title": "Save Daily Report",
+  "type": "SaveCustomFile",
+  "filepath": "/data/reports/{YYYY_MM_DD}_report.txt",
+  "content": "Daily Report for {todays_date_pretty}\n\n{agent1Output}"
+}
+```
+
+If today is December 7, 2025, this will save to `/data/reports/2025_12_07_report.txt`.
+
+#### Example: Combining Multiple Variables
+
+```json
+{
+  "title": "Save Session-Specific Daily Log",
+  "type": "SaveCustomFile",
+  "filepath": "/data/{YYYY_MM_DD}/{Discussion_Id}_output.txt",
+  "content": "Generated at {current_time_12h}:\n\n{agent1Output}"
+}
+```
+
+-----
+
 ### Behavior and Edge Cases
 
 It's crucial to understand how the node behaves in specific situations:
 
 * **Output Variable**: The node returns a status message as a single string (e.g., `"File successfully saved to ..."`).
   This output is assigned to a variable based on the node's position (e.g., `{agent1Output}`, `{agent2Output}`).
+* **Variable Substitution**: Both the `filepath` and `content` fields are processed through the workflow variable
+  manager before the file is saved. This means you can use any available workflow variable in both fields.
 * **File System Errors**: If the file cannot be written due to permissions issues or other I/O errors, the node will
   return an error message string, for example:
   `"Error saving file: [Errno 13] Permission denied: 'C:\Windows\system.log'"`.
@@ -110,3 +166,7 @@ It's crucial to understand how the node behaves in specific situations:
 * **Missing `content`**: If the `content` field is missing from the configuration, the node will return the string:
   `"No content specified"`. Note that an empty string (`"content": ""`) is valid and will result in an empty file being
   created.
+* **Empty Discussion_Id**: If `{Discussion_Id}` is used but no discussion ID is present in the context, it will be
+  replaced with an empty string, which may result in an invalid filepath.
+* **Directory Creation**: If the parent directories in the filepath do not exist, the node will attempt to create them
+  automatically.

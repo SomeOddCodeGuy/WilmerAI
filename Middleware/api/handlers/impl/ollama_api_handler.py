@@ -26,6 +26,7 @@ from flask import jsonify, request, Response, g, stream_with_context
 from flask.views import MethodView
 from werkzeug.exceptions import ClientDisconnected
 
+from Middleware.api import api_helpers
 from Middleware.api.app import app
 from Middleware.api.handlers.base.base_api_handler import BaseApiHandler
 from Middleware.api.workflow_gateway import handle_user_prompt, _sanitize_log_data, handle_openwebui_tool_check
@@ -59,12 +60,18 @@ def _stream_with_eventlet_optimized(request_id: str, messages: List[Dict], strea
     logger.info(f"Ollama starting Eventlet optimized streaming for request_id: {request_id}")
     from Middleware.services.cancellation_service import cancellation_service
 
+    # Capture workflow override before spawning greenlet, since the finally block
+    # in the calling function will clear it before the greenlet runs
+    captured_workflow_override = api_helpers.get_active_workflow_override()
+
     event_queue = EventletQueue()
     stop_signal = eventlet.event.Event()
     reader_greenlet = None
 
     def backend_reader():
         """Background greenlet that reads from handle_user_prompt and queues chunks."""
+        # Restore the workflow override that was captured before spawning
+        instance_global_variables.WORKFLOW_OVERRIDE = captured_workflow_override
         try:
             for chunk in handle_user_prompt(request_id, messages, stream):
                 if stop_signal.ready():
@@ -147,7 +154,13 @@ def _stream_response_fallback(request_id: str, messages: List[Dict], stream: boo
     logger.info(f"Ollama starting fallback (synchronous) streaming for request_id: {request_id}")
     from Middleware.services.cancellation_service import cancellation_service  # Import inside function
 
+    # Capture workflow override before creating generator, since the finally block
+    # in the calling function will clear it before the generator runs
+    captured_workflow_override = api_helpers.get_active_workflow_override()
+
     def streaming_generator():
+        # Restore the workflow override that was captured before creating the generator
+        instance_global_variables.WORKFLOW_OVERRIDE = captured_workflow_override
         logger.debug(f"Ollama Fallback Generator starting for request_id: {request_id}")
         try:
             for chunk in handle_user_prompt(request_id, messages, stream):
@@ -239,39 +252,46 @@ class GenerateAPI(MethodView):
         if not model:
             return jsonify({"error": "The 'model' field is required."}), 400
 
-        prompt: str = data.get("prompt", "")
-        system: str = data.get("system", "")
-        stream: bool = data.get("stream", True)
+        # Set workflow override from model field if applicable
+        api_helpers.set_workflow_override(model)
 
-        # Combine system and user prompt for processing
-        full_prompt = prompt
-        if system:
-            # Keep behavior consistent with previous implementation
-            full_prompt = system + prompt
+        try:
+            prompt: str = data.get("prompt", "")
+            system: str = data.get("system", "")
+            stream: bool = data.get("stream", True)
 
-        # Attempt to parse tagged conversation format
-        messages = parse_conversation(full_prompt)
+            # Combine system and user prompt for processing
+            full_prompt = prompt
+            if system:
+                # Keep behavior consistent with previous implementation
+                full_prompt = system + prompt
 
-        # Ensure messages is initialized even if empty
-        if not messages and full_prompt:
-            messages = [{"role": "user", "content": full_prompt}]
-        elif not messages:
-            messages = []
+            # Attempt to parse tagged conversation format
+            messages = parse_conversation(full_prompt)
 
-        images = data.get("images", [])
-        if images:
-            for image_base64 in images:
-                messages.append({"role": "images", "content": image_base64})
+            # Ensure messages is initialized even if empty
+            if not messages and full_prompt:
+                messages = [{"role": "user", "content": full_prompt}]
+            elif not messages:
+                messages = []
 
-        if stream:
-            # Use the dynamic streaming handler selection
-            return _handle_streaming_request(request_id, messages, stream)
-        else:
-            # Pass request_id
-            return_response: str = handle_user_prompt(request_id, messages, stream=False)
-            response = response_builder.build_ollama_generate_response(return_response, model=model,
-                                                                       request_id=request_id)
-            return jsonify(response)
+            images = data.get("images", [])
+            if images:
+                for image_base64 in images:
+                    messages.append({"role": "images", "content": image_base64})
+
+            if stream:
+                # Use the dynamic streaming handler selection
+                return _handle_streaming_request(request_id, messages, stream)
+            else:
+                # Pass request_id. Use the model name from api_helpers to get username:workflow format
+                return_response: str = handle_user_prompt(request_id, messages, stream=False)
+                response_model = api_helpers.get_model_name()
+                response = response_builder.build_ollama_generate_response(return_response, model=response_model,
+                                                                           request_id=request_id)
+                return jsonify(response)
+        finally:
+            api_helpers.clear_workflow_override()
 
 
 class ApiChatAPI(MethodView):
@@ -309,51 +329,58 @@ class ApiChatAPI(MethodView):
         if 'model' not in request_data or 'messages' not in request_data:
             return jsonify({"error": "Both 'model' and 'messages' fields are required."}), 400
 
-        messages: List[Dict[str, Any]] = request_data["messages"]
-        transformed_messages: List[Dict[str, Any]] = []
+        # Set workflow override from model field if applicable
+        model_from_request = request_data.get("model")
+        api_helpers.set_workflow_override(model_from_request)
 
-        for message in messages:
-            if "role" not in message or "content" not in message:
-                return jsonify({"error": "Each message must have 'role' and 'content' fields."}), 400
+        try:
+            messages: List[Dict[str, Any]] = request_data["messages"]
+            transformed_messages: List[Dict[str, Any]] = []
 
-            role = message["role"]
-            content = message["content"]
+            for message in messages:
+                if "role" not in message or "content" not in message:
+                    return jsonify({"error": "Each message must have 'role' and 'content' fields."}), 400
 
-            if "images" in message and isinstance(message["images"], list):
-                for image_base64 in message["images"]:
-                    transformed_messages.append({"role": "images", "content": image_base64})
+                role = message["role"]
+                content = message["content"]
 
-            # Handle content modification safely
-            content_str = str(content) if content is not None else ""
+                if "images" in message and isinstance(message["images"], list):
+                    for image_base64 in message["images"]:
+                        transformed_messages.append({"role": "images", "content": image_base64})
 
-            if add_user_assistant:
-                if role == "user":
-                    content_str = "User: " + content_str
-                elif role == "assistant":
-                    content_str = "Assistant: " + content_str
+                # Handle content modification safely
+                content_str = str(content) if content is not None else ""
 
-            transformed_messages.append({"role": role, "content": content_str})
+                if add_user_assistant:
+                    if role == "user":
+                        content_str = "User: " + content_str
+                    elif role == "assistant":
+                        content_str = "Assistant: " + content_str
 
-        if add_missing_assistant:
-            if add_user_assistant and transformed_messages and transformed_messages[-1]["role"] != "assistant":
-                transformed_messages.append({"role": "assistant", "content": "Assistant:"})
-            elif transformed_messages and transformed_messages[-1]["role"] != "assistant":
-                transformed_messages.append({"role": "assistant", "content": ""})
+                transformed_messages.append({"role": role, "content": content_str})
 
-        stream = request_data.get("stream", True)
-        if isinstance(stream, str):
-            stream = stream.lower() == 'true'
+            if add_missing_assistant:
+                if add_user_assistant and transformed_messages and transformed_messages[-1]["role"] != "assistant":
+                    transformed_messages.append({"role": "assistant", "content": "Assistant:"})
+                elif transformed_messages and transformed_messages[-1]["role"] != "assistant":
+                    transformed_messages.append({"role": "assistant", "content": ""})
 
-        if stream:
-            # Use the dynamic streaming handler selection
-            return _handle_streaming_request(request_id, transformed_messages, stream)
-        else:
-            # Pass request_id
-            response_data = handle_user_prompt(request_id, transformed_messages, stream)
-            model_name = request_data.get("model", "llama3.2")
-            response = response_builder.build_ollama_chat_response(response_data, model_name=model_name,
-                                                                   request_id=request_id)
-            return jsonify(response)
+            stream = request_data.get("stream", True)
+            if isinstance(stream, str):
+                stream = stream.lower() == 'true'
+
+            if stream:
+                # Use the dynamic streaming handler selection
+                return _handle_streaming_request(request_id, transformed_messages, stream)
+            else:
+                # Pass request_id. Use the model name from api_helpers to get username:workflow format
+                response_data = handle_user_prompt(request_id, transformed_messages, stream)
+                response_model = api_helpers.get_model_name()
+                response = response_builder.build_ollama_chat_response(response_data, model_name=response_model,
+                                                                       request_id=request_id)
+                return jsonify(response)
+        finally:
+            api_helpers.clear_workflow_override()
 
 
 class TagsAPI(MethodView):

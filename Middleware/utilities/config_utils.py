@@ -277,6 +277,21 @@ def get_custom_workflow_is_active():
     return get_config_value('customWorkflowOverride')
 
 
+def get_allow_shared_workflows() -> bool:
+    """
+    Determines if shared workflows should be listed in the models API endpoints.
+
+    When enabled, the /v1/models and /api/tags endpoints return workflow folders
+    from _shared/ as selectable models. When disabled (the default), only the
+    username is returned as a model.
+
+    Returns:
+        bool: True if shared workflows should be listed, False otherwise.
+    """
+    value = get_config_value('allowSharedWorkflows')
+    return bool(value) if value is not None else False
+
+
 def get_default_parallel_processor_name():
     """
     Retrieves the name of the default parallel processor workflow.
@@ -401,6 +416,25 @@ def get_active_recent_memory_tool_name():
         str: The name of the active recent memory tool workflow.
     """
     return get_config_value('recentMemoryToolWorkflow')
+
+
+def get_workflow_subdirectory_override():
+    """
+    Retrieves the subdirectory override for workflow configurations.
+
+    This function gets the 'workflowConfigsSubDirectoryOverride' from the
+    user configuration. If set, it returns '_overrides/<override>' to load
+    workflows from a subfolder within the overrides folder.
+    If not set, it returns the current username as the default subdirectory.
+
+    Returns:
+        str: The path to the workflow subdirectory ('_overrides/<override>' or username).
+    """
+    sub_directory = get_config_value('workflowConfigsSubDirectoryOverride')
+    if sub_directory:
+        return os.path.join('_overrides', sub_directory)
+    else:
+        return get_current_username()
 
 
 def get_file_memory_tool_name():
@@ -562,15 +596,111 @@ def get_workflow_path(workflow_name, user_folder_override=None):
     Args:
         workflow_name (str): The name of the workflow configuration.
         user_folder_override (str, optional): If provided, uses this folder name
-                                            instead of the current user's. Defaults to None.
+                                            instead of the user's configured default. Defaults to None.
 
     Returns:
         str: The full path to the workflow configuration file.
     """
-    user_name = user_folder_override if user_folder_override else get_current_username()
+    if user_folder_override:
+        user_name = user_folder_override
+    else:
+        user_name = get_workflow_subdirectory_override()
     config_dir = str(get_root_config_directory())
     config_file = os.path.join(config_dir, 'Workflows', user_name, f'{workflow_name}.json')
     return config_file
+
+
+def get_shared_workflows_folder():
+    """
+    Retrieves the name of the shared workflows folder.
+
+    This function checks for the 'sharedWorkflowsSubDirectoryOverride' setting
+    in the user configuration. If set, returns that value. Otherwise, returns
+    '_shared' as the default folder for shared workflows.
+
+    Workflows listed by the models API endpoint and selected via the API
+    model field are loaded from this folder.
+
+    Returns:
+        str: The name of the shared workflows folder (override value or '_shared').
+    """
+    override = get_config_value('sharedWorkflowsSubDirectoryOverride')
+    if override:
+        return override
+    return '_shared'
+
+
+def get_available_shared_workflow_folders():
+    """
+    Retrieves a list of available workflow folder names from the shared workflows folder.
+
+    This function scans the shared workflows directory and returns a list of
+    subfolder names that can be used as model identifiers in API requests.
+    Each folder should contain a DefaultWorkflow.json as the entry point.
+
+    Returns:
+        list: A list of folder names available in the shared folder.
+    """
+    config_dir = str(get_root_config_directory())
+    shared_folder = get_shared_workflows_folder()
+    workflows_path = os.path.join(config_dir, 'Workflows', shared_folder)
+
+    folders = []
+    try:
+        if os.path.isdir(workflows_path):
+            for item in os.listdir(workflows_path):
+                item_path = os.path.join(workflows_path, item)
+                # Only include directories that don't start with _
+                if os.path.isdir(item_path) and not item.startswith('_'):
+                    folders.append(item)
+    except OSError as e:
+        logger.warning(f"Failed to list shared workflow folders from {workflows_path}: {e}")
+
+    return sorted(folders)
+
+
+def workflow_folder_exists_in_shared(folder_name):
+    """
+    Checks if a workflow folder exists in the shared workflows folder.
+
+    Args:
+        folder_name (str): The name of the folder to check.
+
+    Returns:
+        bool: True if the folder exists, False otherwise.
+    """
+    config_dir = str(get_root_config_directory())
+    shared_folder = get_shared_workflows_folder()
+    folder_path = os.path.join(config_dir, 'Workflows', shared_folder, folder_name)
+    return os.path.isdir(folder_path)
+
+
+# Backwards compatibility aliases
+def get_available_shared_workflows():
+    """
+    Retrieves a list of available workflow folder names from the shared workflows folder.
+
+    This is an alias for get_available_shared_workflow_folders().
+
+    Returns:
+        list: A list of folder names available in the shared folder.
+    """
+    return get_available_shared_workflow_folders()
+
+
+def workflow_exists_in_shared_folder(folder_name):
+    """
+    Checks if a workflow folder exists in the shared workflows folder.
+
+    This is an alias for workflow_folder_exists_in_shared().
+
+    Args:
+        folder_name (str): The name of the folder to check.
+
+    Returns:
+        bool: True if the folder exists, False otherwise.
+    """
+    return workflow_folder_exists_in_shared(folder_name)
 
 
 def get_discussion_id_workflow_path():

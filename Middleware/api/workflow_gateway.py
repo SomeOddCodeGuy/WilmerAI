@@ -2,6 +2,7 @@
 
 import copy
 import logging
+import os
 from functools import wraps
 from typing import Any, Dict, List, Generator, Optional, Union
 
@@ -10,7 +11,8 @@ from flask import jsonify, Response, request
 from Middleware.api import api_helpers
 from Middleware.services.prompt_categorization_service import PromptCategorizationService
 from Middleware.services.response_builder_service import ResponseBuilderService
-from Middleware.utilities.config_utils import get_custom_workflow_is_active, get_active_custom_workflow_name
+from Middleware.utilities.config_utils import get_custom_workflow_is_active, get_active_custom_workflow_name, \
+    get_shared_workflows_folder
 from Middleware.utilities.prompt_extraction_utils import extract_discussion_id
 from Middleware.utilities.text_utils import replace_brackets_in_list
 from Middleware.workflows.managers.workflow_manager import WorkflowManager
@@ -22,6 +24,11 @@ response_builder = ResponseBuilderService()
 def handle_user_prompt(request_id: str, prompt_collection: List[Dict[str, Any]], stream: bool) -> Union[str, Generator[str, None, None]]:
     """
     Processes a user prompt by routing it to the appropriate workflow.
+
+    The workflow is determined by the following priority:
+    1. Workflow override from API model field (if set via api_helpers.set_workflow_override)
+    2. Custom workflow from user config (if get_custom_workflow_is_active is True)
+    3. Dynamic routing via PromptCategorizationService
 
     Args:
         request_id (str): The unique identifier for this request.
@@ -36,6 +43,25 @@ def handle_user_prompt(request_id: str, prompt_collection: List[Dict[str, Any]],
     sanitized_messages = replace_brackets_in_list(prompt_collection)
 
     logger.debug(f"Handle user prompt discussion_id: {discussion_id}")
+
+    # Check for workflow folder override from API model field
+    # When set, this specifies a folder within _shared/ containing workflows.
+    # We run _DefaultWorkflow.json from that folder, and all nested workflow
+    # calls will also use that folder.
+    workflow_folder_override = api_helpers.get_active_workflow_override()
+    logger.debug(f"Workflow folder override value: {workflow_folder_override}")
+    if workflow_folder_override:
+        # Build the full folder path: _shared/<folder_name>
+        folder_path = os.path.join(get_shared_workflows_folder(), workflow_folder_override)
+        logger.info(f"Using workflow folder override from model field: {folder_path}")
+        return WorkflowManager.run_custom_workflow(
+            workflow_name="_DefaultWorkflow",
+            request_id=request_id,
+            discussion_id=discussion_id,
+            messages=sanitized_messages,
+            is_streaming=stream,
+            workflow_user_folder_override=folder_path
+        )
 
     if not get_custom_workflow_is_active():
         request_routing_service = PromptCategorizationService()

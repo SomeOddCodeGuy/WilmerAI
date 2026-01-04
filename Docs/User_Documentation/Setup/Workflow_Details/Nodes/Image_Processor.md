@@ -114,8 +114,8 @@ because it's part of the conversation log it receives.
   {
     "title": "Step 1: Analyze and Describe All User Images",
     "type": "ImageProcessor",
-    "endpointName": "Image-Endpoint",
-    "preset": "Vision_Default_Preset",
+    "endpointName": "Vision-Endpoint",
+    "preset": "Vision-Preset",
     "addAsUserMessage": true,
     // --- BEHAVIOR CONTROL ---
     // This is the key. The aggregated description will be added to the chat history

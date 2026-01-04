@@ -74,7 +74,7 @@ to review different types of content.
   "prompt": "",
   "lastMessagesToSendInsteadOfPrompt": 25,
   "endpointName": "Coding-Fast-Endpoint",
-  "preset": "Coder_Preset",
+  "preset": "Coding-Fast-Preset",
   "maxResponseSizeInTokens": 8000,
   "addUserTurnTemplate": false,
   "addDiscussionIdTimestampsForLLM": false,
@@ -113,7 +113,7 @@ Note the explicit instruction to think in the first person and the detailed list
   // ... System Prompt setting the stage, injecting personas and memories ...
   "prompt": "Please consider the most recent ten messages of the online conversation:\n\n<recent_conversation>\n{chat_user_prompt_last_ten}\n</recent_conversation>\n\nAdditionally, you have already carefully considered some things about the conversation... You can find those initial thoughts here:\n\n<initial_thoughts>\n{agent4Output}\n</initial_thoughts>\n\nThis step involves you being in a private area of Wilmer, where you can quietly think to yourself about the conversation, what you think of the conversation, and what you want to say next.\n\nPlease think to yourself, as if talking to yourself in first person, about everything you know and think about the conversation and what to say next. These thoughts will be available to you when you reach the step to respond to {human_persona_name}. Please be sure to think about the following items in vivid, lengthy detail; for each item, be sure to challenge your assertions at least once to be certain that you are correct, and justify your thought process:\n    - Item 1: Please carefully think about what {human_persona_name} is really saying and how you interpret that. What do you think they are thinking? Why do you think they are thinking it?\n    - Item 2: What kind of response do you think {human_persona_name} wants, and is it really the right response?...\n    - Item 3: Please take extra care to think about whether you've been repeating yourself— for example, starting every message a certain way...\n    - Item 4: Please think about whether the current date has any significance that you are aware of, and the current time...\n\nPlease proceed with thinking to yourself in the first person in this scratchpad. Complete all the items listed, but please do not categorize them as 'Item 1', 'Item 2', etc. Flow all your thoughts together as if they were a journal entry...",
   "endpointName": "Thinker-Endpoint",
-  "preset": "Thinker_Preset",
+  "preset": "Thinker-Preset",
   "maxResponseSizeInTokens": 8000,
   "addUserTurnTemplate": true,
   "returnToUser": false,
@@ -390,10 +390,10 @@ Node configurations are highly specialized and strategic.
 The methodology relies heavily on specialized backends for different cognitive tasks. Configuration names reflect this
 specialization:
 
-* `Thinker-Endpoint` / `Thinker_Preset`: For introspection and deep analysis.
-* `Worker-Endpoint` / `Worker_Preset`: For fast, constrained utility tasks (extraction, formatting).
-* `Responder-Endpoint` / `Responder_Preset`: For final message generation and polishing.
-* `Coding-Endpoint` / `Coder_Preset`: For specialized code generation.
+* `Thinker-Endpoint` / `Thinker-Preset`: For introspection and deep analysis.
+* `Worker-Endpoint` / `Worker-Preset`: For fast, constrained utility tasks (extraction, formatting).
+* `Responder-Endpoint` / `Responder-Preset`: For final message generation and polishing.
+* `Coding-Endpoint` / `Coding-Preset`: For specialized code generation.
 
 ### 5.2. Strategic Token Allocation (`maxResponseSizeInTokens`)
 

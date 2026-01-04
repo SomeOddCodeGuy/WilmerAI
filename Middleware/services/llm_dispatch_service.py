@@ -41,7 +41,9 @@ class LLMDispatchService:
         workflow_variable_service = context.workflow_variable_service
 
         message_copy = deepcopy(context.messages)
-        llm_takes_images = llm_handler.takes_image_collection
+        # Images should only be processed when explicitly passed via image_message
+        # (i.e., from the ImageProcessor node). All other nodes filter out images.
+        llm_takes_images = image_message is not None
 
         # 1. Get and apply variables to base prompts from the node config
         system_prompt = workflow_variable_service.apply_variables(

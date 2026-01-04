@@ -1,0 +1,37 @@
+{
+  "temperature": 0.3,
+  "min_p": 0.01,
+  "top_a": 0,
+  "top_k": 0,
+  "top_p": 1,
+  "typical": 1,
+  "tfs": 1,
+  "dynatemp_range": 0,
+  "smoothing_factor": 0,
+  "dynatemp_exponent": 1,
+  "mirostat": 0,
+  "mirostat_tau": 5.0,
+  "mirostat_eta": 0.1,
+  "rep_pen": 1.1,
+  "rep_pen_range": 1024,
+  "rep_pen_slope": 1,
+  "sampler_order": [
+    6,
+    0,
+    1,
+    3,
+    4,
+    2,
+    5
+  ],
+  "stop_sequence": [
+    "<|im_end|>",
+    "</s>",
+    "<|start_header_id|>",
+    "<|END_RESPONSE|>",
+    "User:",
+    "Human:",
+    "<|user|>"
+  ],
+  "images": []
+}

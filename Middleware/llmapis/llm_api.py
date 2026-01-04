@@ -10,12 +10,9 @@ from typing import Dict, Generator, List, Optional, Union, Any
 from Middleware.llmapis.handlers.base.base_llm_api_handler import LlmApiHandler
 from Middleware.llmapis.handlers.impl.claude_api_handler import ClaudeApiHandler
 from Middleware.llmapis.handlers.impl.koboldcpp_api_handler import KoboldCppApiHandler
-from Middleware.llmapis.handlers.impl.koboldcpp_api_image_specific_handler import KoboldCppImageSpecificApiHandler
 from Middleware.llmapis.handlers.impl.ollama_chat_api_handler import OllamaChatHandler
-from Middleware.llmapis.handlers.impl.ollama_chat_api_image_specific_handler import OllamaApiChatImageSpecificHandler
 from Middleware.llmapis.handlers.impl.ollama_generate_api_handler import OllamaGenerateApiHandler
 from Middleware.llmapis.handlers.impl.openai_api_handler import OpenAiApiHandler
-from Middleware.llmapis.handlers.impl.openai_chat_api_image_specific_handler import OpenAIApiChatImageSpecificHandler
 from Middleware.llmapis.handlers.impl.openai_completions_api_handler import OpenAiCompletionsApiHandler
 from Middleware.utilities.config_utils import (
     get_openai_preset_path,
@@ -104,24 +101,21 @@ class LlmApiService:
             "max_tokens": self.max_tokens,
         }
 
-        if self.llm_type == "openAIChatCompletion":
+        # Note: ImageSpecific types are deprecated. The regular handlers now support images
+        # when passed via the ImageProcessor node. These mappings are kept for backwards
+        # compatibility with existing configurations.
+        if self.llm_type in ("openAIChatCompletion", "openAIApiChatImageSpecific"):
             return OpenAiApiHandler(**common_args, dont_include_model=self.dont_include_model)
         elif self.llm_type == "claudeMessages":
             return ClaudeApiHandler(**common_args, dont_include_model=self.dont_include_model)
-        elif self.llm_type == "koboldCppGenerate":
+        elif self.llm_type in ("koboldCppGenerate", "koboldCppGenerateImageSpecific"):
             return KoboldCppApiHandler(**common_args)
-        elif self.llm_type == "koboldCppGenerateImageSpecific":
-            return KoboldCppImageSpecificApiHandler(**common_args)
         elif self.llm_type == "openAIV1Completion":
             return OpenAiCompletionsApiHandler(**common_args)
-        elif self.llm_type == "ollamaApiChat":
+        elif self.llm_type in ("ollamaApiChat", "ollamaApiChatImageSpecific"):
             return OllamaChatHandler(**common_args)
         elif self.llm_type == "ollamaApiGenerate":
             return OllamaGenerateApiHandler(**common_args)
-        elif self.llm_type == "ollamaApiChatImageSpecific":
-            return OllamaApiChatImageSpecificHandler(**common_args)
-        elif self.llm_type == "openAIApiChatImageSpecific":
-            return OpenAIApiChatImageSpecificHandler(**common_args, dont_include_model=self.dont_include_model)
         else:
             raise ValueError(f"Unsupported LLM type: {self.llm_type}")
 

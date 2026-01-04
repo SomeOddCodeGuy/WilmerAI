@@ -459,7 +459,8 @@ class SpecializedNodeHandler(BaseHandler):
         Handles the logic for a "GetCustomFile" node.
 
         This method loads the content of a text file specified by the 'filepath' field.
-        It reads the file and returns its content as a single string.
+        It reads the file and returns its content as a single string. The filepath field
+        supports variable substitution (e.g., {Discussion_Id}, {YYYY_MM_DD}).
 
         Args:
             context (ExecutionContext): The central object containing all runtime data for the node.
@@ -467,9 +468,12 @@ class SpecializedNodeHandler(BaseHandler):
         Returns:
             str: The content of the file, or an error message if the filepath is not specified.
         """
-        filepath = context.config.get("filepath")
-        if not filepath:
+        filepath_template = context.config.get("filepath")
+        if not filepath_template:
             return "No filepath specified"
+
+        # Apply variable substitution to the filepath
+        filepath = self.workflow_variable_service.apply_variables(filepath_template, context)
 
         delimiter = context.config.get("delimiter")
         custom_return_delimiter = context.config.get("customReturnDelimiter")
@@ -486,7 +490,8 @@ class SpecializedNodeHandler(BaseHandler):
         Handles the logic for a "SaveCustomFile" node.
 
         This method saves the provided 'content' to a file specified by 'filepath'.
-        It resolves any variables in the content and filepath before writing the file.
+        It resolves any variables in both the content and filepath before writing the file.
+        The filepath field supports variable substitution (e.g., {Discussion_Id}, {YYYY_MM_DD}).
 
         Args:
             context (ExecutionContext): The central object containing all runtime data for the node.
@@ -494,23 +499,27 @@ class SpecializedNodeHandler(BaseHandler):
         Returns:
             str: A success or error message indicating the result of the save operation.
         """
-        filepath = context.config.get("filepath")
-        if not filepath:
+        filepath_template = context.config.get("filepath")
+        if not filepath_template:
             return "No filepath specified"
 
         content_template = context.config.get("content")
         if content_template is None:
             return "No content specified"
 
+        # Apply variable substitution to both filepath and content
+        resolved_filepath = self.workflow_variable_service.apply_variables(
+            filepath_template, context
+        )
         resolved_content = self.workflow_variable_service.apply_variables(
             content_template, context
         )
 
         try:
-            save_custom_file(filepath=filepath, content=resolved_content)
-            return f"File successfully saved to {filepath}"
+            save_custom_file(filepath=resolved_filepath, content=resolved_content)
+            return f"File successfully saved to {resolved_filepath}"
         except Exception as e:
-            logger.error(f"Failed to save file to {filepath}. Error: {e}")
+            logger.error(f"Failed to save file to {resolved_filepath}. Error: {e}")
             return f"Error saving file: {e}"
 
     def handle_image_processor_node(self, context: ExecutionContext) -> str:

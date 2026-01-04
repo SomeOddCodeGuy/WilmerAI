@@ -2,11 +2,11 @@
 
 import json
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 
 from Middleware.common import instance_global_variables
 from Middleware.services.response_builder_service import ResponseBuilderService
-from Middleware.utilities.config_utils import get_current_username
+from Middleware.utilities.config_utils import get_current_username, workflow_exists_in_shared_folder
 
 logger = logging.getLogger(__name__)
 response_builder = ResponseBuilderService()
@@ -144,12 +144,91 @@ def extract_text_from_chunk(chunk) -> str:
 
 def get_model_name():
     """
-    Retrieves the current model name based on the username.
+    Retrieves the current model name based on the username and active workflow.
+
+    If a workflow override is active, returns "username:workflow".
+    Otherwise, returns just the username.
 
     Returns:
-        str: The username used as the model identifier.
+        str: The model identifier in format "username" or "username:workflow".
     """
-    return f"{get_current_username()}"
+    username = get_current_username()
+    workflow = instance_global_variables.WORKFLOW_OVERRIDE
+    if workflow:
+        return f"{username}:{workflow}"
+    return username
+
+
+def parse_model_field(model_value: Optional[str]) -> Optional[str]:
+    """
+    Parses the model field from an API request and extracts the workflow name.
+
+    Handles the following formats:
+    - "username:workflow" -> returns "workflow"
+    - "workflow" (if it exists in shared folder) -> returns "workflow"
+    - Anything else -> returns None (use normal routing)
+
+    Args:
+        model_value (Optional[str]): The model field value from the request.
+
+    Returns:
+        Optional[str]: The workflow name if found, None otherwise.
+    """
+    if not model_value:
+        return None
+
+    # Strip any :latest suffix that Ollama might add
+    if model_value.endswith(':latest'):
+        model_value = model_value[:-7]
+
+    # Check for "username:workflow" format
+    if ':' in model_value:
+        parts = model_value.split(':', 1)
+        if len(parts) == 2:
+            workflow_name = parts[1]
+            if workflow_exists_in_shared_folder(workflow_name):
+                return workflow_name
+
+    # Check if the model value itself is a workflow name
+    if workflow_exists_in_shared_folder(model_value):
+        return model_value
+
+    return None
+
+
+def set_workflow_override(model_value: Optional[str]) -> None:
+    """
+    Parses the model field and sets the workflow override global variable.
+
+    This should be called at the start of request processing to set up
+    the workflow override for the current request.
+
+    Args:
+        model_value (Optional[str]): The model field value from the request.
+    """
+    workflow = parse_model_field(model_value)
+    instance_global_variables.WORKFLOW_OVERRIDE = workflow
+    if workflow:
+        logger.info(f"Workflow override set from model field: {workflow}")
+
+
+def clear_workflow_override() -> None:
+    """
+    Clears the workflow override global variable.
+
+    This should be called at the end of request processing to clean up.
+    """
+    instance_global_variables.WORKFLOW_OVERRIDE = None
+
+
+def get_active_workflow_override() -> Optional[str]:
+    """
+    Gets the currently active workflow override.
+
+    Returns:
+        Optional[str]: The workflow name if override is active, None otherwise.
+    """
+    return instance_global_variables.WORKFLOW_OVERRIDE
 
 
 def sse_format(data: str, output_format: str) -> str:

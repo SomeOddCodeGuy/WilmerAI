@@ -143,11 +143,13 @@ def chunk_messages_by_token_size(messages: List[Dict[str, str]], chunk_size: int
             current_chunk_size = message_token_count
 
     # After the loop, add the last remaining chunk if it's not empty.
+    # IMPORTANT: We always include this final chunk (the oldest messages) regardless of
+    # max_messages_before_chunk. The threshold is meant to control when to TRIGGER memory
+    # generation, not to DISCARD early messages once generation has started. Discarding
+    # this chunk would permanently lose the beginning of conversations.
     if current_chunk:
         logger.debug("Adding final remaining chunk.")
-        # The logic for `max_messages_before_chunk` applies to the final, potentially smaller chunk.
-        if max_messages_before_chunk == 0 or len(current_chunk) >= max_messages_before_chunk:
-            chunks.insert(0, current_chunk)
+        chunks.insert(0, current_chunk)
 
     return chunks
 

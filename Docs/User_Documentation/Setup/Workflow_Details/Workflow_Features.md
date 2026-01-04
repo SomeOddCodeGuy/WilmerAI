@@ -143,7 +143,8 @@ to read and write local files and perform basic data manipulation without needin
 script.
 
 * **File I/O**: The **`GetCustomFile`** node reads the contents of a text file, while the **`SaveCustomFile`** node
-  writes string content to a file.
+  writes string content to a file. Both nodes support variable substitution in their `filepath` fields, including
+  `{Discussion_Id}` and `{YYYY_MM_DD}` for per-conversation or date-based file paths.
 * **Data Processing**: The **`StringConcatenator`** node joins a list of strings with a specified delimiter, and the *
   *`ArithmeticProcessor`** node evaluates a simple mathematical expression.
 
@@ -162,3 +163,32 @@ completes.
 
 * **Key Node**: `WorkflowLock`
 * **Detailed Documentation**: `A Comprehensive Guide to WilmerAI Workflow Nodes`
+
+---
+
+## Debugging and Performance Monitoring
+
+WilmerAI provides built-in logging to help debug workflows and monitor performance. At the end of each workflow
+execution, an INFO-level summary is logged showing every node that executed, including timing information.
+
+**Example Output:**
+```
+=== Workflow Node Execution Summary: MainWorkflow ===
+Node 1: Standard || 'Prepare Response' || Responder-Endpoint || http://127.0.0.1:5001 || 182.4 seconds
+Node 2: GetCustomFile || 'Load Context' || N/A || N/A || 0.1 seconds
+Node 3: CustomWorkflow || 'Route to Helper -> HelperWorkflow' || N/A || N/A || 45.2 seconds
+=== End of Summary: MainWorkflow ===
+```
+
+**Information Displayed:**
+- **Node index**: 1-based position in the workflow
+- **Node type**: The type of node (Standard, GetCustomFile, CustomWorkflow, etc.)
+- **Node name**: From the `title` field, falling back to `agentName`, or "N/A"
+- **Endpoint details**: The endpoint name and URL for LLM-calling nodes
+- **Execution time**: Time spent executing this node in seconds
+
+For `CustomWorkflow` and `ConditionalCustomWorkflow` nodes, the summary also shows the target workflow name(s) to help
+trace execution through nested workflows.
+
+* **Log Level**: INFO (visible in standard logging output)
+* **Use Cases**: Identifying slow nodes, debugging workflow execution order, performance optimization

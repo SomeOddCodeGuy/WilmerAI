@@ -28,6 +28,7 @@ def mock_user_config():
         "discussionDirectory": "/mock/discussions",
         "sqlLiteDirectory": "/mock/db",
         "endpointConfigsSubDirectory": "test_endpoints",
+        "workflowConfigsSubDirectoryOverride": "shared_workflows",
         "presetConfigsSubDirectoryOverride": "shared_presets",
         "chatPromptTemplateName": "test_template",
         "useFileLogging": True
@@ -262,3 +263,342 @@ class TestConfigUtils:
 
         # Act & Assert
         assert config_utils.get_preset_subdirectory_override() == 'default_user'
+
+    def test_get_workflow_subdirectory_override_exists(self, mocker, mock_user_config):
+        """
+        Tests that the workflow subdirectory override is used when it exists.
+        """
+        # Arrange
+        mocker.patch('Middleware.utilities.config_utils.get_config_value',
+                     return_value=mock_user_config['workflowConfigsSubDirectoryOverride'])
+
+        # Act & Assert - should return _overrides/<override>
+        expected = os.path.join('_overrides', 'shared_workflows')
+        assert config_utils.get_workflow_subdirectory_override() == expected
+
+    def test_get_workflow_subdirectory_override_fallback(self, mocker):
+        """
+        Tests that the workflow subdirectory falls back to the current username when the override is not set.
+        """
+        # Arrange
+        mocker.patch('Middleware.utilities.config_utils.get_config_value', return_value=None)
+        mocker.patch('Middleware.utilities.config_utils.get_current_username', return_value='default_user')
+
+        # Act & Assert
+        assert config_utils.get_workflow_subdirectory_override() == 'default_user'
+
+    def test_get_workflow_path_with_override(self, mocker):
+        """
+        Tests that the workflow path uses the explicit override when provided.
+        """
+        # Arrange
+        mocker.patch('Middleware.utilities.config_utils.get_root_config_directory', return_value='/fake/config')
+
+        # Act
+        path = config_utils.get_workflow_path('MyWorkflow', user_folder_override='custom_folder')
+
+        # Assert
+        expected = os.path.join('/fake/config', 'Workflows', 'custom_folder', 'MyWorkflow.json')
+        assert path == expected
+
+    def test_get_workflow_path_uses_subdirectory_override(self, mocker):
+        """
+        Tests that the workflow path uses the user config subdirectory override when no explicit override is provided.
+        """
+        # Arrange
+        mocker.patch('Middleware.utilities.config_utils.get_root_config_directory', return_value='/fake/config')
+        mocker.patch('Middleware.utilities.config_utils.get_workflow_subdirectory_override',
+                     return_value=os.path.join('_overrides', 'shared_workflows'))
+
+        # Act
+        path = config_utils.get_workflow_path('MyWorkflow')
+
+        # Assert
+        expected = os.path.join('/fake/config', 'Workflows', '_overrides', 'shared_workflows', 'MyWorkflow.json')
+        assert path == expected
+
+    def test_get_workflow_path_fallback_to_username(self, mocker):
+        """
+        Tests that the workflow path falls back to the username when no overrides are set.
+        """
+        # Arrange
+        mocker.patch('Middleware.utilities.config_utils.get_root_config_directory', return_value='/fake/config')
+        mocker.patch('Middleware.utilities.config_utils.get_config_value', return_value=None)
+        mocker.patch('Middleware.utilities.config_utils.get_current_username', return_value='test_user')
+
+        # Act
+        path = config_utils.get_workflow_path('MyWorkflow')
+
+        # Assert
+        expected = os.path.join('/fake/config', 'Workflows', 'test_user', 'MyWorkflow.json')
+        assert path == expected
+
+    def test_get_workflow_subdirectory_override_empty_string(self, mocker):
+        """
+        Tests that an empty string override falls back to the current username.
+        """
+        # Arrange
+        mocker.patch('Middleware.utilities.config_utils.get_config_value', return_value='')
+        mocker.patch('Middleware.utilities.config_utils.get_current_username', return_value='default_user')
+
+        # Act & Assert
+        assert config_utils.get_workflow_subdirectory_override() == 'default_user'
+
+    def test_get_workflow_subdirectory_override_whitespace_only(self, mocker):
+        """
+        Tests that a whitespace-only override is treated as truthy and used within _overrides.
+        This documents current behavior where whitespace strings are not stripped.
+        """
+        # Arrange
+        mocker.patch('Middleware.utilities.config_utils.get_config_value', return_value='   ')
+
+        # Act & Assert - whitespace is preserved within _overrides path
+        expected = os.path.join('_overrides', '   ')
+        assert config_utils.get_workflow_subdirectory_override() == expected
+
+    def test_get_workflow_subdirectory_override_with_special_characters(self, mocker):
+        """
+        Tests that special characters in the override are preserved as-is.
+        This documents that no sanitization occurs on the subdirectory name.
+        """
+        # Arrange
+        mocker.patch('Middleware.utilities.config_utils.get_config_value', return_value='my-workflows_v2.0')
+
+        # Act & Assert - should be within _overrides
+        expected = os.path.join('_overrides', 'my-workflows_v2.0')
+        assert config_utils.get_workflow_subdirectory_override() == expected
+
+    def test_get_workflow_path_with_path_traversal_characters(self, mocker):
+        """
+        Tests behavior with path traversal characters in the subdirectory override.
+        This documents that path traversal is not sanitized (trust the config file).
+        """
+        # Arrange
+        mocker.patch('Middleware.utilities.config_utils.get_root_config_directory', return_value='/fake/config')
+        mocker.patch('Middleware.utilities.config_utils.get_workflow_subdirectory_override',
+                     return_value=os.path.join('_overrides', '../parent_folder'))
+
+        # Act
+        path = config_utils.get_workflow_path('MyWorkflow')
+
+        # Assert - path traversal characters are preserved within _overrides structure
+        expected = os.path.join('/fake/config', 'Workflows', '_overrides', '../parent_folder', 'MyWorkflow.json')
+        assert path == expected
+
+    def test_get_workflow_path_with_empty_string_node_override(self, mocker):
+        """
+        Tests that an empty string node-level override is still used (truthy check).
+        """
+        # Arrange
+        mocker.patch('Middleware.utilities.config_utils.get_root_config_directory', return_value='/fake/config')
+        mocker.patch('Middleware.utilities.config_utils.get_workflow_subdirectory_override',
+                     return_value=os.path.join('_overrides', 'shared_workflows'))
+
+        # Act - empty string is falsy, so it should fall back to get_workflow_subdirectory_override
+        path = config_utils.get_workflow_path('MyWorkflow', user_folder_override='')
+
+        # Assert - empty string is falsy, so should use subdirectory override
+        expected = os.path.join('/fake/config', 'Workflows', '_overrides', 'shared_workflows', 'MyWorkflow.json')
+        assert path == expected
+
+    def test_get_workflow_path_with_absolute_workflow_name(self, mocker):
+        """
+        Tests behavior when workflow name contains path separators.
+        This documents that workflow names are used as-is without sanitization.
+        """
+        # Arrange
+        mocker.patch('Middleware.utilities.config_utils.get_root_config_directory', return_value='/fake/config')
+        mocker.patch('Middleware.utilities.config_utils.get_current_username', return_value='test_user')
+        mocker.patch('Middleware.utilities.config_utils.get_config_value', return_value=None)
+
+        # Act
+        path = config_utils.get_workflow_path('subfolder/MyWorkflow')
+
+        # Assert - path separators in workflow name are preserved
+        expected = os.path.join('/fake/config', 'Workflows', 'test_user', 'subfolder/MyWorkflow.json')
+        assert path == expected
+
+    def test_get_workflow_path_precedence_node_over_user_config(self, mocker):
+        """
+        Tests that node-level user_folder_override takes precedence over user config subdirectory override.
+        """
+        # Arrange
+        mocker.patch('Middleware.utilities.config_utils.get_root_config_directory', return_value='/fake/config')
+        mocker.patch('Middleware.utilities.config_utils.get_workflow_subdirectory_override',
+                     return_value=os.path.join('_overrides', 'user_config_override'))
+
+        # Act
+        path = config_utils.get_workflow_path('MyWorkflow', user_folder_override='node_override')
+
+        # Assert - node override should win (it's used as-is, not within _overrides)
+        expected = os.path.join('/fake/config', 'Workflows', 'node_override', 'MyWorkflow.json')
+        assert path == expected
+
+    def test_get_workflow_subdirectory_override_with_unicode(self, mocker):
+        """
+        Tests that Unicode characters in the override are preserved.
+        """
+        # Arrange
+        mocker.patch('Middleware.utilities.config_utils.get_config_value', return_value='workflows-日本語')
+
+        # Act & Assert - should be within _overrides
+        expected = os.path.join('_overrides', 'workflows-日本語')
+        assert config_utils.get_workflow_subdirectory_override() == expected
+
+    def test_get_workflow_path_with_very_long_override(self, mocker):
+        """
+        Tests behavior with a very long subdirectory override name.
+        """
+        # Arrange
+        long_name = 'a' * 500
+        mocker.patch('Middleware.utilities.config_utils.get_root_config_directory', return_value='/fake/config')
+        mocker.patch('Middleware.utilities.config_utils.get_workflow_subdirectory_override',
+                     return_value=os.path.join('_overrides', long_name))
+
+        # Act
+        path = config_utils.get_workflow_path('MyWorkflow')
+
+        # Assert - long names are preserved within _overrides
+        expected = os.path.join('/fake/config', 'Workflows', '_overrides', long_name, 'MyWorkflow.json')
+        assert path == expected
+
+    # Tests for shared workflows functionality
+
+    def test_get_shared_workflows_folder_default(self, mocker):
+        """
+        Tests that the shared workflows folder returns '_shared' by default.
+        """
+        # Arrange
+        mocker.patch('Middleware.utilities.config_utils.get_config_value', return_value=None)
+
+        # Act & Assert - should return _shared when no override is set
+        assert config_utils.get_shared_workflows_folder() == '_shared'
+
+    def test_get_shared_workflows_folder_with_override(self, mocker):
+        """
+        Tests that the shared workflows folder uses the override when set.
+        """
+        # Arrange
+        mocker.patch('Middleware.utilities.config_utils.get_config_value', return_value='custom_shared')
+
+        # Act & Assert - should return the override value
+        assert config_utils.get_shared_workflows_folder() == 'custom_shared'
+
+    def test_get_shared_workflows_folder_empty_override(self, mocker):
+        """
+        Tests that an empty string override falls back to '_shared'.
+        """
+        # Arrange
+        mocker.patch('Middleware.utilities.config_utils.get_config_value', return_value='')
+
+        # Act & Assert - empty string is falsy, should return _shared
+        assert config_utils.get_shared_workflows_folder() == '_shared'
+
+    def test_get_available_shared_workflows(self, mocker, tmp_path):
+        """
+        Tests that available workflow folders are correctly listed from the shared folder.
+        The function lists subfolders (not files) in _shared/.
+        """
+        # Arrange
+        workflows_dir = tmp_path / 'Workflows' / '_shared'
+        workflows_dir.mkdir(parents=True)
+        (workflows_dir / 'coding-workflow').mkdir()  # Folder - should be included
+        (workflows_dir / 'general-workflow').mkdir()  # Folder - should be included
+        (workflows_dir / '_hidden-folder').mkdir()  # Should be excluded (starts with _)
+        (workflows_dir / 'SomeFile.json').write_text('{}')  # Should be excluded (not a folder)
+
+        mocker.patch('Middleware.utilities.config_utils.get_root_config_directory', return_value=str(tmp_path))
+        mocker.patch('Middleware.utilities.config_utils.get_shared_workflows_folder', return_value='_shared')
+
+        # Act
+        workflows = config_utils.get_available_shared_workflows()
+
+        # Assert
+        assert workflows == ['coding-workflow', 'general-workflow']
+
+    def test_get_available_shared_workflows_empty_directory(self, mocker, tmp_path):
+        """
+        Tests that empty list is returned for empty directory.
+        """
+        # Arrange
+        workflows_dir = tmp_path / 'Workflows' / '_shared'
+        workflows_dir.mkdir(parents=True)
+
+        mocker.patch('Middleware.utilities.config_utils.get_root_config_directory', return_value=str(tmp_path))
+        mocker.patch('Middleware.utilities.config_utils.get_shared_workflows_folder', return_value='_shared')
+
+        # Act
+        workflows = config_utils.get_available_shared_workflows()
+
+        # Assert
+        assert workflows == []
+
+    def test_get_available_shared_workflows_directory_not_exists(self, mocker, tmp_path):
+        """
+        Tests that empty list is returned when directory doesn't exist.
+        """
+        # Arrange
+        mocker.patch('Middleware.utilities.config_utils.get_root_config_directory', return_value=str(tmp_path))
+        mocker.patch('Middleware.utilities.config_utils.get_shared_workflows_folder', return_value='_shared')
+
+        # Act
+        workflows = config_utils.get_available_shared_workflows()
+
+        # Assert
+        assert workflows == []
+
+    def test_workflow_exists_in_shared_folder_true(self, mocker, tmp_path):
+        """
+        Tests that workflow_exists_in_shared_folder returns True when folder exists.
+        """
+        # Arrange
+        workflows_dir = tmp_path / 'Workflows' / '_shared'
+        workflows_dir.mkdir(parents=True)
+        (workflows_dir / 'coding-workflow').mkdir()  # Create a folder
+
+        mocker.patch('Middleware.utilities.config_utils.get_root_config_directory', return_value=str(tmp_path))
+        mocker.patch('Middleware.utilities.config_utils.get_shared_workflows_folder', return_value='_shared')
+
+        # Act & Assert
+        assert config_utils.workflow_exists_in_shared_folder('coding-workflow') is True
+
+    def test_workflow_exists_in_shared_folder_file_not_folder(self, mocker, tmp_path):
+        """
+        Tests that workflow_exists_in_shared_folder returns False when a file exists but not a folder.
+        """
+        # Arrange
+        workflows_dir = tmp_path / 'Workflows' / '_shared'
+        workflows_dir.mkdir(parents=True)
+        (workflows_dir / 'some-workflow.json').write_text('{}')  # File, not folder
+
+        mocker.patch('Middleware.utilities.config_utils.get_root_config_directory', return_value=str(tmp_path))
+        mocker.patch('Middleware.utilities.config_utils.get_shared_workflows_folder', return_value='_shared')
+
+        # Act & Assert - files should NOT be detected, only folders
+        assert config_utils.workflow_exists_in_shared_folder('some-workflow.json') is False
+        assert config_utils.workflow_exists_in_shared_folder('some-workflow') is False
+
+    def test_workflow_exists_in_shared_folder_false(self, mocker, tmp_path):
+        """
+        Tests that workflow_exists_in_shared_folder returns False when folder doesn't exist.
+        """
+        # Arrange
+        workflows_dir = tmp_path / 'Workflows' / '_shared'
+        workflows_dir.mkdir(parents=True)
+
+        mocker.patch('Middleware.utilities.config_utils.get_root_config_directory', return_value=str(tmp_path))
+        mocker.patch('Middleware.utilities.config_utils.get_shared_workflows_folder', return_value='_shared')
+
+        # Act & Assert
+        assert config_utils.workflow_exists_in_shared_folder('NonExistent') is False
+
+    def test_workflow_exists_in_shared_folder_directory_not_exists(self, mocker, tmp_path):
+        """
+        Tests that workflow_exists_in_shared_folder returns False when _shared directory doesn't exist.
+        """
+        # Arrange
+        mocker.patch('Middleware.utilities.config_utils.get_root_config_directory', return_value=str(tmp_path))
+        mocker.patch('Middleware.utilities.config_utils.get_shared_workflows_folder', return_value='_shared')
+
+        # Act & Assert
+        assert config_utils.workflow_exists_in_shared_folder('AnyWorkflow') is False

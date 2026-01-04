@@ -6,7 +6,7 @@
     "prompt": "Please consider the below messages:\n\n<recent_conversation>\n{chat_user_prompt_last_ten}\n</recent_conversation>\n\nConsider the full context of the messages given.\n After analyzing this information, please consider the below domains:\n\n<category_domains>\n{category_colon_descriptions_newline_bulletpoint}\n</category_domains>\n\nPlease answer the following 4 questions in complete sentences:\n1) What sort of content does the user expect in the next response? Are they expecting idle banter, technical discussion, philosophical discussion, code, math, medical topics, or some other similar subject domain?\n2) Which of the domains would be the best fit based on the answer for the first question?\n3) Please carefully reconsider the last messages in the conversation- does the original assessment of exactly what the user is asking for and what domain fits best still seem appropriate? Challenge the assertion, including considering the possibility that the latest message was wrapping up the topic and would better fit a conversational category - such as a user first asking for help and then saying thank you when help is rendered. In this case, the domain needed for the help is no longer necessary; conversation is all that is needed to acknowledge the appreciation.\n4) Please either re-affirm the domain chosen, or determine a more appropriate domain.",
     "lastMessagesToSendInsteadOfPrompt": 5,
     "endpointName": "Worker-Endpoint",
-    "preset": "Worker_Preset",
+    "preset": "Worker-Preset",
     "maxResponseSizeInTokens": 300,
     "addUserTurnTemplate": true
   },
@@ -16,7 +16,7 @@
     "systemPrompt": "When given a message and a series of domains to choose from, always respond with only a single word: the expected domain that the next response fits into. Do not include any other words than the single appropriate domain that was chosen.\nIMPORTANT: When categorizing, always consider whether a topic has concluded or the subject has been changed, and adjust the domain accordingly.",
     "prompt": "A user is currently in an online conversation, and has sent a new message. The most likely domain that the next response falls within has been carefully determined here:\n\n<category_assessment>\n{agent1Output}\n</category_assessment>\n\nPlease categorize the user's message into one of the following domains:\n\n</category_domains>\n{category_colon_descriptions_newline_bulletpoint}\n</category_domains>. Return only one word for your response.\n\nPlease respond with one of the following: {categoryNameBulletpoints}.",
     "endpointName": "Worker-Endpoint",
-    "preset": "Worker_Preset",
+    "preset": "Worker-Preset",
     "maxResponseSizeInTokens": 300,
     "addUserTurnTemplate": true
   }

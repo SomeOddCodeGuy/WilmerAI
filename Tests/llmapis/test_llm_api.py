@@ -27,12 +27,14 @@ MOCK_PRESET_CONFIG = {"temperature": 0.7, "top_p": 0.9}
 SUPPORTED_HANDLERS = [
     ("openAIChatCompletion", "OpenAiApiHandler"),
     ("koboldCppGenerate", "KoboldCppApiHandler"),
-    ("koboldCppGenerateImageSpecific", "KoboldCppImageSpecificApiHandler"),
+    # ImageSpecific types are deprecated but still supported for backwards compatibility
+    # They now map to the regular handlers which have integrated image support
+    ("koboldCppGenerateImageSpecific", "KoboldCppApiHandler"),
     ("openAIV1Completion", "OpenAiCompletionsApiHandler"),
     ("ollamaApiChat", "OllamaChatHandler"),
     ("ollamaApiGenerate", "OllamaGenerateApiHandler"),
-    ("ollamaApiChatImageSpecific", "OllamaApiChatImageSpecificHandler"),
-    ("openAIApiChatImageSpecific", "OpenAIApiChatImageSpecificHandler"),
+    ("ollamaApiChatImageSpecific", "OllamaChatHandler"),
+    ("openAIApiChatImageSpecific", "OpenAiApiHandler"),
 ]
 
 

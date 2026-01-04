@@ -23,6 +23,7 @@ from flask import jsonify, request, Response, g, stream_with_context
 from flask.views import MethodView
 from werkzeug.exceptions import ClientDisconnected
 
+from Middleware.api import api_helpers
 from Middleware.api.app import app
 from Middleware.api.handlers.base.base_api_handler import BaseApiHandler
 from Middleware.api.workflow_gateway import handle_user_prompt, _sanitize_log_data, handle_openwebui_tool_check
@@ -54,12 +55,18 @@ def _stream_with_eventlet_optimized(request_id: str, messages: List[Dict], strea
     logger.info(f"OpenAI starting Eventlet optimized streaming for request_id: {request_id}")
     from Middleware.services.cancellation_service import cancellation_service
 
+    # Capture workflow override before spawning greenlet, since the finally block
+    # in the calling function will clear it before the greenlet runs
+    captured_workflow_override = api_helpers.get_active_workflow_override()
+
     event_queue = EventletQueue()
     stop_signal = eventlet.event.Event()
     reader_greenlet = None
 
     def backend_reader():
         """Background greenlet that reads from handle_user_prompt and queues chunks."""
+        # Restore the workflow override that was captured before spawning
+        instance_global_variables.WORKFLOW_OVERRIDE = captured_workflow_override
         try:
             for chunk in handle_user_prompt(request_id, messages, stream):
                 if stop_signal.ready():
@@ -134,7 +141,13 @@ def _stream_response_fallback(request_id: str, messages: List[Dict], stream: boo
     logger.info(f"OpenAI starting fallback (synchronous) streaming for request_id: {request_id}")
     from Middleware.services.cancellation_service import cancellation_service
 
+    # Capture workflow override before creating generator, since the finally block
+    # in the calling function will clear it before the generator runs
+    captured_workflow_override = api_helpers.get_active_workflow_override()
+
     def streaming_generator():
+        # Restore the workflow override that was captured before creating the generator
+        instance_global_variables.WORKFLOW_OVERRIDE = captured_workflow_override
         logger.debug(f"OpenAI Fallback Generator starting for request_id: {request_id}")
         try:
             for chunk in handle_user_prompt(request_id, messages, stream):
@@ -222,16 +235,24 @@ class CompletionsAPI(MethodView):
         logger.info(f"CompletionsAPI request received (ID: {request_id})")
         data: Dict[str, Any] = request.json
         logger.debug(f"CompletionsAPI request received (ID: {request_id}): {json.dumps(_sanitize_log_data(data))}")
-        prompt: str = data.get("prompt", "")
-        stream: bool = data.get("stream", True)
-        messages = parse_conversation(prompt)
 
-        if stream:
-            return _handle_streaming_request(request_id, messages, stream)
-        else:
-            return_response: str = handle_user_prompt(request_id, messages, False)
-            response = response_builder.build_openai_completion_response(return_response)
-            return jsonify(response)
+        # Set workflow override from model field if applicable
+        model_name = data.get("model")
+        api_helpers.set_workflow_override(model_name)
+
+        try:
+            prompt: str = data.get("prompt", "")
+            stream: bool = data.get("stream", True)
+            messages = parse_conversation(prompt)
+
+            if stream:
+                return _handle_streaming_request(request_id, messages, stream)
+            else:
+                return_response: str = handle_user_prompt(request_id, messages, False)
+                response = response_builder.build_openai_completion_response(return_response)
+                return jsonify(response)
+        finally:
+            api_helpers.clear_workflow_override()
 
 
 class ChatCompletionsAPI(MethodView):
@@ -268,38 +289,45 @@ class ChatCompletionsAPI(MethodView):
             f"ChatCompletionsAPI request received (ID: {request_id}): {json.dumps(_sanitize_log_data(request_data))}")
         logger.info(f"ChatCompletionsAPI.post() called - stream={request_data.get('stream', False)}")
 
-        stream: bool = request_data.get("stream", False)
-        if 'messages' not in request_data:
-            raise ValueError("The 'messages' field is required.")
-        messages: List[Dict[str, str]] = request_data["messages"]
-        for message in messages:
-            if "role" not in message or "content" not in message:
-                raise ValueError("Each message must have 'role' and 'content' fields.")
+        # Set workflow override from model field if applicable
+        model_name = request_data.get("model")
+        api_helpers.set_workflow_override(model_name)
 
-        transformed_messages: List[Dict[str, str]] = []
-        for message in messages:
-            role = message["role"]
-            content = message["content"]
-            if add_user_assistant:
-                if role == "user":
-                    content = "User: " + content
-                elif role == "assistant":
-                    content = "Assistant: " + content
-            transformed_messages.append({"role": role, "content": content})
+        try:
+            stream: bool = request_data.get("stream", False)
+            if 'messages' not in request_data:
+                raise ValueError("The 'messages' field is required.")
+            messages: List[Dict[str, str]] = request_data["messages"]
+            for message in messages:
+                if "role" not in message or "content" not in message:
+                    raise ValueError("Each message must have 'role' and 'content' fields.")
 
-        if add_missing_assistant:
-            if add_user_assistant and messages and messages[-1]["role"] != "assistant":
-                transformed_messages.append({"role": "assistant", "content": "Assistant:"})
-            elif messages and messages[-1]["role"] != "assistant":
-                transformed_messages.append({"role": "assistant", "content": ""})
+            transformed_messages: List[Dict[str, str]] = []
+            for message in messages:
+                role = message["role"]
+                content = message["content"]
+                if add_user_assistant:
+                    if role == "user":
+                        content = "User: " + content
+                    elif role == "assistant":
+                        content = "Assistant: " + content
+                transformed_messages.append({"role": role, "content": content})
 
-        if stream:
-            logger.info(f"ChatCompletionsAPI starting streaming response for request_id: {request_id}")
-            return _handle_streaming_request(request_id, transformed_messages, stream)
-        else:
-            return_response = handle_user_prompt(request_id, transformed_messages, stream=False)
-            response = response_builder.build_openai_chat_completion_response(return_response)
-            return jsonify(response)
+            if add_missing_assistant:
+                if add_user_assistant and messages and messages[-1]["role"] != "assistant":
+                    transformed_messages.append({"role": "assistant", "content": "Assistant:"})
+                elif messages and messages[-1]["role"] != "assistant":
+                    transformed_messages.append({"role": "assistant", "content": ""})
+
+            if stream:
+                logger.info(f"ChatCompletionsAPI starting streaming response for request_id: {request_id}")
+                return _handle_streaming_request(request_id, transformed_messages, stream)
+            else:
+                return_response = handle_user_prompt(request_id, transformed_messages, stream=False)
+                response = response_builder.build_openai_chat_completion_response(return_response)
+                return jsonify(response)
+        finally:
+            api_helpers.clear_workflow_override()
 
 
 class OpenAIApiHandler(BaseApiHandler):

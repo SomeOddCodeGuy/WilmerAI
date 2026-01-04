@@ -10,6 +10,30 @@ A WilmerAI workflow is a **JSON file** that defines a sequence of operations cal
 sequentially from top to bottom. The string output of any node is automatically made available to all subsequent nodes,
 allowing for the creation of complex, multi-step agentic behaviors.
 
+### Workflow Location
+
+Workflows are stored in `Public/Configs/Workflows/` and organized into subfolders:
+
+* **User Folders** (e.g., `Workflows/chris/`): The default location for a user's workflows. The folder name matches the
+  username.
+* **`_shared/` Folder**: A special folder for shared workflows that can be selected via the API model field. Folders
+  within `_shared/` (containing a `_DefaultWorkflow.json` file) are listed by the `/v1/models` and `/api/tags`
+  endpoints, allowing front-end applications to select them via the model dropdown. The
+  `workflowConfigsSubDirectoryOverride` user config setting can also reference subfolders within `_shared/`.
+
+```
+Public/Configs/Workflows/
+├── _shared/
+│   ├── openwebui-coding/           # Listed by models endpoint as folder name
+│   │   └── _DefaultWorkflow.json   # Workflow loaded when folder is selected
+│   ├── openwebui-general/
+│   │   └── _DefaultWorkflow.json
+│   └── openwebui-task/
+│       └── _DefaultWorkflow.json
+├── chris/                          # Default user folder
+│   └── ...
+```
+
 -----
 
 ## Part 1: Workflow Structure & Variables
@@ -123,9 +147,11 @@ This is a catalog of available node types, validated against the `WorkflowManage
 * **`Standard`**: The most fundamental node. Makes a direct call to an LLM.
 * **`PythonModule`**: Executes a custom Python script as long as it matches the required signature, and returns the
   string output from that script as the nodes output.
-* **`GetCustomFile`**: Loads a `.txt` file from disk and places its content into the node's output.
+* **`GetCustomFile`**: Loads a `.txt` file from disk and places its content into the node's output. Its `filepath` field
+  supports variables, including `{Discussion_Id}` and `{YYYY_MM_DD}` for dynamic, per-conversation or date-based paths.
 * **`SaveCustomFile`**: Writes string content to a local text file. Its `filepath` and `content` fields support
-  variables. The node's output is a success or error message.
+  variables, including `{Discussion_Id}` and `{YYYY_MM_DD}` for dynamic paths. The node's output is a success or error
+  message.
 * **`ImageProcessor`**: Generates a text description from an image provided by the user.
 * **`StaticResponse`**: Returns a hardcoded string from its `content` field. Can act as a responder node and supports
   streaming.

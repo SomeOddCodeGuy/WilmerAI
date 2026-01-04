@@ -238,6 +238,7 @@ class WorkflowManager:
 
         try:
             config_file = self.path_finder_func(self.workflowConfigName)
+            logger.info(f"Loading workflow: {config_file}")
             with open(config_file) as f:
                 loaded_json_config = json.load(f)
 

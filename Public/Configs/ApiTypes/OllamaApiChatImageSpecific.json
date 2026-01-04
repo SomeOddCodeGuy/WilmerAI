@@ -1,8 +1,0 @@
-{
-  "nameForDisplayOnly": "Ollama api/chat Compatible Api Specifically to Use For Image Endpoints Example",
-  "type": "ollamaApiChatImageSpecific",
-  "presetType": "OllamaApiChat",
-  "truncateLengthPropertyName": "num_ctx",
-  "maxNewTokensPropertyName": "num_predict",
-  "streamPropertyName": "stream"
-}

@@ -147,6 +147,17 @@ Each User JSON file contains a single object with the following key-value pairs.
 
 -----
 
+##### `workflowConfigsSubDirectoryOverride`
+
+* **Description**: Specifies a custom subfolder within `Public/Configs/Workflows/_overrides/` for workflow configurations.
+  When set, workflows are loaded from `_overrides/<override>/` instead of the user's folder. This allows multiple users to
+  share a common set of workflows.
+* **Data Type**: `string`
+* **Required**: No
+* **Example**: `"coding-workflows"` (loads from `_overrides/coding-workflows/`)
+
+-----
+
 ##### `presetConfigsSubDirectoryOverride`
 
 * **Description**: Specifies a custom subfolder within `Public/Configs/Presets/<ApiType>/` for LLM generation presets (
@@ -227,6 +238,32 @@ Each User JSON file contains a single object with the following key-value pairs.
 
 -----
 
+##### `allowSharedWorkflows`
+
+* **Description**: If `true`, the `/v1/models` and `/api/tags` API endpoints return workflow folders from
+  `Public/Configs/Workflows/_shared/` as selectable models. This allows front-end applications to select different
+  workflow folders via the model dropdown. If `false` or omitted (the default), only the username is returned as a
+  model, and workflow selection occurs through the normal routing or `customWorkflow` settings.
+* **Data Type**: `boolean`
+* **Required**: No
+* **Default**: `false`
+* **Example**: `true`
+
+-----
+
+##### `sharedWorkflowsSubDirectoryOverride`
+
+* **Description**: Specifies a custom folder name to use instead of `_shared` for the shared workflows folder. When set,
+  the `/v1/models` and `/api/tags` endpoints (when `allowSharedWorkflows` is true) will list workflow folders from
+  `Public/Configs/Workflows/<override>/` instead of `_shared/`. Similarly, workflow selection via the API model field
+  will look in this folder instead of `_shared/`.
+* **Data Type**: `string`
+* **Required**: No
+* **Default**: `"_shared"`
+* **Example**: `"_team_workflows"` (uses `Public/Configs/Workflows/_team_workflows/` for shared workflows)
+
+-----
+
 #### **Example User File**
 
 Here is a fully-commented example user configuration file.
@@ -259,6 +296,8 @@ Here is a fully-commented example user configuration file.
   "sqlLiteDirectory": "D:\\WilmerAI\\Databases",
   // Subdirectory for this user's LLM endpoint configurations.
   "endpointConfigsSubDirectory": "assistant-single-model",
+  // Optional override to use a shared folder for workflow configurations (within _overrides/).
+  "workflowConfigsSubDirectoryOverride": "coding-workflows",
   // Optional override to use a shared folder for generation presets.
   "presetConfigsSubDirectoryOverride": "shared-presets",
   // The prompt template for flattening chat messages for completion APIs.
@@ -274,6 +313,10 @@ Here is a fully-commented example user configuration file.
   // Port for the local Wikipedia API.
   "offlineWikiApiPort": 5728,
   // If true, enables writing logs to a file.
-  "useFileLogging": true
+  "useFileLogging": true,
+  // If true, lists workflow folders from the shared workflows folder in the models API endpoints.
+  "allowSharedWorkflows": false,
+  // Optional override for the shared workflows folder name (default is "_shared").
+  "sharedWorkflowsSubDirectoryOverride": "_shared"
 }
 ```

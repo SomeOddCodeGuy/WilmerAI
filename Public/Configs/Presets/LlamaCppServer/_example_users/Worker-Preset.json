@@ -1,0 +1,12 @@
+{
+  "temperature": 0.3,
+  "top_p": 1,
+  "min_p": 0.05,
+  "stop": [
+    "<|END_RESPONSE|>"
+  ],
+  "chat_template_kwargs": {
+    "enable_thinking": false,
+    "thinking_budget": 0
+  }
+}

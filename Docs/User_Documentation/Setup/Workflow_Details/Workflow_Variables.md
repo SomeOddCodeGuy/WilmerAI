@@ -56,7 +56,7 @@ You **CAN** use variables in fields that are treated as content for the node to 
 * `systemPrompt`
 * `title`
 * `promptToSearch` (and similar input fields on specialized nodes)
-* `filepath` (in `GetCustomFile`, the handler specifically processes variables for this field)
+* `filepath` (in `GetCustomFile` and `SaveCustomFile`, the handlers process variables for this field)
 
 ##### ⚠️ Fields with SPECIAL variable support (Early Substitution)
 
@@ -174,6 +174,7 @@ This is an exhaustive list of all available variables, validated against `workfl
 
 * **`{todays_date_pretty}`**: e.g., "August 30, 2025"
 * **`{todays_date_iso}`**: e.g., "2025-08-30"
+* **`{YYYY_MM_DD}`**: e.g., "2025_08_30" (underscore-separated format, useful for filenames)
 * **`{current_time_12h}`**: e.g., "08:00 PM"
 * **`{current_time_24h}`**: e.g., "20:00"
 * **`{current_month_full}`**: e.g., "August"
@@ -182,8 +183,46 @@ This is an exhaustive list of all available variables, validated against `workfl
 
 #### Context & Memory Variables
 
+* **`{Discussion_Id}`**: The unique identifier for the current conversation/discussion. This is useful for creating
+  per-conversation files or organizing data by session. If no discussion ID is present, this will be an empty string.
 * **`{time_context_summary}`**: A natural language summary of the conversation's timeline (e.g., "The user started this
   conversation a few minutes ago").
+
+##### Using `{Discussion_Id}` and `{YYYY_MM_DD}` for Dynamic File Paths
+
+These variables are particularly useful with the `GetCustomFile` and `SaveCustomFile` nodes, which support variable
+substitution in their `filepath` fields. This allows you to create per-conversation or date-based file storage.
+
+**Example: Per-Conversation Notes**
+
+```json
+{
+  "type": "GetCustomFile",
+  "filepath": "/data/sessions/{Discussion_Id}_notes.txt"
+}
+```
+
+**Example: Daily Logs**
+
+```json
+{
+  "type": "SaveCustomFile",
+  "filepath": "/data/logs/{YYYY_MM_DD}_report.txt",
+  "content": "{agent1Output}"
+}
+```
+
+**Example: Combined Session and Date**
+
+```json
+{
+  "type": "SaveCustomFile",
+  "filepath": "/data/{YYYY_MM_DD}/{Discussion_Id}_output.txt",
+  "content": "Generated at {current_time_12h}:\n\n{agent1Output}"
+}
+```
+
+See the `GetCustomFile` and `SaveCustomFile` node documentation for more details.
 * **`{current_chat_summary}`**: **⚠️ UNAVAILABLE VARIABLE:** The helper function `generate_chat_summary_variables` that
   populates this is **not called** by the main variable generation logic. **Do not use `{current_chat_summary}`** as it
   will not be substituted. To get the summary, you must use a dedicated node like `GetCurrentSummaryFromFile`.

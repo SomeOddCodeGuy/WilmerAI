@@ -1,0 +1,25 @@
+{
+  "VisionModel": "Vision-Endpoint",
+  "VisionPreset": "Vision-Preset",
+  "VisionRespondTokenSize": "6000",
+  "RespondingModel": "General-Fast-Endpoint",
+  "RespondingPreset": "General-Fast-Preset",
+  "RespondingResponseTokenSize": "8000",
+  "nodes": [
+    {
+      "displayOnlyComment": "Example General workflow. You can find this and others in the _common folder. To replace, just change the workflowName.",
+      "title": "Run General Workflow",
+      "type": "CustomWorkflow",
+      "workflowName": "General_With_Vision",
+      "workflowUserFolderOverride": "_common",
+      "scoped_variables": [
+        "{VisionModel}",
+        "{VisionPreset}",
+        "{VisionRespondTokenSize}",
+        "{RespondingModel}",
+        "{RespondingPreset}",
+        "{RespondingResponseTokenSize}"
+      ]
+    }
+  ]
+}

@@ -25,7 +25,7 @@ response.
 | **`systemPrompt`**                          | String  | Yes      | N/A        | The system prompt or initial instruction set for the LLM. Supports variable substitution.                                             |
 | **`prompt`**                                | String  | Yes      | N/A        | The main user-facing prompt. If this is empty, the node will use `lastMessagesToSendInsteadOfPrompt`. Supports variable substitution. |
 | **`lastMessagesToSendInsteadOfPrompt`**     | Integer | No       | `5`        | If `prompt` is empty, this specifies how many recent conversational turns to use as the prompt.                                       |
-| **`maxResponseSizeInTokens`**               | Integer | No       | `400`      | Overrides the maximum number of tokens the LLM can generate for this node.                                                            |
+| **`maxResponseSizeInTokens`**               | Integer/String | No       | `400`      | Overrides the maximum number of tokens the LLM can generate for this node. **Supports LIMITED variables like endpointName.**         |
 | **`maxContextTokenSize`**                   | Integer | No       | `4096`     | Overrides the maximum context window size (in tokens) for this node.                                                                  |
 | **`jinja2`**                                | Boolean | No       | `false`    | If `true`, enables Jinja2 templating for the `systemPrompt` and `prompt` fields.                                                      |
 | **`addDiscussionIdTimestampsForLLM`**       | Boolean | No       | `false`    | If `true`, automatically injects timestamps into the `messages` payload sent to the LLM.                                              |
@@ -38,9 +38,10 @@ response.
 
 #### **Limitations and Key Usage Notes**
 
-* **Variable Support:** Full variables are supported in the `systemPrompt` and `prompt` fields. The `endpointName` and
-  `preset` fields support LIMITED variables (only `{agent#Input}` from parent workflows and static variables defined
-  in the workflow JSON, NOT `{agent#Output}` which doesn't exist yet).
+* **Variable Support:** Full variables are supported in the `systemPrompt` and `prompt` fields. The `endpointName`,
+  `preset`, and `maxResponseSizeInTokens` fields support LIMITED variables (only `{agent#Input}` from parent workflows
+  and static variables defined in the workflow JSON, NOT `{agent#Output}` which doesn't exist yet). For
+  `maxResponseSizeInTokens`, the variable must resolve to a valid integer string (e.g., `"5000"`).
 * **Responder Node:** Only one node in a workflow can have `returnToUser` set to `true`. If no node is designated, the
   last node in the workflow automatically becomes the responder.
 * **Prompt Fallback:** The node prioritizes the `prompt` field. If it's empty, it will fall back to using the
@@ -58,7 +59,7 @@ history.
   "systemPrompt": "System Information: Today is {todays_date_pretty}. The user is {human_persona_name}.\n\n<your_profile>\n{agent3Output}\n</your_profile>\n\n<user_profile>\n{agent2Output}\n</user_profile>",
   "prompt": "Please consider the most recent twenty messages of your online conversation with {human_persona_name}:\n\n<recent_conversation>\n{chat_user_prompt_last_twenty}\n</recent_conversation>\n\nPlease think carefully about all of this by answering the following questions:\n- A) How long has it been since the last message?\n- B) What did {human_persona_name} mean in their last message to you?\n- C) Carefully consider what the best way to respond might be.",
   "endpointName": "Thinker-Endpoint",
-  "preset": "Thinker_Preset",
+  "preset": "Thinker-Preset",
   "maxResponseSizeInTokens": 8000,
   "addUserTurnTemplate": true,
   "returnToUser": false,
@@ -66,6 +67,45 @@ history.
   "useRelativeTimestamps": true
 }
 ```
+
+#### **Variable Substitution for Child Workflows**
+
+When calling a child workflow via `CustomWorkflow`, you can pass dynamic values for `endpointName`, `preset`, and
+`maxResponseSizeInTokens` using `scoped_variables`. This allows the parent workflow to control which endpoint, preset,
+and response size the child uses.
+
+**Parent Workflow (calls the child with dynamic config):**
+
+```json
+{
+  "title": "Run Analysis with Custom Settings",
+  "type": "CustomWorkflow",
+  "workflowName": "General_Workflow_Replaceable_Endpoint",
+  "workflowUserFolderOverride": "_common",
+  "scoped_variables": [
+    "MyDynamicEndpoint",
+    "MyDynamicPreset",
+    "6000"
+  ]
+}
+```
+
+**Child Workflow (receives the values as `{agent#Input}`):**
+
+```json
+{
+  "title": "Responding Agent",
+  "type": "Standard",
+  "endpointName": "{agent1Input}",
+  "preset": "{agent2Input}",
+  "maxResponseSizeInTokens": "{agent3Input}",
+  "systemPrompt": "...",
+  "prompt": ""
+}
+```
+
+In this example, the child workflow will use endpoint `MyDynamicEndpoint`, preset `MyDynamicPreset`, and generate up to
+`6000` tokens.
 
 -----
 
@@ -305,17 +345,18 @@ inject large blocks of static text (like instructions or lore) without clutterin
 
 #### **Properties**
 
-| Property                    | Type   | Required | Default | Description                                                             |
-|:----------------------------|:-------|:---------|:--------|:------------------------------------------------------------------------|
-| **`type`**                  | String | Yes      | N/A     | Must be `"GetCustomFile"`.                                              |
-| **`title`**                 | String | No       | `""`    | An optional, human-readable name for the node.                          |
-| **`filepath`**              | String | Yes      | N/A     | The full path to the text file to load. Supports variables.             |
-| **`delimiter`**             | String | No       | `\n`    | An optional string to search for and replace within the file's content. |
-| **`customReturnDelimiter`** | String | No       | `\n`    | An optional string that will replace every instance of the `delimiter`. |
+| Property                    | Type   | Required | Default | Description                                                                                           |
+|:----------------------------|:-------|:---------|:--------|:------------------------------------------------------------------------------------------------------|
+| **`type`**                  | String | Yes      | N/A     | Must be `"GetCustomFile"`.                                                                            |
+| **`title`**                 | String | No       | `""`    | An optional, human-readable name for the node.                                                        |
+| **`filepath`**              | String | Yes      | N/A     | The full path to the text file to load. Supports variables including `{Discussion_Id}` and `{YYYY_MM_DD}`. |
+| **`delimiter`**             | String | No       | `\n`    | An optional string to search for and replace within the file's content.                               |
+| **`customReturnDelimiter`** | String | No       | `\n`    | An optional string that will replace every instance of the `delimiter`.                               |
 
 #### **Limitations and Key Usage Notes**
 
-* **Variable Support:** The `filepath` field supports variable substitution.
+* **Variable Support:** The `filepath` field supports full variable substitution, including `{Discussion_Id}` for
+  per-conversation files and `{YYYY_MM_DD}` for date-based files.
 * **File Not Found:** If the file doesn't exist, the node returns `"Custom instruction file did not exist"`.
 * **IMPORTANT:** Do not set a delimiter or custom delimiter if you want the file to be pulled as it was originally
   written.
@@ -334,6 +375,18 @@ This node loads a character sheet and replaces a simple `---` separator with a m
 }
 ```
 
+#### **Dynamic Filepath Example**
+
+This node loads session-specific notes using the conversation's unique identifier.
+
+```json
+{
+  "title": "Load Session Notes",
+  "type": "GetCustomFile",
+  "filepath": "/data/sessions/{Discussion_Id}_notes.txt"
+}
+```
+
 -----
 
 ### **Utility: The `SaveCustomFile` Node**
@@ -343,17 +396,19 @@ during a workflow, such as an LLM's analysis, a conversation summary, or a repor
 
 #### **Properties**
 
-| Property       | Type   | Required | Default | Description                                                       |
-|:---------------|:-------|:---------|:--------|:------------------------------------------------------------------|
-| **`type`**     | String | Yes      | N/A     | Must be `"SaveCustomFile"`.                                       |
-| **`title`**    | String | No       | `""`    | An optional, human-readable name for the node.                    |
-| **`filepath`** | String | Yes      | N/A     | The full path where the file will be saved. Supports variables.   |
-| **`content`**  | String | Yes      | N/A     | The string content to be written to the file. Supports variables. |
+| Property       | Type   | Required | Default | Description                                                                                             |
+|:---------------|:-------|:---------|:--------|:--------------------------------------------------------------------------------------------------------|
+| **`type`**     | String | Yes      | N/A     | Must be `"SaveCustomFile"`.                                                                             |
+| **`title`**    | String | No       | `""`    | An optional, human-readable name for the node.                                                          |
+| **`filepath`** | String | Yes      | N/A     | The full path where the file will be saved. Supports variables including `{Discussion_Id}` and `{YYYY_MM_DD}`. |
+| **`content`**  | String | Yes      | N/A     | The string content to be written to the file. Supports variables.                                       |
 
 #### **Limitations and Key Usage Notes**
 
-* **Variable Support:** Both `filepath` and `content` fields support full variable substitution.
+* **Variable Support:** Both `filepath` and `content` fields support full variable substitution, including
+  `{Discussion_Id}` for per-conversation files and `{YYYY_MM_DD}` for date-based files.
 * **Error Handling:** The node returns a status message indicating success or failure (e.g., due to permissions).
+* **Directory Creation:** If parent directories don't exist, the node will attempt to create them.
 
 #### **Full Syntax Example**
 
@@ -365,6 +420,19 @@ This node saves a character bio generated by a previous node to a file.
   "type": "SaveCustomFile",
   "filepath": "D:\\WilmerAI\\Characters\\jax_the_pirate.txt",
   "content": "CHARACTER PROFILE\n-----------------\nName: Jax\nBio: {agent1Output}"
+}
+```
+
+#### **Dynamic Filepath Example**
+
+This node saves a daily report using the date variable.
+
+```json
+{
+  "title": "Save Daily Report",
+  "type": "SaveCustomFile",
+  "filepath": "/data/reports/{YYYY_MM_DD}_report.txt",
+  "content": "Report for {todays_date_pretty}:\n\n{agent1Output}"
 }
 ```
 
@@ -441,8 +509,8 @@ use.
 {
   "title": "Analyze and Describe All User Images",
   "type": "ImageProcessor",
-  "endpointName": "Image-Endpoint",
-  "preset": "Vision_Default_Preset",
+  "endpointName": "Vision-Endpoint",
+  "preset": "Vision-Preset",
   "addAsUserMessage": true,
   "message": "[SYSTEM: An image analysis module has processed the user's recent image(s). The detailed description is below:\n\n[IMAGE_BLOCK]\n\nThis is now part of our conversation.]",
   "systemPrompt": "You are a world-class visual analysis AI. Describe the image in meticulous detail for a text-only assistant.",

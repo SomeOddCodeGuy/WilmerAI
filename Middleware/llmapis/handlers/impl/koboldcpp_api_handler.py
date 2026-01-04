@@ -1,7 +1,7 @@
 # middleware/llmapis/handlers/impl/koboldcpp_api_handler.py
 import json
 import logging
-from typing import Dict, Optional, Any
+from typing import Dict, List, Optional, Any
 
 from Middleware.llmapis.handlers.base.base_completions_handler import BaseCompletionsHandler
 
@@ -16,7 +16,38 @@ class KoboldCppApiHandler(BaseCompletionsHandler):
     generation endpoints. It implements the logic required for both streaming and
     non-streaming modes, correctly parsing KoboldCpp's specific Server-Sent Event (SSE)
     format and standard JSON responses.
+
+    This handler also supports multimodal inputs when image data is included in the
+    request. It extracts image content and includes it in the generation parameters.
     """
+
+    def _prepare_payload(self, conversation: Optional[List[Dict[str, str]]], system_prompt: Optional[str],
+                         prompt: Optional[str]) -> Dict:
+        """
+        Prepares the payload by adding image data before calling the parent implementation.
+
+        This method overrides the standard payload preparation to handle multimodal
+        inputs. It inspects the `conversation` for any messages with the role "images".
+        If found, it extracts their content and adds it to the `gen_input`
+        dictionary. It then calls the parent class's `_prepare_payload` method to
+        construct the text prompt and assemble the rest of the request payload.
+
+        Args:
+            conversation (Optional[List[Dict[str, str]]]): The history of the conversation,
+                which may include special "images" role messages.
+            system_prompt (Optional[str]): The system-level instruction for the LLM.
+            prompt (Optional[str]): The latest user text prompt.
+
+        Returns:
+            Dict: The final JSON payload, including image data if present, ready to be
+            sent to the API.
+        """
+        if conversation:
+            image_contents = [msg["content"] for msg in conversation if msg.get("role") == "images"]
+            if image_contents:
+                self.gen_input["images"] = image_contents
+
+        return super()._prepare_payload(conversation, system_prompt, prompt)
 
     def _get_api_endpoint_url(self) -> str:
         """
