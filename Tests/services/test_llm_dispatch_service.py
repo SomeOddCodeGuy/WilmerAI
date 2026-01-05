@@ -38,7 +38,6 @@ def mock_context(mocker):
     mock_llm_handler.llm = mock_llm
     mock_llm_handler.prompt_template_file_name = "test_template.json"
     mock_llm_handler.add_generation_prompt = False
-    mock_llm_handler.takes_image_collection = False  # Default to False
     mock_llm_handler.takes_message_collection = False  # Default to completions API
 
     # Mock the variable service to return the prompt as-is
@@ -180,13 +179,13 @@ class TestLLMDispatchServiceCompletions:
         """
         Verifies that an image message is correctly passed in the 'conversation'
         argument for Completions APIs that can handle them.
+        llm_takes_images is now determined by whether image_message is not None.
         """
         # Arrange
         mock_context.config = {
             "systemPrompt": "System prompt.",
             "prompt": "Describe this image."
         }
-        mock_context.llm_handler.takes_image_collection = True
 
         mocker.patch('Middleware.services.llm_dispatch_service.format_system_prompt_with_template',
                      return_value="formatted_system_for_image_test")
@@ -298,10 +297,10 @@ class TestLLMDispatchServiceChat:
     def test_dispatch_with_image_message(self, mock_context):
         """
         Verifies that an image message is correctly appended to the message list.
+        llm_takes_images is now determined by whether image_message is not None.
         """
         # Arrange
         mock_context.llm_handler.takes_message_collection = True
-        mock_context.llm_handler.takes_image_collection = True
         mock_context.config = {"prompt": "Describe this image."}
 
         expected_collection = [

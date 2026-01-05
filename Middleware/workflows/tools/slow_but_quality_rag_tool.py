@@ -506,7 +506,7 @@ JSON Output:"""
             return llm_handler.llm.get_response_from_llm(
                 system_prompt=formatted_system_prompt,
                 prompt=formatted_prompt,
-                llm_takes_images=llm_handler.takes_image_collection
+                llm_takes_images=False
             )
         else:
             collection = []
@@ -516,5 +516,5 @@ JSON Output:"""
                 collection.append({"role": "user", "content": formatted_prompt})
             return llm_handler.llm.get_response_from_llm(
                 collection,
-                llm_takes_images=llm_handler.takes_image_collection
+                llm_takes_images=False
             )
