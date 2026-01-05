@@ -307,10 +307,11 @@ class TestSlowButQualityRAGTool:
         )
 
         # Verify get_response_from_llm was called with keyword arguments
+        # llm_takes_images is always False for RAG processing (no images in text chunks)
         mock_context.llm_handler.llm.get_response_from_llm.assert_called_once_with(
             system_prompt="System: my text chunk",
             prompt="Prompt: my text chunk",
-            llm_takes_images=mock_context.llm_handler.takes_image_collection
+            llm_takes_images=False
         )
         assert result == "LLM Response"
 
