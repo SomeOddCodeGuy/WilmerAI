@@ -9,6 +9,9 @@
 > This project and any expressed views, methodologies, etc., found within are the result of contributions by the
 > maintainer and any contributors in their free time and on their personal hardware, and should not reflect upon
 > any of their employers.
+>
+> [The maintainer of this project, SomeOddCodeGuy, is not doing any Contract, Freelance, or Collaboration
+> work.](https://github.com/SomeOddCodeGuy#disclaimer)
 
 ---
 
@@ -33,16 +36,17 @@ logic without requiring changes to your existing front-end tools.
 
 ---
 
-## Maintainer's Note — UPDATED 2026-01-04
+## Maintainer's Note — UPDATED 2026-02-08
 
 > **IMPORTANT:**  
-> Sorry for the slow releases lately! I've started a new job and haven't had quite as much free time as I did before.
-> However, I do expect in the coming months that I'll be able to put more time into this.
+> I'm getting into the swing of a one month release cadence. I'll probably speed it up later into the year, but right now
+> I'm spending a lot of time digging into dev agents and working on some complimentary projects to Wilmer for my tinkering,
+> so this is a good pace.
 >
-> I can assure you that I haven't abandoned or forgotten this project. I use it daily. Claude Code has definitely
-> changed my opinion on agentic development, but I still use Wilmer for all of my regular chatbot stuff, which I
-> use often (especially for offline LLMs). I still have a lot I want to do with Wilmer, so I'm not remotely finished
-> yet.
+> I have a long roadmap for Wilmer. I'm nowhere near done with this project, and with the state of AI dev now, I really think
+> I can start to make a dent in where I really want Wilmer to go. My use cases for it have changed, but I'm still all in.
+>
+> I'll try to make some more videos and share some more workflows in the near future.
 >
 > — Socg
 
