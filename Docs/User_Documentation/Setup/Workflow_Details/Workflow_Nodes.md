@@ -27,6 +27,10 @@ response.
 | **`lastMessagesToSendInsteadOfPrompt`**     | Integer | No       | `5`        | If `prompt` is empty, this specifies how many recent conversational turns to use as the prompt.                                       |
 | **`maxResponseSizeInTokens`**               | Integer/String | No       | `400`      | Overrides the maximum number of tokens the LLM can generate for this node. **Supports LIMITED variables like endpointName.**         |
 | **`maxContextTokenSize`**                   | Integer | No       | `4096`     | Overrides the maximum context window size (in tokens) for this node.                                                                  |
+| **`nMessagesToIncludeInVariable`**           | Integer | No       | `5`        | Controls how many messages are included in the `{chat_user_prompt_n_messages}` and `{templated_user_prompt_n_messages}` variables.    |
+| **`estimatedTokensToIncludeInVariable`**    | Integer | No       | `2048`     | Controls the estimated token budget for the `{chat_user_prompt_estimated_token_limit}` and `{templated_user_prompt_estimated_token_limit}` variables. Messages are included from most recent backwards until the budget is reached. At least one message is always included. |
+| **`minMessagesInVariable`**                 | Integer | No       | `5`        | Used with `maxEstimatedTokensInVariable`. Sets the minimum message count for the `{chat_user_prompt_min_n_max_tokens}` and `{templated_user_prompt_min_n_max_tokens}` variables. These messages are always included regardless of the token budget. |
+| **`maxEstimatedTokensInVariable`**          | Integer | No       | `2048`     | Used with `minMessagesInVariable`. Sets the token budget for expansion beyond the minimum message count. After the minimum messages are included, older messages are added until this budget would be exceeded. |
 | **`jinja2`**                                | Boolean | No       | `false`    | If `true`, enables Jinja2 templating for the `systemPrompt` and `prompt` fields.                                                      |
 | **`addDiscussionIdTimestampsForLLM`**       | Boolean | No       | `false`    | If `true`, automatically injects timestamps into the `messages` payload sent to the LLM.                                              |
 | **`useRelativeTimestamps`**                 | Boolean | No       | `false`    | If `addDiscussionIdTimestampsForLLM` is `true`, this uses relative timestamps (e.g., "5 minutes ago").                                |
@@ -335,6 +339,100 @@ This example assembles a multi-line user profile from various data sources.
   "returnToUser": false
 }
 ```
+
+-----
+
+### **Data Extraction: The `JsonExtractor` Node**
+
+The **`JsonExtractor`** node extracts a specific field from a JSON string. It parses a JSON object (optionally wrapped
+in markdown code blocks), resolves workflow variables, and returns the value of the specified field as a string. This
+is useful for parsing structured LLM outputs.
+
+#### **Properties**
+
+| Property                | Type   | Required | Default | Description                                                                                          |
+|:------------------------|:-------|:---------|:--------|:-----------------------------------------------------------------------------------------------------|
+| **`type`**              | String | Yes      | N/A     | Must be `"JsonExtractor"`.                                                                           |
+| **`title`**             | String | No       | `""`    | A descriptive name for the node.                                                                     |
+| **`jsonToExtractFrom`** | String | Yes      | N/A     | The JSON string to extract from. Supports variables. Handles markdown code blocks automatically.     |
+| **`fieldToExtract`**    | String | Yes      | N/A     | The name of the field to extract. Supports variables.                                                |
+
+#### **Limitations and Key Usage Notes**
+
+* **Variable Support:** Both `jsonToExtractFrom` and `fieldToExtract` support full variable substitution.
+* **Markdown Handling:** The node automatically strips ` ```json ` and ` ``` ` code block wrappers before parsing.
+* **Return Types:** Strings are returned as-is; numbers/booleans become strings; nested objects/arrays become JSON
+  strings; `null` returns an empty string.
+
+#### **Full Syntax Example**
+
+This node extracts the "name" field from a JSON object returned by a previous LLM node.
+
+```json
+{
+  "title": "Extract Character Name from LLM Response",
+  "type": "JsonExtractor",
+  "jsonToExtractFrom": "{agent1Output}",
+  "fieldToExtract": "name"
+}
+```
+
+**Example Input (from `agent1Output`):**
+```json
+{"name": "Socg", "file": "Socg.txt"}
+```
+
+**Example Output:** `Socg`
+
+-----
+
+### **Data Extraction: The `TagTextExtractor` Node**
+
+The **`TagTextExtractor`** node extracts content from XML/HTML-style tags within a text string. It searches for a
+specified tag (e.g., `<answer>...</answer>`) and returns the content between the opening and closing tags. This is
+useful for parsing structured LLM outputs where the model wraps content in custom tags.
+
+#### **Properties**
+
+| Property              | Type   | Required | Default | Description                                                                    |
+|:----------------------|:-------|:---------|:--------|:-------------------------------------------------------------------------------|
+| **`type`**            | String | Yes      | N/A     | Must be `"TagTextExtractor"`.                                                  |
+| **`title`**           | String | No       | `""`    | A descriptive name for the node.                                               |
+| **`tagToExtractFrom`** | String | Yes      | N/A     | The text string to search within. Supports variables.                          |
+| **`fieldToExtract`**    | String | Yes      | N/A     | The name of the tag to search for (without angle brackets). Supports variables.|
+
+#### **Limitations and Key Usage Notes**
+
+* **Variable Support:** Both `tagToExtractFrom` and `fieldToExtract` support full variable substitution.
+* **Case Sensitivity:** Tag matching is case-sensitive (`<Answer>` and `<answer>` are different).
+* **First Match:** If multiple instances of the tag exist, only the first match is extracted.
+* **Whitespace:** Leading/trailing whitespace is stripped from the extracted content.
+
+#### **Full Syntax Example**
+
+This node extracts the content within `<answer>` tags from an LLM response.
+
+```json
+{
+  "title": "Extract Answer from LLM Response",
+  "type": "TagTextExtractor",
+  "tagToExtractFrom": "{agent1Output}",
+  "fieldToExtract": "answer"
+}
+```
+
+**Example Input (from `agent1Output`):**
+```
+I've analyzed your question. Here is my response:
+
+<answer>
+The capital of France is Paris.
+</answer>
+
+I hope this helps.
+```
+
+**Example Output:** `The capital of France is Paris.`
 
 -----
 

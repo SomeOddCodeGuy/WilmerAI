@@ -119,8 +119,9 @@ class BaseChatCompletionsHandler(LlmApiHandler):
             "content"] == "":
             corrected_conversation.pop()
 
-        if corrected_conversation:
-            corrected_conversation = [item for item in corrected_conversation if item["role"] != "images"]
+        # Note: Image filtering is handled upstream in llm_api.py based on the llm_takes_images flag.
+        # Handlers that support images (OpenAI, Ollama) override this method to process images.
+        # Handlers that don't support images receive a pre-filtered conversation.
 
         return_brackets(corrected_conversation)
 

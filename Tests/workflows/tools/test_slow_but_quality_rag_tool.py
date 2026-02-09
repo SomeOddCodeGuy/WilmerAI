@@ -231,13 +231,15 @@ class TestSlowButQualityRAGTool:
                 # so handle_discussion_id_flow no longer calls add_vector_check_hash directly
                 mock_vector_db.add_vector_check_hash.assert_not_called()
 
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.os.path.exists', return_value=True)
     @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.load_config')
     @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.read_chunks_with_hashes', return_value=[])
     @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.rough_estimate_token_length', return_value=2000)
     @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_discussion_memory_file_path')
     @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.chunk_messages_with_hashes')
     def test_handle_discussion_id_flow_file_path(
-            self, mock_chunker, mock_get_path, mock_estimate_tokens, mock_read_hashes, mock_load_config, mock_context
+            self, mock_chunker, mock_get_path, mock_estimate_tokens, mock_read_hashes, mock_load_config,
+            mock_path_exists, mock_context
     ):
         """Tests the main orchestrator method for the file-based memory path."""
         tool = SlowButQualityRAGTool()
@@ -311,7 +313,8 @@ class TestSlowButQualityRAGTool:
         mock_context.llm_handler.llm.get_response_from_llm.assert_called_once_with(
             system_prompt="System: my text chunk",
             prompt="Prompt: my text chunk",
-            llm_takes_images=False
+            llm_takes_images=False,
+            request_id="test-req-123"
         )
         assert result == "LLM Response"
 
@@ -447,3 +450,344 @@ class TestSlowButQualityRAGTool:
             mock_generate.assert_not_called()
             # Hash should NOT be updated
             mock_vector_db.add_vector_check_hash.assert_not_called()
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.os.path.exists', return_value=True)
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.load_config')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.read_chunks_with_hashes',
+           return_value=[("existing chunk", "existing_hash")])
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.rough_estimate_token_length', return_value=1000)
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_discussion_memory_file_path')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.chunk_messages_with_hashes')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.find_last_matching_hash_message', return_value=20)
+    def test_trigger_fires_at_exact_token_threshold(
+            self, mock_find_hash, mock_chunker, mock_get_path, mock_estimate_tokens,
+            mock_read_hashes, mock_load_config, mock_path_exists, mock_context
+    ):
+        """Tests that token trigger fires at exactly the threshold value (>= not >)."""
+        tool = SlowButQualityRAGTool()
+        mock_load_config.return_value = {
+            'useVectorForQualityMemory': False,
+            'lookbackStartTurn': 1,
+            'chunkEstimatedTokenSize': 1000,
+            'maxMessagesBetweenChunks': 100
+        }
+        mock_context.messages = [{"role": "user", "content": f"message {i}"} for i in range(25)]
+        mock_chunker.return_value = [("some chunk text", "some_hash")]
+
+        with patch.object(tool, 'process_new_memory_chunks') as mock_process:
+            tool.handle_discussion_id_flow(mock_context)
+            mock_process.assert_called_once()
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.os.path.exists', return_value=True)
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.load_config')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.read_chunks_with_hashes',
+           return_value=[("existing chunk", "existing_hash")])
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.rough_estimate_token_length', return_value=999)
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_discussion_memory_file_path')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.find_last_matching_hash_message', return_value=20)
+    def test_token_trigger_does_not_fire_below_threshold(
+            self, mock_find_hash, mock_get_path, mock_estimate_tokens,
+            mock_read_hashes, mock_load_config, mock_path_exists, mock_context
+    ):
+        """Tests that token trigger does NOT fire at threshold - 1 (distinguishes >= from >)."""
+        tool = SlowButQualityRAGTool()
+        mock_load_config.return_value = {
+            'useVectorForQualityMemory': False,
+            'lookbackStartTurn': 1,
+            'chunkEstimatedTokenSize': 1000,
+            'maxMessagesBetweenChunks': 100
+        }
+        # 4 new messages (well below maxMessagesBetweenChunks=100), so message trigger won't fire.
+        # Token count is 999 < 1000 threshold, so token trigger shouldn't fire either.
+        mock_context.messages = [{"role": "user", "content": f"message {i}"} for i in range(25)]
+
+        with patch.object(tool, 'process_new_memory_chunks') as mock_process:
+            tool.handle_discussion_id_flow(mock_context)
+            mock_process.assert_not_called()
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.os.path.exists', return_value=True)
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.load_config')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.read_chunks_with_hashes',
+           return_value=[("existing chunk", "existing_hash")])
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.rough_estimate_token_length', return_value=500)
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_discussion_memory_file_path')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.chunk_messages_with_hashes')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.find_last_matching_hash_message', return_value=20)
+    def test_trigger_fires_at_exact_message_threshold(
+            self, mock_find_hash, mock_chunker, mock_get_path, mock_estimate_tokens,
+            mock_read_hashes, mock_load_config, mock_path_exists, mock_context
+    ):
+        """Tests that message trigger fires at exactly the threshold value (>= not >)."""
+        tool = SlowButQualityRAGTool()
+        mock_load_config.return_value = {
+            'useVectorForQualityMemory': False,
+            'lookbackStartTurn': 1,
+            'chunkEstimatedTokenSize': 5000,
+            'maxMessagesBetweenChunks': 20
+        }
+        mock_context.messages = [{"role": "user", "content": f"message {i}"} for i in range(25)]
+        mock_chunker.return_value = [("some chunk text", "some_hash")]
+
+        with patch.object(tool, 'process_new_memory_chunks') as mock_process:
+            tool.handle_discussion_id_flow(mock_context)
+            mock_process.assert_called_once()
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.os.path.exists', return_value=True)
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.load_config')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.read_chunks_with_hashes',
+           return_value=[("existing chunk", "existing_hash")])
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.rough_estimate_token_length', return_value=500)
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_discussion_memory_file_path')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.find_last_matching_hash_message', return_value=19)
+    def test_message_trigger_does_not_fire_below_threshold(
+            self, mock_find_hash, mock_get_path, mock_estimate_tokens,
+            mock_read_hashes, mock_load_config, mock_path_exists, mock_context
+    ):
+        """Tests that message trigger does NOT fire at threshold - 1 (distinguishes >= from >)."""
+        tool = SlowButQualityRAGTool()
+        mock_load_config.return_value = {
+            'useVectorForQualityMemory': False,
+            'lookbackStartTurn': 1,
+            'chunkEstimatedTokenSize': 5000,
+            'maxMessagesBetweenChunks': 20
+        }
+        # 19 new messages (threshold - 1), tokens 500 < 5000. Neither threshold met.
+        mock_context.messages = [{"role": "user", "content": f"message {i}"} for i in range(25)]
+
+        with patch.object(tool, 'process_new_memory_chunks') as mock_process:
+            tool.handle_discussion_id_flow(mock_context)
+            mock_process.assert_not_called()
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.os.path.exists', return_value=True)
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.load_config')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.read_chunks_with_hashes',
+           return_value=[("existing chunk", "existing_hash")])
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.rough_estimate_token_length', return_value=500)
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_discussion_memory_file_path')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.find_last_matching_hash_message', return_value=10)
+    def test_message_trigger_fires_when_tokens_below_threshold(
+            self, mock_find_hash, mock_get_path, mock_estimate_tokens,
+            mock_read_hashes, mock_load_config, mock_path_exists, mock_context
+    ):
+        """Tests that message trigger fires even when tokens are below threshold (standard mode)."""
+        tool = SlowButQualityRAGTool()
+        mock_load_config.return_value = {
+            'useVectorForQualityMemory': False,
+            'lookbackStartTurn': 1,
+            'chunkEstimatedTokenSize': 5000,
+            'maxMessagesBetweenChunks': 5
+        }
+        mock_context.messages = [{"role": "user", "content": f"message {i}"} for i in range(15)]
+
+        with patch('Middleware.workflows.tools.slow_but_quality_rag_tool.chunk_messages_with_hashes',
+                   return_value=[("chunk", "hash")]) as mock_chunker:
+            with patch.object(tool, 'process_new_memory_chunks') as mock_process:
+                tool.handle_discussion_id_flow(mock_context)
+                mock_process.assert_called_once()
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.os.path.exists', return_value=False)
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.load_config')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.read_chunks_with_hashes', return_value=[])
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.rough_estimate_token_length', return_value=500)
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_discussion_memory_file_path')
+    def test_consolidation_mode_when_file_does_not_exist(
+            self, mock_get_path, mock_estimate_tokens,
+            mock_read_hashes, mock_load_config, mock_path_exists, mock_context
+    ):
+        """Tests that message threshold is disabled when file does not exist on disk (consolidation mode)."""
+        tool = SlowButQualityRAGTool()
+        mock_load_config.return_value = {
+            'useVectorForQualityMemory': False,
+            'lookbackStartTurn': 1,
+            'chunkEstimatedTokenSize': 5000,
+            'maxMessagesBetweenChunks': 3
+        }
+        # 10 messages exceeds maxMessagesBetweenChunks=3, but file does not exist on disk
+        mock_context.messages = [{"role": "user", "content": f"message {i}"} for i in range(10)]
+
+        with patch.object(tool, 'process_new_memory_chunks') as mock_process:
+            tool.handle_discussion_id_flow(mock_context)
+            # Should NOT trigger because file doesn't exist (consolidation mode) and token threshold not met
+            mock_process.assert_not_called()
+
+    def test_process_single_chunk_passes_request_id_completions(self, mock_context):
+        """Tests that process_single_chunk passes request_id for completions-style APIs."""
+        mock_context.llm_handler.takes_message_collection = False
+
+        SlowButQualityRAGTool.process_single_chunk(
+            "my text chunk", "Prompt: [TextChunk]", "System: [TextChunk]", mock_context
+        )
+
+        mock_context.llm_handler.llm.get_response_from_llm.assert_called_once_with(
+            system_prompt="System: my text chunk",
+            prompt="Prompt: my text chunk",
+            llm_takes_images=False,
+            request_id="test-req-123"
+        )
+
+    def test_process_single_chunk_passes_request_id_chat(self, mock_context):
+        """Tests that process_single_chunk passes request_id for chat-style APIs."""
+        mock_context.llm_handler.takes_message_collection = True
+
+        SlowButQualityRAGTool.process_single_chunk(
+            "my text chunk", "Prompt: [TextChunk]", "System: [TextChunk]", mock_context
+        )
+
+        call_args, call_kwargs = mock_context.llm_handler.llm.get_response_from_llm.call_args
+        assert call_kwargs.get('request_id') == "test-req-123"
+        assert call_kwargs.get('llm_takes_images') is False
+
+    # ---- Scenario tests for file_exists triggering behavior ----
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.os.path.exists', return_value=True)
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.load_config')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.read_chunks_with_hashes', return_value=[])
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.rough_estimate_token_length', return_value=500)
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_discussion_memory_file_path')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.chunk_messages_with_hashes')
+    def test_new_chat_empty_file_exists_uses_message_threshold(
+            self, mock_chunker, mock_get_path, mock_estimate_tokens,
+            mock_read_hashes, mock_load_config, mock_path_exists, mock_context
+    ):
+        """
+        Scenario: New chat where file exists on disk but has no chunks (empty []).
+        The message threshold should be active because the file exists, even though
+        it contains no memory chunks. This is the key fix — previously, the code
+        checked bool(discussion_chunks) which was False for empty files, disabling
+        the message threshold entirely for new conversations.
+        """
+        tool = SlowButQualityRAGTool()
+        mock_load_config.return_value = {
+            'useVectorForQualityMemory': False,
+            'lookbackStartTurn': 1,
+            'chunkEstimatedTokenSize': 50000,
+            'maxMessagesBetweenChunks': 5
+        }
+        # 25 messages, tokens (500) far below token threshold (50000),
+        # but message count (24 after lookback) exceeds maxMessagesBetweenChunks (5)
+        mock_context.messages = [{"role": "user", "content": f"message {i}"} for i in range(25)]
+        mock_chunker.return_value = [("chunk text", "chunk_hash")]
+
+        with patch.object(tool, 'process_new_memory_chunks') as mock_process:
+            tool.handle_discussion_id_flow(mock_context)
+            # MUST trigger via message threshold, even though file has no chunks
+            mock_process.assert_called_once()
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.os.path.exists', return_value=False)
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.load_config')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.read_chunks_with_hashes', return_value=[])
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.rough_estimate_token_length', return_value=100000)
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_discussion_memory_file_path')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.chunk_messages_with_hashes')
+    def test_consolidation_file_deleted_triggers_by_tokens_only(
+            self, mock_chunker, mock_get_path, mock_estimate_tokens,
+            mock_read_hashes, mock_load_config, mock_path_exists, mock_context
+    ):
+        """
+        Scenario: User deletes memory file to consolidate. File does not exist on disk.
+        Token threshold met (100000 >= 30000). Should trigger via tokens.
+        Message threshold should be disabled (file doesn't exist = consolidation mode).
+        """
+        tool = SlowButQualityRAGTool()
+        mock_load_config.return_value = {
+            'useVectorForQualityMemory': False,
+            'lookbackStartTurn': 3,
+            'chunkEstimatedTokenSize': 30000,
+            'maxMessagesBetweenChunks': 20
+        }
+        mock_context.messages = [{"role": "user", "content": f"message {i}"} for i in range(160)]
+        mock_chunker.return_value = [("chunk1", "hash1"), ("chunk2", "hash2"), ("chunk3", "hash3")]
+
+        with patch.object(tool, 'process_new_memory_chunks') as mock_process:
+            tool.handle_discussion_id_flow(mock_context)
+            # Should trigger via token threshold
+            mock_process.assert_called_once()
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.os.path.exists', return_value=False)
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.load_config')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.read_chunks_with_hashes', return_value=[])
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.rough_estimate_token_length', return_value=500)
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_discussion_memory_file_path')
+    def test_consolidation_file_deleted_message_threshold_disabled(
+            self, mock_get_path, mock_estimate_tokens,
+            mock_read_hashes, mock_load_config, mock_path_exists, mock_context
+    ):
+        """
+        Scenario: User deletes memory file to consolidate. File does not exist on disk.
+        Message count (50) far exceeds maxMessagesBetweenChunks (5), but token threshold
+        not met (500 < 30000). Should NOT trigger because consolidation mode disables
+        the message threshold.
+        """
+        tool = SlowButQualityRAGTool()
+        mock_load_config.return_value = {
+            'useVectorForQualityMemory': False,
+            'lookbackStartTurn': 1,
+            'chunkEstimatedTokenSize': 30000,
+            'maxMessagesBetweenChunks': 5
+        }
+        mock_context.messages = [{"role": "user", "content": f"message {i}"} for i in range(50)]
+
+        with patch.object(tool, 'process_new_memory_chunks') as mock_process:
+            tool.handle_discussion_id_flow(mock_context)
+            # Must NOT trigger — consolidation mode, only token threshold applies
+            mock_process.assert_not_called()
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.os.path.exists', return_value=True)
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.load_config')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.read_chunks_with_hashes',
+           return_value=[("existing memory", "existing_hash")])
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.rough_estimate_token_length', return_value=500)
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_discussion_memory_file_path')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.chunk_messages_with_hashes')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.find_last_matching_hash_message', return_value=25)
+    def test_existing_chat_message_threshold_triggers(
+            self, mock_find_hash, mock_chunker, mock_get_path, mock_estimate_tokens,
+            mock_read_hashes, mock_load_config, mock_path_exists, mock_context
+    ):
+        """
+        Scenario: Existing chat with memory chunks. File exists with chunks.
+        25 new messages, maxMessagesBetweenChunks=20. Token count (500) below threshold (30000).
+        Should trigger via message threshold.
+        """
+        tool = SlowButQualityRAGTool()
+        mock_load_config.return_value = {
+            'useVectorForQualityMemory': False,
+            'lookbackStartTurn': 3,
+            'chunkEstimatedTokenSize': 30000,
+            'maxMessagesBetweenChunks': 20
+        }
+        mock_context.messages = [{"role": "user", "content": f"message {i}"} for i in range(100)]
+        mock_chunker.return_value = [("chunk", "hash")]
+
+        with patch.object(tool, 'process_new_memory_chunks') as mock_process:
+            tool.handle_discussion_id_flow(mock_context)
+            # Should trigger via message count threshold
+            mock_process.assert_called_once()
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.os.path.exists', return_value=True)
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.load_config')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.read_chunks_with_hashes',
+           return_value=[("existing memory", "existing_hash")])
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.rough_estimate_token_length', return_value=500)
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_discussion_memory_file_path')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.find_last_matching_hash_message', return_value=10)
+    def test_existing_chat_below_both_thresholds_no_trigger(
+            self, mock_find_hash, mock_get_path, mock_estimate_tokens,
+            mock_read_hashes, mock_load_config, mock_path_exists, mock_context
+    ):
+        """
+        Scenario: Existing chat, 10 new messages. maxMessages=20, tokens=500 < 30000.
+        Neither threshold met. Should NOT trigger.
+        """
+        tool = SlowButQualityRAGTool()
+        mock_load_config.return_value = {
+            'useVectorForQualityMemory': False,
+            'lookbackStartTurn': 3,
+            'chunkEstimatedTokenSize': 30000,
+            'maxMessagesBetweenChunks': 20
+        }
+        mock_context.messages = [{"role": "user", "content": f"message {i}"} for i in range(100)]
+
+        with patch.object(tool, 'process_new_memory_chunks') as mock_process:
+            tool.handle_discussion_id_flow(mock_context)
+            mock_process.assert_not_called()

@@ -219,6 +219,30 @@ def test_generate_variables_handles_agent_inputs_dictionary(mock_context, mocker
         'Middleware.workflows.managers.workflow_variable_manager.format_system_prompts',
         return_value={}
     )
+    mocker.patch(
+        'Middleware.workflows.managers.workflow_variable_manager.extract_last_n_turns_as_string',
+        return_value="raw_n_messages"
+    )
+    mocker.patch(
+        'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_n_turns_as_string',
+        return_value="templated_n_messages"
+    )
+    mocker.patch(
+        'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_by_estimated_token_limit_as_string',
+        return_value="raw_token_limit"
+    )
+    mocker.patch(
+        'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_by_estimated_token_limit_as_string',
+        return_value="templated_token_limit"
+    )
+    mocker.patch(
+        'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_with_min_messages_and_token_limit_as_string',
+        return_value=""
+    )
+    mocker.patch(
+        'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_with_min_messages_and_token_limit_as_string',
+        return_value=""
+    )
 
     # Act
     variables = manager.generate_variables(mock_context)
@@ -256,6 +280,18 @@ def test_generate_variables_integration(mocker, mock_context):
     mocker.patch.object(manager, 'extract_additional_attributes', return_value={"category_list": ["test"]})
     mocker.patch('Middleware.workflows.managers.workflow_variable_manager.format_system_prompts',
                  return_value={"templated_system_prompt": "system prompt"})
+    mocker.patch('Middleware.workflows.managers.workflow_variable_manager.extract_last_n_turns_as_string',
+                 return_value="raw_n_messages")
+    mocker.patch('Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_n_turns_as_string',
+                 return_value="templated_n_messages")
+    mocker.patch('Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_by_estimated_token_limit_as_string',
+                 return_value="raw_token_limit")
+    mocker.patch('Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_by_estimated_token_limit_as_string',
+                 return_value="templated_token_limit")
+    mocker.patch('Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_with_min_messages_and_token_limit_as_string',
+                 return_value="raw_combo")
+    mocker.patch('Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_with_min_messages_and_token_limit_as_string',
+                 return_value="templated_combo")
 
     # Act
     variables = manager.generate_variables(mock_context)
@@ -271,6 +307,8 @@ def test_generate_variables_integration(mocker, mock_context):
     assert variables['agent1Input'] == "Input from parent workflow"  # Now correctly asserts the dict value
     assert variables['agent2Input'] == "Second input from parent"
     assert variables['category_list'] == ["test"]
+    assert variables['chat_user_prompt_n_messages'] == "raw_n_messages"
+    assert variables['templated_user_prompt_n_messages'] == "templated_n_messages"
 
     # Assert mocks were called correctly
     mock_ts_service.get_time_context_summary.assert_called_once_with("test_discussion_123")
@@ -291,7 +329,7 @@ def test_apply_variables_standard_format(mocker, mock_context):
 
     # Assert
     assert result == "My name is Wilmer and I am testing."
-    manager.generate_variables.assert_called_once_with(mock_context, None)
+    manager.generate_variables.assert_called_once_with(mock_context, None, prompt=prompt)
 
 
 def test_apply_variables_jinja2_format(mocker, mock_context):
@@ -601,6 +639,12 @@ class TestDiscussionIdAndDateVariables:
 
         mocker.patch.object(manager, 'generate_conversation_turn_variables', return_value={})
         mocker.patch('Middleware.workflows.managers.workflow_variable_manager.format_system_prompts', return_value={})
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.extract_last_n_turns_as_string', return_value="")
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_n_turns_as_string', return_value="")
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_by_estimated_token_limit_as_string', return_value="")
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_by_estimated_token_limit_as_string', return_value="")
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_with_min_messages_and_token_limit_as_string', return_value="")
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_with_min_messages_and_token_limit_as_string', return_value="")
 
         # Act
         variables = manager.generate_variables(mock_context)
@@ -617,6 +661,12 @@ class TestDiscussionIdAndDateVariables:
 
         mocker.patch.object(manager, 'generate_conversation_turn_variables', return_value={})
         mocker.patch('Middleware.workflows.managers.workflow_variable_manager.format_system_prompts', return_value={})
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.extract_last_n_turns_as_string', return_value="")
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_n_turns_as_string', return_value="")
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_by_estimated_token_limit_as_string', return_value="")
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_by_estimated_token_limit_as_string', return_value="")
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_with_min_messages_and_token_limit_as_string', return_value="")
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_with_min_messages_and_token_limit_as_string', return_value="")
 
         # Act
         variables = manager.generate_variables(mock_context)
@@ -646,6 +696,12 @@ class TestDiscussionIdAndDateVariables:
         manager = WorkflowVariableManager()
         mocker.patch.object(manager, 'generate_conversation_turn_variables', return_value={})
         mocker.patch('Middleware.workflows.managers.workflow_variable_manager.format_system_prompts', return_value={})
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.extract_last_n_turns_as_string', return_value="")
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_n_turns_as_string', return_value="")
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_by_estimated_token_limit_as_string', return_value="")
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_by_estimated_token_limit_as_string', return_value="")
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_with_min_messages_and_token_limit_as_string', return_value="")
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_with_min_messages_and_token_limit_as_string', return_value="")
 
         # Act
         variables = manager.generate_variables(mock_context)
@@ -721,3 +777,779 @@ class TestDiscussionIdAndDateVariables:
 
         # Assert
         assert result == "/data/_notes.txt"
+
+
+# --- TESTS FOR CONFIGURABLE N-MESSAGES VARIABLES ---
+
+class TestNMessagesVariables:
+    """Tests for the configurable {chat_user_prompt_n_messages} and {templated_user_prompt_n_messages} variables."""
+
+    def test_n_messages_variable_with_explicit_config(self, mocker, mock_context):
+        """Tests that nMessagesToIncludeInVariable reads from config and generates the correct variables."""
+        # Arrange
+        manager = WorkflowVariableManager()
+        mock_context.config = {'jinja2': False, 'nMessagesToIncludeInVariable': 15}
+
+        mocker.patch.object(manager, 'generate_conversation_turn_variables', return_value={})
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.format_system_prompts', return_value={})
+
+        mock_extract = mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_n_turns_as_string',
+            return_value="raw_n15"
+        )
+        mock_formatted = mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_n_turns_as_string',
+            return_value="templated_n15"
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_by_estimated_token_limit_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_by_estimated_token_limit_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_with_min_messages_and_token_limit_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_with_min_messages_and_token_limit_as_string',
+            return_value=""
+        )
+
+        # Act
+        variables = manager.generate_variables(mock_context)
+
+        # Assert
+        assert variables['chat_user_prompt_n_messages'] == "raw_n15"
+        assert variables['templated_user_prompt_n_messages'] == "templated_n15"
+
+        # Verify extract was called with n=15
+        mock_extract.assert_called_with(
+            mocker.ANY, 15, True, None
+        )
+        mock_formatted.assert_called_with(
+            mocker.ANY, 15,
+            template_file_name="test_template.json",
+            isChatCompletion=True
+        )
+
+    def test_n_messages_variable_defaults_to_five(self, mocker, mock_context):
+        """Tests that nMessagesToIncludeInVariable defaults to 5 when not in config."""
+        # Arrange
+        manager = WorkflowVariableManager()
+        mock_context.config = {'jinja2': False}  # No nMessagesToIncludeInVariable
+
+        mocker.patch.object(manager, 'generate_conversation_turn_variables', return_value={})
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.format_system_prompts', return_value={})
+
+        mock_extract = mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_n_turns_as_string',
+            return_value="raw_n5"
+        )
+        mock_formatted = mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_n_turns_as_string',
+            return_value="templated_n5"
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_by_estimated_token_limit_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_by_estimated_token_limit_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_with_min_messages_and_token_limit_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_with_min_messages_and_token_limit_as_string',
+            return_value=""
+        )
+
+        # Act
+        variables = manager.generate_variables(mock_context)
+
+        # Assert
+        assert variables['chat_user_prompt_n_messages'] == "raw_n5"
+        assert variables['templated_user_prompt_n_messages'] == "templated_n5"
+
+        # Verify extract was called with default n=5
+        mock_extract.assert_called_with(
+            mocker.ANY, 5, True, None
+        )
+        mock_formatted.assert_called_with(
+            mocker.ANY, 5,
+            template_file_name="test_template.json",
+            isChatCompletion=True
+        )
+
+    def test_n_messages_variable_with_none_config(self, mocker, mock_context):
+        """Tests that n-messages variables default to 5 when config is None."""
+        # Arrange
+        manager = WorkflowVariableManager()
+        mock_context.config = None
+
+        mocker.patch.object(manager, 'generate_conversation_turn_variables', return_value={})
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.format_system_prompts', return_value={})
+
+        mock_extract = mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_n_turns_as_string',
+            return_value="raw_default"
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_n_turns_as_string',
+            return_value="templated_default"
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_by_estimated_token_limit_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_by_estimated_token_limit_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_with_min_messages_and_token_limit_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_with_min_messages_and_token_limit_as_string',
+            return_value=""
+        )
+
+        # Act
+        variables = manager.generate_variables(mock_context)
+
+        # Assert
+        assert variables['chat_user_prompt_n_messages'] == "raw_default"
+        assert variables['templated_user_prompt_n_messages'] == "templated_default"
+        mock_extract.assert_called_with(mocker.ANY, 5, True, None)
+
+    def test_n_messages_variable_usable_in_standard_format(self, mocker, mock_context):
+        """Tests that the n-messages variable can be used with standard str.format()."""
+        # Arrange
+        manager = WorkflowVariableManager()
+        mocker.patch.object(manager, 'generate_variables', return_value={
+            'chat_user_prompt_n_messages': 'Hello from last N messages',
+            'templated_user_prompt_n_messages': 'Templated N messages'
+        })
+        mock_context.config = {'jinja2': False}
+        prompt = "Recent: {chat_user_prompt_n_messages}"
+
+        # Act
+        result = manager.apply_variables(prompt, mock_context)
+
+        # Assert
+        assert result == "Recent: Hello from last N messages"
+
+    def test_n_messages_variable_usable_in_jinja2(self, mocker, mock_context):
+        """Tests that the n-messages variable can be used with Jinja2 templating."""
+        # Arrange
+        manager = WorkflowVariableManager()
+        mocker.patch.object(manager, 'generate_variables', return_value={
+            'chat_user_prompt_n_messages': 'N messages content'
+        })
+        mock_context.config = {'jinja2': True}
+        mock_context.messages = []
+        prompt = "Content: {{ chat_user_prompt_n_messages }}"
+
+        # Act
+        result = manager.apply_variables(prompt, mock_context)
+
+        # Assert
+        assert result == "Content: N messages content"
+
+
+class TestEstimatedTokenLimitVariables:
+    """Tests for the configurable {chat_user_prompt_estimated_token_limit} and
+    {templated_user_prompt_estimated_token_limit} variables."""
+
+    def test_token_limit_variable_with_explicit_config(self, mocker, mock_context):
+        """Tests that estimatedTokensToIncludeInVariable reads from config and generates the correct variables."""
+        # Arrange
+        manager = WorkflowVariableManager()
+        mock_context.config = {'jinja2': False, 'estimatedTokensToIncludeInVariable': 5000}
+
+        mocker.patch.object(manager, 'generate_conversation_turn_variables', return_value={})
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.format_system_prompts', return_value={})
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_n_turns_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_n_turns_as_string',
+            return_value=""
+        )
+
+        mock_extract_token = mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_by_estimated_token_limit_as_string',
+            return_value="raw_token_5000"
+        )
+        mock_formatted_token = mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_by_estimated_token_limit_as_string',
+            return_value="templated_token_5000"
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_with_min_messages_and_token_limit_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_with_min_messages_and_token_limit_as_string',
+            return_value=""
+        )
+
+        # Act
+        variables = manager.generate_variables(mock_context)
+
+        # Assert
+        assert variables['chat_user_prompt_estimated_token_limit'] == "raw_token_5000"
+        assert variables['templated_user_prompt_estimated_token_limit'] == "templated_token_5000"
+
+        # Verify extract was called with token_limit=5000
+        mock_extract_token.assert_called_with(
+            mocker.ANY, 5000, True, None
+        )
+        mock_formatted_token.assert_called_with(
+            mocker.ANY, 5000,
+            template_file_name="test_template.json",
+            isChatCompletion=True
+        )
+
+    def test_token_limit_variable_defaults_to_2048(self, mocker, mock_context):
+        """Tests that estimatedTokensToIncludeInVariable defaults to 2048 when not in config."""
+        # Arrange
+        manager = WorkflowVariableManager()
+        mock_context.config = {'jinja2': False}  # No estimatedTokensToIncludeInVariable
+
+        mocker.patch.object(manager, 'generate_conversation_turn_variables', return_value={})
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.format_system_prompts', return_value={})
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_n_turns_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_n_turns_as_string',
+            return_value=""
+        )
+
+        mock_extract_token = mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_by_estimated_token_limit_as_string',
+            return_value="raw_token_2048"
+        )
+        mock_formatted_token = mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_by_estimated_token_limit_as_string',
+            return_value="templated_token_2048"
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_with_min_messages_and_token_limit_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_with_min_messages_and_token_limit_as_string',
+            return_value=""
+        )
+
+        # Act
+        variables = manager.generate_variables(mock_context)
+
+        # Assert
+        assert variables['chat_user_prompt_estimated_token_limit'] == "raw_token_2048"
+        assert variables['templated_user_prompt_estimated_token_limit'] == "templated_token_2048"
+
+        # Verify extract was called with default token_limit=2048
+        mock_extract_token.assert_called_with(
+            mocker.ANY, 2048, True, None
+        )
+        mock_formatted_token.assert_called_with(
+            mocker.ANY, 2048,
+            template_file_name="test_template.json",
+            isChatCompletion=True
+        )
+
+    def test_token_limit_variable_with_none_config(self, mocker, mock_context):
+        """Tests that token-limit variables default to 2048 when config is None."""
+        # Arrange
+        manager = WorkflowVariableManager()
+        mock_context.config = None
+
+        mocker.patch.object(manager, 'generate_conversation_turn_variables', return_value={})
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.format_system_prompts', return_value={})
+
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_n_turns_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_n_turns_as_string',
+            return_value=""
+        )
+        mock_extract_token = mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_by_estimated_token_limit_as_string',
+            return_value="raw_token_default"
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_by_estimated_token_limit_as_string',
+            return_value="templated_token_default"
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_with_min_messages_and_token_limit_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_with_min_messages_and_token_limit_as_string',
+            return_value=""
+        )
+
+        # Act
+        variables = manager.generate_variables(mock_context)
+
+        # Assert
+        assert variables['chat_user_prompt_estimated_token_limit'] == "raw_token_default"
+        assert variables['templated_user_prompt_estimated_token_limit'] == "templated_token_default"
+        mock_extract_token.assert_called_with(mocker.ANY, 2048, True, None)
+
+    def test_token_limit_variable_usable_in_standard_format(self, mocker, mock_context):
+        """Tests that the token-limit variable can be used with standard str.format()."""
+        # Arrange
+        manager = WorkflowVariableManager()
+        mocker.patch.object(manager, 'generate_variables', return_value={
+            'chat_user_prompt_estimated_token_limit': 'Token-limited content here',
+            'templated_user_prompt_estimated_token_limit': 'Templated token content'
+        })
+        mock_context.config = {'jinja2': False}
+        prompt = "Recent: {chat_user_prompt_estimated_token_limit}"
+
+        # Act
+        result = manager.apply_variables(prompt, mock_context)
+
+        # Assert
+        assert result == "Recent: Token-limited content here"
+
+    def test_token_limit_variable_usable_in_jinja2(self, mocker, mock_context):
+        """Tests that the token-limit variable can be used with Jinja2 templating."""
+        # Arrange
+        manager = WorkflowVariableManager()
+        mocker.patch.object(manager, 'generate_variables', return_value={
+            'chat_user_prompt_estimated_token_limit': 'Token limit content'
+        })
+        mock_context.config = {'jinja2': True}
+        mock_context.messages = []
+        prompt = "Content: {{ chat_user_prompt_estimated_token_limit }}"
+
+        # Act
+        result = manager.apply_variables(prompt, mock_context)
+
+        # Assert
+        assert result == "Content: Token limit content"
+
+
+class TestMinMessagesMaxTokensVariables:
+    """Tests for the configurable {chat_user_prompt_min_n_max_tokens} and
+    {templated_user_prompt_min_n_max_tokens} variables."""
+
+    def test_combo_variable_with_explicit_config(self, mocker, mock_context):
+        """Tests that minMessagesInVariable and maxEstimatedTokensInVariable read from config."""
+        # Arrange
+        manager = WorkflowVariableManager()
+        mock_context.config = {
+            'jinja2': False,
+            'minMessagesInVariable': 10,
+            'maxEstimatedTokensInVariable': 5000
+        }
+
+        mocker.patch.object(manager, 'generate_conversation_turn_variables', return_value={})
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.format_system_prompts', return_value={})
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_n_turns_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_n_turns_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_by_estimated_token_limit_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_by_estimated_token_limit_as_string',
+            return_value=""
+        )
+
+        mock_extract_combo = mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_with_min_messages_and_token_limit_as_string',
+            return_value="raw_combo_10_5000"
+        )
+        mock_formatted_combo = mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_with_min_messages_and_token_limit_as_string',
+            return_value="templated_combo_10_5000"
+        )
+
+        # Act
+        variables = manager.generate_variables(mock_context)
+
+        # Assert
+        assert variables['chat_user_prompt_min_n_max_tokens'] == "raw_combo_10_5000"
+        assert variables['templated_user_prompt_min_n_max_tokens'] == "templated_combo_10_5000"
+
+        # Verify extract was called with min_messages=10, max_tokens=5000
+        mock_extract_combo.assert_called_with(
+            mocker.ANY, 10, 5000, True, None
+        )
+        mock_formatted_combo.assert_called_with(
+            mocker.ANY, 10, 5000,
+            template_file_name="test_template.json",
+            isChatCompletion=True
+        )
+
+    def test_combo_variable_defaults(self, mocker, mock_context):
+        """Tests that combo variables default to min_messages=5, max_tokens=2048 when not in config."""
+        # Arrange
+        manager = WorkflowVariableManager()
+        mock_context.config = {'jinja2': False}  # No combo config
+
+        mocker.patch.object(manager, 'generate_conversation_turn_variables', return_value={})
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.format_system_prompts', return_value={})
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_n_turns_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_n_turns_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_by_estimated_token_limit_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_by_estimated_token_limit_as_string',
+            return_value=""
+        )
+
+        mock_extract_combo = mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_with_min_messages_and_token_limit_as_string',
+            return_value="raw_combo_default"
+        )
+        mock_formatted_combo = mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_with_min_messages_and_token_limit_as_string',
+            return_value="templated_combo_default"
+        )
+
+        # Act
+        variables = manager.generate_variables(mock_context)
+
+        # Assert
+        assert variables['chat_user_prompt_min_n_max_tokens'] == "raw_combo_default"
+        assert variables['templated_user_prompt_min_n_max_tokens'] == "templated_combo_default"
+
+        # Verify extract was called with defaults: min_messages=5, max_tokens=2048
+        mock_extract_combo.assert_called_with(
+            mocker.ANY, 5, 2048, True, None
+        )
+        mock_formatted_combo.assert_called_with(
+            mocker.ANY, 5, 2048,
+            template_file_name="test_template.json",
+            isChatCompletion=True
+        )
+
+    def test_combo_variable_with_none_config(self, mocker, mock_context):
+        """Tests that combo variables default when config is None."""
+        # Arrange
+        manager = WorkflowVariableManager()
+        mock_context.config = None
+
+        mocker.patch.object(manager, 'generate_conversation_turn_variables', return_value={})
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.format_system_prompts', return_value={})
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_n_turns_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_n_turns_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_by_estimated_token_limit_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_by_estimated_token_limit_as_string',
+            return_value=""
+        )
+        mock_extract_combo = mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_with_min_messages_and_token_limit_as_string',
+            return_value="raw_combo_none"
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_with_min_messages_and_token_limit_as_string',
+            return_value="templated_combo_none"
+        )
+
+        # Act
+        variables = manager.generate_variables(mock_context)
+
+        # Assert
+        assert variables['chat_user_prompt_min_n_max_tokens'] == "raw_combo_none"
+        assert variables['templated_user_prompt_min_n_max_tokens'] == "templated_combo_none"
+        mock_extract_combo.assert_called_with(mocker.ANY, 5, 2048, True, None)
+
+    def test_combo_variable_usable_in_standard_format(self, mocker, mock_context):
+        """Tests that the combo variable can be used with standard str.format()."""
+        # Arrange
+        manager = WorkflowVariableManager()
+        mocker.patch.object(manager, 'generate_variables', return_value={
+            'chat_user_prompt_min_n_max_tokens': 'Combo content here',
+            'templated_user_prompt_min_n_max_tokens': 'Templated combo content'
+        })
+        mock_context.config = {'jinja2': False}
+        prompt = "Recent: {chat_user_prompt_min_n_max_tokens}"
+
+        # Act
+        result = manager.apply_variables(prompt, mock_context)
+
+        # Assert
+        assert result == "Recent: Combo content here"
+
+    def test_combo_variable_usable_in_jinja2(self, mocker, mock_context):
+        """Tests that the combo variable can be used with Jinja2 templating."""
+        # Arrange
+        manager = WorkflowVariableManager()
+        mocker.patch.object(manager, 'generate_variables', return_value={
+            'chat_user_prompt_min_n_max_tokens': 'Combo jinja content'
+        })
+        mock_context.config = {'jinja2': True}
+        mock_context.messages = []
+        prompt = "Content: {{ chat_user_prompt_min_n_max_tokens }}"
+
+        # Act
+        result = manager.apply_variables(prompt, mock_context)
+
+        # Assert
+        assert result == "Content: Combo jinja content"
+
+
+# --- TESTS FOR PROMPT-AWARE LOGGING AND EDGE CASES ---
+
+class TestPromptAwareLogging:
+    """Tests for the prompt-aware conditional logging in generate_variables."""
+
+    def _setup_generate_variables_mocks(self, mocker, mock_context, config=None):
+        """Helper to set up common mocks for generate_variables tests."""
+        manager = WorkflowVariableManager()
+        if config is not None:
+            mock_context.config = config
+        else:
+            mock_context.config = {'jinja2': False}
+
+        mocker.patch.object(manager, 'generate_conversation_turn_variables', return_value={})
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.format_system_prompts', return_value={})
+
+        mock_extract_n = mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_n_turns',
+            return_value=[{'role': 'user', 'content': 'test'}]
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_n_turns_as_string',
+            return_value="raw"
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_n_turns_as_string',
+            return_value="templated"
+        )
+
+        mock_extract_token = mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_by_estimated_token_limit',
+            return_value=[{'role': 'user', 'content': 'test'}]
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_by_estimated_token_limit_as_string',
+            return_value="raw_token"
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_by_estimated_token_limit_as_string',
+            return_value="templated_token"
+        )
+
+        mock_extract_combo = mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_with_min_messages_and_token_limit',
+            return_value=[{'role': 'user', 'content': 'test'}]
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_with_min_messages_and_token_limit_as_string',
+            return_value="raw_combo"
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_with_min_messages_and_token_limit_as_string',
+            return_value="templated_combo"
+        )
+
+        return manager, mock_extract_n, mock_extract_token, mock_extract_combo
+
+    def test_n_messages_logging_fires_when_prompt_references_variable(self, mocker, mock_context):
+        """Tests that extract_last_n_turns is called for logging when prompt references the variable."""
+        manager, mock_extract_n, _, _ = self._setup_generate_variables_mocks(mocker, mock_context)
+
+        manager.generate_variables(mock_context, prompt="Use {chat_user_prompt_n_messages} here")
+
+        mock_extract_n.assert_called_once()
+
+    def test_n_messages_logging_fires_for_templated_variant(self, mocker, mock_context):
+        """Tests that logging fires when prompt references the templated variant."""
+        manager, mock_extract_n, _, _ = self._setup_generate_variables_mocks(mocker, mock_context)
+
+        manager.generate_variables(mock_context, prompt="Use {templated_user_prompt_n_messages} here")
+
+        mock_extract_n.assert_called_once()
+
+    def test_n_messages_logging_suppressed_when_prompt_omits_variable(self, mocker, mock_context):
+        """Tests that extract_last_n_turns is NOT called when prompt doesn't reference the variable."""
+        manager, mock_extract_n, _, _ = self._setup_generate_variables_mocks(mocker, mock_context)
+
+        manager.generate_variables(mock_context, prompt="No reference here")
+
+        mock_extract_n.assert_not_called()
+
+    def test_n_messages_logging_suppressed_when_prompt_is_none(self, mocker, mock_context):
+        """Tests that logging functions are not called when prompt is None."""
+        manager, mock_extract_n, mock_extract_token, mock_extract_combo = (
+            self._setup_generate_variables_mocks(mocker, mock_context)
+        )
+
+        manager.generate_variables(mock_context)
+
+        mock_extract_n.assert_not_called()
+        mock_extract_token.assert_not_called()
+        mock_extract_combo.assert_not_called()
+
+    def test_token_limit_logging_fires_when_prompt_references_variable(self, mocker, mock_context):
+        """Tests that extract_last_turns_by_estimated_token_limit is called for logging."""
+        manager, _, mock_extract_token, _ = self._setup_generate_variables_mocks(mocker, mock_context)
+
+        manager.generate_variables(
+            mock_context, prompt="Use {chat_user_prompt_estimated_token_limit} here"
+        )
+
+        mock_extract_token.assert_called_once()
+
+    def test_combo_logging_fires_when_prompt_references_variable(self, mocker, mock_context):
+        """Tests that extract_last_turns_with_min_messages_and_token_limit is called for logging."""
+        manager, _, _, mock_extract_combo = self._setup_generate_variables_mocks(mocker, mock_context)
+
+        manager.generate_variables(
+            mock_context, prompt="Use {chat_user_prompt_min_n_max_tokens} here"
+        )
+
+        mock_extract_combo.assert_called_once()
+
+
+class TestConfigEdgeCases:
+    """Tests for config edge cases in generate_variables."""
+
+    def _setup_mocks(self, mocker, mock_context):
+        """Helper to set up common mocks."""
+        manager = WorkflowVariableManager()
+        mocker.patch.object(manager, 'generate_conversation_turn_variables', return_value={})
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.format_system_prompts', return_value={})
+
+        mock_n = mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_n_turns_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_n_turns_as_string',
+            return_value=""
+        )
+        mock_token = mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_by_estimated_token_limit_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_by_estimated_token_limit_as_string',
+            return_value=""
+        )
+        mock_combo = mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_with_min_messages_and_token_limit_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_with_min_messages_and_token_limit_as_string',
+            return_value=""
+        )
+        return manager, mock_n, mock_token, mock_combo
+
+    def test_empty_dict_config_uses_defaults(self, mocker, mock_context):
+        """Tests that an empty dict config {} uses default values for all configurable variables."""
+        mock_context.config = {}
+        manager, mock_n, mock_token, mock_combo = self._setup_mocks(mocker, mock_context)
+
+        manager.generate_variables(mock_context)
+
+        # Should use defaults: n=5, tokens=2048, min=5/max=2048
+        mock_n.assert_called_with(mocker.ANY, 5, True, None)
+        mock_token.assert_called_with(mocker.ANY, 2048, True, None)
+        mock_combo.assert_called_with(mocker.ANY, 5, 2048, True, None)
+
+    def test_partial_combo_config_only_min_messages(self, mocker, mock_context):
+        """Tests that providing only minMessagesInVariable uses default for maxEstimatedTokensInVariable."""
+        mock_context.config = {'minMessagesInVariable': 10}
+        manager, _, _, mock_combo = self._setup_mocks(mocker, mock_context)
+
+        manager.generate_variables(mock_context)
+
+        mock_combo.assert_called_with(mocker.ANY, 10, 2048, True, None)
+
+    def test_partial_combo_config_only_max_tokens(self, mocker, mock_context):
+        """Tests that providing only maxEstimatedTokensInVariable uses default for minMessagesInVariable."""
+        mock_context.config = {'maxEstimatedTokensInVariable': 4096}
+        manager, _, _, mock_combo = self._setup_mocks(mocker, mock_context)
+
+        manager.generate_variables(mock_context)
+
+        mock_combo.assert_called_with(mocker.ANY, 5, 4096, True, None)
+
+    def test_apply_variables_jinja2_passes_prompt_kwarg(self, mocker, mock_context):
+        """Tests that apply_variables passes prompt= to generate_variables in the Jinja2 path."""
+        manager = WorkflowVariableManager()
+        mocker.patch.object(manager, 'generate_variables', return_value={"name": "test"})
+        mock_context.config = {'jinja2': True}
+        mock_context.messages = []
+        prompt = "Hello {{ name }}"
+
+        manager.apply_variables(prompt, mock_context)
+
+        manager.generate_variables.assert_called_once_with(mock_context, None, prompt=prompt)
+
+    def test_deepcopy_prevents_mutation_of_context_messages(self, mocker, mock_context):
+        """Tests that context.messages are not mutated after generate_variables."""
+        from copy import deepcopy
+        original_messages = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there"},
+        ]
+        mock_context.messages = deepcopy(original_messages)
+
+        manager = WorkflowVariableManager()
+        mocker.patch.object(manager, 'generate_conversation_turn_variables', return_value={})
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.format_system_prompts', return_value={})
+
+        # Use real extraction functions but mock rough_estimate_token_length
+        mocker.patch(
+            'Middleware.utilities.prompt_extraction_utils.rough_estimate_token_length',
+            return_value=10
+        )
+        mocker.patch(
+            'Middleware.utilities.prompt_template_utils.rough_estimate_token_length',
+            return_value=10
+        )
+        mocker.patch(
+            'Middleware.utilities.prompt_template_utils.load_template_from_json',
+            return_value={}
+        )
+
+        manager.generate_variables(mock_context)
+
+        assert mock_context.messages == original_messages

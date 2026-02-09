@@ -1,5 +1,6 @@
 # /Middleware/workflows/handlers/impl/specialized_node_handler.py
 
+import json
 import logging
 import re
 from copy import deepcopy
@@ -64,6 +65,10 @@ class SpecializedNodeHandler(BaseHandler):
             return self.handle_conditional(context)
         elif node_type == "StringConcatenator":
             return self.handle_string_concatenator(context)
+        elif node_type == "JsonExtractor":
+            return self.handle_json_extractor(context)
+        elif node_type == "TagTextExtractor":
+            return self.handle_tag_text_extractor(context)
 
         raise ValueError(f"Unknown specialized node type: {node_type}")
 
@@ -566,3 +571,117 @@ class SpecializedNodeHandler(BaseHandler):
             context.messages.insert(insert_index, {"role": "user", "content": final_message})
 
         return image_descriptions
+
+    def _strip_markdown_code_block(self, text: str) -> str:
+        """
+        Strips markdown code block formatting from a string if present.
+
+        This helper function removes ```json, ```JSON, or ``` prefixes and trailing ```
+        from a string to extract the raw content within a markdown code block.
+
+        Args:
+            text (str): The text that may contain markdown code block formatting.
+
+        Returns:
+            str: The text with markdown code block formatting removed, or the original
+                text if no code block formatting was present.
+        """
+        stripped = text.strip()
+
+        code_block_pattern = re.compile(
+            r'^```(?:json|JSON)?\s*\n?(.*?)\n?```\s*$',
+            re.DOTALL
+        )
+        match = code_block_pattern.match(stripped)
+        if match:
+            return match.group(1).strip()
+
+        return text
+
+    def handle_json_extractor(self, context: ExecutionContext) -> str:
+        """
+        Handles the logic for a "JsonExtractor" node.
+
+        This method extracts a specific field from a JSON string. It supports:
+        - Workflow variable substitution in both the JSON source and field name
+        - JSON wrapped in markdown code blocks (```json or ```)
+
+        Args:
+            context (ExecutionContext): The central object containing all runtime data for the node.
+
+        Returns:
+            str: The extracted value as a string, or an empty string if the field is not found
+                or the JSON is invalid.
+        """
+        json_template = context.config.get("jsonToExtractFrom")
+        if not json_template:
+            logger.warning("JsonExtractor node is missing 'jsonToExtractFrom'.")
+            return ""
+
+        field_template = context.config.get("fieldToExtract")
+        if not field_template:
+            logger.warning("JsonExtractor node is missing 'fieldToExtract'.")
+            return ""
+
+        resolved_json = self.workflow_variable_service.apply_variables(json_template, context)
+        resolved_field = self.workflow_variable_service.apply_variables(field_template, context)
+
+        resolved_json = self._strip_markdown_code_block(resolved_json)
+
+        try:
+            parsed_json = json.loads(resolved_json)
+        except json.JSONDecodeError as e:
+            logger.warning(f"JsonExtractor failed to parse JSON: {e}")
+            return ""
+
+        if not isinstance(parsed_json, dict):
+            logger.warning(f"JsonExtractor expected a JSON object, got {type(parsed_json).__name__}.")
+            return ""
+
+        value = parsed_json.get(resolved_field)
+        if value is None:
+            logger.debug(f"JsonExtractor: Field '{resolved_field}' not found in JSON.")
+            return ""
+
+        if isinstance(value, (dict, list)):
+            return json.dumps(value)
+        return str(value)
+
+    def handle_tag_text_extractor(self, context: ExecutionContext) -> str:
+        """
+        Handles the logic for a "TagTextExtractor" node.
+
+        This method extracts the content between XML/HTML-style tags from a text string.
+        It supports workflow variable substitution in both the source text and tag name.
+
+        Args:
+            context (ExecutionContext): The central object containing all runtime data for the node.
+
+        Returns:
+            str: The extracted content between the tags (stripped of leading/trailing whitespace),
+                or an empty string if the tags are not found.
+        """
+        text_template = context.config.get("tagToExtractFrom")
+        if not text_template:
+            logger.warning("TagTextExtractor node is missing 'tagToExtractFrom'.")
+            return ""
+
+        tag_template = context.config.get("fieldToExtract")
+        if not tag_template:
+            logger.warning("TagTextExtractor node is missing 'fieldToExtract'.")
+            return ""
+
+        resolved_text = self.workflow_variable_service.apply_variables(text_template, context)
+        resolved_tag = self.workflow_variable_service.apply_variables(tag_template, context)
+
+        pattern = re.compile(
+            rf'<{re.escape(resolved_tag)}>\s*(.*?)\s*</{re.escape(resolved_tag)}>',
+            re.DOTALL
+        )
+
+        match = pattern.search(resolved_text)
+        if match:
+            return match.group(1).strip()
+
+        logger.debug(f"TagTextExtractor: Tag '<{resolved_tag}>' not found in text.")
+        return ""

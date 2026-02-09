@@ -125,8 +125,8 @@ This section details the responsibility of each key file in the `Middleware/work
     - `sub_workflow_handler.py`: Handles nodes that trigger other workflows (`"CustomWorkflow"`). It calls back to the
       `$WorkflowManager$` to run a nested workflow, resolving and passing any `scoped_variables` from the parent
       context.
-    - `specialized_node_handler.py`: A router for miscellaneous nodes like `"WorkflowLock"`, `"GetCustomFile"`, and
-      `"StaticResponse"`.
+    - `specialized_node_handler.py`: A router for miscellaneous nodes like `"WorkflowLock"`, `"GetCustomFile"`,
+      `"StaticResponse"`, `"JsonExtractor"`, and `"TagTextExtractor"`.
 
 #### `streaming/`
 

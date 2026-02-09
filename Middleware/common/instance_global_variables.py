@@ -7,7 +7,6 @@ CONFIG_DIRECTORY = None
 USER = None
 LOGGING_DIRECTORY = "logs"
 API_TYPE = "openai"
-IMAGE_API_TYPES = ["ollamaApiChatImageSpecific", "openAIApiChatImageSpecific"]
 
 # Workflow override extracted from the model field in API requests.
 # When set, this workflow is used instead of normal routing.

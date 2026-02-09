@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import re
 from copy import deepcopy
 from typing import List, Dict, Any
@@ -318,6 +319,11 @@ JSON Output:"""
             # This is the file-based memory path
             logger.debug("Running file-based memory check.")
             filepath = get_discussion_memory_file_path(context.discussion_id)
+            # Check file existence BEFORE read_chunks_with_hashes, which creates the file
+            # as an empty [] if it doesn't exist. We need to distinguish between:
+            # - File doesn't exist: consolidation mode (user deleted it to regenerate)
+            # - File exists (even if empty): standard mode (both thresholds active)
+            file_exists = os.path.exists(filepath)
             discussion_chunks = read_chunks_with_hashes(filepath)
             lookback_turns = discussion_id_workflow_config.get('lookbackStartTurn', 3)
             new_message_content_to_process = []
@@ -345,12 +351,22 @@ JSON Output:"""
             token_count = rough_estimate_token_length(
                 '\n'.join(m['content'] for m in new_message_content_to_process if 'content' in m)
             )
-            file_exists = bool(discussion_chunks)
-            trigger_by_tokens = token_count > chunk_size
-            trigger_by_messages = file_exists and len(new_message_content_to_process) > max_messages
+
+            logger.info(f"Memory trigger check: {len(new_message_content_to_process)} new messages, "
+                        f"~{token_count} estimated tokens. "
+                        f"Thresholds: {max_messages} messages / {chunk_size} tokens. "
+                        f"Memory file exists: {file_exists}")
+
+            trigger_by_tokens = token_count >= chunk_size
+            trigger_by_messages = file_exists and len(new_message_content_to_process) >= max_messages
 
             if trigger_by_tokens or trigger_by_messages:
-                logger.info("Threshold met. Generating new memories.")
+                if trigger_by_tokens and trigger_by_messages:
+                    logger.info("Both thresholds met (tokens and messages). Generating new memories.")
+                elif trigger_by_tokens:
+                    logger.info("Token threshold met. Generating new memories.")
+                else:
+                    logger.info("Message count threshold met. Generating new memories.")
                 hashed_chunks = chunk_messages_with_hashes(new_message_content_to_process, chunk_size,
                                                            max_messages_before_chunk=max_messages)
                 text_chunks = extract_text_blocks_from_hashed_chunks(hashed_chunks)
@@ -361,7 +377,11 @@ JSON Output:"""
                     self.process_new_memory_chunks(text_chunks, hashed_chunks, rag_system_prompt, rag_prompt,
                                                    discussion_id_workflow_config, context)
             else:
-                logger.info("Thresholds not met. No new memories will be generated this time.")
+                if not file_exists:
+                    logger.info("Thresholds not met. Memory file does not exist; message threshold is disabled "
+                                "(consolidation mode). Only token threshold applies.")
+                else:
+                    logger.info("Thresholds not met. No new memories will be generated this time.")
 
     def process_new_memory_chunks(self, chunks, hash_chunks, rag_system_prompt, rag_prompt, workflow_config,
                                   context: ExecutionContext, chunks_per_memory=3):
@@ -506,7 +526,8 @@ JSON Output:"""
             return llm_handler.llm.get_response_from_llm(
                 system_prompt=formatted_system_prompt,
                 prompt=formatted_prompt,
-                llm_takes_images=False
+                llm_takes_images=False,
+                request_id=context.request_id
             )
         else:
             collection = []
@@ -516,5 +537,6 @@ JSON Output:"""
                 collection.append({"role": "user", "content": formatted_prompt})
             return llm_handler.llm.get_response_from_llm(
                 collection,
-                llm_takes_images=False
+                llm_takes_images=False,
+                request_id=context.request_id
             )

@@ -321,3 +321,262 @@ def test_get_formatted_last_n_turns_as_string(mocker):
 
     # Assert the final output is correct
     assert result == "formatted turn 2formatted turn 3"
+
+
+## Tests for get_formatted_last_turns_by_estimated_token_limit_as_string
+
+def test_get_formatted_last_turns_by_estimated_token_limit_basic(mocker, mock_dependencies):
+    """
+    Tests that messages are selected by token budget, formatted, and concatenated.
+    """
+    messages = [
+        {"role": "system", "content": "system prompt"},
+        {"role": "user", "content": "turn 1"},
+        {"role": "assistant", "content": "turn 2"},
+        {"role": "images", "content": "image"},
+        {"role": "user", "content": "turn 3"},
+    ]
+
+    # After filtering images/system, we have: turn 1, turn 2, turn 3
+    # Mock token estimation: each turn is 50 tokens, budget is 120
+    # So turn 3 (50) + turn 2 (50) = 100, turn 1 (50) would make 150 > 120
+    mock_dependencies['estimate_tokens'].side_effect = lambda text: 50
+
+    mock_formatter = mocker.patch('Middleware.utilities.prompt_template_utils.format_messages_with_template')
+    mock_formatter.return_value = [
+        {"content": "formatted turn 2"},
+        {"content": "formatted turn 3"},
+    ]
+
+    result = prompt_template_utils.get_formatted_last_turns_by_estimated_token_limit_as_string(
+        messages, 120, "template.json", False
+    )
+
+    # Assert the correct messages were passed to the formatter
+    formatter_call_args = mock_formatter.call_args[0][0]
+    assert len(formatter_call_args) == 2
+    assert formatter_call_args[0]['content'] == 'turn 2'
+    assert formatter_call_args[1]['content'] == 'turn 3'
+
+    assert result == "formatted turn 2formatted turn 3"
+
+
+def test_get_formatted_last_turns_by_estimated_token_limit_at_least_one(mocker, mock_dependencies):
+    """
+    Tests that at least one message is returned even if it exceeds the token budget.
+    """
+    messages = [
+        {"role": "user", "content": "huge message"},
+    ]
+
+    mock_dependencies['estimate_tokens'].return_value = 10000
+
+    mock_formatter = mocker.patch('Middleware.utilities.prompt_template_utils.format_messages_with_template')
+    mock_formatter.return_value = [{"content": "formatted huge"}]
+
+    result = prompt_template_utils.get_formatted_last_turns_by_estimated_token_limit_as_string(
+        messages, 50, "template.json", False
+    )
+
+    formatter_call_args = mock_formatter.call_args[0][0]
+    assert len(formatter_call_args) == 1
+    assert result == "formatted huge"
+
+
+def test_get_formatted_last_turns_by_estimated_token_limit_empty(mock_dependencies):
+    """Tests that an empty message list returns an empty string."""
+    result = prompt_template_utils.get_formatted_last_turns_by_estimated_token_limit_as_string(
+        [], 1000, "template.json", False
+    )
+    assert result == ""
+
+
+def test_get_formatted_last_turns_by_estimated_token_limit_only_system_and_images(mock_dependencies):
+    """Tests that a list with only system/images messages returns an empty string."""
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "images", "content": "img"},
+    ]
+    result = prompt_template_utils.get_formatted_last_turns_by_estimated_token_limit_as_string(
+        messages, 1000, "template.json", False
+    )
+    assert result == ""
+
+
+def test_get_formatted_token_limit_exact_boundary(mocker, mock_dependencies):
+    """Tests that token limit exact equality includes the message."""
+    messages = [
+        {"role": "user", "content": "turn 1"},
+        {"role": "assistant", "content": "turn 2"},
+        {"role": "user", "content": "turn 3"},
+    ]
+    # Each message is 50 tokens, budget is 100: turn 3 (50) + turn 2 (50) = 100 == limit
+    mock_dependencies['estimate_tokens'].side_effect = lambda text: 50
+
+    mock_formatter = mocker.patch('Middleware.utilities.prompt_template_utils.format_messages_with_template')
+    mock_formatter.return_value = [{"content": "f2"}, {"content": "f3"}]
+
+    result = prompt_template_utils.get_formatted_last_turns_by_estimated_token_limit_as_string(
+        messages, 100, "template.json", False
+    )
+    formatter_call_args = mock_formatter.call_args[0][0]
+    assert len(formatter_call_args) == 2
+
+
+def test_get_formatted_token_limit_does_not_mutate_originals(mocker, mock_dependencies):
+    """Tests that the original messages list is not mutated."""
+    from copy import deepcopy
+    messages = [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "hi"},
+    ]
+    original_copy = deepcopy(messages)
+    mock_dependencies['estimate_tokens'].return_value = 10
+
+    mock_formatter = mocker.patch('Middleware.utilities.prompt_template_utils.format_messages_with_template')
+    # Simulate format_messages_with_template mutating the messages it receives
+    def mutating_formatter(msgs, template, isChatCompletion):
+        for m in msgs:
+            m['content'] = 'MUTATED'
+        return msgs
+    mock_formatter.side_effect = mutating_formatter
+
+    prompt_template_utils.get_formatted_last_turns_by_estimated_token_limit_as_string(
+        messages, 1000, "template.json", False
+    )
+    # Original should be unchanged thanks to deepcopy in the function
+    assert messages == original_copy
+
+
+## Tests for get_formatted_last_turns_with_min_messages_and_token_limit_as_string
+
+def test_get_formatted_combo_basic(mocker, mock_dependencies):
+    """Tests basic operation of the min-messages + token-limit formatted function."""
+    messages = [
+        {"role": "system", "content": "system prompt"},
+        {"role": "user", "content": "turn 1"},
+        {"role": "assistant", "content": "turn 2"},
+        {"role": "images", "content": "image"},
+        {"role": "user", "content": "turn 3"},
+    ]
+    # After filtering images/system: turn 1, turn 2, turn 3
+    # min_messages=1, budget=120, each 50 tokens
+    # Phase 1: turn 3 (50). Phase 2: turn 2 (100) fits, turn 1 (150 > 120) stops
+    mock_dependencies['estimate_tokens'].return_value = 50
+
+    mock_formatter = mocker.patch('Middleware.utilities.prompt_template_utils.format_messages_with_template')
+    mock_formatter.return_value = [{"content": "f2"}, {"content": "f3"}]
+
+    result = prompt_template_utils.get_formatted_last_turns_with_min_messages_and_token_limit_as_string(
+        messages, 1, 120, "template.json", False
+    )
+    formatter_call_args = mock_formatter.call_args[0][0]
+    assert len(formatter_call_args) == 2
+    assert result == "f2f3"
+
+
+def test_get_formatted_combo_empty_input(mock_dependencies):
+    """Tests that an empty message list returns an empty string."""
+    result = prompt_template_utils.get_formatted_last_turns_with_min_messages_and_token_limit_as_string(
+        [], 5, 1000, "template.json", False
+    )
+    assert result == ""
+
+
+def test_get_formatted_combo_all_system_and_images(mock_dependencies):
+    """Tests that all system/images messages returns empty string."""
+    messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "images", "content": "img"},
+    ]
+    result = prompt_template_utils.get_formatted_last_turns_with_min_messages_and_token_limit_as_string(
+        messages, 5, 1000, "template.json", False
+    )
+    assert result == ""
+
+
+def test_get_formatted_combo_min_messages_exceeds_available(mocker, mock_dependencies):
+    """Tests that when min_messages exceeds available, all messages are returned."""
+    messages = [
+        {"role": "user", "content": "only one"},
+    ]
+    mock_dependencies['estimate_tokens'].return_value = 10
+
+    mock_formatter = mocker.patch('Middleware.utilities.prompt_template_utils.format_messages_with_template')
+    mock_formatter.return_value = [{"content": "formatted one"}]
+
+    result = prompt_template_utils.get_formatted_last_turns_with_min_messages_and_token_limit_as_string(
+        messages, 10, 1000, "template.json", False
+    )
+    formatter_call_args = mock_formatter.call_args[0][0]
+    assert len(formatter_call_args) == 1
+    assert result == "formatted one"
+
+
+def test_get_formatted_combo_min_floor_overrides_token_ceiling(mocker, mock_dependencies):
+    """Tests that min_messages floor takes precedence over token ceiling."""
+    messages = [
+        {"role": "user", "content": "turn 1"},
+        {"role": "assistant", "content": "turn 2"},
+        {"role": "user", "content": "turn 3"},
+    ]
+    # Each is 500 tokens, min=3, budget=100: all 3 returned despite 1500 > 100
+    mock_dependencies['estimate_tokens'].return_value = 500
+
+    mock_formatter = mocker.patch('Middleware.utilities.prompt_template_utils.format_messages_with_template')
+    mock_formatter.return_value = [{"content": "f1"}, {"content": "f2"}, {"content": "f3"}]
+
+    result = prompt_template_utils.get_formatted_last_turns_with_min_messages_and_token_limit_as_string(
+        messages, 3, 100, "template.json", False
+    )
+    formatter_call_args = mock_formatter.call_args[0][0]
+    assert len(formatter_call_args) == 3
+
+
+def test_get_formatted_combo_does_not_mutate_originals(mocker, mock_dependencies):
+    """Tests that the original messages are not mutated."""
+    from copy import deepcopy
+    messages = [
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "hi"},
+    ]
+    original_copy = deepcopy(messages)
+    mock_dependencies['estimate_tokens'].return_value = 10
+
+    mock_formatter = mocker.patch('Middleware.utilities.prompt_template_utils.format_messages_with_template')
+    def mutating_formatter(msgs, template, isChatCompletion):
+        for m in msgs:
+            m['content'] = 'MUTATED'
+        return msgs
+    mock_formatter.side_effect = mutating_formatter
+
+    prompt_template_utils.get_formatted_last_turns_with_min_messages_and_token_limit_as_string(
+        messages, 1, 1000, "template.json", False
+    )
+    assert messages == original_copy
+
+
+def test_get_formatted_combo_token_expansion_stops(mocker, mock_dependencies):
+    """Tests that expansion beyond min_messages stops when token budget exceeded."""
+    messages = [
+        {"role": "user", "content": "turn 1"},
+        {"role": "assistant", "content": "turn 2"},
+        {"role": "user", "content": "turn 3"},
+        {"role": "assistant", "content": "turn 4"},
+    ]
+    mock_dependencies['estimate_tokens'].return_value = 50
+
+    mock_formatter = mocker.patch('Middleware.utilities.prompt_template_utils.format_messages_with_template')
+    mock_formatter.return_value = [{"content": "f3"}, {"content": "f4"}]
+
+    # min=1 (turn 4, 50). budget=80: turn 3 (100) won't fit. Only 2 messages returned.
+    # Wait: 50+50=100 > 80. So turn 3 doesn't fit. Only turn 4 and... let me recalculate.
+    # Actually: min=1 gets turn 4 (50 tokens accumulated). Then check turn 3: 50+50=100 > 80? Yes, stop.
+    # So only turn 4. Let me use min=2 instead.
+    mock_formatter.return_value = [{"content": "f3"}, {"content": "f4"}]
+    result = prompt_template_utils.get_formatted_last_turns_with_min_messages_and_token_limit_as_string(
+        messages, 2, 120, "template.json", False
+    )
+    # min=2: turn 4 (50) + turn 3 (50) = 100. Phase 2: turn 2 (50) = 150 > 120, stop.
+    formatter_call_args = mock_formatter.call_args[0][0]
+    assert len(formatter_call_args) == 2

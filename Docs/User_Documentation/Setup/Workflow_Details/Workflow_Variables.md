@@ -156,6 +156,31 @@ This is an exhaustive list of all available variables, validated against `workfl
 * **`{chat_user_prompt_last_five}`**: Raw text of the last 5 turns.
 * **`{chat_user_prompt_last_ten}`**: Raw text of the last 10 turns.
 * **`{chat_user_prompt_last_twenty}`**: Raw text of the last 20 turns.
+* **`{chat_user_prompt_n_messages}`**: Raw text of the last N messages, where N is set by the node property
+  `nMessagesToIncludeInVariable` (defaults to 5 if not specified). This is the preferred approach for custom message
+  counts, as it allows any value of N without requiring a new hardcoded variable.
+* **`{templated_user_prompt_n_messages}`**: Same as `{chat_user_prompt_n_messages}`, but formatted with the LLM's
+  chat template. Controlled by the same `nMessagesToIncludeInVariable` property.
+* **`{chat_user_prompt_estimated_token_limit}`**: Recent messages as a raw string, selected by estimated token budget
+  instead of message count. The budget is set by the node property `estimatedTokensToIncludeInVariable` (defaults to
+  2048). Starting from the most recent message and working backwards, messages are accumulated until the estimated token
+  count would exceed the budget. At least one message is always included, even if it alone exceeds the limit. This is
+  useful when you want to fill a prompt with as much conversation context as will fit, without knowing how many messages
+  that corresponds to. Note: token counts are estimated (not exact) using a heuristic that intentionally overestimates.
+* **`{templated_user_prompt_estimated_token_limit}`**: Same as `{chat_user_prompt_estimated_token_limit}`, but formatted
+  with the LLM's chat template. Controlled by the same `estimatedTokensToIncludeInVariable` property.
+* **`{chat_user_prompt_min_n_max_tokens}`**: A combination of the N-messages and token-limit approaches. This variable
+  pulls a minimum number of messages (set by the node property `minMessagesInVariable`, defaults to 5), then
+  continues adding older messages as long as the accumulated estimated token count stays within the budget (set by the
+  node property `maxEstimatedTokensInVariable`, defaults to 2048). The minimum message count always takes precedence:
+  even if the minimum messages exceed the token budget, they are all included. Beyond the minimum, expansion stops when
+  the next message would push the total past the token limit. This is useful when you want at least N messages of
+  context but are willing to include more if the messages are short enough to fit within a token budget. For example,
+  with `"minMessagesInVariable": 5` and `"maxEstimatedTokensInVariable": 5000`, you always get at least 5 messages. If
+  those 5 messages only total 2000 estimated tokens, additional older messages are included until the 5000-token budget
+  is reached (without exceeding it).
+* **`{templated_user_prompt_min_n_max_tokens}`**: Same as `{chat_user_prompt_min_n_max_tokens}`, but formatted with
+  the LLM's chat template. Controlled by the same `minMessagesInVariable` and `maxEstimatedTokensInVariable` properties.
 * **`{templated_user_prompt_last_one}`**: The last message, formatted with the LLM's chat template (e.g.,
   `[INST]...[/INST]`).
 * **`{templated_user_prompt_last_two}`**: Last 2 turns, templated.

@@ -8,15 +8,22 @@ from typing import List, Dict
 logger = logging.getLogger(__name__)
 
 
-# Based on this response from ruby_coder on OpenAI forums:
+# Originally based on ruby_coder's approach on the OpenAI forums:
 # https://community.openai.com/t/what-is-the-openai-algorithm-to-calculate-tokens/58237/4
-# This roughly estimates the token length of a prompt
-# Modified to overestimate the number of tokens, which
-# We want to do in order to be safe on the truncation
-# until I swap to something better
-# Right now Im trying to avoid pulling a model in if I can help it
-# probably will give in eventually, though...
-def rough_estimate_token_length(text: str) -> int:
+# Ratios have since been recalibrated.
+#
+# The word ratio (1.35 tokens/word) is based on the commonly cited ~0.75 words/token
+# heuristic for English, with a small upward buffer.
+#
+# The character ratio (3.5 chars/token) is a compromise between code (modern BPE
+# tokenizers with 100k-200k vocab sizes average 2.8-3.5 chars/token on code) and
+# English prose (~4.0 chars/token). It errs toward overestimation on prose. It is
+# not specifically calibrated for either content type alone.
+#
+# The safety_margin parameter (default 1.10) provides deliberate additional
+# overestimation to prevent context window overflow. The effective combined rate
+# after margin is ~1.485 tokens/word.
+def rough_estimate_token_length(text: str, safety_margin: float = 1.10) -> int:
     """Estimates the token length of a prompt, overestimating slightly.
 
     This function splits the text into words and characters to estimate the
@@ -25,6 +32,9 @@ def rough_estimate_token_length(text: str) -> int:
 
     Args:
         text (str): The text to estimate the token length for.
+        safety_margin (float): Multiplier applied to the raw estimate to provide
+            deliberate overestimation. Default is 1.10, meaning 10% above the
+            raw heuristic estimate.
 
     Returns:
         int: The estimated token length.
@@ -33,10 +43,10 @@ def rough_estimate_token_length(text: str) -> int:
     word_count = len(words)
     char_count = len(text)
 
-    tokens_word_est = word_count / 0.65
+    tokens_word_est = word_count * 1.35
     tokens_char_est = char_count / 3.5
 
-    return int(max(tokens_word_est, tokens_char_est))
+    return int(max(tokens_word_est, tokens_char_est) * safety_margin)
 
 
 def reduce_text_to_token_limit(text: str, num_tokens: int) -> str:
@@ -124,21 +134,15 @@ def chunk_messages_by_token_size(messages: List[Dict[str, str]], chunk_size: int
     current_chunk_size = 0
     logger.debug("Chunk size: %s", str(chunk_size))
 
-    # Iterate through the messages in reverse order (from newest to oldest)
     for message in reversed(messages):
         message_token_count = rough_estimate_token_length(message.get('content', ''))
 
-        # If current chunk is empty or the new message fits, add it.
-        # The use of insert(0,...) correctly maintains the chronological order within the chunk.
         if not current_chunk or (current_chunk_size + message_token_count <= chunk_size * 0.8):
             current_chunk.insert(0, message)
             current_chunk_size += message_token_count
         else:
-            # The current chunk is full. Finalize it and start a new one.
             logger.debug("Finalizing chunk. Size: %s", str(current_chunk_size))
             chunks.insert(0, current_chunk)
-
-            # Start the new chunk with the current message.
             current_chunk = [message]
             current_chunk_size = message_token_count
 

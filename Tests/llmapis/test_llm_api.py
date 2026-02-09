@@ -231,3 +231,81 @@ class TestLlmApiService:
         assert service.is_busy() is False
         service.is_busy_flag = True
         assert service.is_busy() is True
+
+    def test_close_delegates_to_handler(self, mock_configs, mocker):
+        """
+        Tests that LlmApiService.close() delegates to the handler's close().
+        """
+        mocker.patch("Middleware.llmapis.llm_api.LlmApiService.create_api_handler")
+        service = LlmApiService(endpoint="test", presetname="test", max_tokens=128)
+
+        mock_handler_instance = MagicMock()
+        service._api_handler = mock_handler_instance
+
+        service.close()
+
+        mock_handler_instance.close.assert_called_once()
+
+    def test_close_handles_no_handler(self, mock_configs, mocker):
+        """
+        Tests that LlmApiService.close() handles None handler gracefully.
+        """
+        mocker.patch("Middleware.llmapis.llm_api.LlmApiService.create_api_handler")
+        service = LlmApiService(endpoint="test", presetname="test", max_tokens=128)
+        service._api_handler = None
+
+        # Should not raise
+        service.close()
+
+    def test_non_streaming_calls_close(self, mock_configs, mocker):
+        """
+        Tests that close() is called after a non-streaming LLM call.
+        """
+        mocker.patch("Middleware.llmapis.llm_api.LlmApiService.create_api_handler")
+        service = LlmApiService(endpoint="test", presetname="test", max_tokens=128, stream=False)
+
+        mock_handler_instance = MagicMock()
+        mock_handler_instance.handle_non_streaming.return_value = "Test response"
+        service._api_handler = mock_handler_instance
+
+        response = service.get_response_from_llm(prompt="Hello")
+
+        assert response == "Test response"
+        mock_handler_instance.close.assert_called_once()
+
+    def test_streaming_calls_close_after_exhaustion(self, mock_configs, mocker):
+        """
+        Tests that close() is called after a streaming response is fully consumed.
+        """
+        mocker.patch("Middleware.llmapis.llm_api.LlmApiService.create_api_handler")
+        service = LlmApiService(endpoint="test", presetname="test", max_tokens=128, stream=True)
+
+        def mock_stream_generator():
+            yield {"token": "Hello"}
+            yield {"token": " World"}
+
+        mock_handler_instance = MagicMock()
+        mock_handler_instance.handle_streaming.return_value = mock_stream_generator()
+        service._api_handler = mock_handler_instance
+
+        response_generator = service.get_response_from_llm(prompt="Hello")
+        list(response_generator)
+
+        mock_handler_instance.close.assert_called_once()
+
+    def test_non_streaming_calls_close_on_exception(self, mock_configs, mocker):
+        """
+        Tests that close() is called even when a non-streaming call raises an exception.
+        """
+        mocker.patch("Middleware.llmapis.llm_api.LlmApiService.create_api_handler")
+        service = LlmApiService(endpoint="test", presetname="test", max_tokens=128, stream=False)
+
+        mock_handler_instance = MagicMock()
+        mock_handler_instance.handle_non_streaming.side_effect = ValueError("API Error")
+        service._api_handler = mock_handler_instance
+
+        with pytest.raises(ValueError, match="API Error"):
+            service.get_response_from_llm(prompt="Hello")
+
+        mock_handler_instance.close.assert_called_once()
+        assert service.is_busy() is False

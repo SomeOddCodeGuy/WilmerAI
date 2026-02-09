@@ -261,3 +261,115 @@ class TestBaseLlmApiHandlerCancellation:
         # Should only get first chunk
         assert len(results) == 1
         assert results[0]['token'] == 'chunk1'
+
+
+class TestBaseLlmApiHandlerSessionCleanup:
+    """Test suite for LLM API handler session cleanup."""
+
+    def test_close_method_closes_session(self, mock_handler):
+        """Tests that close() closes the underlying requests session."""
+        mock_session = MagicMock()
+        mock_handler.session = mock_session
+
+        mock_handler.close()
+
+        mock_session.close.assert_called_once()
+
+    def test_close_method_swallows_exceptions(self, mock_handler):
+        """Tests that close() does not raise exceptions if session.close() fails."""
+        mock_session = MagicMock()
+        mock_session.close.side_effect = Exception("Connection error")
+        mock_handler.session = mock_session
+
+        # Should not raise
+        mock_handler.close()
+
+        mock_session.close.assert_called_once()
+
+    @patch('Middleware.llmapis.handlers.base.base_llm_api_handler.get_connect_timeout', return_value=30)
+    def test_connect_timeout_is_loaded(self, mock_get_timeout):
+        """Tests that connect_timeout is loaded from config on init."""
+        handler = MockLlmApiHandler(
+            base_url="http://localhost:8000",
+            api_key="test_key",
+            gen_input={},
+            model_name="test_model",
+            headers={"Content-Type": "application/json"},
+            stream=False,
+            api_type_config={},
+            endpoint_config={},
+            max_tokens=100
+        )
+        assert handler.connect_timeout == 30
+
+    @patch('Middleware.llmapis.handlers.base.base_llm_api_handler.get_connect_timeout', return_value=60)
+    def test_connect_timeout_custom_value(self, mock_get_timeout):
+        """Tests that a custom connect timeout value is used."""
+        handler = MockLlmApiHandler(
+            base_url="http://localhost:8000",
+            api_key="test_key",
+            gen_input={},
+            model_name="test_model",
+            headers={"Content-Type": "application/json"},
+            stream=False,
+            api_type_config={},
+            endpoint_config={},
+            max_tokens=100
+        )
+        assert handler.connect_timeout == 60
+
+    @patch('requests.Session.post')
+    @patch('Middleware.llmapis.handlers.base.base_llm_api_handler.get_connect_timeout', return_value=45)
+    def test_streaming_post_uses_tuple_timeout(self, mock_timeout, mock_post, setup_cancellation_service):
+        """Tests that streaming POST uses (connect_timeout, 14400) tuple."""
+        handler = MockLlmApiHandler(
+            base_url="http://localhost:8000",
+            api_key="test_key",
+            gen_input={},
+            model_name="test_model",
+            headers={"Content-Type": "application/json"},
+            stream=True,
+            api_type_config={},
+            endpoint_config={},
+            max_tokens=100
+        )
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.encoding = "utf-8"
+        mock_response.iter_lines = lambda decode_unicode=True: iter(['data: {"done": true}'])
+        mock_response.__enter__ = Mock(return_value=mock_response)
+        mock_response.__exit__ = Mock(return_value=False)
+        mock_post.return_value = mock_response
+
+        list(handler.handle_streaming(prompt="test"))
+
+        # Verify the tuple timeout was passed
+        call_kwargs = mock_post.call_args
+        assert call_kwargs.kwargs.get('timeout') == (45, 14400) or call_kwargs[1].get('timeout') == (45, 14400)
+
+    @patch('requests.Session.post')
+    @patch('Middleware.llmapis.handlers.base.base_llm_api_handler.get_connect_timeout', return_value=30)
+    def test_non_streaming_post_uses_tuple_timeout(self, mock_timeout, mock_post, setup_cancellation_service):
+        """Tests that non-streaming POST uses (connect_timeout, 14400) tuple."""
+        handler = MockLlmApiHandler(
+            base_url="http://localhost:8000",
+            api_key="test_key",
+            gen_input={},
+            model_name="test_model",
+            headers={"Content-Type": "application/json"},
+            stream=False,
+            api_type_config={},
+            endpoint_config={},
+            max_tokens=100
+        )
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"text": "response"}
+        mock_post.return_value = mock_response
+
+        handler.handle_non_streaming(prompt="test")
+
+        call_kwargs = mock_post.call_args
+        assert call_kwargs.kwargs.get('timeout') == (30, 14400) or call_kwargs[1].get('timeout') == (30, 14400)

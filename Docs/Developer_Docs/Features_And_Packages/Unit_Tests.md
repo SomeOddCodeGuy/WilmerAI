@@ -9,7 +9,7 @@ alongside plugins for mocking (`pytest-mock`) and code coverage (`pytest-cov`).
 
 -----
 
-## 1\. Environment Setup 🛠️
+## 1\. Environment Setup
 
 Before running or writing tests, you must install the necessary development dependencies.
 
@@ -75,14 +75,13 @@ WilmerAI
 │   │   │   └── impl/
 │   │   │       ├── test_llmapis_claude_api_handler.py
 │   │   │       ├── test_llmapis_koboldcpp_api_handler.py
-│   │   │       ├── test_llmapis_koboldcpp_api_image_specific_handler.py
 │   │   │       ├── test_llmapis_ollama_chat_api_handler.py
-│   │   │       ├── test_llmapis_ollama_chat_api_image_specific_handler.py
 │   │   │       ├── test_llmapis_ollama_generate_api_handler.py
-│   │   │       ├── test_llmapis_openai_chat_api_image_specific_handler.py
 │   │   │       ├── test_llmapis_openai_chat_handler.py
 │   │   │       └── test_llmapis_openai_completions_api_handler.py
 │   │   └── test_llm_api.py
+│   ├── models/
+│   │   └── test_llm_handler.py
 │   ├── services/
 │   │   ├── test_cancellation_service.py
 │   │   ├── test_llm_dispatch_service.py
@@ -215,28 +214,17 @@ Here is a summary of what each test file is responsible for.
     * **Purpose**: To test the handler for the KoboldCpp `generate` and `stream` endpoints.
     * **Strategy**: Verifies correct URL generation for streaming vs. non-streaming. Tests the parsing of KoboldCpp's
       specific SSE message format and non-streaming JSON response. It uses `mocker` to simulate `requests.post` calls
-      for end-to-end tests, asserting the correct payload is sent and the response is handled.
-
-* **`test_koboldcpp_api_image_specific_handler.py`**
-
-    * **Purpose**: To test the specialized handler for KoboldCpp's multimodal (image) capabilities.
-    * **Strategy**: This is a test of inheritance and modification. It mocks the parent's `_prepare_payload` method to
-      ensure the image-specific handler correctly extracts image data from the conversation history and adds it to the
-      `gen_input` dictionary *before* calling the parent logic.
+      for end-to-end tests, asserting the correct payload is sent and the response is handled. Also tests image
+      extraction from conversation history for multimodal capabilities.
 
 * **`test_ollama_chat_api_handler.py`**
 
     * **Purpose**: To test the handler for Ollama's `/api/chat` endpoint.
     * **Strategy**: Verifies correct URL generation. Tests the unique payload structure for Ollama, which nests
       generation parameters under an `options` key. It also tests parsing of Ollama's line-delimited JSON stream and
-      includes parameterized tests for various valid and malformed stream chunks.
-
-* **`test_ollama_chat_api_image_specific_handler.py`**
-
-    * **Purpose**: To test the specialized handler for Ollama's multimodal chat models (like LLaVA).
-    * **Strategy**: Focuses entirely on testing the `_build_messages_from_conversation` method. It verifies that
-      `images` role messages are correctly removed and their base64 content is attached to the *last* user message in a
-      new `images` key, as required by the Ollama API.
+      includes parameterized tests for various valid and malformed stream chunks. Also tests the
+      `_build_messages_from_conversation` method for multimodal support, verifying that `images` role messages are
+      correctly processed and attached to user messages as required by the Ollama API.
 
 * **`test_ollama_generate_api_handler.py`**
 
@@ -250,20 +238,25 @@ Here is a summary of what each test file is responsible for.
     * **Purpose**: To test the primary handler for OpenAI-compatible `/v1/chat/completions` endpoints.
     * **Strategy**: Verifies correct URL generation. Tests the parsing of standard OpenAI SSE streams and non-streaming
       JSON responses. Uses parameterized tests to ensure graceful handling of malformed or incomplete response data from
-      the API.
-
-* **`test_openai_chat_api_image_specific_handler.py`**
-
-    * **Purpose**: To test the specialized handler for OpenAI's vision-capable chat models (e.g., GPT-4 Vision).
-    * **Strategy**: Heavily tests the complex logic in `_build_messages_from_conversation`. It verifies the
-      transformation of user and `images` messages into OpenAI's multimodal content block format. It includes tests and
-      helper methods for handling various image source types: HTTP URLs, file URIs, data URIs, and raw base64 strings.
+      the API. Also tests the `_build_messages_from_conversation` method for multimodal support, verifying the
+      transformation of user and `images` messages into OpenAI's multimodal content block format, including handling of
+      various image source types: HTTP URLs, file URIs, data URIs, and raw base64 strings.
 
 * **`test_openai_completions_api_handler.py`**
 
     * **Purpose**: To test the handler for legacy OpenAI-compatible `/v1/completions` endpoints.
     * **Strategy**: Verifies the correct URL and payload generation, including logic for optionally omitting the `model`
       key. It tests the parsing logic for both streaming and non-streaming responses from this older API format.
+
+### **`tests/models/`**
+
+* **`test_llm_handler.py`**
+
+    * **Purpose**: Contract tests that verify the `LlmHandler` class has all expected public attributes and behaves
+      correctly based on `llm_type`.
+    * **Strategy**: Validates that all expected attributes exist on `LlmHandler` instances (catching issues where code
+      references removed attributes). Also tests the `takes_message_collection` flag logic for different API types and
+      documents intentionally removed attributes (like `takes_image_collection`) to prevent accidental re-introduction.
 
 ### **`tests/services/`**
 

@@ -4,6 +4,8 @@ import logging
 import re
 from typing import Dict, Tuple, List, Optional, Any
 
+from Middleware.utilities.text_utils import rough_estimate_token_length
+
 logger = logging.getLogger(__name__)
 
 template = {
@@ -98,6 +100,216 @@ def extract_last_n_turns_as_string(messages: List[Dict[str, Any]], n: int, inclu
 
     formatted_lines = []
     for message in last_n_messages:
+        content = message.get("content", "")
+        formatted_lines.append(content)
+
+    return '\n'.join(formatted_lines)
+
+
+def extract_last_turns_by_estimated_token_limit(messages: List[Dict[str, str]], token_limit: int,
+                                                 include_sysmes: bool = True,
+                                                 remove_all_systems_override=False) -> List[Dict[str, str]]:
+    """
+    Extracts as many recent messages as fit within an estimated token budget.
+
+    This function iterates from the most recent message backwards, accumulating
+    estimated token counts until adding the next message would exceed the limit.
+    It always returns at least one message, even if that single message exceeds
+    the token limit.
+
+    Token estimation uses ``rough_estimate_token_length``, which intentionally
+    overestimates to stay safe when enforcing limits.
+
+    Args:
+        messages (List[Dict[str, str]]): The list of conversation messages.
+        token_limit (int): The maximum estimated token budget.
+        include_sysmes (bool, optional): If ``True``, includes system messages
+            (excluding leading ones). If ``False``, all system messages are
+            excluded. Defaults to ``True``.
+        remove_all_systems_override (bool, optional): If ``True``, removes all
+            system messages regardless of ``include_sysmes``. Defaults to ``False``.
+
+    Returns:
+        List[Dict[str, str]]: Messages fitting within the token budget, in
+            chronological order. Always contains at least one message if the
+            input is non-empty.
+    """
+    if not messages:
+        return []
+
+    filtered_messages = [message for message in messages if message["role"] != "images"]
+
+    if remove_all_systems_override:
+        filtered_messages = [message for message in filtered_messages if message["role"] != "system"]
+    elif not include_sysmes:
+        filtered_messages = [message for message in filtered_messages if message["role"] != "system"]
+    else:
+        first_non_system_index = next(
+            (i for i, message in enumerate(filtered_messages) if message["role"] != "system"), 0
+        )
+        filtered_messages = filtered_messages[first_non_system_index:]
+
+    if not filtered_messages:
+        return []
+
+    accumulated_tokens = 0
+    selected = []
+
+    for message in reversed(filtered_messages):
+        message_tokens = rough_estimate_token_length(message.get("content", ""))
+        if not selected:
+            # Always include at least one message
+            selected.append(message)
+            accumulated_tokens += message_tokens
+        elif accumulated_tokens + message_tokens <= token_limit:
+            selected.append(message)
+            accumulated_tokens += message_tokens
+        else:
+            break
+
+    return list(reversed(selected))
+
+
+def extract_last_turns_by_estimated_token_limit_as_string(messages: List[Dict[str, Any]], token_limit: int,
+                                                           include_sysmes: bool = True,
+                                                           remove_all_systems_override=False) -> str:
+    """
+    Extracts recent messages within an estimated token budget and joins them
+    into a single string.
+
+    This function leverages ``extract_last_turns_by_estimated_token_limit`` to
+    select messages, then concatenates their content with newlines.
+
+    Args:
+        messages (List[Dict[str, Any]]): The list of conversation messages.
+        token_limit (int): The maximum estimated token budget.
+        include_sysmes (bool, optional): Controls system message inclusion.
+            Defaults to ``True``.
+        remove_all_systems_override (bool, optional): If ``True``, all system
+            messages are removed. Defaults to ``False``.
+
+    Returns:
+        str: The content of the selected messages joined as a single string.
+            Returns an empty string if the input is empty.
+    """
+    if not messages:
+        return ""
+
+    selected_messages = extract_last_turns_by_estimated_token_limit(
+        messages, token_limit, include_sysmes, remove_all_systems_override
+    )
+
+    formatted_lines = []
+    for message in selected_messages:
+        content = message.get("content", "")
+        formatted_lines.append(content)
+
+    return '\n'.join(formatted_lines)
+
+
+def extract_last_turns_with_min_messages_and_token_limit(messages: List[Dict[str, str]], min_messages: int,
+                                                          token_limit: int, include_sysmes: bool = True,
+                                                          remove_all_systems_override=False) -> List[Dict[str, str]]:
+    """
+    Extracts recent messages up to a minimum count, then expanding up to a token budget.
+
+    This function always includes at least ``min_messages`` messages (counted from
+    the most recent backwards).  After that minimum is satisfied, it continues
+    adding older messages as long as the cumulative estimated token count does not
+    exceed ``token_limit``.  If the minimum messages alone already exceed the
+    token limit, the minimum messages are still returned (the message-count floor
+    takes precedence).
+
+    Token estimation uses ``rough_estimate_token_length``, which intentionally
+    overestimates to stay safe when enforcing limits.
+
+    Args:
+        messages (List[Dict[str, str]]): The list of conversation messages.
+        min_messages (int): The minimum number of messages to always include.
+        token_limit (int): The maximum estimated token budget for expansion
+            beyond the minimum message count.
+        include_sysmes (bool, optional): If ``True``, includes system messages
+            (excluding leading ones). If ``False``, all system messages are
+            excluded. Defaults to ``True``.
+        remove_all_systems_override (bool, optional): If ``True``, removes all
+            system messages regardless of ``include_sysmes``. Defaults to ``False``.
+
+    Returns:
+        List[Dict[str, str]]: Selected messages in chronological order.  Always
+            contains at least ``min_messages`` messages (or all available messages
+            if fewer exist).
+    """
+    if not messages:
+        return []
+
+    filtered_messages = [message for message in messages if message["role"] != "images"]
+
+    if remove_all_systems_override:
+        filtered_messages = [message for message in filtered_messages if message["role"] != "system"]
+    elif not include_sysmes:
+        filtered_messages = [message for message in filtered_messages if message["role"] != "system"]
+    else:
+        first_non_system_index = next(
+            (i for i, message in enumerate(filtered_messages) if message["role"] != "system"), 0
+        )
+        filtered_messages = filtered_messages[first_non_system_index:]
+
+    if not filtered_messages:
+        return []
+
+    accumulated_tokens = 0
+    selected = []
+
+    for message in reversed(filtered_messages):
+        message_tokens = rough_estimate_token_length(message.get("content", ""))
+
+        if len(selected) < min_messages:
+            # Phase 1: always include up to min_messages
+            selected.append(message)
+            accumulated_tokens += message_tokens
+        elif accumulated_tokens + message_tokens <= token_limit:
+            # Phase 2: expand beyond min_messages while within token budget
+            selected.append(message)
+            accumulated_tokens += message_tokens
+        else:
+            break
+
+    return list(reversed(selected))
+
+
+def extract_last_turns_with_min_messages_and_token_limit_as_string(messages: List[Dict[str, Any]], min_messages: int,
+                                                                    token_limit: int, include_sysmes: bool = True,
+                                                                    remove_all_systems_override=False) -> str:
+    """
+    Extracts recent messages with a minimum count floor and token budget ceiling,
+    then joins them into a single string.
+
+    This function leverages ``extract_last_turns_with_min_messages_and_token_limit``
+    to select messages, then concatenates their content with newlines.
+
+    Args:
+        messages (List[Dict[str, Any]]): The list of conversation messages.
+        min_messages (int): The minimum number of messages to always include.
+        token_limit (int): The maximum estimated token budget for expansion
+            beyond the minimum message count.
+        include_sysmes (bool, optional): Controls system message inclusion.
+            Defaults to ``True``.
+        remove_all_systems_override (bool, optional): If ``True``, all system
+            messages are removed. Defaults to ``False``.
+
+    Returns:
+        str: The content of the selected messages joined as a single string.
+            Returns an empty string if the input is empty.
+    """
+    if not messages:
+        return ""
+
+    selected_messages = extract_last_turns_with_min_messages_and_token_limit(
+        messages, min_messages, token_limit, include_sysmes, remove_all_systems_override
+    )
+
+    formatted_lines = []
+    for message in selected_messages:
         content = message.get("content", "")
         formatted_lines.append(content)
 

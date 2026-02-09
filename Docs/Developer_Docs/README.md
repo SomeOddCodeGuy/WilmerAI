@@ -318,6 +318,12 @@ This is the application's core logic.
   \* `$LLMDispatchService$`: Orchestrates the final call to the `$LlmApiService$` to get a response from a language
   model.
 * **`utilities/`**: A collection of stateless helper modules.
+  \* `text_utils.py`: Contains `rough_estimate_token_length()`, the heuristic token counter used throughout the
+  codebase for estimating token counts without a model-specific tokenizer. It uses a word-based ratio (1.35
+  tokens/word) and a character-based ratio (3.5 chars/token), taking the higher of the two and applying a
+  configurable `safety_margin` (default 1.10) to deliberately overestimate. Also contains functions for chunking
+  text and messages by token size (`reduce_text_to_token_limit`, `split_into_tokenized_chunks`,
+  `chunk_messages_by_token_size`).
   \* `streaming_utils.py`: Contains logic for response cleaning, including `post_process_llm_output` for non-streaming
   text and `$StreamingThinkRemover$` for stateful stream cleaning.
   \* `vector_db_utils.py`: The abstraction layer for the SQLite FTS5 vector memory database.
