@@ -6,7 +6,7 @@
 
 This directory contains the primary entry point for the WilmerAI application: a Flask web server that exposes all public-facing API endpoints. Its fundamental role is to act as a robust **compatibility and translation layer**. It accepts requests conforming to popular external schemas (like OpenAI and Ollama), transforms the data into a standardized internal format, and dispatches the request to the central workflow engine for processing.
 
-The architecture is designed to be modular and extensible. The API logic is broken down into an orchestrator (`ApiServer`), a business logic gateway (`workflow_gateway`), and a series of self-contained **handlers** for specific API schemas. A key component of this architecture is the `ResponseBuilderService`, which centralizes all logic for constructing API-specific JSON responses, ensuring that outgoing data perfectly matches the schema expected by the client.
+The architecture is designed to be modular and extensible. The API logic is broken down into an orchestrator (`ApiServer`), a business logic gateway (`workflow_gateway`), and a series of self-contained **handlers** for specific API schemas. A key component of this architecture is the `ResponseBuilderService`, which centralizes all logic for constructing API-specific JSON responses, ensuring that outgoing data matches the schema expected by the client.
 
 This separation of concerns makes the system cleaner, more maintainable, and significantly easier to extend with new endpoints or entire API compatibility layers.
 
@@ -49,7 +49,7 @@ depends on whether the client requests a streaming or non-streaming response.
       returns a Flask `Response` object with the appropriate `mimetype` (e.g., `'text/event-stream'`). The handler is
       specifically designed to work with production WSGI servers like `Eventlet` to detect client disconnects and
       trigger cancellation. Deep within the streaming logic, `api_helpers.build_response_json()` is called for each
-      token, which in turn uses the `ResponseBuilderService` to construct a perfectly formatted JSON chunk string for
+      token, which in turn uses the `ResponseBuilderService` to construct a well formatted JSON chunk string for
       the specific API type.
     * **Non-Streaming**: If `stream` is false, `handle_user_prompt()` returns a single, complete string of text. The
       handler then calls the appropriate method **directly** on the `ResponseBuilderService` (

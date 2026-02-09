@@ -17,7 +17,7 @@ except ImportError:
 
 
 from Middleware.services.cancellation_service import cancellation_service
-from Middleware.utilities.config_utils import get_config_property_if_exists
+from Middleware.utilities.config_utils import get_config_property_if_exists, get_connect_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +65,7 @@ class LlmApiHandler(ABC):
         self.stream_property_name = get_config_property_if_exists("streamPropertyName", api_type_config)
         self.max_token_property_name = get_config_property_if_exists("maxNewTokensPropertyName", api_type_config)
         self.dont_include_model = dont_include_model
+        self.connect_timeout = get_connect_timeout()
 
     @abstractmethod
     def _get_api_endpoint_url(self) -> str:
@@ -154,7 +155,7 @@ class LlmApiHandler(ABC):
             logger.info(f"Request {request_id} was already cancelled before starting LLM request.")
             try:
                 self.session.close()
-            except:
+            except Exception:
                 pass
             return
 
@@ -201,7 +202,7 @@ class LlmApiHandler(ABC):
         try:
             logger.info(f"Starting POST request for streaming request_id: {request_id}")
             # This call is cooperative when Eventlet is active (monkey-patched)
-            with self.session.post(url, headers=self.headers, json=payload, stream=True, timeout=14400) as response:
+            with self.session.post(url, headers=self.headers, json=payload, stream=True, timeout=(self.connect_timeout, 14400)) as response:
                 response_to_abort = response
 
                 # Check for errors and capture the response body before raising
@@ -305,10 +306,9 @@ class LlmApiHandler(ABC):
         # Check if already cancelled before making the request
         if request_id and cancellation_service.is_cancelled(request_id):
             logger.info(f"Request {request_id} was already cancelled before starting LLM request.")
-            # Ensure session is closed if we return early
             try:
                 self.session.close()
-            except:
+            except Exception:
                 pass
             return ""
 
@@ -354,7 +354,7 @@ class LlmApiHandler(ABC):
 
             try:
                 # This call blocks. Closing the session will cause an exception here.
-                response = self.session.post(url, headers=self.headers, json=payload, timeout=14400)
+                response = self.session.post(url, headers=self.headers, json=payload, timeout=(self.connect_timeout, 14400))
                 response_to_abort = response
 
                 response.raise_for_status()
@@ -405,3 +405,10 @@ class LlmApiHandler(ABC):
             logger.debug(f"Added {self.max_token_property_name}={self.max_tokens} to gen_input")
         else:
             logger.warning(f"max_token_property_name is not set, max_tokens will not be included in payload")
+
+    def close(self):
+        """Closes the HTTP session to release keep-alive connections."""
+        try:
+            self.session.close()
+        except Exception:
+            pass

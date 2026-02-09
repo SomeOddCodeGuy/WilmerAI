@@ -156,6 +156,15 @@ This is a catalog of available node types, validated against the `WorkflowManage
 * **`StaticResponse`**: Returns a hardcoded string from its `content` field. Can act as a responder node and supports
   streaming.
 
+#### Data Manipulation Nodes
+
+* **`StringConcatenator`**: Joins a list of strings with a specified delimiter and returns the result.
+* **`ArithmeticProcessor`**: Evaluates a simple mathematical expression (e.g., `{agent1Output} * 1.07`) and returns the
+  result.
+* **`Conditional`**: Evaluates a logical expression (with `AND`/`OR` operators) and returns `"TRUE"` or `"FALSE"`.
+* **`JsonExtractor`**: Extracts a specific field from a JSON string. Automatically handles markdown code block wrappers.
+* **`TagTextExtractor`**: Extracts content from XML/HTML-style tags (e.g., `<answer>...</answer>`) within a text string.
+
 #### Workflow Orchestration Nodes
 
 * **`CustomWorkflow`**: Executes another workflow file, allowing for modular logic.

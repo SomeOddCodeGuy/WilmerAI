@@ -320,3 +320,106 @@ def get_formatted_last_n_turns_as_string(messages: List[Dict[str, str]], n: int,
     trimmed_messages = deepcopy(filtered_messages[-n:])
     return_message = format_messages_with_template(trimmed_messages, template_file_name, isChatCompletion)
     return ''.join([message["content"] for message in return_message])
+
+
+def get_formatted_last_turns_by_estimated_token_limit_as_string(messages: List[Dict[str, str]], token_limit: int,
+                                                                 template_file_name: str,
+                                                                 isChatCompletion: bool) -> str:
+    """
+    Retrieves and formats recent messages that fit within an estimated token
+    budget as a single concatenated string.
+
+    This function filters out ``images`` and ``system`` roles, then iterates
+    from the most recent message backwards, accumulating estimated token counts.
+    It stops when adding the next message would exceed the limit, but always
+    includes at least one message. The selected messages are then formatted
+    using the LLM's chat template.
+
+    Args:
+        messages (List[Dict[str, str]]): A list of messages with 'role' and
+            'content' keys.
+        token_limit (int): The maximum estimated token budget.
+        template_file_name (str): The name of the template config file to use
+            for formatting.
+        isChatCompletion (bool): A flag indicating if the LLM supports
+            chat completions.
+
+    Returns:
+        str: A single string with the selected messages concatenated and
+            formatted.
+    """
+    filtered_messages = [message for message in messages if message["role"] not in {"images", "system"}]
+
+    if not filtered_messages:
+        return ""
+
+    accumulated_tokens = 0
+    selected = []
+
+    for message in reversed(filtered_messages):
+        message_tokens = rough_estimate_token_length(message.get("content", ""))
+        if not selected:
+            selected.append(message)
+            accumulated_tokens += message_tokens
+        elif accumulated_tokens + message_tokens <= token_limit:
+            selected.append(message)
+            accumulated_tokens += message_tokens
+        else:
+            break
+
+    trimmed_messages = deepcopy(list(reversed(selected)))
+    return_message = format_messages_with_template(trimmed_messages, template_file_name, isChatCompletion)
+    return ''.join([message["content"] for message in return_message])
+
+
+def get_formatted_last_turns_with_min_messages_and_token_limit_as_string(messages: List[Dict[str, str]],
+                                                                          min_messages: int, token_limit: int,
+                                                                          template_file_name: str,
+                                                                          isChatCompletion: bool) -> str:
+    """
+    Retrieves and formats recent messages with a minimum count floor and token
+    budget ceiling as a single concatenated string.
+
+    This function filters out ``images`` and ``system`` roles, always includes
+    at least ``min_messages`` messages from the end of the conversation, then
+    continues adding older messages as long as the cumulative estimated token
+    count does not exceed ``token_limit``.  The selected messages are then
+    formatted using the LLM's chat template.
+
+    Args:
+        messages (List[Dict[str, str]]): A list of messages with 'role' and
+            'content' keys.
+        min_messages (int): The minimum number of messages to always include.
+        token_limit (int): The maximum estimated token budget for expansion
+            beyond the minimum message count.
+        template_file_name (str): The name of the template config file to use
+            for formatting.
+        isChatCompletion (bool): A flag indicating if the LLM supports
+            chat completions.
+
+    Returns:
+        str: A single string with the selected messages concatenated and
+            formatted.
+    """
+    filtered_messages = [message for message in messages if message["role"] not in {"images", "system"}]
+
+    if not filtered_messages:
+        return ""
+
+    accumulated_tokens = 0
+    selected = []
+
+    for message in reversed(filtered_messages):
+        message_tokens = rough_estimate_token_length(message.get("content", ""))
+        if len(selected) < min_messages:
+            selected.append(message)
+            accumulated_tokens += message_tokens
+        elif accumulated_tokens + message_tokens <= token_limit:
+            selected.append(message)
+            accumulated_tokens += message_tokens
+        else:
+            break
+
+    trimmed_messages = deepcopy(list(reversed(selected)))
+    return_message = format_messages_with_template(trimmed_messages, template_file_name, isChatCompletion)
+    return ''.join([message["content"] for message in return_message])

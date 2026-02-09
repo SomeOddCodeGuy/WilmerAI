@@ -85,9 +85,14 @@ class TestBuildMessagesFromConversation:
         messages = handler._build_messages_from_conversation(conversation, None, None)
         assert messages[0]["role"] == "system"
 
-    def test_image_message_removal(self, handler_factory):
+    def test_image_messages_pass_through(self, handler_factory):
         """
-        Tests that messages with the role 'images' are correctly filtered out.
+        Tests that image messages pass through the base handler unchanged.
+
+        Image filtering is now handled upstream in llm_api.py based on the llm_takes_images flag.
+        The base handler no longer filters images - this allows handlers that support images
+        (OpenAI, Ollama) to override _build_messages_from_conversation and process them.
+        Handlers that don't support images receive pre-filtered conversations from llm_api.py.
         """
         handler = handler_factory()
         conversation = [
@@ -95,8 +100,10 @@ class TestBuildMessagesFromConversation:
             {"role": "images", "content": "base64_string_here"}
         ]
         messages = handler._build_messages_from_conversation(conversation, None, None)
-        assert len(messages) == 1
+        # Images pass through the base handler - filtering happens upstream
+        assert len(messages) == 2
         assert messages[0]["role"] == "user"
+        assert messages[1]["role"] == "images"
 
     def test_empty_last_assistant_message_removal(self, handler_factory):
         """

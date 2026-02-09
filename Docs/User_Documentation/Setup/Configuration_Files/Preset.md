@@ -120,7 +120,7 @@ be valid for the target LLM backend. Always consult the API documentation for th
 #### **Important Considerations**
 
 * **Parameter Precedence**: The property for setting the maximum number of new tokens (e.g., `max_tokens`, `max_length`)
-  is controlled by the workflow node's configuration, **not** the preset file. The value from the node will always
+  is controlled by the workflow node's configuration, **not** the preset file. The value from the node should always
   override any equivalent setting in the preset.
 * **Valid JSON**: Preset files must be syntactically valid JSON.
 * **Backend Documentation**: The parameter keys and value types used in a preset file must be supported by the target

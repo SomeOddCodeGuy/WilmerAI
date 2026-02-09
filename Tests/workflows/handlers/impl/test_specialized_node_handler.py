@@ -77,6 +77,8 @@ class TestHandleRouter:
         ("ArithmeticProcessor", "handle_arithmetic_processor"),
         ("Conditional", "handle_conditional"),
         ("StringConcatenator", "handle_string_concatenator"),
+        ("JsonExtractor", "handle_json_extractor"),
+        ("TagTextExtractor", "handle_tag_text_extractor"),
     ])
     def test_handle_routes_to_correct_method(self, mocker, specialized_handler, base_context, node_type,
                                              method_to_mock):
@@ -717,3 +719,715 @@ class TestHandleStringConcatenator:
             result = specialized_handler.handle_string_concatenator(base_context)
             assert result == ""
             mock_log.assert_called_once_with("StringConcatenator 'strings' property must be a list.")
+
+
+class TestStripMarkdownCodeBlock:
+    """Tests the '_strip_markdown_code_block' helper method."""
+
+    def test_strips_json_code_block(self, specialized_handler):
+        """Should strip ```json code block formatting."""
+        text = '```json\n{"name": "test"}\n```'
+        result = specialized_handler._strip_markdown_code_block(text)
+        assert result == '{"name": "test"}'
+
+    def test_strips_json_uppercase_code_block(self, specialized_handler):
+        """Should strip ```JSON (uppercase) code block formatting."""
+        text = '```JSON\n{"name": "test"}\n```'
+        result = specialized_handler._strip_markdown_code_block(text)
+        assert result == '{"name": "test"}'
+
+    def test_strips_plain_code_block(self, specialized_handler):
+        """Should strip plain ``` code block formatting."""
+        text = '```\n{"name": "test"}\n```'
+        result = specialized_handler._strip_markdown_code_block(text)
+        assert result == '{"name": "test"}'
+
+    def test_handles_no_newline_after_backticks(self, specialized_handler):
+        """Should handle code blocks without newline after opening backticks."""
+        text = '```json{"name": "test"}```'
+        result = specialized_handler._strip_markdown_code_block(text)
+        assert result == '{"name": "test"}'
+
+    def test_returns_unchanged_when_no_code_block(self, specialized_handler):
+        """Should return the original text when no code block formatting is present."""
+        text = '{"name": "test"}'
+        result = specialized_handler._strip_markdown_code_block(text)
+        assert result == '{"name": "test"}'
+
+    def test_handles_whitespace_around_code_block(self, specialized_handler):
+        """Should strip surrounding whitespace from code blocks."""
+        text = '  \n```json\n{"name": "test"}\n```\n  '
+        result = specialized_handler._strip_markdown_code_block(text)
+        assert result == '{"name": "test"}'
+
+    def test_preserves_content_with_newlines(self, specialized_handler):
+        """Should preserve newlines within the code block content."""
+        text = '```json\n{\n  "name": "test",\n  "value": 123\n}\n```'
+        result = specialized_handler._strip_markdown_code_block(text)
+        assert '"name": "test"' in result
+        assert '"value": 123' in result
+
+
+class TestHandleJsonExtractor:
+    """Tests the 'JsonExtractor' node logic."""
+
+    def test_extracts_simple_string_field(self, specialized_handler, base_context, mock_variable_service):
+        """Should extract a simple string field from JSON."""
+        json_string = '{"name": "Socg", "file": "Socg.txt"}'
+        base_context.config = {
+            "jsonToExtractFrom": json_string,
+            "fieldToExtract": "name"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_json_extractor(base_context)
+
+        assert result == "Socg"
+
+    def test_extracts_second_field(self, specialized_handler, base_context, mock_variable_service):
+        """Should extract any specified field from JSON."""
+        json_string = '{"name": "Socg", "file": "Socg.txt"}'
+        base_context.config = {
+            "jsonToExtractFrom": json_string,
+            "fieldToExtract": "file"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_json_extractor(base_context)
+
+        assert result == "Socg.txt"
+
+    def test_extracts_numeric_field(self, specialized_handler, base_context, mock_variable_service):
+        """Should extract numeric fields and convert to string."""
+        json_string = '{"name": "test", "count": 42}'
+        base_context.config = {
+            "jsonToExtractFrom": json_string,
+            "fieldToExtract": "count"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_json_extractor(base_context)
+
+        assert result == "42"
+
+    def test_extracts_boolean_field(self, specialized_handler, base_context, mock_variable_service):
+        """Should extract boolean fields and convert to string."""
+        json_string = '{"name": "test", "active": true}'
+        base_context.config = {
+            "jsonToExtractFrom": json_string,
+            "fieldToExtract": "active"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_json_extractor(base_context)
+
+        assert result == "True"
+
+    def test_extracts_nested_object_as_json_string(self, specialized_handler, base_context, mock_variable_service):
+        """Should extract nested objects and return as JSON string."""
+        json_string = '{"name": "test", "details": {"a": 1, "b": 2}}'
+        base_context.config = {
+            "jsonToExtractFrom": json_string,
+            "fieldToExtract": "details"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_json_extractor(base_context)
+
+        assert result == '{"a": 1, "b": 2}'
+
+    def test_extracts_array_as_json_string(self, specialized_handler, base_context, mock_variable_service):
+        """Should extract arrays and return as JSON string."""
+        json_string = '{"name": "test", "items": [1, 2, 3]}'
+        base_context.config = {
+            "jsonToExtractFrom": json_string,
+            "fieldToExtract": "items"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_json_extractor(base_context)
+
+        assert result == '[1, 2, 3]'
+
+    def test_handles_markdown_json_code_block(self, specialized_handler, base_context, mock_variable_service):
+        """Should handle JSON wrapped in ```json code block."""
+        json_string = '```json\n{"name": "Socg", "file": "Socg.txt"}\n```'
+        base_context.config = {
+            "jsonToExtractFrom": json_string,
+            "fieldToExtract": "name"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_json_extractor(base_context)
+
+        assert result == "Socg"
+
+    def test_handles_plain_markdown_code_block(self, specialized_handler, base_context, mock_variable_service):
+        """Should handle JSON wrapped in plain ``` code block."""
+        json_string = '```\n{"name": "Socg", "file": "Socg.txt"}\n```'
+        base_context.config = {
+            "jsonToExtractFrom": json_string,
+            "fieldToExtract": "name"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_json_extractor(base_context)
+
+        assert result == "Socg"
+
+    def test_applies_variables_to_json_source(self, specialized_handler, base_context, mock_variable_service):
+        """Should apply variable substitution to jsonToExtractFrom."""
+        base_context.config = {
+            "jsonToExtractFrom": "{agent1Input}",
+            "fieldToExtract": "name"
+        }
+        base_context.agent_inputs = {"agent1Input": '{"name": "FromVariable"}'}
+
+        def mock_apply(template, ctx):
+            if template == "{agent1Input}":
+                return ctx.agent_inputs.get("agent1Input", template)
+            return template
+
+        mock_variable_service.apply_variables.side_effect = mock_apply
+
+        result = specialized_handler.handle_json_extractor(base_context)
+
+        assert result == "FromVariable"
+
+    def test_applies_variables_to_field_name(self, specialized_handler, base_context, mock_variable_service):
+        """Should apply variable substitution to fieldToExtract."""
+        base_context.config = {
+            "jsonToExtractFrom": '{"dynamic_field": "value"}',
+            "fieldToExtract": "{fieldName}"
+        }
+        base_context.agent_inputs = {"fieldName": "dynamic_field"}
+
+        def mock_apply(template, ctx):
+            if template == "{fieldName}":
+                return ctx.agent_inputs.get("fieldName", template)
+            return template
+
+        mock_variable_service.apply_variables.side_effect = mock_apply
+
+        result = specialized_handler.handle_json_extractor(base_context)
+
+        assert result == "value"
+
+    def test_returns_empty_for_missing_field(self, specialized_handler, base_context, mock_variable_service):
+        """Should return empty string when field is not found."""
+        json_string = '{"name": "test"}'
+        base_context.config = {
+            "jsonToExtractFrom": json_string,
+            "fieldToExtract": "nonexistent"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_json_extractor(base_context)
+
+        assert result == ""
+
+    def test_returns_empty_for_invalid_json(self, specialized_handler, base_context, mock_variable_service):
+        """Should return empty string for invalid JSON."""
+        base_context.config = {
+            "jsonToExtractFrom": "not valid json",
+            "fieldToExtract": "name"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        with patch('Middleware.workflows.handlers.impl.specialized_node_handler.logger.warning') as mock_log:
+            result = specialized_handler.handle_json_extractor(base_context)
+            assert result == ""
+            assert mock_log.called
+            assert "failed to parse JSON" in mock_log.call_args[0][0]
+
+    def test_returns_empty_for_json_array(self, specialized_handler, base_context, mock_variable_service):
+        """Should return empty string when JSON is an array instead of object."""
+        base_context.config = {
+            "jsonToExtractFrom": '[1, 2, 3]',
+            "fieldToExtract": "0"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        with patch('Middleware.workflows.handlers.impl.specialized_node_handler.logger.warning') as mock_log:
+            result = specialized_handler.handle_json_extractor(base_context)
+            assert result == ""
+            assert "expected a JSON object" in mock_log.call_args[0][0]
+
+    def test_returns_empty_when_json_source_missing(self, specialized_handler, base_context):
+        """Should return empty string and log warning when jsonToExtractFrom is missing."""
+        base_context.config = {"fieldToExtract": "name"}
+
+        with patch('Middleware.workflows.handlers.impl.specialized_node_handler.logger.warning') as mock_log:
+            result = specialized_handler.handle_json_extractor(base_context)
+            assert result == ""
+            mock_log.assert_called_once_with("JsonExtractor node is missing 'jsonToExtractFrom'.")
+
+    def test_returns_empty_when_field_name_missing(self, specialized_handler, base_context, mock_variable_service):
+        """Should return empty string and log warning when fieldToExtract is missing."""
+        base_context.config = {"jsonToExtractFrom": '{"name": "test"}'}
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        with patch('Middleware.workflows.handlers.impl.specialized_node_handler.logger.warning') as mock_log:
+            result = specialized_handler.handle_json_extractor(base_context)
+            assert result == ""
+            mock_log.assert_called_once_with("JsonExtractor node is missing 'fieldToExtract'.")
+
+    def test_handles_null_value(self, specialized_handler, base_context, mock_variable_service):
+        """Should return empty string when field value is null."""
+        json_string = '{"name": null}'
+        base_context.config = {
+            "jsonToExtractFrom": json_string,
+            "fieldToExtract": "name"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_json_extractor(base_context)
+
+        assert result == ""
+
+    def test_handles_empty_string_value(self, specialized_handler, base_context, mock_variable_service):
+        """Should return empty string when field value is empty string."""
+        json_string = '{"name": ""}'
+        base_context.config = {
+            "jsonToExtractFrom": json_string,
+            "fieldToExtract": "name"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_json_extractor(base_context)
+
+        assert result == ""
+
+
+class TestHandleTagTextExtractor:
+    """Tests the 'TagTextExtractor' node logic."""
+
+    def test_extracts_simple_tag_content(self, specialized_handler, base_context, mock_variable_service):
+        """Should extract content from simple XML-style tags."""
+        text = """This is some text.
+
+<thing_I_Want>
+    Output that I want to grab
+</thing_I_Want>
+
+More text"""
+        base_context.config = {
+            "tagToExtractFrom": text,
+            "fieldToExtract": "thing_I_Want"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_tag_text_extractor(base_context)
+
+        assert result == "Output that I want to grab"
+
+    def test_extracts_content_without_surrounding_whitespace(self, specialized_handler, base_context, mock_variable_service):
+        """Should strip leading/trailing whitespace from extracted content."""
+        text = "<tag>   content with spaces   </tag>"
+        base_context.config = {
+            "tagToExtractFrom": text,
+            "fieldToExtract": "tag"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_tag_text_extractor(base_context)
+
+        assert result == "content with spaces"
+
+    def test_extracts_multiline_content(self, specialized_handler, base_context, mock_variable_service):
+        """Should extract multiline content between tags."""
+        text = """<output>
+Line 1
+Line 2
+Line 3
+</output>"""
+        base_context.config = {
+            "tagToExtractFrom": text,
+            "fieldToExtract": "output"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_tag_text_extractor(base_context)
+
+        assert "Line 1" in result
+        assert "Line 2" in result
+        assert "Line 3" in result
+
+    def test_extracts_content_with_nested_elements(self, specialized_handler, base_context, mock_variable_service):
+        """Should extract content including nested HTML/XML elements."""
+        text = "<wrapper><inner>nested content</inner></wrapper>"
+        base_context.config = {
+            "tagToExtractFrom": text,
+            "fieldToExtract": "wrapper"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_tag_text_extractor(base_context)
+
+        assert result == "<inner>nested content</inner>"
+
+    def test_extracts_first_matching_tag(self, specialized_handler, base_context, mock_variable_service):
+        """Should extract content from the first matching tag when multiple exist."""
+        text = "<tag>first</tag> some text <tag>second</tag>"
+        base_context.config = {
+            "tagToExtractFrom": text,
+            "fieldToExtract": "tag"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_tag_text_extractor(base_context)
+
+        assert result == "first"
+
+    def test_applies_variables_to_text_source(self, specialized_handler, base_context, mock_variable_service):
+        """Should apply variable substitution to tagToExtractFrom."""
+        base_context.config = {
+            "tagToExtractFrom": "{agent1Input}",
+            "fieldToExtract": "result"
+        }
+        base_context.agent_inputs = {"agent1Input": "<result>extracted value</result>"}
+
+        def mock_apply(template, ctx):
+            if template == "{agent1Input}":
+                return ctx.agent_inputs.get("agent1Input", template)
+            return template
+
+        mock_variable_service.apply_variables.side_effect = mock_apply
+
+        result = specialized_handler.handle_tag_text_extractor(base_context)
+
+        assert result == "extracted value"
+
+    def test_applies_variables_to_tag_name(self, specialized_handler, base_context, mock_variable_service):
+        """Should apply variable substitution to fieldToExtract."""
+        text = "<dynamic_tag>content</dynamic_tag>"
+        base_context.config = {
+            "tagToExtractFrom": text,
+            "fieldToExtract": "{tagName}"
+        }
+        base_context.agent_inputs = {"tagName": "dynamic_tag"}
+
+        def mock_apply(template, ctx):
+            if template == "{tagName}":
+                return ctx.agent_inputs.get("tagName", template)
+            return template
+
+        mock_variable_service.apply_variables.side_effect = mock_apply
+
+        result = specialized_handler.handle_tag_text_extractor(base_context)
+
+        assert result == "content"
+
+    def test_returns_empty_for_missing_tag(self, specialized_handler, base_context, mock_variable_service):
+        """Should return empty string when tag is not found."""
+        text = "<other>some content</other>"
+        base_context.config = {
+            "tagToExtractFrom": text,
+            "fieldToExtract": "nonexistent"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_tag_text_extractor(base_context)
+
+        assert result == ""
+
+    def test_returns_empty_when_text_source_missing(self, specialized_handler, base_context):
+        """Should return empty string and log warning when tagToExtractFrom is missing."""
+        base_context.config = {"fieldToExtract": "tag"}
+
+        with patch('Middleware.workflows.handlers.impl.specialized_node_handler.logger.warning') as mock_log:
+            result = specialized_handler.handle_tag_text_extractor(base_context)
+            assert result == ""
+            mock_log.assert_called_once_with("TagTextExtractor node is missing 'tagToExtractFrom'.")
+
+    def test_returns_empty_when_tag_name_missing(self, specialized_handler, base_context, mock_variable_service):
+        """Should return empty string and log warning when fieldToExtract is missing."""
+        base_context.config = {"tagToExtractFrom": "<tag>content</tag>"}
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        with patch('Middleware.workflows.handlers.impl.specialized_node_handler.logger.warning') as mock_log:
+            result = specialized_handler.handle_tag_text_extractor(base_context)
+            assert result == ""
+            mock_log.assert_called_once_with("TagTextExtractor node is missing 'fieldToExtract'.")
+
+    def test_handles_special_regex_characters_in_tag_name(self, specialized_handler, base_context, mock_variable_service):
+        """Should properly escape special regex characters in tag names."""
+        text = "<tag.with.dots>content</tag.with.dots>"
+        base_context.config = {
+            "tagToExtractFrom": text,
+            "fieldToExtract": "tag.with.dots"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_tag_text_extractor(base_context)
+
+        assert result == "content"
+
+    def test_handles_tags_with_underscores(self, specialized_handler, base_context, mock_variable_service):
+        """Should handle tag names with underscores."""
+        text = "<my_custom_tag>underscore content</my_custom_tag>"
+        base_context.config = {
+            "tagToExtractFrom": text,
+            "fieldToExtract": "my_custom_tag"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_tag_text_extractor(base_context)
+
+        assert result == "underscore content"
+
+    def test_handles_tags_with_hyphens(self, specialized_handler, base_context, mock_variable_service):
+        """Should handle tag names with hyphens."""
+        text = "<my-custom-tag>hyphen content</my-custom-tag>"
+        base_context.config = {
+            "tagToExtractFrom": text,
+            "fieldToExtract": "my-custom-tag"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_tag_text_extractor(base_context)
+
+        assert result == "hyphen content"
+
+    def test_handles_empty_tag_content(self, specialized_handler, base_context, mock_variable_service):
+        """Should return empty string for empty tag content."""
+        text = "<tag></tag>"
+        base_context.config = {
+            "tagToExtractFrom": text,
+            "fieldToExtract": "tag"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_tag_text_extractor(base_context)
+
+        assert result == ""
+
+    def test_handles_whitespace_only_content(self, specialized_handler, base_context, mock_variable_service):
+        """Should return empty string when tag content is only whitespace."""
+        text = "<tag>   \n   </tag>"
+        base_context.config = {
+            "tagToExtractFrom": text,
+            "fieldToExtract": "tag"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_tag_text_extractor(base_context)
+
+        assert result == ""
+
+    def test_does_not_match_mismatched_tags(self, specialized_handler, base_context, mock_variable_service):
+        """Should return empty when opening and closing tags don't match."""
+        text = "<tag>content</other_tag>"
+        base_context.config = {
+            "tagToExtractFrom": text,
+            "fieldToExtract": "tag"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_tag_text_extractor(base_context)
+
+        assert result == ""
+
+    def test_case_sensitive_tag_matching(self, specialized_handler, base_context, mock_variable_service):
+        """Should perform case-sensitive tag matching."""
+        text = "<Tag>content</Tag>"
+        base_context.config = {
+            "tagToExtractFrom": text,
+            "fieldToExtract": "tag"  # lowercase - should not match
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_tag_text_extractor(base_context)
+
+        assert result == ""
+
+    def test_extracts_from_middle_of_larger_text(self, specialized_handler, base_context, mock_variable_service):
+        """Should extract tag from the middle of a larger document."""
+        text = """
+        Some preamble text here.
+        More content about various things.
+
+        <answer>
+        The actual answer we want
+        </answer>
+
+        And some footer text.
+        More stuff at the end.
+        """
+        base_context.config = {
+            "tagToExtractFrom": text,
+            "fieldToExtract": "answer"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_tag_text_extractor(base_context)
+
+        assert result == "The actual answer we want"
+
+    def test_nested_same_name_tags_extracts_first_match(self, specialized_handler, base_context, mock_variable_service):
+        """Should extract from first opening to first closing tag with non-greedy matching."""
+        text = "<tag><tag>inner</tag></tag>"
+        base_context.config = {
+            "tagToExtractFrom": text,
+            "fieldToExtract": "tag"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_tag_text_extractor(base_context)
+
+        # Non-greedy .*? matches from first <tag> to first </tag>
+        assert result == "<tag>inner"
+
+    def test_self_closing_tags_do_not_match(self, specialized_handler, base_context, mock_variable_service):
+        """Should return empty string for self-closing tags like <tag/>."""
+        text = "<tag/> some other text"
+        base_context.config = {
+            "tagToExtractFrom": text,
+            "fieldToExtract": "tag"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_tag_text_extractor(base_context)
+
+        assert result == ""
+
+    def test_tags_with_attributes_do_not_match(self, specialized_handler, base_context, mock_variable_service):
+        """Should not match tags with attributes since regex requires exact <tag>."""
+        text = '<tag class="foo">content</tag>'
+        base_context.config = {
+            "tagToExtractFrom": text,
+            "fieldToExtract": "tag"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_tag_text_extractor(base_context)
+
+        assert result == ""
+
+    def test_additional_special_regex_characters(self, specialized_handler, base_context, mock_variable_service):
+        """Should escape special regex characters beyond dots (brackets, parens, etc)."""
+        text = "<tag[0]>content</tag[0]>"
+        base_context.config = {
+            "tagToExtractFrom": text,
+            "fieldToExtract": "tag[0]"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_tag_text_extractor(base_context)
+
+        assert result == "content"
+
+
+class TestStripMarkdownCodeBlockEdgeCases:
+    """Additional edge case tests for _strip_markdown_code_block."""
+
+    def test_non_json_language_tag_stripped_with_tag_in_content(self, specialized_handler):
+        """Code blocks with non-json language tags get stripped, but tag becomes part of content."""
+        text = '```python\ndef hello():\n    pass\n```'
+        result = specialized_handler._strip_markdown_code_block(text)
+        # The regex makes json/JSON optional, so ```python still matches as a code block.
+        # The language tag 'python' is not consumed by the optional group, so it
+        # becomes part of the captured content.
+        assert result == 'python\ndef hello():\n    pass'
+
+    def test_mixed_case_json_stripped_with_tag_in_content(self, specialized_handler):
+        """Code blocks with mixed-case ```Json are stripped, but 'Json' becomes part of content."""
+        text = '```Json\n{"name": "test"}\n```'
+        result = specialized_handler._strip_markdown_code_block(text)
+        # (?:json|JSON)? only matches exact 'json' or 'JSON', not 'Json'
+        assert result == 'Json\n{"name": "test"}'
+
+    def test_whitespace_only_content_in_code_block(self, specialized_handler):
+        """Should return empty string when code block contains only whitespace."""
+        text = '```json\n   \n```'
+        result = specialized_handler._strip_markdown_code_block(text)
+        assert result == ""
+
+
+class TestJsonExtractorEdgeCases:
+    """Additional edge case tests for JsonExtractor."""
+
+    def test_top_level_string_not_a_dict(self, specialized_handler, base_context, mock_variable_service):
+        """Should return empty for top-level JSON string (not a dict)."""
+        base_context.config = {
+            "jsonToExtractFrom": '"just a string"',
+            "fieldToExtract": "anything"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_json_extractor(base_context)
+
+        assert result == ""
+
+    def test_top_level_number_not_a_dict(self, specialized_handler, base_context, mock_variable_service):
+        """Should return empty for top-level JSON number (not a dict)."""
+        base_context.config = {
+            "jsonToExtractFrom": '42',
+            "fieldToExtract": "anything"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_json_extractor(base_context)
+
+        assert result == ""
+
+    def test_top_level_boolean_not_a_dict(self, specialized_handler, base_context, mock_variable_service):
+        """Should return empty for top-level JSON boolean (not a dict)."""
+        base_context.config = {
+            "jsonToExtractFrom": 'true',
+            "fieldToExtract": "anything"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_json_extractor(base_context)
+
+        assert result == ""
+
+    def test_float_value_extraction(self, specialized_handler, base_context, mock_variable_service):
+        """Should extract float values and convert to string."""
+        base_context.config = {
+            "jsonToExtractFrom": '{"pi": 3.14}',
+            "fieldToExtract": "pi"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_json_extractor(base_context)
+
+        assert result == "3.14"
+
+    def test_field_name_with_special_characters(self, specialized_handler, base_context, mock_variable_service):
+        """Should handle field names with spaces, dots, and hyphens."""
+        base_context.config = {
+            "jsonToExtractFrom": '{"field with spaces": "val1", "field.name": "val2"}',
+            "fieldToExtract": "field with spaces"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_json_extractor(base_context)
+
+        assert result == "val1"
+
+    def test_dot_notation_field_does_not_do_nested_access(self, specialized_handler, base_context, mock_variable_service):
+        """Should not do nested access with dot notation — treats field name literally."""
+        base_context.config = {
+            "jsonToExtractFrom": '{"details": {"name": "inner"}}',
+            "fieldToExtract": "details.name"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_json_extractor(base_context)
+
+        # "details.name" is not a top-level key, should return empty
+        assert result == ""
+
+    def test_uppercase_json_code_block_integration(self, specialized_handler, base_context, mock_variable_service):
+        """Should handle JSON wrapped in uppercase ```JSON code block."""
+        base_context.config = {
+            "jsonToExtractFrom": '```JSON\n{"name": "test"}\n```',
+            "fieldToExtract": "name"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_json_extractor(base_context)
+
+        assert result == "test"

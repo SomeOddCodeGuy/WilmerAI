@@ -184,5 +184,5 @@ and non-streaming responses, any new rule must be implemented in both places to 
    # ... before existing "Assistant:" prefix removal ...
    ```
 
-By adding the rule to both locations, you guarantee that the system will produce the same clean output regardless of
+By adding the rule to both locations, you ensure that the system will produce the same clean output regardless of
 whether the user requested a streaming or non-streaming response.

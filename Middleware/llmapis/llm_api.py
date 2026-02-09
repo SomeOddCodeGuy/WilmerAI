@@ -179,22 +179,31 @@ class LlmApiService:
                         )
                     finally:
                         self.is_busy_flag = False
+                        self.close()
 
                 return stream_wrapper()
             else:
-                response = self._api_handler.handle_non_streaming(
-                    conversation=conversation_copy,
-                    system_prompt=system_prompt_to_pass,
-                    prompt=prompt_to_pass,
-                    request_id=request_id,
-                )
-                self.is_busy_flag = False
-                return response
+                try:
+                    response = self._api_handler.handle_non_streaming(
+                        conversation=conversation_copy,
+                        system_prompt=system_prompt_to_pass,
+                        prompt=prompt_to_pass,
+                        request_id=request_id,
+                    )
+                    return response
+                finally:
+                    self.is_busy_flag = False
+                    self.close()
         except Exception as e:
             self.is_busy_flag = False
             logger.error("Exception in get_response_from_llm: %s", e)
             traceback.print_exc()
             raise
+
+    def close(self):
+        """Closes the underlying API handler's HTTP session."""
+        if self._api_handler:
+            self._api_handler.close()
 
     def is_busy(self) -> bool:
         """

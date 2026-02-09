@@ -200,6 +200,19 @@ Each User JSON file contains a single object with the following key-value pairs.
 
 -----
 
+##### `connectTimeoutInSeconds`
+
+* **Description**: The timeout in seconds for establishing an HTTP connection to an LLM endpoint. This only covers the
+  TCP connection phase (the initial handshake), not the time spent waiting for the LLM to process and respond. If the
+  connection cannot be established within this time, the request fails. This is useful for detecting unreachable
+  endpoints quickly rather than waiting for the full request timeout.
+* **Data Type**: `integer`
+* **Required**: No
+* **Default**: `30`
+* **Example**: `60`
+
+-----
+
 ##### `useOfflineWikiApi`
 
 * **Description**: If `true`, enables the `OfflineWikipediaTextApi` tool, allowing workflows to query a local Wikipedia
@@ -314,6 +327,8 @@ Here is a fully-commented example user configuration file.
   "offlineWikiApiPort": 5728,
   // If true, enables writing logs to a file.
   "useFileLogging": true,
+  // Timeout in seconds for establishing an HTTP connection to an LLM endpoint (default: 30).
+  "connectTimeoutInSeconds": 30,
   // If true, lists workflow folders from the shared workflows folder in the models API endpoints.
   "allowSharedWorkflows": false,
   // Optional override for the shared workflows folder name (default is "_shared").

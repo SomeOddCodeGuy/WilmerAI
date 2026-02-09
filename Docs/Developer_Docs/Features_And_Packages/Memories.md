@@ -143,7 +143,78 @@ To modify or extend the memory system, you will primarily work with these five f
 
 -----
 
-## 4\. How to Add a New Memory Feature
+## 4\. Memory Generation Triggering Logic
+
+This section details the internal logic that determines when new file-based memories are generated. Understanding this
+is essential for debugging memory timing issues.
+
+### Key Configuration Fields
+
+The triggering logic is governed by four fields in the discussion ID workflow configuration file:
+
+* **`chunkEstimatedTokenSize`** (default: 1000): The estimated token count threshold. When the accumulated new messages
+  reach or exceed this many tokens, memory generation triggers.
+* **`maxMessagesBetweenChunks`** (default: 5): The message count threshold. When this many new messages have
+  accumulated, memory generation triggers. This threshold only applies when the memory file exists on disk
+  (standard mode). It is disabled when the file does not exist (consolidation mode).
+* **`maxResponseSizeInTokens`** (default: 400): The maximum number of tokens in the LLM's summarization response.
+* **`lookbackStartTurn`** (default: 3): The number of most recent conversation turns to exclude from memory processing.
+  This prevents recent, potentially incomplete exchanges (such as frontend command messages) from being included in
+  memories.
+
+### Triggering Modes
+
+The system operates in two modes depending on whether the memory file exists on disk:
+
+#### Standard Mode (Memory File Exists)
+
+Both thresholds are active. Memory generation triggers when **either** threshold is reached first:
+
+* `estimated_tokens >= chunkEstimatedTokenSize`, OR
+* `message_count >= maxMessagesBetweenChunks`
+
+This "whichever comes first" logic allows the system to generate memories based on either volume (tokens) or frequency
+(messages), depending on which condition is met first.
+
+The memory file does not need to contain any chunks for standard mode to apply — it just needs to exist on disk. In a
+new conversation, the file is created (as an empty `[]`) on the first check (around message 3, after the early return
+for conversations with fewer than 3 messages). From that point on, standard mode applies and both thresholds are active.
+
+#### Consolidation Mode (Memory File Does Not Exist)
+
+Only the token threshold applies. The message count threshold is disabled. This mode activates only when the memory file
+has been deleted from disk — for example, when a user wants to regenerate memories with a larger chunk size to produce
+fewer, larger chunks.
+
+### Implementation Details
+
+The triggering logic lives in `SlowButQualityRAGTool.handle_discussion_id_flow()`, within the file-based memory path
+(the `else` branch after the `use_vector_memory_from_config` check).
+
+1. **File existence check**: Before reading, the system checks `os.path.exists(filepath)` to determine whether the
+   memory file exists on disk. This check must happen before `read_chunks_with_hashes()`, which creates the file as an
+   empty `[]` if it does not exist (see "File Creation Side-Effect" below).
+2. **New message detection**: The method uses hash-based tracking (`find_last_matching_hash_message`) to identify
+   messages that have been added since the last memory generation run. Only unprocessed messages are considered. If the
+   file has no chunks (new chat or freshly created file), all messages minus the lookback are treated as new.
+3. **Token estimation**: The content of all new messages is joined and passed through `rough_estimate_token_length()` to
+   get an approximate token count. This function intentionally overestimates by using the higher of a word-based estimate
+   (1.35 tokens/word) and a character-based estimate (3.5 chars/token), then applying a `safety_margin` multiplier
+   (default 1.10). See `text_utils.py` for details.
+4. **Trigger evaluation**: The two boolean conditions are evaluated. `trigger_by_messages` is gated on `file_exists`
+   (from step 1). Diagnostic logging reports the exact counts, thresholds, and which trigger(s) fired (or why none did).
+
+### File Creation Side-Effect
+
+The `read_chunks_with_hashes()` function calls `ensure_json_file_exists()`, which creates the memory file as an empty
+JSON array (`[]`) if it does not exist on disk. This is why the `file_exists` check must happen before that call —
+otherwise the file would always appear to exist. The side-effect is intentional: it means that on the first memory
+check of a new conversation (around message 3), the file is created, and from message 4 onward the system operates in
+standard mode with both thresholds active.
+
+-----
+
+## 5\. How to Add a New Memory Feature
 
 The system is designed for extension. Below are two common scenarios.
 

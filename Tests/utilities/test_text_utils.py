@@ -49,6 +49,39 @@ def test_rough_estimate_token_length(text, expected_tokens):
     assert rough_estimate_token_length(text) == expected_tokens
 
 
+def test_rough_estimate_token_length_custom_safety_margin():
+    """
+    Tests that custom safety_margin values produce different results.
+    Uses a text where the margin changes the int() truncation result.
+    """
+    # "one two three four five" = 5 words, 23 chars
+    # word_est = 5 * 1.35 = 6.75
+    # char_est = 23 / 3.5 = 6.571
+    # max = 6.75
+    text = "one two three four five"
+
+    # With safety_margin=1.0: int(6.75 * 1.0) = 6
+    assert rough_estimate_token_length(text, safety_margin=1.0) == 6
+
+    # With default safety_margin=1.10: int(6.75 * 1.10) = int(7.425) = 7
+    assert rough_estimate_token_length(text, safety_margin=1.10) == 7
+
+    # With safety_margin=2.0: int(6.75 * 2.0) = int(13.5) = 13
+    assert rough_estimate_token_length(text, safety_margin=2.0) == 13
+
+
+def test_rough_estimate_default_margin_distinguishable_from_no_margin():
+    """
+    Tests that the default 1.10 safety margin produces a detectably different
+    result from no margin (1.0) for a carefully chosen input.
+    """
+    # "one two three four five" has word_est=6.75, char_est=6.571
+    text = "one two three four five"
+    result_with_margin = rough_estimate_token_length(text)       # 1.10 default
+    result_no_margin = rough_estimate_token_length(text, safety_margin=1.0)
+    assert result_with_margin > result_no_margin
+
+
 @pytest.mark.parametrize(
     "text, token_limit, expected_text",
     [
@@ -88,10 +121,11 @@ def test_chunk_messages_by_token_size():
     """
     messages = deepcopy(MESSAGES_FIXTURE)
     chunks = chunk_messages_by_token_size(messages, 20, 0)
-    assert len(chunks) == 3
-    assert chunks[0] == [messages[0], messages[1]]
-    assert chunks[1] == [messages[2]]
-    assert chunks[2] == [messages[3]]
+    assert len(chunks) == 4
+    assert chunks[0] == [messages[0]]
+    assert chunks[1] == [messages[1]]
+    assert chunks[2] == [messages[2]]
+    assert chunks[3] == [messages[3]]
 
 
 def test_chunk_messages_by_token_size_with_max_messages_filter():

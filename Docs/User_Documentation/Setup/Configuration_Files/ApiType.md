@@ -39,12 +39,15 @@ Each `ApiTypes` JSON file contains a single object with the following key-value 
     * `"claudeMessages"`: For the Anthropic Claude Messages API, which uses a structured list of messages.
     * `"koboldCppGenerate"`: For the KoboldCpp `/api/v1/generate` endpoint. This is a completions-style API.
     * `"ollamaApiChat"`: For the Ollama `/api/chat` endpoint, which uses a message list and a nested `options` object
-      for parameters.
+      for parameters. Supports images when used with the ImageProcessor node.
     * `"ollamaApiGenerate"`: For the Ollama `/api/generate` endpoint, which is a completions-style API with a nested
       `options` object.
-    * `"koboldCppGenerateImageSpecific"`: A specialized handler for KoboldCpp image models.
-    * `"ollamaApiChatImageSpecific"`: A specialized handler for Ollama multimodal chat models.
-    * `"openAIApiChatImageSpecific"`: A specialized handler for OpenAI multimodal chat models (e.g., GPT-4o).
+
+  **Deprecated types (kept for backwards compatibility):** The following types are deprecated and route to their
+  standard handlers. Use the regular types above instead - they support images when used with the ImageProcessor node:
+    * `"koboldCppGenerateImageSpecific"` → use `"koboldCppGenerate"`
+    * `"ollamaApiChatImageSpecific"` → use `"ollamaApiChat"`
+    * `"openAIApiChatImageSpecific"` → use `"openAIChatCompletion"`
 
 -----
 

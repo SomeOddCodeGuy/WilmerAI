@@ -116,6 +116,15 @@ available node categories and some key examples.
 
 -----
 
+#### **Data Extraction Nodes**
+
+* **`JsonExtractor`**: Extracts a specific field from a JSON string. Automatically handles markdown code block wrappers
+  (` ```json ` or ` ``` `). Returns the field value as a string; nested objects/arrays are returned as JSON strings.
+* **`TagTextExtractor`**: Extracts content from XML/HTML-style tags (e.g., `<answer>...</answer>`) within a text
+  string. Returns the content between the first matching opening and closing tags.
+
+-----
+
 #### **Workflow Orchestration Nodes**
 
 * **`CustomWorkflow`**: Executes another, separate workflow file, allowing for modular and reusable logic.

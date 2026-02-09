@@ -602,3 +602,27 @@ class TestConfigUtils:
 
         # Act & Assert
         assert config_utils.workflow_exists_in_shared_folder('AnyWorkflow') is False
+
+
+class TestGetConnectTimeout:
+    """Tests for the get_connect_timeout function."""
+
+    def test_returns_config_value_when_present(self, mocker):
+        """Tests that the configured value is returned when present."""
+        mocker.patch('Middleware.utilities.config_utils.get_config_value', return_value=60)
+        assert config_utils.get_connect_timeout() == 60
+
+    def test_returns_default_30_when_missing(self, mocker):
+        """Tests that 30 is returned when the config key is missing (None)."""
+        mocker.patch('Middleware.utilities.config_utils.get_config_value', return_value=None)
+        assert config_utils.get_connect_timeout() == 30
+
+    def test_converts_string_to_int(self, mocker):
+        """Tests that a string config value is converted to int."""
+        mocker.patch('Middleware.utilities.config_utils.get_config_value', return_value="45")
+        assert config_utils.get_connect_timeout() == 45
+
+    def test_zero_value_returns_zero_not_default(self, mocker):
+        """Tests that a value of 0 returns 0, not the default of 30."""
+        mocker.patch('Middleware.utilities.config_utils.get_config_value', return_value=0)
+        assert config_utils.get_connect_timeout() == 0

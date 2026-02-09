@@ -792,6 +792,21 @@ def get_is_chat_complete_add_missing_assistant() -> bool:
     return data['chatCompletionAddMissingAssistantGenerator']
 
 
+def get_connect_timeout() -> int:
+    """
+    Retrieves the `connectTimeoutInSeconds` configuration setting.
+
+    This function returns the timeout in seconds for establishing an HTTP
+    connection to an LLM endpoint. If the setting is not found, it defaults
+    to 30 seconds.
+
+    Returns:
+        int: The connect timeout in seconds.
+    """
+    value = get_config_value('connectTimeoutInSeconds')
+    return 30 if value is None else int(value)
+
+
 def get_use_file_logging() -> bool:
     """
     Retrieves the `useFileLogging` configuration setting.

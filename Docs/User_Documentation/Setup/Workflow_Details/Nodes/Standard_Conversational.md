@@ -46,6 +46,10 @@ A `Standard` node's execution follows a clear, logical sequence:
 | **`lastMessagesToSendInsteadOfPrompt`**     | Integer | No       | 5          | If `prompt` is empty, this specifies how many of the most recent conversational turns to use as the prompt.                                                                                                                                                                 |
 | **`maxResponseSizeInTokens`**               | Integer/String | No       | 400        | Overrides the maximum number of tokens the LLM can generate for this specific node. Supports LIMITED variable substitution (e.g., `"{agent#Input}"`) - the variable must resolve to a valid integer string. Note: Only `{agent#Input}` style variables work here, NOT `{agent#Output}`. |
 | **`maxContextTokenSize`**                   | Integer | No       | 4096       | Overrides the maximum context window size (in tokens) for this specific node.                                                                                                                                                                                               |
+| **`nMessagesToIncludeInVariable`**           | Integer | No       | `5`        | Controls how many messages are included in the `{chat_user_prompt_n_messages}` and `{templated_user_prompt_n_messages}` variables. Set this to any integer to pull a custom number of conversation turns into these variables. The existing hardcoded variables (e.g., `{chat_user_prompt_last_twenty}`) remain available for backwards compatibility. |
+| **`estimatedTokensToIncludeInVariable`**    | Integer | No       | `2048`     | Controls the estimated token budget for the `{chat_user_prompt_estimated_token_limit}` and `{templated_user_prompt_estimated_token_limit}` variables. Starting from the most recent message and working backwards, messages are included as long as the accumulated estimated token count stays within this budget. At least one message is always included, even if it alone exceeds the limit. Token estimation uses a heuristic that intentionally overestimates. |
+| **`minMessagesInVariable`**                 | Integer | No       | `5`        | Used together with `maxEstimatedTokensInVariable`. Sets the minimum number of messages that are always included in the `{chat_user_prompt_min_n_max_tokens}` and `{templated_user_prompt_min_n_max_tokens}` variables, regardless of their token count. After this minimum is met, older messages continue to be added up to the token budget. |
+| **`maxEstimatedTokensInVariable`**          | Integer | No       | `2048`     | Used together with `minMessagesInVariable`. Sets the estimated token budget for expansion beyond the minimum message count. After the minimum messages are included, older messages are added as long as the accumulated estimated token count stays within this budget. The minimum message count always takes precedence: if the minimum messages alone exceed this budget, they are all still included. |
 | **`jinja2`**                                | Boolean | No       | `false`    | If `true`, enables Jinja2 templating for the `systemPrompt` and `prompt` fields, theoretically allowing for more complex logic like loops and conditionals.                                                                                                                 |
 | **`addDiscussionIdTimestampsForLLM`**       | Boolean | No       | `false`    | If `true`, automatically injects timestamps into the `messages` payload sent to the LLM. Requires a `discussionId` to be active.                                                                                                                                            |
 | **`useRelativeTimestamps`**                 | Boolean | No       | `false`    | If `addDiscussionIdTimestampsForLLM` is `true`, this setting will use relative timestamps (e.g., "5 minutes ago") instead of absolute ones.                                                                                                                                 |
@@ -76,8 +80,19 @@ The `systemPrompt` and `prompt` fields can be made dynamic by using the followin
     * `{chat_user_prompt_last_five}`: The last five turns as a raw string.
     * `{chat_user_prompt_last_ten}`: The last ten turns as a raw string.
     * `{chat_user_prompt_last_twenty}`: The last twenty turns as a raw string.
-    * `{templated_user_prompt_last_...}`: Templated versions of the above, formatted according to the endpoint's prompt
-      style (e.g., Alpaca, ChatML).
+    * `{chat_user_prompt_n_messages}`: The last N turns as a raw string, where N is set by the node property
+      `nMessagesToIncludeInVariable` (defaults to 5).
+    * `{chat_user_prompt_estimated_token_limit}`: Recent messages as a raw string, selected by estimated token budget
+      set via the node property `estimatedTokensToIncludeInVariable` (defaults to 2048).
+    * `{chat_user_prompt_min_n_max_tokens}`: A combination of the N-messages and token-limit approaches. Pulls at
+      least N messages (set by `minMessagesInVariable`, defaults to 5), then continues adding older messages up to the
+      token budget (set by `maxEstimatedTokensInVariable`, defaults to 2048). The minimum message count always takes
+      precedence over the token budget.
+    * `{templated_user_prompt_last_...}`: Templated versions of the hardcoded counts above, formatted according to the
+      endpoint's prompt style (e.g., Alpaca, ChatML).
+    * `{templated_user_prompt_n_messages}`: Templated version of the configurable N-messages variable.
+    * `{templated_user_prompt_estimated_token_limit}`: Templated version of the token-budget variable.
+    * `{templated_user_prompt_min_n_max_tokens}`: Templated version of the min-messages + max-tokens combo variable.
 * **Memory & Context:**
     * `{time_context_summary}`: A summary of the time passed since the last interaction (e.g., "It has been about 5
       minutes since your last message.").

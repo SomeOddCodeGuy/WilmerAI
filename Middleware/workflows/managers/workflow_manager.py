@@ -208,6 +208,8 @@ class WorkflowManager:
             "ArithmeticProcessor": specialized_node_handler,
             "Conditional": specialized_node_handler,
             "StringConcatenator": specialized_node_handler,
+            "JsonExtractor": specialized_node_handler,
+            "TagTextExtractor": specialized_node_handler,
         }
 
     def run_workflow(self, messages, request_id, discussionId: str = None, stream: bool = False,

@@ -67,7 +67,7 @@ memories before reading.
   providing context to an LLM call without adding latency.
 
 * **Read-and-Update Nodes**: Before reading, these nodes first trigger the **file-based** memory creation process to
-  ensure the data is current. This can introduce latency but guarantees the freshest chronological context.
+  ensure the data is current. This can introduce latency but helps achieve the freshest chronological context.
 
 * **`RecentMemorySummarizerTool`** (Pure/Fast Reader)
   Reads the last few summary chunks from the Long-Term Memory File, providing context on recent parts of the
@@ -155,6 +155,40 @@ A typical high-performance flow is as follows:
    latest exchange and update memory files for the next turn.
 
 This architecture allows for a responsive chat experience by not blocking the user response on memory processing.
+
+-----
+
+## Memory Generation Triggering
+
+File-based memory generation is controlled by two thresholds that work together:
+
+* **Token threshold** (`chunkEstimatedTokenSize`): Memory generates when new messages accumulate enough tokens to reach
+  or exceed this value.
+* **Message count threshold** (`maxMessagesBetweenChunks`): Memory generates when this many new messages have
+  accumulated since the last generation.
+
+In normal operation (when the memory file exists on disk), the system uses **whichever threshold is reached first**. For
+example, if `chunkEstimatedTokenSize` is 1000 and `maxMessagesBetweenChunks` is 20, memories will generate either when
+~1000 tokens of new messages accumulate or when 20 new messages are added, whichever happens first. The memory file does
+not need to contain any chunks for both thresholds to be active — it just needs to exist. In a new conversation, the
+file is automatically created on the first memory check (around message 3), so both thresholds are active from that
+point on.
+
+The `lookbackStartTurn` setting excludes the most recent N turns from consideration. This is useful when your frontend
+sends command messages (like system instructions) in recent turns that should not be included in memories.
+
+### Consolidation Workflow
+
+If you want to regenerate all memories with different chunking (for example, fewer but larger chunks), you can:
+
+1. Delete the memory file for the discussion.
+2. Adjust `chunkEstimatedTokenSize` to a larger value.
+3. Let the system regenerate memories from the full conversation history.
+
+When the memory file does not exist on disk, the message count threshold is disabled and only the token threshold
+applies. This consolidation mode allows the system to create appropriately sized chunks from the full history without
+being limited by the per-message threshold. Once the file is created (which happens automatically on the first memory
+check after deletion), subsequent messages will use the standard mode with both thresholds.
 
 -----
 

@@ -36,6 +36,29 @@ Multiple formats of the conversation history are provided.
   are `1`, `2`, `3`, `4`, `5`, `10`, `20`. Example: `{chat_user_prompt_last_one}`.
 - `{templated_user_prompt_last_<N>}`: The last N turns of the conversation, formatted with the LLM's specific chat
   template (e.g., adding `[INST]` tokens). Supported values for N are the same as above.
+- `{chat_user_prompt_n_messages}`: The last N turns as a raw string, where N is configured by the node-level property
+  `nMessagesToIncludeInVariable` (defaults to 5). This is the preferred approach when the hardcoded counts above do not
+  meet your needs, since any integer value is supported.
+- `{templated_user_prompt_n_messages}`: Same as above, but formatted with the LLM's chat template. Controlled by the
+  same `nMessagesToIncludeInVariable` property.
+- `{chat_user_prompt_estimated_token_limit}`: Recent turns as a raw string, selected by estimated token budget rather
+  than message count. The budget is configured by the node-level property `estimatedTokensToIncludeInVariable` (defaults
+  to 2048). Starting from the most recent message and working backwards, messages are included as long as the
+  accumulated estimated token count stays within the budget. At least one message is always included, even if it alone
+  exceeds the budget. Token estimation uses `rough_estimate_token_length`, which intentionally overestimates by using
+  the higher of a word-based estimate (1.35 tokens/word) and a character-based estimate (3.5 chars/token), then
+  applying a configurable `safety_margin` multiplier (default 1.10).
+- `{templated_user_prompt_estimated_token_limit}`: Same as above, but formatted with the LLM's chat template.
+  Controlled by the same `estimatedTokensToIncludeInVariable` property.
+- `{chat_user_prompt_min_n_max_tokens}`: A combination of the N-messages and token-limit approaches. This variable
+  pulls a minimum number of messages (set by `minMessagesInVariable`, defaults to 5), then continues adding older
+  messages as long as the accumulated estimated token count stays within the budget (set by
+  `maxEstimatedTokensInVariable`, defaults to 2048). The minimum message count takes precedence: if the minimum
+  messages alone exceed the token budget, they are all still included. Beyond the minimum, expansion stops when the next
+  message would push the total past the token limit. This is useful when you want at least N messages of context, but
+  are willing to include more if the conversation messages are short enough to fit within a token budget.
+- `{templated_user_prompt_min_n_max_tokens}`: Same as above, but formatted with the LLM's chat template. Controlled by
+  the same `minMessagesInVariable` and `maxEstimatedTokensInVariable` properties.
 - `{system_prompts_as_string}`: All system messages from the conversation history, concatenated into a single string.
 - `{messages}`: The entire conversation history as a list of dictionaries (`[{'role': 'user', 'content': '...'}]`). This
   is primarily for use with **Jinja2 templating**.

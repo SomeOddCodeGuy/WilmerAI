@@ -145,10 +145,14 @@ script.
 * **File I/O**: The **`GetCustomFile`** node reads the contents of a text file, while the **`SaveCustomFile`** node
   writes string content to a file. Both nodes support variable substitution in their `filepath` fields, including
   `{Discussion_Id}` and `{YYYY_MM_DD}` for per-conversation or date-based file paths.
-* **Data Processing**: The **`StringConcatenator`** node joins a list of strings with a specified delimiter, and the *
-  *`ArithmeticProcessor`** node evaluates a simple mathematical expression.
+* **Data Processing**: The **`StringConcatenator`** node joins a list of strings with a specified delimiter, and the
+  **`ArithmeticProcessor`** node evaluates a simple mathematical expression.
+* **Data Extraction**: The **`JsonExtractor`** node extracts a specific field from a JSON string (automatically handling
+  markdown code block wrappers), and the **`TagTextExtractor`** node extracts content from XML/HTML-style tags within
+  text.
 
-* **Key Nodes**: `GetCustomFile`, `SaveCustomFile`, `StringConcatenator`, `ArithmeticProcessor`
+* **Key Nodes**: `GetCustomFile`, `SaveCustomFile`, `StringConcatenator`, `ArithmeticProcessor`, `JsonExtractor`,
+  `TagTextExtractor`
 * **Detailed Documentation**: `A Comprehensive Guide to WilmerAI Workflow Nodes`
 
 ---
