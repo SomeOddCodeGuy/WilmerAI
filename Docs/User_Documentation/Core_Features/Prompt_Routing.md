@@ -88,8 +88,9 @@ This workflow executes a two-step process:
    list provided by the routing config file.
 
 The final text output from this workflow is then matched against the category names in your routing config. If a match
-is found, the corresponding workflow is run. If no clear match can be determined, the system will retry a few times
-before falling back to a default workflow, named `_DefaultWorkflow`.
+is found, the corresponding workflow is run. If no clear match can be determined, the system falls back to a default
+workflow named `_DefaultWorkflow`. The number of categorization attempts before falling back is controlled by the
+`maxCategorizationAttempts` setting in the User config (default: `1`, meaning a single attempt with no retries).
 
 -----
 

@@ -15,8 +15,8 @@ retrieve general memories for RAG, but rather collects the specific "new materia
 
 ### Internal Execution Flow
 
-1. **Identify Markers**: The node reads the main memory file (`<id>_memories.jsonl`) and the summary file (
-   `<id>_summary.jsonl`).
+1. **Identify Markers**: The node reads the main memory file (`<id>_memories.json`) and the summary file (
+   `<id>_chat_summary.json`).
 2. **Hash Comparison**: It identifies the hash of the last memory chunk that was incorporated into the current summary.
 3. **Gather New Chunks**: It then gathers all memory chunks from the main memory file that are newer than that
    last-processed hash.
@@ -37,8 +37,8 @@ retrieve general memories for RAG, but rather collects the specific "new materia
 
 | Property             | Type    | Required? | Description                                                                                                                          |
 |:---------------------|:--------|:----------|:-------------------------------------------------------------------------------------------------------------------------------------|
-| **`type`**           | String  | ✅ Yes     | Must be exactly `"ChatSummaryMemoryGatheringTool"`.                                                                                  |
-| **`maxTurnsToPull`** | Integer | ✅ Yes     | **Used in Stateless Mode.** The number of recent conversation turns to pull from the chat history when no `discussionId` is present. |
+| **`type`**           | String  | Yes     | Must be exactly `"ChatSummaryMemoryGatheringTool"`.                                                                                  |
+| **`maxTurnsToPull`** | Integer | Yes     | **Used in Stateless Mode.** The number of recent conversation turns to pull from the chat history when no `discussionId` is present. |
 
 -----
 

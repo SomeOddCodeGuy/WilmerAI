@@ -29,9 +29,9 @@ requires specifying the script's location and any arguments to be passed to it.
 
 ### **JSON Fields**
 
-* `"title"`: **(String, Required)** A user-defined name for the node. The string returned by the Python script will be
-  stored in an output variable based on this title (e.g., a title of `"Data Processor"` makes its output available as
-  `{Data ProcessorOutput}`).
+* `"title"`: **(String, Required)** A user-defined name for the node, used for logging and debugging. The string
+  returned by the Python script will be stored in an output variable based on the node's position in the workflow
+  (e.g., `{agent1Output}`, `{agent2Output}`, etc.), following the same convention as all other node types.
 * `"type"`: **(String, Required)** Must be set to `"PythonModule"`.
 * `"module_path"`: **(String, Required)** The absolute file path to the target `.py` script on the machine where the
   WilmerAI server is running.

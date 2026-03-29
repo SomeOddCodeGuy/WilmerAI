@@ -32,8 +32,8 @@ Let's trace a request made to the OpenAI-compatible `/v1/chat/completions` endpo
 
     * It generates a unique **`request_id`** (e.g., a UUID) and stores it in Flask's `g` context object. This ID is the
       key to tracking the request for cancellation.
-    * It sets a global variable, `instance_global_variables.API_TYPE = "openaichatcompletion"`, to inform downstream
-      components which response schema to use.
+    * It sets the request-scoped API type via `instance_global_variables.set_api_type("openaichatcompletion")` to inform
+      downstream components which response schema to use.
     * It transforms the incoming JSON payload into the standardized internal `messages` list.
     * It calls `handle_user_prompt(request_id, messages, stream=True)` from `workflow_gateway.py`.
     * It immediately returns a Flask `Response` object, wrapping the generator returned by the gateway. This begins

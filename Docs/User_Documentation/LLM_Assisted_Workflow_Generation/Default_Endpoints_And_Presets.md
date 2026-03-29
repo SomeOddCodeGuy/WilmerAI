@@ -16,7 +16,7 @@ The endpoints for the example users can be found in `Public/Configs/Endpoints/_e
   checking, etc.
 * `General-Endpoint`: Your best generalist model.
 * `General-Fast-Endpoint`: A fast and light generalist model. This gets tasked with quick iterations, double checking,
-  etc.c
+  etc.
 * `General-Rag-Endpoint`: Your model that has the best context understanding. This gets used for heavy RAG tasks,
   meaning large amounts of text with a high expectation of it to use that text properly.
 * `General-Rag-Fast-Endpoint`: A fast and light RAG model. Whatever the smallest and fastest model you have that handles

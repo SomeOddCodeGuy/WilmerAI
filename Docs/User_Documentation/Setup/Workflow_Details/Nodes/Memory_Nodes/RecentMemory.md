@@ -33,7 +33,7 @@ The node performs two major operations in strict sequence, blocking execution un
 
 | Property   | Type   | Required? | Description                       |
 |:-----------|:-------|:----------|:----------------------------------|
-| **`type`** | String | ✅ Yes     | Must be exactly `"RecentMemory"`. |
+| **`type`** | String | Yes     | Must be exactly `"RecentMemory"`. |
 
 -----
 

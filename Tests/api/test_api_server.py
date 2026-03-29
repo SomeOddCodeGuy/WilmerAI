@@ -36,17 +36,11 @@ def test_discover_and_register_handlers(mocker):
     mock_register.assert_called_once_with(mock_app)
 
 
-def test_api_server_run(mocker):
+def test_api_server_has_no_run_method():
     """
-    Tests that ApiServer.run() calls the Flask app's run method correctly.
+    ApiServer no longer owns a run() method.  Port resolution and server
+    startup are handled by the entry-point scripts (server.py, run_eventlet.py,
+    run_waitress.py) so that multi-user mode can resolve the port before Flask
+    is involved.
     """
-    mocker.patch('Middleware.api.api_server.get_application_port', return_value=9999)
-    mock_app = MagicMock()
-    mock_app.run = MagicMock()
-
-    mocker.patch.object(ApiServer, '_discover_and_register_handlers')
-
-    server = ApiServer(app_instance=mock_app)
-    server.run(debug=True)
-
-    mock_app.run.assert_called_once_with(host='0.0.0.0', port=9999, debug=True)
+    assert not hasattr(ApiServer, 'run')

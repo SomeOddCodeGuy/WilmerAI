@@ -5,6 +5,7 @@ import logging
 from typing import Dict, Optional, List
 
 from .base_llm_api_handler import LlmApiHandler
+from Middleware.utilities.sensitive_logging_utils import sensitive_log_lazy, log_prompt_content
 from Middleware.utilities.text_utils import return_brackets_in_string
 
 logger = logging.getLogger(__name__)
@@ -42,9 +43,7 @@ class BaseCompletionsHandler(LlmApiHandler):
             full_prompt += completion_text
 
         # Log the final, fully-formed prompt before creating the payload
-        logger.info("\n\n*****************************************************************************\n")
-        logger.info("\n\nFormatted_Prompt: %s", full_prompt)
-        logger.info("\n*****************************************************************************\n\n")
+        log_prompt_content(logger, "Formatted_Prompt", full_prompt)
 
         payload = {
             "prompt": full_prompt,
@@ -52,7 +51,7 @@ class BaseCompletionsHandler(LlmApiHandler):
         }
 
         logger.info(f"Payload prepared for {self.__class__.__name__}")
-        logger.debug(f"URL: {self.base_url}, Payload: {json.dumps(payload, indent=2)}")
+        sensitive_log_lazy(logger, logging.DEBUG, "URL: %s, Payload: %s", lambda: self.base_url, lambda: json.dumps(payload, indent=2))
         return payload
 
     def _build_prompt_from_conversation(self, system_prompt: Optional[str], prompt: Optional[str]) -> str:

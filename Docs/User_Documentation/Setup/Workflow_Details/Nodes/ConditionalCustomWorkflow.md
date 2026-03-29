@@ -44,13 +44,13 @@ The node executes with the following priority:
    the node will then look for and execute the workflow specified under the `"Default"` key in the
    `conditionalWorkflows` map.
 
-4. **⚠️ Known Issue: Route Override Key Casing**: When looking for overrides in the `routeOverrides` map, the logic is
+4. **Caution: Known Issue: Route Override Key Casing**: When looking for overrides in the `routeOverrides` map, the logic is
    different. The system will look for a key that matches the **Capitalized** version of the resolved `conditionalKey`
    value (e.g., `"python"` becomes `"Python"`). This means the keys in your `routeOverrides` object **must be
    capitalized** to be found.
 
-    * ✅ **Correct**: `"Python"`, `"JavaScript"`
-    * ❌ **Incorrect**: `"python"`, `"javascript"`
+    * **Correct**: `"Python"`, `"JavaScript"`
+    * **Incorrect**: `"python"`, `"javascript"`
 
 -----
 

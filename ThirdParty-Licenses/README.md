@@ -29,18 +29,18 @@ _Last Updated: 2024-06-23_
 _Last Updated: 2024-06-23_
 
 * License Type: `MIT License`
-* Code:https://github.com/urllib3/urllib3/
+* Code: https://github.com/urllib3/urllib3/
 * License: https://github.com/urllib3/urllib3/blob/main/LICENSE.txt
 
 #### scikit-learn:
 
-_Last Updated: 2024-06-23_
+_Last Updated: 2026-03-29_
 
 * License Type: `BSD 3-Clause "New" or "Revised" License`
 * Code: https://github.com/scikit-learn/scikit-learn/
 * License: https://github.com/scikit-learn/scikit-learn/blob/main/COPYING
 
-### jinja:
+#### jinja:
 
 _Last Updated: 2024-08-17_
 
@@ -48,25 +48,33 @@ _Last Updated: 2024-08-17_
 * Code: https://github.com/pallets/jinja
 * License: https://github.com/pallets/jinja/blob/main/LICENSE.txt
 
-### pillow:
+#### pillow:
 
-_Last Updated: 2025-08-17_
+_Last Updated: 2026-03-29_
 
 * License Type: `MIT-CMU`
 * Code: https://github.com/python-pillow/Pillow/
-* License: https://github.com/python-pillow/Pillow/
+* License: https://github.com/python-pillow/Pillow/blob/main/LICENSE
 
-### eventlet:
+#### eventlet:
 
-_Last Updated: 2025-10-12_
+_Last Updated: 2026-03-29_
 
 * License Type: `MIT License`
 * Code: https://github.com/eventlet/eventlet
 * License: https://github.com/eventlet/eventlet/blob/master/LICENSE
 
-### waitress:
+#### cryptography:
 
-_Last Updated: 2025-10-12_
+_Last Updated: 2026-03-29_
+
+* License Type: `Apache License 2.0 / BSD 3-Clause` (dual-licensed)
+* Code: https://github.com/pyca/cryptography
+* License: https://github.com/pyca/cryptography/blob/main/LICENSE
+
+#### waitress:
+
+_Last Updated: 2026-03-29_
 
 * License Type: `Zope Public License (ZPL) Version 2.1`
 * Code: https://github.com/Pylons/waitress

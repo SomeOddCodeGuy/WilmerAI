@@ -1,7 +1,6 @@
 # /Middleware/llmapis/handlers/base/base_llm_api_handler.py
 
 import logging
-import traceback
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Generator, List, Optional
 
@@ -18,6 +17,7 @@ except ImportError:
 
 from Middleware.services.cancellation_service import cancellation_service
 from Middleware.utilities.config_utils import get_config_property_if_exists, get_connect_timeout
+from Middleware.utilities.sensitive_logging_utils import sensitive_log, log_prompt_content
 
 logger = logging.getLogger(__name__)
 
@@ -144,10 +144,28 @@ class LlmApiHandler(ABC):
                          prompt: Optional[str] = None, request_id: Optional[str] = None) -> Generator[Dict[str, Any], None, None]:
         """
         Manages a streaming request to the LLM API.
-        When running under Eventlet, relies on monkey-patching for cooperative I/O.
+
+        Sends the prepared payload and iterates over the response, yielding standardized
+        token dictionaries as they arrive. Supports cancellation via the abort callback
+        registered with the CancellationService. When running under Eventlet, the
+        underlying socket I/O is cooperative via monkey-patching.
+
+        Args:
+            conversation (Optional[List[Dict[str, str]]]): The conversation history.
+            system_prompt (Optional[str]): A system-level instruction for the LLM.
+            prompt (Optional[str]): The latest user prompt.
+            request_id (Optional[str]): The request ID for cancellation tracking.
+
+        Yields:
+            Dict[str, Any]: Standardized token dictionaries with 'token' and
+                'finish_reason' keys, as returned by `_process_stream_data`.
+
+        Raises:
+            requests.exceptions.RequestException: If a non-cancellation network error
+                occurs and all retries are exhausted.
         """
         payload = self._prepare_payload(conversation, system_prompt, prompt)
-        logger.debug(f"Payload being sent to LLM API: {payload}")
+        sensitive_log(logger, logging.DEBUG, "Payload being sent to LLM API: %s", payload)
         url = self._get_api_endpoint_url()
 
         # Check if already cancelled
@@ -276,12 +294,10 @@ class LlmApiHandler(ABC):
                 return
             else:
                 # Genuine error - details already logged above if it was an HTTP error
-                logger.error(f"Error during streaming: {e}")
-                traceback.print_exc()
+                logger.error(f"Error during streaming: {e}", exc_info=True)
                 raise e
         except Exception as e:
-            logger.error(f"Unexpected error during streaming: {e}")
-            traceback.print_exc()
+            logger.error(f"Unexpected error during streaming: {e}", exc_info=True)
             raise e
         finally:
             # Clean up the abort callback
@@ -361,9 +377,7 @@ class LlmApiHandler(ABC):
                 response_json = response.json()
                 result_text = self._parse_non_stream_response(response_json)
 
-                logger.info("\n\n*****************************************************************************\n")
-                logger.info("\n\nRaw output from the LLM: %s", result_text)
-                logger.info("\n*****************************************************************************\n\n")
+                log_prompt_content(logger, "Raw output from the LLM", result_text)
 
                 return result_text or ""
             except (requests.exceptions.RequestException, ConnectionError, OSError) as e:
@@ -373,16 +387,16 @@ class LlmApiHandler(ABC):
                     # Cleanup handled in finally
                     return ""
 
+                is_final = attempt == retries - 1
                 logger.error(
-                    f"Attempt {attempt + 1} of {retries} for {self.__class__.__name__} failed: {e}")
-                if attempt == retries - 1:
-                    traceback.print_exc()
+                    f"Attempt {attempt + 1} of {retries} for {self.__class__.__name__} failed: {e}",
+                    exc_info=is_final)
+                if is_final:
                     # Cleanup handled in finally
                     raise
 
             except Exception as e:
-                logger.error(f"Unexpected error in {self.__class__.__name__}: {e}")
-                traceback.print_exc()
+                logger.error(f"Unexpected error in {self.__class__.__name__}: {e}", exc_info=True)
                 # Cleanup handled in finally
                 raise
             finally:

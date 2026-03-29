@@ -1,7 +1,3 @@
-### **Developer Guide: The Conditional Node**
-
-Here is the updated documentation for the new `Conditional` node.
-
 ### **Logic & Control Flow: The Conditional Node**
 
 The **`Conditional`** node is a powerful control flow utility that evaluates a complex logical expression. Its purpose
@@ -59,7 +55,7 @@ to enclose them in quotes** (e.g., `"completed"`).
 
 -----
 
-#### **⚠️ Critical Usage Note: Comparing Booleans vs. Strings**
+#### **Important: Critical Usage Note: Comparing Booleans vs. Strings**
 
 The node's type inference engine makes a critical distinction between a boolean `TRUE` and a string `'TRUE'`. **This is
 especially important when checking the output of a previous `Conditional` node.**

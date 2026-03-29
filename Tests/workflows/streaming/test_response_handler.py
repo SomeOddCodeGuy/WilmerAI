@@ -1,4 +1,3 @@
-# Tests/workflows/streaming/test_response_handler.py
 from typing import Dict, Any, Generator, List
 
 import pytest
@@ -26,7 +25,6 @@ def mock_dependencies(mocker):
     mock_api_helpers.sse_format.side_effect = lambda data, output_format: f"data: {data}\n\n" if output_format not in (
         'ollamagenerate', 'ollamaapichat') else f"{data}\n"
 
-    mocker.patch('Middleware.workflows.streaming.response_handler.get_current_username', return_value="test_user")
     mock_add_assistant = mocker.patch(
         'Middleware.workflows.streaming.response_handler.get_is_chat_complete_add_user_assistant', return_value=False)
     mock_add_missing_assistant = mocker.patch(
@@ -39,8 +37,8 @@ def mock_dependencies(mocker):
     mocker.patch('Middleware.workflows.streaming.response_handler.StreamingThinkRemover',
                  return_value=mock_remover_instance)
 
-    mocker.patch('Middleware.workflows.streaming.response_handler.instance_global_variables.API_TYPE',
-                 "openaichatcompletion")
+    mocker.patch('Middleware.workflows.streaming.response_handler.instance_global_variables.get_api_type',
+                 return_value="openaichatcompletion")
 
     return {
         "api_helpers": mock_api_helpers,
@@ -207,8 +205,8 @@ class TestStreamingResponseHandler:
         handler3._prefix_buffer = "Character Name: Multi-word"
         handler3._reconstruction_applied = False
         result3 = handler3._process_prefixes_from_buffer()
-        assert handler3._reconstruction_applied is True
-        assert result3 == "Character Name: Character Name: Multi-word"
+        assert handler3._reconstruction_applied is False
+        assert result3 == "Character Name: Multi-word"
 
     def test_process_prefixes_only_reconstructs_once(self, mock_dependencies):
         """Tests that reconstruction only happens once even if called multiple times."""
@@ -274,10 +272,10 @@ class TestStreamingResponseHandler:
         ("ollamagenerate", False), ("ollamaapichat", False),
     ])
     def test_process_stream_final_done_message(self, mocker, api_type, expect_done):
-        mocker.patch('Middleware.workflows.streaming.response_handler.instance_global_variables.API_TYPE', api_type)
+        mocker.patch('Middleware.workflows.streaming.response_handler.instance_global_variables.get_api_type',
+                     return_value=api_type)
         mocker.patch('Middleware.workflows.streaming.response_handler.api_helpers')
         mocker.patch('Middleware.workflows.streaming.response_handler.StreamingThinkRemover')
-        mocker.patch('Middleware.workflows.streaming.response_handler.get_current_username')
         from Middleware.api import api_helpers
         mocker.patch('Middleware.workflows.streaming.response_handler.api_helpers.sse_format',
                      side_effect=api_helpers.sse_format)

@@ -1,4 +1,3 @@
-# Tests/workflows/handlers/impl/test_sub_workflow_handler.py
 from unittest.mock import Mock, call
 
 import pytest
@@ -285,7 +284,8 @@ def test_handle_custom_workflow_calls_manager(mocker, sub_workflow_handler, mock
         first_node_system_prompt_override="resolved_system",
         first_node_prompt_override="resolved_prompt",
         scoped_inputs=["resolved_input_1"],
-        workflow_user_folder_override="test_user"
+        workflow_user_folder_override="test_user",
+        api_key=None
     )
 
 
@@ -509,7 +509,6 @@ def test_handle_conditional_uses_default_content_when_no_match(mocker, sub_workf
 
     result = sub_workflow_handler.handle_conditional_custom_workflow(context)
 
-    # Assertions
     mock_workflow_manager.run_custom_workflow.assert_not_called()
     if is_streaming:
         mock_streamer.assert_called_once_with("Sorry, no match found.")
@@ -582,7 +581,6 @@ def test_handle_conditional_ignores_default_content_when_match_found(mocker, sub
 
     sub_workflow_handler.handle_conditional_custom_workflow(context)
 
-    # Assertions
     mock_workflow_manager.run_custom_workflow.assert_called_once()
     call_args = mock_workflow_manager.run_custom_workflow.call_args
     assert call_args.kwargs['workflow_name'] == "WorkflowA"
@@ -642,7 +640,8 @@ def test_full_custom_workflow_flow_streaming(sub_workflow_handler, mock_workflow
         first_node_system_prompt_override="System: input1",
         first_node_prompt_override="Prompt: output1",
         scoped_inputs=["output1", "output2"],
-        workflow_user_folder_override="user123"
+        workflow_user_folder_override="user123",
+        api_key=None
     )
 
 
@@ -697,7 +696,8 @@ def test_full_conditional_workflow_flow_non_streaming(sub_workflow_handler, mock
         first_node_system_prompt_override=None,
         first_node_prompt_override="Resolved Database Prompt",
         scoped_inputs=["db_data"],
-        workflow_user_folder_override=None
+        workflow_user_folder_override=None,
+        api_key=None
     )
 
 

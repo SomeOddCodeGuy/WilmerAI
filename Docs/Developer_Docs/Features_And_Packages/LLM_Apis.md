@@ -63,7 +63,7 @@ A request to an LLM follows a clear, sequential path from service instantiation 
 
 2. **Configuration Loading**: The `$LlmApiService.__init__()$` method loads all necessary configurations from JSON
    files. This includes the endpoint URL, API key, generation parameters from the specified preset, and the
-   crucial `$apiTypeConfig$` which defines the `$llm_type$` (e.g., `"openAIChatCompletion"`, `"claudeApiChat"`).
+   crucial `$apiTypeConfig$` which defines the `$llm_type$` (e.g., `"openAIChatCompletion"`, `"claudeMessages"`).
 
 3. **Handler Selection (Factory)**: The `$LlmApiService$` immediately calls its own `$create_api_handler()$` method.
    This method acts as a factory, using an `$if/elif$` block to inspect the `$llm_type$` string and instantiate the
@@ -75,7 +75,7 @@ A request to an LLM follows a clear, sequential path from service instantiation 
 
 5. **Initial Prompt Manipulation**: Inside `$get_response_from_llm()$`, some initial, universal prompt modifications
    occur. Based on endpoint configuration, text can be prepended to the system or user prompts. If the target LLM cannot
-   handle images, image messages are also filtered out here.
+   handle images, the `images` key is stripped from all messages here.
 
 6. **Delegation to Handler**: `$LlmApiService$` determines if the request is for streaming or non-streaming and
    delegates the call to the appropriate method on the instantiated handler: `$handler.handle_streaming()`
@@ -137,17 +137,28 @@ such as a `$WorkflowProcessor$` or `$StreamingResponseHandler$`, which consume t
 * **Examples**:
     * **`$ClaudeApiHandler$`**: Inherits from `$BaseChatCompletionsHandler$`. It overrides `_prepare_payload` to match
       the Anthropic Messages API format (e.g., moving the system prompt to a top-level parameter) and correctly parses
-      Claude's specific SSE stream format.
+      Claude's specific SSE stream format. It also overrides `_build_messages_from_conversation` to convert per-message
+      `"images"` keys into Claude's multimodal content block format (`{"type": "image", "source": {"type": "base64",
+      "media_type": "...", "data": "..."}}` for base64 data and `{"type": "image", "source": {"type": "url",
+      "url": "..."}}` for HTTP URLs). Images are placed before text in content blocks per Claude's recommendation.
     * **`$OllamaChatHandler$`**: Inherits from `$BaseChatCompletionsHandler$`. It overrides `_prepare_payload` to place
       generation parameters in an `options` object and sets `$_iterate_by_lines$` to `True` to handle line-delimited
       JSON streaming.
     * **`$KoboldCppApiHandler$`**: Inherits from `$BaseCompletionsHandler$`. It implements `_get_api_endpoint_url` to
       return the correct Kobold endpoint.
 
-**Note on Image/Multimodal Support**: Standard handlers (`OllamaChatHandler`, `OpenAiApiHandler`, `KoboldCppApiHandler`)
-now handle images natively. When conversation messages include image data (role: "images"), the handlers'
-`_build_messages_from_conversation` methods detect and format images appropriately for each API. Separate "ImageSpecific"
-handlers are no longer needed and have been deprecated.
+**Note on Image/Multimodal Support**: Images are carried as a per-message `"images"` key on regular message dicts (e.g.,
+`{"role": "user", "content": "What's this?", "images": ["base64data"]}`). There are no separate `role: "images"` messages.
+Standard handlers (`OllamaChatHandler`, `OpenAiApiHandler`, `ClaudeApiHandler`, `KoboldCppApiHandler`) detect the
+`"images"` key and format images appropriately for each API in their `_build_messages_from_conversation` methods. The `LlmApiService` gatekeeper
+strips the `"images"` key from all messages when `llm_takes_images` is False, ensuring non-vision models never see image
+data. Separate "ImageSpecific" handlers are no longer needed and have been deprecated.
+
+The `ImageProcessor` workflow node supports optional per-discussion caching of vision responses via the
+`saveVisionResponsesToDiscussionId` property. When enabled, vision LLM responses are stored in
+`{discussion_id}/vision_responses.json` (keyed by a hash of the message's role, content, and sorted image data).
+Cache reads/writes use `read_vision_responses` / `write_vision_responses` in `file_utils.py`, and the hash function
+is `hash_message_with_images` in `hashing_utils.py`.
 
 -----
 

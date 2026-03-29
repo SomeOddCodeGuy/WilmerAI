@@ -8,7 +8,7 @@ system.
 
 The **`QualityMemory`** node is the primary and **only recommended creator node** in the memory system. Its exclusive
 function is to analyze the conversation history for new messages and, if certain thresholds are met, generate and save
-new memories to persistent storage. It intelligently switches between creating classic file-based memories (`.jsonl`)
+new memories to persistent storage. It intelligently switches between creating classic file-based memories (`.json`)
 and modern, searchable vector memories (`.db`) based on the discussion's configuration.
 
 Crucially, this node **produces no direct output** for subsequent nodes (its `{agent#Output}` will be empty). Its job is
@@ -33,7 +33,7 @@ The node's logic is a sophisticated, multi-step process orchestrated by an inter
    configured token counts or message counts.
 5. **Memory Generation**: If the threshold is met, it generates the memory summary by either executing a dedicated
    sub-workflow or making a direct LLM call.
-6. **Persistence**: The newly generated memory is saved to the appropriate storage (`.db` or `.jsonl`), and the "last
+6. **Persistence**: The newly generated memory is saved to the appropriate storage (`.db` or `.json`), and the "last
    processed" marker is updated for the next run.
 
 -----
@@ -50,7 +50,7 @@ The node's logic is a sophisticated, multi-step process orchestrated by an inter
 
 | Property   | Type   | Required? | Description                        |
 |:-----------|:-------|:----------|:-----------------------------------|
-| **`type`** | String | ✅ Yes     | Must be exactly `"QualityMemory"`. |
+| **`type`** | String | Yes        | Must be exactly `"QualityMemory"`. |
 
 **Note**: All functional configuration for this node (e.g., LLM endpoints, prompts, vector vs. file strategy) is
 controlled externally in a discussion-specific settings file, not within the workflow node itself.
@@ -80,7 +80,7 @@ paired with a `WorkflowLock` to prevent race conditions.
     {
       "title": "Step 3: Lock the workflow to allow background processing",
       "type": "WorkflowLock",
-      "lockName": "memory-generation-lock"
+      "workflowLockId": "memory-generation-lock"
     },
     {
       "title": "Step 4: (In Background) Update memories with the latest turn",

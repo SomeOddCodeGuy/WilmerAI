@@ -87,7 +87,7 @@ handle all other prefix removals.
 
 1. **Buffering:** It collects the initial chunks from `$StreamingThinkRemover$` into its own `_prefix_buffer` until a
    sufficient amount of text is gathered to check for prefixes. No text is yielded to the client during this phase.
-2. **Processing:** Once the buffer is ready, the `_strip_prefixes_from_buffer` method is called **once**. This method
+2. **Processing:** Once the buffer is ready, the `_process_prefixes_from_buffer` method is called **once**. This method
    applies the exact same ordered logic as the non-streaming `post_process_llm_output` function, including iterating
    through the arrays of custom prefixes.
 3. **Streaming:** The cleaned text from the buffer is yielded to the client. From this point on, the prefix buffer is
@@ -102,13 +102,13 @@ consistent behavior.
 
 1. **Non-Streaming:** Add your logic to the sequence in `post_process_llm_output` in
    `Middleware/utilities/streaming_utils.py`.
-2. **Streaming:** Add the identical logic to the `_strip_prefixes_from_buffer` method in
+2. **Streaming:** Add the identical logic to the `_process_prefixes_from_buffer` method in
    `Middleware/workflows/streaming/response_handler.py`.
 
 **Example:** Remove a `[DIAGNOSTIC]:` prefix.
 
 ```python
-# In both post_process_llm_output and _strip_prefixes_from_buffer...
+# In both post_process_llm_output and _process_prefixes_from_buffer...
 
 # ... (existing custom text and timestamp removals) ...
 
@@ -126,8 +126,8 @@ if content.startswith("[DIAGNOSTIC]:"):
 | Feature / Rule                       | File for Non-Streaming Logic                       | File for Streaming Logic                              |
 |--------------------------------------|----------------------------------------------------|-------------------------------------------------------|
 | **Thinking Tags (start/end)**        | `streaming_utils.py` (`remove_thinking_from_text`) | `streaming_utils.py` (`StreamingThinkRemover`)        |
-| **Workflow Custom Prefixes (Array)** | `streaming_utils.py` (`post_process_llm_output`)   | `response_handler.py` (`_strip_prefixes_from_buffer`) |
-| **Endpoint Custom Prefixes (Array)** | `streaming_utils.py` (`post_process_llm_output`)   | `response_handler.py` (`_strip_prefixes_from_buffer`) |
-| **Timestamp (`[Sent...ago]`)**       | `streaming_utils.py` (`post_process_llm_output`)   | `response_handler.py` (`_strip_prefixes_from_buffer`) |
-| **"Assistant:" Prefix**              | `streaming_utils.py` (`post_process_llm_output`)   | `response_handler.py` (`_strip_prefixes_from_buffer`) |
-| **Leading/Trailing Whitespace**      | `streaming_utils.py` (`post_process_llm_output`)   | `response_handler.py` (`_strip_prefixes_from_buffer`) |
+| **Workflow Custom Prefixes (Array)** | `streaming_utils.py` (`post_process_llm_output`)   | `response_handler.py` (`_process_prefixes_from_buffer`) |
+| **Endpoint Custom Prefixes (Array)** | `streaming_utils.py` (`post_process_llm_output`)   | `response_handler.py` (`_process_prefixes_from_buffer`) |
+| **Timestamp (`[Sent...ago]`)**       | `streaming_utils.py` (`post_process_llm_output`)   | `response_handler.py` (`_process_prefixes_from_buffer`) |
+| **"Assistant:" Prefix**              | `streaming_utils.py` (`post_process_llm_output`)   | `response_handler.py` (`_process_prefixes_from_buffer`) |
+| **Leading/Trailing Whitespace**      | `streaming_utils.py` (`post_process_llm_output`)   | `response_handler.py` (`_process_prefixes_from_buffer`) |

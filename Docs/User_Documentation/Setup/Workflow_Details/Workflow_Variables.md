@@ -41,14 +41,14 @@ use the full Jinja2 syntax.
 }
 ```
 
-#### ⚠️ Critical Limitation: Configuration vs. Content
+#### **Important:** Critical Limitation: Configuration vs. Content
 
 Variable substitution is performed by node handlers on specific fields, not by the core workflow engine. This creates a
 critical distinction between what can and cannot be a variable.
 
 **The principle is: Configuration keys are static, content keys can be dynamic.**
 
-##### ✅ Fields that SUPPORT variables (Content)
+##### Fields that SUPPORT variables (Content)
 
 You **CAN** use variables in fields that are treated as content for the node to process.
 
@@ -58,7 +58,7 @@ You **CAN** use variables in fields that are treated as content for the node to 
 * `promptToSearch` (and similar input fields on specialized nodes)
 * `filepath` (in `GetCustomFile` and `SaveCustomFile`, the handlers process variables for this field)
 
-##### ⚠️ Fields with SPECIAL variable support (Early Substitution)
+##### **Important:** Fields with SPECIAL variable support (Early Substitution)
 
 **`endpointName`** and **`preset`** now support a LIMITED form of variable substitution. These fields use **early variable substitution**, which means they are processed BEFORE nodes execute. This creates important limitations:
 
@@ -70,8 +70,8 @@ You **CAN** use variables in fields that are treated as content for the node to 
 * `{time_context_summary}` (if a discussionId is present)
 
 **These variables DO NOT work in `endpointName` and `preset`:**
-* ❌ `{agent#Output}` - These don't exist yet since nodes haven't executed!
-* ❌ Any variable that depends on the output of another node
+* No: `{agent#Output}` - These don't exist yet since nodes haven't executed!
+* No: Any variable that depends on the output of another node
 
 **Example of CORRECT usage:**
 ```json
@@ -90,13 +90,13 @@ You **CAN** use variables in fields that are treated as content for the node to 
 {
   "nodes": [{
     "type": "Standard",
-    "endpointName": "{agent1Output}",  // ❌ WILL FAIL - agent1Output doesn't exist yet!
+    "endpointName": "{agent1Output}",  // WILL FAIL - agent1Output doesn't exist yet!
     "prompt": "..."
   }]
 }
 ```
 
-##### ❌ Fields that DO NOT SUPPORT variables (Configuration)
+##### Fields that DO NOT SUPPORT variables (Configuration)
 
 You **CANNOT** use variables in fields that define a node's configuration. These fields are read by the workflow engine
 *before* any processing occurs. **Always use hardcoded, static string values for them.**
@@ -248,7 +248,7 @@ substitution in their `filepath` fields. This allows you to create per-conversat
 ```
 
 See the `GetCustomFile` and `SaveCustomFile` node documentation for more details.
-* **`{current_chat_summary}`**: **⚠️ UNAVAILABLE VARIABLE:** The helper function `generate_chat_summary_variables` that
+* **`{current_chat_summary}`**: **Warning: UNAVAILABLE VARIABLE:** The helper function `generate_chat_summary_variables` that
   populates this is **not called** by the main variable generation logic. **Do not use `{current_chat_summary}`** as it
   will not be substituted. To get the summary, you must use a dedicated node like `GetCurrentSummaryFromFile`.
 

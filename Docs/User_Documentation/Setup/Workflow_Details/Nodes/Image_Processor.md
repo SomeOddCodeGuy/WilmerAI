@@ -8,7 +8,7 @@ image-aware workflows.
 
 The **`ImageProcessor`** node serves as the essential bridge between user-provided images and the text-based nodes of a
 workflow. Its primary function is to call a vision-capable LLM to generate detailed text descriptions of any images
-present in the user's latest message. These text descriptions are then consolidated and made available to all subsequent
+present in the conversation. These text descriptions are then consolidated and made available to all subsequent
 nodes, allowing text-only LLMs to "understand" and reason about visual content.
 
 If the user's message contains no images, the node will output the string
@@ -22,15 +22,15 @@ This section clarifies the precise, step-by-step operational logic of the node, 
 output. The node does **not** process images independently in parallel; it processes them sequentially and then *
 *aggregates the results into a single output**.
 
-1. **Isolate Content**: The node first separates the conversation history into two parts: a list of all text-based
-   messages and a list of all image-based messages from the user's most recent turn.
+1. **Identify Images**: The node scans all messages in the conversation for any that have images attached. Images are
+   associated with their originating message (e.g., the user message they were sent with).
 
-2. **Sequential Processing Loop**: The node iterates through each image message one by one. For **each individual image
-   **, it performs the following steps:
+2. **Sequential Processing Loop**: The node iterates through each individual image one by one. For **each individual
+   image**, it performs the following steps:
 
     * It creates a temporary, isolated context for the LLM call.
-    * This context includes the **entire text history** of the conversation plus the **single image** currently being
-      processed.
+    * This context includes the **entire conversation history**, but with only the **single image** currently being
+      processed attached to its originating message.
     * It calls the vision LLM specified in `endpointName` with this context, the `systemPrompt`, and the `prompt`.
     * The resulting text description for that single image is stored.
 
@@ -72,17 +72,19 @@ code.
 
 | Property               | Type    | Required? | Description                                                                                                                                                                                                                                                                               |
 |:-----------------------|:--------|:----------|:------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **`type`**             | String  | ✅ Yes     | Must be exactly `"ImageProcessor"`.                                                                                                                                                                                                                                                       |
-| **`endpointName`**     | String  | ✅ Yes     | The name of the vision-capable LLM endpoint that will analyze the image. **Supports LIMITED variables: only `{agent#Input}` from parent workflows and static workflow variables, NOT `{agent#Output}` which doesn't exist yet.**                                                        |
-| **`systemPrompt`**     | String  | ✅ Yes     | The system prompt sent to the **vision LLM**. This instructs the model on *how* to describe the image (e.g., its persona, desired level of detail, output format). It supports all standard workflow variables.                                                                           |
-| **`prompt`**           | String  | ✅ Yes     | The user prompt sent to the **vision LLM**. This guides the model on *what* to focus on, often using conversation variables like `{chat_user_prompt_last_five}` for context. It supports all standard workflow variables.                                                                 |
-| **`preset`**           | String  | ✅ Yes     | The name of the generation preset (defining temperature, tokens, etc.) to be used by the vision LLM endpoint. **Supports LIMITED variables like endpointName.**                                                                                                                            |
-| **`addAsUserMessage`** | Boolean | ❌ No      | **Default: `false`**. If `true`, the node injects the aggregated image description into the conversation history as a new user message. If `false` (or omitted), the description is only available via `{agent#Output}`.                                                                  |
-| **`message`**          | String  | ❌ No      | **Only used if `addAsUserMessage` is `true`**. A template string for the message that gets injected. It **must** contain the special `[IMAGE_BLOCK]` placeholder. If this property is omitted, a default system message is used instead. This field supports standard workflow variables. |
-| **`nMessagesToIncludeInVariable`** | Integer | ❌ No | **Default: `5`**. Controls how many messages are included in the `{chat_user_prompt_n_messages}` and `{templated_user_prompt_n_messages}` variables. Set this to any integer to pull a custom number of conversation turns into these variables. |
-| **`estimatedTokensToIncludeInVariable`** | Integer | ❌ No | **Default: `2048`**. Controls the estimated token budget for the `{chat_user_prompt_estimated_token_limit}` and `{templated_user_prompt_estimated_token_limit}` variables. Messages are included from most recent backwards until the budget is reached. At least one message is always included. |
-| **`minMessagesInVariable`** | Integer | ❌ No | **Default: `5`**. Used together with `maxEstimatedTokensInVariable`. Sets the minimum number of messages always included in the `{chat_user_prompt_min_n_max_tokens}` and `{templated_user_prompt_min_n_max_tokens}` variables, regardless of their token count. After this minimum is met, older messages continue to be added up to the token budget. |
-| **`maxEstimatedTokensInVariable`** | Integer | ❌ No | **Default: `2048`**. Used together with `minMessagesInVariable`. Sets the estimated token budget for expansion beyond the minimum message count. The minimum message count always takes precedence: if the minimum messages alone exceed this budget, they are all still included. |
+| **`type`**             | String  | Yes     | Must be exactly `"ImageProcessor"`.                                                                                                                                                                                                                                                       |
+| **`endpointName`**     | String  | Yes     | The name of the vision-capable LLM endpoint that will analyze the image. **Supports LIMITED variables: only `{agent#Input}` from parent workflows and static workflow variables, NOT `{agent#Output}` which doesn't exist yet.**                                                        |
+| **`systemPrompt`**     | String  | Yes     | The system prompt sent to the **vision LLM**. This instructs the model on *how* to describe the image (e.g., its persona, desired level of detail, output format). It supports all standard workflow variables.                                                                           |
+| **`prompt`**           | String  | Yes     | The user prompt sent to the **vision LLM**. This guides the model on *what* to focus on, often using conversation variables like `{chat_user_prompt_last_five}` for context. It supports all standard workflow variables.                                                                 |
+| **`preset`**           | String  | Yes     | The name of the generation preset (defining temperature, tokens, etc.) to be used by the vision LLM endpoint. **Supports LIMITED variables like endpointName.**                                                                                                                            |
+| **`addAsUserMessage`** | Boolean | No      | **Default: `false`**. If `true`, the node injects the aggregated image description into the conversation history as a new user message. If `false` (or omitted), the description is only available via `{agent#Output}`. **When caching is enabled**, injected messages are placed directly after each image-bearing message instead of a single message near the end. |
+| **`message`**          | String  | No      | **Only used if `addAsUserMessage` is `true`**. A template string for the message that gets injected. It **must** contain the special `[IMAGE_BLOCK]` placeholder. If this property is omitted, a default system message is used instead. This field supports standard workflow variables. |
+| **`saveVisionResponsesToDiscussionId`** | Boolean | No | **Default: `false`**. If `true` and a `discussion_id` is available, the node caches vision LLM responses to a per-discussion file (`{discussion_id}_vision_responses.json`). On subsequent runs, images that have already been described are served from the cache without calling the vision LLM again. This also changes the `addAsUserMessage` behavior to per-message injection. See the "Vision Response Caching" section below. |
+| **`nMessagesToIncludeInVariable`** | Integer | No | **Default: `5`**. Controls how many messages are included in the `{chat_user_prompt_n_messages}` and `{templated_user_prompt_n_messages}` variables. Set this to any integer to pull a custom number of conversation turns into these variables. |
+| **`estimatedTokensToIncludeInVariable`** | Integer | No | **Default: `2048`**. Controls the estimated token budget for the `{chat_user_prompt_estimated_token_limit}` and `{templated_user_prompt_estimated_token_limit}` variables. Messages are included from most recent backwards until the budget is reached. At least one message is always included. |
+| **`minMessagesInVariable`** | Integer | No | **Default: `5`**. Used together with `maxEstimatedTokensInVariable`. Sets the minimum number of messages always included in the `{chat_user_prompt_min_n_max_tokens}` and `{templated_user_prompt_min_n_max_tokens}` variables, regardless of their token count. After this minimum is met, older messages continue to be added up to the token budget. |
+| **`maxEstimatedTokensInVariable`** | Integer | No | **Default: `2048`**. Used together with `minMessagesInVariable`. Sets the estimated token budget for expansion beyond the minimum message count. The minimum message count always takes precedence: if the minimum messages alone exceed this budget, they are all still included. |
+| **`visionScanMessageLimit`** | Integer | No | **Default: `20`**. When caching is enabled (`saveVisionResponsesToDiscussionId: true`), this controls the maximum number of recent messages to scan for images. Messages older than this window are ignored. Increase this value if images earlier in the conversation need to be included in the cache scan. |
 
 #### The `[IMAGE_BLOCK]` Placeholder: A Critical Note
 
@@ -100,6 +102,57 @@ If `addAsUserMessage` is `true` and the `message` property is not provided, the 
 
 -----
 
+### Vision Response Caching
+
+When `saveVisionResponsesToDiscussionId` is set to `true` and a `discussion_id` is available at runtime, the node
+enables per-discussion caching of vision LLM responses. This prevents redundant API calls when the same images appear
+in subsequent workflow runs.
+
+#### How It Works
+
+1. **Cache Storage**: Responses are stored in `{discussionDirectory}/{discussion_id}/vision_responses.json`. Each entry
+   maps a hash of the image-bearing message (role + content + sorted image data) to the vision LLM's response text.
+
+2. **Processing Window**: Only the most recent messages in the conversation are scanned for images (controlled by
+   `visionScanMessageLimit`, default: 20). Messages older than this window are ignored, keeping processing efficient
+   for long conversations.
+
+3. **Cache Lookup**: For each image-bearing message in the window, the node computes a hash and checks the cache:
+   - **Cache hit**: The stored response is reused. No LLM call is made.
+   - **Cache miss**: The vision LLM is called for each image in the message (same as the uncached path), the responses
+     are aggregated, and the result is stored in the cache for future use.
+
+4. **Cache Persistence**: The cache file is only written when at least one new entry is added. Existing entries are
+   preserved across writes.
+
+#### Behavioral Changes When Caching Is Enabled
+
+When caching is enabled, the `addAsUserMessage` behavior changes from the default (uncached) behavior:
+
+- **Without caching (`addAsUserMessage: true`)**: A single aggregated message containing all image descriptions is
+  inserted near the end of the conversation (just before the last message).
+
+- **With caching (`addAsUserMessage: true`)**: A separate description message is inserted **directly after each
+  image-bearing message**. This provides better contextual association, as each description sits next to the message
+  it describes rather than being grouped at the end.
+
+When `addAsUserMessage` is `false` and caching is enabled, the node's return value (`{agent#Output}`) contains only
+descriptions from image messages within the **last 10 messages** of the conversation, rather than all images.
+
+#### When to Use Caching
+
+Caching is most useful when:
+- Your workflow runs on every message (including non-image messages), and you want to avoid re-describing previously
+  seen images each time.
+- The conversation includes images early on that remain relevant throughout the discussion.
+- You want to reduce API costs and latency by not re-processing unchanged images.
+
+Caching is not needed when:
+- The workflow only runs once per image (e.g., a dedicated image-handling workflow).
+- You always want fresh descriptions (e.g., if you change the vision LLM prompt frequently).
+
+-----
+
 ### Workflow Strategy and Annotated Example
 
 The most robust and effective strategy is to place the `ImageProcessor` as the **very first node** in a workflow. This
@@ -107,7 +160,7 @@ ensures that any visual information is immediately converted to text and made av
 nodes. Using the message injection method (`addAsUserMessage: true`) is highly recommended as it simplifies the logic
 for the final responding node.
 
-#### Annotated Example Workflow
+#### Annotated Example Workflow (Basic)
 
 This workflow demonstrates the recommended pattern. The first node processes any images and injects the description
 directly into the chat history. The second node is a standard text-based agent that can now "see" the image content
@@ -143,6 +196,38 @@ because it's part of the conversation log it receives.
     "prompt": "",
     "lastMessagesToSendInsteadOfPrompt": 25
     // This sends the last 25 messages, including the newly injected description, to the LLM.
+  }
+]
+```
+
+#### Annotated Example Workflow (With Caching)
+
+This example adds `saveVisionResponsesToDiscussionId` to cache vision responses. On subsequent workflow runs within the
+same discussion, previously described images are served from cache without calling the vision LLM again. Each image
+description is injected directly after its source message.
+
+```json
+[
+  {
+    "title": "Step 1: Analyze and Describe All User Images (Cached)",
+    "type": "ImageProcessor",
+    "endpointName": "Vision-Endpoint",
+    "preset": "Vision-Preset",
+    "addAsUserMessage": true,
+    "saveVisionResponsesToDiscussionId": true,
+    "message": "[SYSTEM: An image analysis module has described the following image:\n\n[IMAGE_BLOCK]]",
+    "systemPrompt": "You are a world-class visual analysis AI. Describe the image in meticulous detail.",
+    "prompt": "Analyze the image the user sent.\n\nRecent Messages:\n{chat_user_prompt_last_five}\n\nDescribe the image in extreme detail. Transcribe all visible text verbatim."
+  },
+  {
+    "title": "Step 2: Formulate Final Response to User",
+    "type": "Standard",
+    "endpointName": "Creative-Text-Endpoint",
+    "preset": "Helpful_Assistant_Preset",
+    "returnToUser": true,
+    "systemPrompt": "You are a helpful AI assistant. Image descriptions from a vision system may appear in the conversation history after messages containing images.",
+    "prompt": "",
+    "lastMessagesToSendInsteadOfPrompt": 25
   }
 ]
 ```

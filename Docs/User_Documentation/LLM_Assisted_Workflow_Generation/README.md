@@ -95,7 +95,7 @@ Next, we give it the nodes to work with. There are 2 levels of information we ca
   These documents should contain exhaustive information on each node. You could give every one of them to your LLM,
   but you'd likely eat up a lot of context that way.
 * `User_Documentation/Setup/Workflow_Details/Workflow_Nodes.md` and
-  `User_Documentation/Setup/Workflow_Details/Worklow_Nodes_Memories.md` give high level overviews of all the available
+  `User_Documentation/Setup/Workflow_Details/Workflow_Nodes_Memories.md` give high level overviews of all the available
   memory and non-memory nodes available. These documents should be sufficient to give an LLM an idea of what nodes
   exist and how to use them in a workflow.
 
@@ -167,7 +167,7 @@ questions about the request and/or your expected output.
 #### Example Code Written With This Guide
 
 Using the exact steps outlined in this guide, except dropping the wikipedia references in the example prompt, I
-generated the recursive coding poc workflow in _common folder. I'll be toying with it over the course of the next
+generated the recursive coding poc workflow in `_common/_archive/` folder. I'll be toying with it over the course of the next
 couple of weeks, but so far it seems to work alright.
 
 I'll continue to improve this as we go.

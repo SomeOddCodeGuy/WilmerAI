@@ -13,9 +13,9 @@ messages, the settings in these files are ignored.
 #### **File Location and Association**
 
 * **Location**: `PromptTemplates` files must be located in the `Public/Configs/PromptTemplates/` directory.
-* **Association**: A template is associated with an LLM endpoint by setting the `promptTemplateFileName` property in
+* **Association**: A template is associated with an LLM endpoint by setting the `promptTemplate` property in
   that endpoint's configuration file (found in `Public/Configs/Endpoints/`). For example:
-  `"promptTemplateFileName": "llama3.json"`.
+  `"promptTemplate": "llama3"`.
 
 -----
 

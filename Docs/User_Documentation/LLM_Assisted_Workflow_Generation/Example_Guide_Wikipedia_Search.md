@@ -79,12 +79,12 @@ The quality of the research depends entirely on the quality of the search query.
 one for the very first search pass, and another for all subsequent, refining passes.
 
 * **Prompting Strategy (First Pass)**: The initial goal is to find a broad, canonical article.
-    1. **Role-Play**: "You are a world-class research strategist."
+    1. **Role Assignment**: "You are a world-class research strategist."
     2. **Explain the Constraints**: Tell the LLM *how* the search tool works. State explicitly that it's a *
        *keyword-based search**, not semantic, and that complex queries fail. This is crucial for getting good, simple
        queries.
-    3. **Provide Examples**: Show the LLM what success looks like (e.g., for 'best sci-fi movies ever', the correct
-       query is 'Science fiction film').
+    3. **Provide Examples**: Show the LLM what success looks like (e.g., for 'best project management tools', the
+       correct query is 'Project management software').
     4. **Extract the Query**: Use a final LLM node to extract *only the query* from the strategist's longer explanation,
        ensuring a clean string is passed to the search tool.
 
@@ -104,7 +104,7 @@ its own child workflow, like `Util_Workflow_Wiki_Select_And_Summarize`.
 1. **Broad Search**: Use the `OfflineWikiApiPartialArticle` node to retrieve the top 10 article summaries for the
    generated keyword. This is more reliable than hoping the single best match is the correct one.
 2. **Select the Best Candidate**: Use a `Standard` node as a "Selector Agent."
-    * **Prompting Strategy**: Give this agent the research objective, the list of 10 summaries, and—most importantly—a
+    * **Prompting Strategy**: Give this agent the research objective, the list of 10 summaries, and -- most importantly -- a
       list of **article titles that have already been read**. Instruct it to pick the single best article that is **not
       ** on the exclusion list. Force it to respond with either the exact article title or the phrase
       `NO_NOVEL_ARTICLE_FOUND`.

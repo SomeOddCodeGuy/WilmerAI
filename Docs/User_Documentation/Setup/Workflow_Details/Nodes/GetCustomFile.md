@@ -3,8 +3,8 @@
 ### Overview
 
 The **`GetCustomFile`** node is a utility node that loads the content of a local text file directly into a workflow.
-This allows you to inject large blocks of static text—like character bios, instructions, or world-building lore—without
-cluttering the workflow JSON itself.
+This allows you to inject large blocks of static text -- like project specifications, reference documents, or configuration
+templates -- without cluttering the workflow JSON itself.
 
 The content of the file is returned as a string, which can then be used by subsequent nodes through the workflow's
 variable system (e.g., `{agent1Output}`).
@@ -50,7 +50,7 @@ Each field is explained in detail below.
       is **case-insensitive**, meaning `C:\Docs\file.txt` will match `C:\docs\File.TXT`. This field supports variable
       substitution, allowing you to use placeholders like `{Discussion_Id}` and `{YYYY_MM_DD}` to create dynamic,
       per-conversation or date-based file paths.
-    * **Example**: `"D:\\WilmerAI\\Public\\lore\\world_history.txt"`
+    * **Example**: `"D:\\WilmerAI\\Public\\references\\project_history.txt"`
     * **Example with variables**: `"/Users/socg/sessions/{Discussion_Id}_notes.txt"` or
       `"/data/logs/{YYYY_MM_DD}_actions.txt"`
 
@@ -79,14 +79,14 @@ Each field is explained in detail below.
 
 Let's illustrate how the delimiters work together.
 
-#### Input File (`C:\Users\User\Desktop\character_sheet.txt`):
+#### Input File (`C:\Users\User\Desktop\project_spec.txt`):
 
 ```text
-Name: Captain Eva "Vortex" Rostova
+Project: Internal Dashboard Redesign
 ---
-Background: A former corporate pilot for OmniCorp, framed for a crime she didn't commit. Now she flies a freighter on the outer rim, taking any job that pays.
+Scope: Migrate the existing analytics dashboard to a modern React-based frontend. Includes updated charting library, role-based access controls, and export-to-PDF functionality.
 ---
-Goal: Clear her name and expose the conspiracy.
+Deadline: Q3 2026. Milestone reviews scheduled monthly.
 ```
 
 #### Workflow Node:
@@ -95,9 +95,9 @@ This node will find each `---` separator and replace it with a more decorative o
 
 ```json
 {
-  "title": "Load Character Sheet",
+  "title": "Load Project Specification",
   "type": "GetCustomFile",
-  "filepath": "C:\\Users\\User\\Desktop\\character_sheet.txt",
+  "filepath": "C:\\Users\\User\\Desktop\\project_spec.txt",
   "delimiter": "---",
   "customReturnDelimiter": "\n**********\n"
 }
@@ -109,15 +109,15 @@ If this is the first node in a workflow, the following string will be available 
 next node:
 
 ```text
-Name: Captain Eva "Vortex" Rostova
+Project: Internal Dashboard Redesign
 
 **********
 
-Background: A former corporate pilot for OmniCorp, framed for a crime she didn't commit. Now she flies a freighter on the outer rim, taking any job that pays.
+Scope: Migrate the existing analytics dashboard to a modern React-based frontend. Includes updated charting library, role-based access controls, and export-to-PDF functionality.
 
 **********
 
-Goal: Clear her name and expose the conspiracy.
+Deadline: Q3 2026. Milestone reviews scheduled monthly.
 ```
 
 -----

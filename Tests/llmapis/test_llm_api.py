@@ -1,5 +1,3 @@
-# tests/llmapis/test_llm_api.py
-
 import json
 from unittest.mock import mock_open, MagicMock
 
@@ -180,10 +178,10 @@ class TestLlmApiService:
         assert call_args.kwargs['system_prompt'] == "[SYSTEM] Be helpful."
         assert call_args.kwargs['prompt'] == "[USER] Say hi."
 
-    def test_image_removal_when_llm_takes_no_images(self, mock_configs, mocker):
+    def test_image_key_stripped_when_llm_takes_no_images(self, mock_configs, mocker):
         """
-        Tests that image messages are removed from the conversation when the
-        `llm_takes_images` flag is False.
+        Tests that the 'images' key is stripped from messages when the
+        `llm_takes_images` flag is False, but message content and role are preserved.
         """
         mocker.patch("Middleware.llmapis.llm_api.LlmApiService.create_api_handler")
         service = LlmApiService(endpoint="test", presetname="test", max_tokens=128)
@@ -191,8 +189,7 @@ class TestLlmApiService:
         service._api_handler = mock_handler_instance
 
         original_conversation = [
-            {"role": "user", "content": "What is this?"},
-            {"role": "images", "content": "base64-string"},
+            {"role": "user", "content": "What is this?", "images": ["base64-string"]},
             {"role": "assistant", "content": "That is a cat."},
         ]
 
@@ -200,9 +197,32 @@ class TestLlmApiService:
 
         passed_conversation = mock_handler_instance.handle_non_streaming.call_args.kwargs['conversation']
         assert len(passed_conversation) == 2
-        assert all(msg['role'] != 'images' for msg in passed_conversation)
+        assert all("images" not in msg for msg in passed_conversation)
+        assert passed_conversation[0]["content"] == "What is this?"
+        assert passed_conversation[1]["content"] == "That is a cat."
 
-        assert len(original_conversation) == 3
+        assert "images" in original_conversation[0]
+
+    def test_image_key_preserved_when_llm_takes_images(self, mock_configs, mocker):
+        """
+        Tests that the 'images' key is preserved when llm_takes_images=True.
+        """
+        mocker.patch("Middleware.llmapis.llm_api.LlmApiService.create_api_handler")
+        service = LlmApiService(endpoint="test", presetname="test", max_tokens=128)
+        mock_handler_instance = MagicMock()
+        service._api_handler = mock_handler_instance
+
+        original_conversation = [
+            {"role": "user", "content": "What is this?", "images": ["base64-string"]},
+            {"role": "assistant", "content": "That is a cat."},
+        ]
+
+        service.get_response_from_llm(conversation=original_conversation, llm_takes_images=True)
+
+        passed_conversation = mock_handler_instance.handle_non_streaming.call_args.kwargs['conversation']
+        assert len(passed_conversation) == 2
+        assert "images" in passed_conversation[0]
+        assert passed_conversation[0]["images"] == ["base64-string"]
 
     def test_get_response_from_llm_handles_exceptions(self, mock_configs, mocker):
         """

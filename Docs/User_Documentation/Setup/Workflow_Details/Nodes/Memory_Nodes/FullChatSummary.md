@@ -13,7 +13,7 @@ Functionally, you can think of this node as a **combination of the `QualityMemor
 nodes**. It first ensures the main memory file is up-to-date (the `QualityMemory` part) and then ensures the rolling
 summary is also up-to-date (the `chatSummarySummarizer` part) before finally returning the result.
 
-⚠️ **Performance Warning**: Because this node is a **combined creator and retriever**, it first triggers the entire
+**Warning: Performance:** Because this node is a **combined creator and retriever**, it first triggers the entire
 `QualityMemory` creation process *before* retrieving the summary. This can introduce significant delays and is a
 critical factor in workflow design.
 
@@ -24,7 +24,7 @@ critical factor in workflow design.
 This node performs two major operations in strict sequence:
 
 1. **Trigger Memory Creation**: The node **first triggers the entire `QualityMemory` creation process**. It checks for
-   new messages in the conversation and generates new memory chunks for the main `<id>_memories.jsonl` file if
+   new messages in the conversation and generates new memory chunks for the main `<id>_memories.json` file if
    thresholds are met. The workflow **will wait** for this potentially slow operation to complete.
 2. **Perform Staleness Check & Retrieval**: Only after the creation step is finished does it proceed.
     * It compares the hash of the current rolling summary to the hashes in the main memory file.
@@ -36,8 +36,9 @@ This node performs two major operations in strict sequence:
 
 ### Data Flow
 
-* **Direct Output (`{agent#Output}`)**: The node **always** returns a single string containing the full text of the
-  rolling chat summary, whether it was read directly or newly generated.
+* **Direct Output (`{agent#Output}`)**: The node returns the full text of the rolling chat summary, whether it was
+  read directly or newly generated. Depending on the code path, the result may be a single string or a list of text
+  blocks extracted from hashed chunks.
 
 -----
 
@@ -45,8 +46,8 @@ This node performs two major operations in strict sequence:
 
 | Property             | Type    | Required? | Description                                                                                                                                                                              |
 |:---------------------|:--------|:----------|:-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **`type`**           | String  | ✅ Yes     | Must be exactly `"FullChatSummary"`.                                                                                                                                                     |
-| **`isManualConfig`** | Boolean | ❌ No      | **Default: `false`**. If `true`, disables both the memory creation and staleness check, forcing a direct, "dumb" read from the summary file. This is the only way to make the node fast. |
+| **`type`**           | String  | Yes        | Must be exactly `"FullChatSummary"`.                                                                                                                                                     |
+| **`isManualConfig`** | Boolean | No         | **Default: `false`**. If `true`, disables both the memory creation and staleness check, forcing a direct, "dumb" read from the summary file. This is the only way to make the node fast. |
 
 -----
 

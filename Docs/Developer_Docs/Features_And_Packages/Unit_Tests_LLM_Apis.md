@@ -12,7 +12,7 @@ Our testing strategy for API handlers is guided by two main principles:
 1. **Isolation**: A handler's unit test should *only* test the logic within that handler. It must not make real HTTP
    requests or access the file system. All external dependencies, including parent class methods that are not being
    overridden, should be mocked.
-2. **Contract Verification**: Each handler has a "contract"—it must correctly prepare a request payload for a specific
+2. **Contract Verification**: Each handler has a "contract" -- it must correctly prepare a request payload for a specific
    API and correctly parse that API's response. Our tests are designed to verify every part of this contract.
 
 ### Setup: The Handler Fixture
@@ -47,7 +47,7 @@ def handler():
 
 -----
 
-## The Core Test Suite ✅
+## The Core Test Suite
 
 Every handler's test file should include tests that cover the following seven fundamental behaviors. These represent the
 bare minimum required to ensure a handler is reliable.

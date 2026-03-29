@@ -1,5 +1,3 @@
-# tests/workflows/processors/test_workflow_processor_cancellation.py
-
 import pytest
 from unittest.mock import MagicMock, patch, Mock
 
@@ -302,7 +300,6 @@ class TestWorkflowProcessorCancellation:
         assert len(execution_log_b) == 3, f"Request B should have executed all nodes, got {len(execution_log_b)}"
         assert len(result_b) > 0, "Request B should have returned output"
 
-    @patch('Middleware.common.instance_global_variables.API_TYPE', 'ollamaapichat')
     def test_streaming_cancellation_during_node_execution(self, mock_dependencies, setup_cancellation_service):
         """
         Test that cancellation works when a node is actively streaming tokens.
@@ -310,6 +307,9 @@ class TestWorkflowProcessorCancellation:
         This simulates a scenario where an LLM is generating tokens and the request
         is cancelled mid-generation. The node should stop yielding tokens.
         """
+        from Middleware.common import instance_global_variables
+        instance_global_variables.set_api_type('ollamaapichat')
+
         mock_dependencies['configs'] = [
             {'type': 'Standard', 'returnToUser': True}
         ]
@@ -343,6 +343,4 @@ class TestWorkflowProcessorCancellation:
 
         # Should have generated only 3 tokens before cancellation stopped it
         assert len(tokens_generated) == 3, f"Should have generated 3 tokens, got {len(tokens_generated)}: {tokens_generated}"
-        # Cancellation should still be registered (not yet acknowledged since we consumed the generator normally)
-        # Actually it would be acknowledged if the processor hit the check, but in this case the node itself stopped
-        # so the processor completed normally. This test shows node-level cancellation awareness.
+

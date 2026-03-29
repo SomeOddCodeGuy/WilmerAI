@@ -1,5 +1,3 @@
-# Tests/llmapis/handlers/impl/test_ollama_chat_api_handler.py
-
 import json
 
 import pytest
@@ -36,24 +34,19 @@ class TestOllamaChatHandler:
         Verifies that the _iterate_by_lines property correctly returns True,
         as Ollama uses a line-delimited JSON streaming format.
         """
-        # Arrange
         handler = OllamaChatHandler(**mock_handler_config, stream=True)
 
-        # Assert
         assert handler._iterate_by_lines is True, "The handler should be configured to iterate by lines for Ollama streams."
 
     def test_get_api_endpoint_url(self, mock_handler_config):
         """
         Ensures the correct API endpoint URL is constructed for the /api/chat endpoint.
         """
-        # Arrange
         handler = OllamaChatHandler(**mock_handler_config, stream=True)
         expected_url = f"{mock_handler_config['base_url']}/api/chat"
 
-        # Act
         actual_url = handler._get_api_endpoint_url()
 
-        # Assert
         assert actual_url == expected_url
 
     def test_prepare_payload_non_streaming(self, mock_handler_config, mocker):
@@ -61,16 +54,13 @@ class TestOllamaChatHandler:
         Tests that for non-streaming requests, the payload is correctly structured
         with generation parameters in a nested 'options' object and includes "stream": False.
         """
-        # Arrange
         handler = OllamaChatHandler(**mock_handler_config, stream=False)
         mock_messages = [{"role": "user", "content": "Hello"}]
         # We mock the parent method to isolate the test to only the logic in this class
         mocker.patch.object(handler, '_build_messages_from_conversation', return_value=mock_messages)
 
-        # Act
         payload = handler._prepare_payload(conversation=[], system_prompt=None, prompt="Hello")
 
-        # Assert
         assert payload["model"] == mock_handler_config["model_name"]
         assert payload["messages"] == mock_messages
         assert payload["options"] == mock_handler_config["gen_input"]
@@ -82,15 +72,12 @@ class TestOllamaChatHandler:
         Tests that for streaming requests, the 'stream' key is omitted from the payload,
         as streaming is the default behavior for the Ollama /api/chat endpoint.
         """
-        # Arrange
         handler = OllamaChatHandler(**mock_handler_config, stream=True)
         mock_messages = [{"role": "user", "content": "Hello"}]
         mocker.patch.object(handler, '_build_messages_from_conversation', return_value=mock_messages)
 
-        # Act
         payload = handler._prepare_payload(conversation=[], system_prompt=None, prompt="Hello")
 
-        # Assert
         assert "stream" not in payload, "The 'stream' key should be omitted for streaming calls to use the API default."
         assert payload["model"] == mock_handler_config["model_name"]
         assert payload["messages"] == mock_messages
@@ -117,11 +104,8 @@ class TestOllamaChatHandler:
         """
         Tests the parsing of various valid stream data chunks from Ollama.
         """
-        # Arrange
         handler = OllamaChatHandler(**mock_handler_config, stream=True)
-        # Act
         result = handler._process_stream_data(data_str)
-        # Assert
         assert result == expected_output
 
     @pytest.mark.parametrize("data_str", [
@@ -132,11 +116,8 @@ class TestOllamaChatHandler:
         """
         Ensures that unparsable or empty stream data correctly returns None.
         """
-        # Arrange
         handler = OllamaChatHandler(**mock_handler_config, stream=True)
-        # Act
         result = handler._process_stream_data(data_str)
-        # Assert
         assert result is None
 
     @pytest.mark.parametrize("data_str, expected_output", [
@@ -152,11 +133,8 @@ class TestOllamaChatHandler:
         Ensures that malformed but parsable JSON chunks are handled gracefully
         by returning a default "empty token" dictionary.
         """
-        # Arrange
         handler = OllamaChatHandler(**mock_handler_config, stream=True)
-        # Act
         result = handler._process_stream_data(data_str)
-        # Assert
         assert result == expected_output
 
     def test_parse_non_stream_response_success(self, mock_handler_config):
@@ -164,7 +142,6 @@ class TestOllamaChatHandler:
         Verifies that the text content is correctly extracted from a successful,
         complete non-streaming JSON response.
         """
-        # Arrange
         handler = OllamaChatHandler(**mock_handler_config, stream=False)
         response_json = {
             "message": {
@@ -173,9 +150,7 @@ class TestOllamaChatHandler:
             },
             "done": True
         }
-        # Act
         result = handler._parse_non_stream_response(response_json)
-        # Assert
         assert result == "A complete and valid response."
 
     @pytest.mark.parametrize("response_json", [
@@ -189,9 +164,71 @@ class TestOllamaChatHandler:
         Ensures graceful failure (returns an empty string) when parsing malformed
         or incomplete non-streaming responses.
         """
-        # Arrange
         handler = OllamaChatHandler(**mock_handler_config, stream=False)
-        # Act
         result = handler._parse_non_stream_response(response_json)
-        # Assert
         assert result == ""
+
+
+class TestBuildMessagesFromConversation:
+    """
+    Tests the _build_messages_from_conversation method for the Ollama chat handler.
+    """
+
+    def test_images_key_passes_through(self, mock_handler_config):
+        """
+        Messages with an 'images' key should pass through unchanged.
+        The Ollama API natively uses this format, so no conversion is needed.
+        """
+        handler = OllamaChatHandler(**mock_handler_config, stream=False)
+        conversation = [
+            {"role": "user", "content": "First", "images": ["base64data1"]},
+            {"role": "assistant", "content": "I see."},
+            {"role": "user", "content": "Second", "images": ["base64data2", "base64data3"]},
+        ]
+        result = handler._build_messages_from_conversation(conversation, None, None)
+
+        assert len(result) == 3
+        assert result[0]["images"] == ["base64data1"]
+        assert "images" not in result[1]
+        assert result[2]["images"] == ["base64data2", "base64data3"]
+
+    def test_messages_without_images_unchanged(self, mock_handler_config):
+        """Messages without images key pass through as normal text messages."""
+        handler = OllamaChatHandler(**mock_handler_config, stream=False)
+        conversation = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi"},
+        ]
+        result = handler._build_messages_from_conversation(conversation, None, None)
+
+        assert len(result) == 2
+        assert result[0]["content"] == "Hello"
+        assert result[1]["content"] == "Hi"
+        assert "images" not in result[0]
+        assert "images" not in result[1]
+
+    def test_systemmes_role_corrected_with_images(self, mock_handler_config):
+        """The systemMes -> system role correction preserves the images key."""
+        handler = OllamaChatHandler(**mock_handler_config, stream=False)
+        conversation = [
+            {"role": "systemMes", "content": "System note"},
+            {"role": "user", "content": "Look", "images": ["img_data"]},
+        ]
+        result = handler._build_messages_from_conversation(conversation, None, None)
+
+        assert result[0]["role"] == "system"
+        assert result[1]["images"] == ["img_data"]
+
+    def test_images_stripped_from_non_user_messages(self, mock_handler_config):
+        """Images key on assistant/system messages should be stripped."""
+        handler = OllamaChatHandler(**mock_handler_config, stream=False)
+        conversation = [
+            {"role": "user", "content": "Look at this", "images": ["user_img"]},
+            {"role": "assistant", "content": "I see", "images": ["stray_data"]},
+            {"role": "system", "content": "Note", "images": ["system_img"]},
+        ]
+        result = handler._build_messages_from_conversation(conversation, None, None)
+
+        assert result[0]["images"] == ["user_img"]
+        assert "images" not in result[1]
+        assert "images" not in result[2]

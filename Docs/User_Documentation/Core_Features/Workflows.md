@@ -139,7 +139,7 @@ This category contains nodes for creating, retrieving, and managing conversation
 **Memory Creators**
 
 * **`QualityMemory`**: The primary and **only recommended node for creating memories**. It analyzes recent conversation
-  history and, if thresholds are met, generates and saves new memories to storage (either vector DB or `.jsonl` file).
+  history and, if thresholds are met, generates and saves new memories to storage (either vector DB or `.json` file).
   This node produces **no direct output** (`{agent#Output}` is empty) and is designed to run as a background task,
   typically at the end of a workflow, to avoid delaying the user's response.
 * **`RecentMemory`**: A dual-function node that first blocks execution to create memories and then retrieves
@@ -151,7 +151,7 @@ This category contains nodes for creating, retrieving, and managing conversation
   search against the vector memory database. It requires a string of keywords in its `input` field, **separated by a
   semicolon (`;`)**. It returns an aggregated string of the most relevant memory summaries. Requires an active
   `discussionId`.
-* **`RecentMemorySummarizerTool`**: The primary retriever for file-based memories (`.jsonl`). It fetches the most recent
+* **`RecentMemorySummarizerTool`**: The primary retriever for file-based memories (`.json`). It fetches the most recent
   memory chunks. It can operate in a stateless mode (pulling from recent chat history) if no `discussionId` is active.
 * **`FullChatSummary`**: Retrieves the "rolling summary" of the entire conversation. By default, it first triggers the
   `QualityMemory` creation process, which can cause significant delays. Setting the property `"isManualConfig": true`

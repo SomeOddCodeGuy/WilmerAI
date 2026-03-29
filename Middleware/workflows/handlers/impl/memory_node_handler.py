@@ -1,6 +1,7 @@
 # Middleware/workflows/handlers/impl/memory_node_handler.py
 
 import logging
+from dataclasses import replace as dc_replace
 from typing import Any, Callable
 
 from Middleware.services.llm_dispatch_service import LLMDispatchService
@@ -72,7 +73,10 @@ class MemoryNodeHandler(BaseHandler):
             return self.memory_service.search_vector_memories(context.discussion_id, keywords, limit)
 
         elif node_type == "ConversationMemory":
-            return self._handle_conversation_memory_parser(context.request_id, context.discussion_id, context.messages)
+            if not context.discussion_id:
+                return "There are not yet any memories"
+            return self._handle_conversation_memory_parser(context.request_id, context.discussion_id, context.messages,
+                                                                api_key=context.api_key)
 
         elif node_type == "FullChatSummary":
             return self._handle_full_chat_summary(context)
@@ -80,14 +84,19 @@ class MemoryNodeHandler(BaseHandler):
         elif node_type == "RecentMemory":
             if context.discussion_id is not None:
                 self._handle_memory_file(context, force_file_memory=True)
-            return self._handle_recent_memory_parser(context.request_id, context.discussion_id, context.messages)
+            return self._handle_recent_memory_parser(context.request_id, context.discussion_id, context.messages,
+                                                        api_key=context.api_key)
 
         elif node_type == "RecentMemorySummarizerTool":
             memories = self.memory_service.get_recent_memories(
                 context.messages, context.discussion_id, context.config["maxTurnsToPull"],
                 context.config["maxSummaryChunksFromFile"],
-                context.config.get("lookbackStart", 0))
+                context.config.get("lookbackStart", 0),
+                encryption_key=context.encryption_key, api_key_hash=context.api_key_hash)
             custom_delimiter = context.config.get("customDelimiter")
+            # Memory chunks are stored and returned joined by the internal '--ChunkBreak--'
+            # sentinel.  If the workflow node specifies a custom delimiter, replace the
+            # sentinel with it before returning so the LLM sees the intended separator.
             if custom_delimiter is not None and memories is not None:
                 return memories.replace("--ChunkBreak--", custom_delimiter)
             elif memories is not None:
@@ -97,12 +106,29 @@ class MemoryNodeHandler(BaseHandler):
 
         elif node_type == "ChatSummaryMemoryGatheringTool":
             return self.memory_service.get_chat_summary_memories(context.messages, context.discussion_id,
-                                                                 context.config["maxTurnsToPull"])
+                                                                 context.config["maxTurnsToPull"],
+                                                                 encryption_key=context.encryption_key,
+                                                                 api_key_hash=context.api_key_hash)
 
-        elif node_type == "GetCurrentSummaryFromFile" or node_type == "GetCurrentMemoryFromFile":
-            return self.memory_service.get_current_summary(context.discussion_id)
+        elif node_type == "GetCurrentSummaryFromFile":
+            if not context.discussion_id:
+                return "There is not yet a summary file"
+            return self.memory_service.get_current_summary(context.discussion_id,
+                                                             encryption_key=context.encryption_key,
+                                                             api_key_hash=context.api_key_hash)
+
+        elif node_type == "GetCurrentMemoryFromFile":
+            if not context.discussion_id:
+                return "There are not yet any memories"
+            memories = self.memory_service.get_current_memories(context.discussion_id,
+                                                                  encryption_key=context.encryption_key,
+                                                                  api_key_hash=context.api_key_hash)
+            custom_delimiter = context.config.get("customDelimiter", "--ChunkBreak--")
+            return custom_delimiter.join(memories)
 
         elif node_type == "chatSummarySummarizer":
+            if not context.discussion_id:
+                return "There is not yet a summary file"
             return self._handle_process_chat_summary(context)
 
         elif node_type == "WriteCurrentSummaryToFileAndReturnIt":
@@ -152,8 +178,8 @@ class MemoryNodeHandler(BaseHandler):
         if context.discussion_id is None:
             return summary
 
-        memory_filepath = get_discussion_memory_file_path(context.discussion_id)
-        hashed_chunks = read_chunks_with_hashes(memory_filepath)
+        memory_filepath = get_discussion_memory_file_path(context.discussion_id, api_key_hash=context.api_key_hash)
+        hashed_chunks = read_chunks_with_hashes(memory_filepath, encryption_key=context.encryption_key)
 
         if last_hash_override is None:
             if not hashed_chunks:
@@ -167,8 +193,8 @@ class MemoryNodeHandler(BaseHandler):
         chunks_to_write = [last_chunk_with_hash]
         logger.debug(f"Saving summary to file:\n{summary}")
 
-        filepath = get_discussion_chat_summary_file_path(context.discussion_id)
-        update_chunks_with_hashes(chunks_to_write, filepath, "overwrite")
+        filepath = get_discussion_chat_summary_file_path(context.discussion_id, api_key_hash=context.api_key_hash)
+        update_chunks_with_hashes(chunks_to_write, filepath, "overwrite", encryption_key=context.encryption_key)
 
         return summary
 
@@ -183,8 +209,9 @@ class MemoryNodeHandler(BaseHandler):
             Any: The final, updated chat summary.
         """
         memory_chunks_with_hashes = self.memory_service.get_latest_memory_chunks_with_hashes_since_last_summary(
-            context.discussion_id)
-        current_chat_summary = self.memory_service.get_current_summary(context.discussion_id)
+            context.discussion_id, encryption_key=context.encryption_key, api_key_hash=context.api_key_hash)
+        current_chat_summary = self.memory_service.get_current_summary(
+            context.discussion_id, encryption_key=context.encryption_key, api_key_hash=context.api_key_hash)
 
         if not memory_chunks_with_hashes:
             return current_chat_summary
@@ -200,6 +227,10 @@ class MemoryNodeHandler(BaseHandler):
             self._save_summary_to_file(context, summary_override=summary)
             return summary
 
+        # Process memories in batches rather than all at once. Each LLM call is bounded
+        # by the context window; batching ensures no single call is overloaded when a
+        # large backlog of unprocessed memories exists. The rolling summary is updated
+        # after each batch so that each subsequent call can reference up-to-date context.
         while len(memory_chunks_with_hashes) > max_memories_per_loop:
             batch_chunks = memory_chunks_with_hashes[:max_memories_per_loop]
             latest_memories_chunk = '\n------------\n'.join([chunk for chunk, _ in batch_chunks])
@@ -213,14 +244,19 @@ class MemoryNodeHandler(BaseHandler):
             temp_config = {**context.config, 'systemPrompt': updated_system_prompt, 'prompt': updated_prompt}
 
             # Create a temporary context for the dispatch call with the modified config
-            temp_context = ExecutionContext(**{**context.__dict__, 'config': temp_config})
+            temp_context = dc_replace(context, config=temp_config)
             summary = LLMDispatchService.dispatch(context=temp_context)
 
             self._save_summary_to_file(context, summary_override=summary, last_hash_override=last_hash)
 
             memory_chunks_with_hashes = memory_chunks_with_hashes[max_memories_per_loop:]
-            current_chat_summary = self.memory_service.get_current_summary(context.discussion_id)
+            current_chat_summary = self.memory_service.get_current_summary(
+                context.discussion_id, encryption_key=context.encryption_key, api_key_hash=context.api_key_hash)
 
+        # Only summarize the remaining memories if there are enough of them. Generating
+        # a summary from too few new chunks would produce thin or near-duplicate output
+        # relative to the existing summary. The workflow waits until the minimum
+        # accumulation threshold is reached before triggering a new LLM call.
         if 0 < len(memory_chunks_with_hashes) and len(memory_chunks_with_hashes) >= minMemoriesPerSummary:
             latest_memories_chunk = '\n------------\n'.join([chunk for chunk, _ in memory_chunks_with_hashes])
             last_hash = memory_chunks_with_hashes[-1][1]
@@ -233,7 +269,7 @@ class MemoryNodeHandler(BaseHandler):
             temp_config = {**context.config, 'systemPrompt': updated_system_prompt, 'prompt': updated_prompt}
 
             # Create another temporary context for the dispatch call
-            temp_context = ExecutionContext(**{**context.__dict__, 'config': temp_config})
+            temp_context = dc_replace(context, config=temp_config)
             summary = LLMDispatchService.dispatch(context=temp_context)
 
             self._save_summary_to_file(context, summary_override=summary, last_hash_override=last_hash)
@@ -249,28 +285,30 @@ class MemoryNodeHandler(BaseHandler):
             context (ExecutionContext): The runtime context for the current node.
 
         Returns:
-            The chat summary string, or None if no discussionId is present.
+            The updated chat summary string, a list of summary text blocks (when
+            the existing summary is still current), "No summary found" if no
+            summary file exists, or None if no discussionId is present.
         """
         if context.discussion_id is not None:
             if context.config.get("isManualConfig"):
-                filepath = get_discussion_chat_summary_file_path(context.discussion_id)
-                summary_chunk = read_chunks_with_hashes(filepath)
+                filepath = get_discussion_chat_summary_file_path(context.discussion_id, api_key_hash=context.api_key_hash)
+                summary_chunk = read_chunks_with_hashes(filepath, encryption_key=context.encryption_key)
                 return extract_text_blocks_from_hashed_chunks(summary_chunk) if summary_chunk else "No summary found"
 
             self._handle_memory_file(context, force_file_memory=True)
 
-            mem_filepath = get_discussion_memory_file_path(context.discussion_id)
-            hashed_memory_chunks = read_chunks_with_hashes(mem_filepath)
+            mem_filepath = get_discussion_memory_file_path(context.discussion_id, api_key_hash=context.api_key_hash)
+            hashed_memory_chunks = read_chunks_with_hashes(mem_filepath, encryption_key=context.encryption_key)
 
-            sum_filepath = get_discussion_chat_summary_file_path(context.discussion_id)
-            hashed_summary_chunk = read_chunks_with_hashes(sum_filepath)
+            sum_filepath = get_discussion_chat_summary_file_path(context.discussion_id, api_key_hash=context.api_key_hash)
+            hashed_summary_chunk = read_chunks_with_hashes(sum_filepath, encryption_key=context.encryption_key)
 
             index = self.memory_service.find_how_many_new_memories_since_last_summary(hashed_summary_chunk,
                                                                                       hashed_memory_chunks)
 
             if index > 1 or index < 0:
                 return self._handle_full_chat_summary_parser(context.request_id, context.discussion_id,
-                                                             context.messages)
+                                                             context.messages, api_key=context.api_key)
             else:
                 return extract_text_blocks_from_hashed_chunks(hashed_summary_chunk)
         return None
@@ -289,6 +327,7 @@ class MemoryNodeHandler(BaseHandler):
             Any: The result from the invoked memory creation or parsing function.
         """
         if context.discussion_id is None:
-            return self._handle_recent_memory_parser(context.request_id, None, context.messages)
+            return self._handle_recent_memory_parser(context.request_id, None, context.messages,
+                                                        api_key=context.api_key)
         else:
             return self._handle_memory_file(context)

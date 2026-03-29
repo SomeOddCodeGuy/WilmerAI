@@ -21,20 +21,39 @@ class KoboldCppApiHandler(BaseCompletionsHandler):
     request. It extracts image content and includes it in the generation parameters.
     """
 
+    @staticmethod
+    def _strip_data_uri_prefix(image_str: str) -> str:
+        """
+        Strips the ``data:...;base64,`` prefix from a data URI, returning raw base64.
+
+        If the string does not start with a data URI prefix it is returned unchanged.
+
+        Args:
+            image_str (str): A base64 string or data URI.
+
+        Returns:
+            str: Raw base64 data suitable for the KoboldCpp API.
+        """
+        if image_str.startswith("data:") and ";base64," in image_str:
+            return image_str.split(";base64,", 1)[1]
+        return image_str
+
     def _prepare_payload(self, conversation: Optional[List[Dict[str, str]]], system_prompt: Optional[str],
                          prompt: Optional[str]) -> Dict:
         """
         Prepares the payload by adding image data before calling the parent implementation.
 
         This method overrides the standard payload preparation to handle multimodal
-        inputs. It inspects the `conversation` for any messages with the role "images".
-        If found, it extracts their content and adds it to the `gen_input`
-        dictionary. It then calls the parent class's `_prepare_payload` method to
-        construct the text prompt and assemble the rest of the request payload.
+        inputs. It inspects each message in the `conversation` for a per-message
+        `images` key containing base64-encoded image data. If found, it extracts
+        the image data, strips any data URI prefix to produce raw base64, and adds
+        it to the `gen_input` dictionary. It then calls the parent class's
+        `_prepare_payload` method to construct the text prompt and assemble the
+        rest of the request payload.
 
         Args:
             conversation (Optional[List[Dict[str, str]]]): The history of the conversation,
-                which may include special "images" role messages.
+                which may include per-message images keys.
             system_prompt (Optional[str]): The system-level instruction for the LLM.
             prompt (Optional[str]): The latest user text prompt.
 
@@ -43,9 +62,12 @@ class KoboldCppApiHandler(BaseCompletionsHandler):
             sent to the API.
         """
         if conversation:
-            image_contents = [msg["content"] for msg in conversation if msg.get("role") == "images"]
+            image_contents = []
+            for msg in conversation:
+                if msg.get("role") == "user":
+                    image_contents.extend(msg.get("images", []))
             if image_contents:
-                self.gen_input["images"] = image_contents
+                self.gen_input["images"] = [self._strip_data_uri_prefix(img) for img in image_contents]
 
         return super()._prepare_payload(conversation, system_prompt, prompt)
 

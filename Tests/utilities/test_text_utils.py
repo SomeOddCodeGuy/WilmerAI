@@ -212,7 +212,7 @@ def test_replace_and_return_brackets_in_list():
     """
     original_list = [{"role": "user", "content": "A {test} string."}]
     replaced_list = replace_brackets_in_list(deepcopy(original_list))
-    assert replaced_list[0]['content'] == "A |{{|test|}}| string."
+    assert replaced_list[0]['content'] == "A __WILMER_L_CURLY__test__WILMER_R_CURLY__ string."
     returned_list = return_brackets(deepcopy(replaced_list))
     assert returned_list[0]['content'] == "A {test} string."
 
@@ -222,9 +222,9 @@ def test_replace_and_return_brackets_in_string():
     Tests both replacing and restoring brackets in a simple string.
     """
     original_string = "Another {test} string."
-    bracket_dict = {r'{': r'|{{|', r'}': r'|}}|'}
+    bracket_dict = {r'{': r'__WILMER_L_CURLY__', r'}': r'__WILMER_R_CURLY__'}
     replaced_string = replace_characters_in_string(original_string, bracket_dict)
-    assert replaced_string == "Another |{{|test|}}| string."
+    assert replaced_string == "Another __WILMER_L_CURLY__test__WILMER_R_CURLY__ string."
     returned_string = return_brackets_in_string(replaced_string)
     assert returned_string == "Another {test} string."
 
@@ -287,11 +287,11 @@ class TestRedactSensitiveData:
         """
         data = {
             'apiKey': 'secret123',
-            'endpoint': 'https://api.example.com'
+            'endpoint': 'https://api.example.local'
         }
         result = redact_sensitive_data(data)
         assert result['apiKey'] == '***REDACTED***'
-        assert result['endpoint'] == 'https://api.example.com'
+        assert result['endpoint'] == 'https://api.example.local'
 
     def test_redact_multiple_sensitive_fields(self):
         """
@@ -302,14 +302,14 @@ class TestRedactSensitiveData:
             'password': 'mypassword',
             'token': 'token123',
             'username': 'user',
-            'endpoint': 'https://api.example.com'
+            'endpoint': 'https://api.example.local'
         }
         result = redact_sensitive_data(data)
         assert result['apiKey'] == '***REDACTED***'
         assert result['password'] == '***REDACTED***'
         assert result['token'] == '***REDACTED***'
         assert result['username'] == 'user'
-        assert result['endpoint'] == 'https://api.example.com'
+        assert result['endpoint'] == 'https://api.example.local'
 
     def test_redact_case_insensitive(self):
         """
@@ -319,13 +319,13 @@ class TestRedactSensitiveData:
             'ApiKey': 'secret123',
             'API_KEY': 'secret456',
             'PASSWORD': 'mypassword',
-            'endpoint': 'https://api.example.com'
+            'endpoint': 'https://api.example.local'
         }
         result = redact_sensitive_data(data)
         assert result['ApiKey'] == '***REDACTED***'
         assert result['API_KEY'] == '***REDACTED***'
         assert result['PASSWORD'] == '***REDACTED***'
-        assert result['endpoint'] == 'https://api.example.com'
+        assert result['endpoint'] == 'https://api.example.local'
 
     def test_redact_nested_dict(self):
         """
@@ -334,13 +334,13 @@ class TestRedactSensitiveData:
         data = {
             'config': {
                 'apiKey': 'secret123',
-                'endpoint': 'https://api.example.com'
+                'endpoint': 'https://api.example.local'
             },
             'username': 'user'
         }
         result = redact_sensitive_data(data)
         assert result['config']['apiKey'] == '***REDACTED***'
-        assert result['config']['endpoint'] == 'https://api.example.com'
+        assert result['config']['endpoint'] == 'https://api.example.local'
         assert result['username'] == 'user'
 
     def test_redact_list_of_dicts(self):
@@ -374,7 +374,7 @@ class TestRedactSensitiveData:
                     'name': 'server2',
                     'credentials': {
                         'password': 'pass456',
-                        'endpoint': 'https://api.example.com'
+                        'endpoint': 'https://api.example.local'
                     }
                 }
             ]
@@ -384,16 +384,16 @@ class TestRedactSensitiveData:
         assert result['servers'][0]['credentials']['secret'] == '***REDACTED***'
         assert result['servers'][0]['name'] == 'server1'
         assert result['servers'][1]['credentials']['password'] == '***REDACTED***'
-        assert result['servers'][1]['credentials']['endpoint'] == 'https://api.example.com'
+        assert result['servers'][1]['credentials']['endpoint'] == 'https://api.example.local'
 
     def test_redact_custom_text(self):
         """
         Tests that custom redaction text can be used.
         """
-        data = {'apiKey': 'secret123', 'endpoint': 'https://api.example.com'}
+        data = {'apiKey': 'secret123', 'endpoint': 'https://api.example.local'}
         result = redact_sensitive_data(data, redaction_text='[HIDDEN]')
         assert result['apiKey'] == '[HIDDEN]'
-        assert result['endpoint'] == 'https://api.example.com'
+        assert result['endpoint'] == 'https://api.example.local'
 
     def test_redact_empty_dict(self):
         """
@@ -409,7 +409,7 @@ class TestRedactSensitiveData:
         """
         data = {
             'name': 'test',
-            'endpoint': 'https://api.example.com',
+            'endpoint': 'https://api.example.local',
             'timeout': 30
         }
         result = redact_sensitive_data(data)

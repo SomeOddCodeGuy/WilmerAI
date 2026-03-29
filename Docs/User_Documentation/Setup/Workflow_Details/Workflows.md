@@ -164,6 +164,9 @@ This is a catalog of available node types, validated against the `WorkflowManage
 * **`Conditional`**: Evaluates a logical expression (with `AND`/`OR` operators) and returns `"TRUE"` or `"FALSE"`.
 * **`JsonExtractor`**: Extracts a specific field from a JSON string. Automatically handles markdown code block wrappers.
 * **`TagTextExtractor`**: Extracts content from XML/HTML-style tags (e.g., `<answer>...</answer>`) within a text string.
+* **`ContextCompactor`**: Compacts conversation history into two rolling summaries (Old and Oldest) returned as
+  XML-tagged text. Works independently from the memory system by directly summarizing raw conversation messages with
+  recency awareness.
 
 #### Workflow Orchestration Nodes
 
@@ -237,7 +240,7 @@ The system provides variables for the last 1, 2, 3, 4, 5, 10, and 20 turns of th
 
 * `{time_context_summary}`: A natural language summary of the conversation's timeline (e.g., "The user started this
   conversation a few minutes ago").
-* `{current_chat_summary}`: **⚠️ UNAVAILABLE VARIABLE:** The code review confirms that the helper function
+* `{current_chat_summary}`: **Warning: UNAVAILABLE VARIABLE:** The code review confirms that the helper function
   `generate_chat_summary_variables` that populates this is **not called** by the main variable generation logic. **Do
   not use `{current_chat_summary}`** as it will not be substituted. To get the summary, you must use a dedicated node
   like `GetCurrentSummaryFromFile`.
@@ -258,7 +261,7 @@ workflows.
 
 -----
 
-## Part 5: ⚠️ Critical Limitations on Variable Usage
+## Part 5: Critical Limitations on Variable Usage
 
 **This is the most important section.** The system's code confirms that variable substitution (`{...}`) is performed by
 node handlers on specific fields, not by the core workflow engine. This creates a critical distinction between what can
@@ -266,7 +269,7 @@ and cannot be a variable.
 
 **The principle is: Configuration keys are static, content keys can be dynamic.**
 
-#### ✅ Fields that SUPPORT variables (Content)
+#### Fields that SUPPORT variables (Content)
 
 Below are the only fields that support variables. Any other fields on nodes will not replace variables within them.
 

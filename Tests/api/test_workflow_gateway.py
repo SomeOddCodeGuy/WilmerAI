@@ -6,7 +6,7 @@ from Middleware.api.app import app
 from Middleware.api.workflow_gateway import (
     handle_user_prompt,
     _sanitize_log_data,
-    handle_openwebui_tool_check
+    check_openwebui_tool_request
 )
 
 # Define the pattern here for reuse
@@ -137,65 +137,61 @@ def test_sanitize_log_data_nested_structure():
     assert "..." in sanitized["nested"]["image"]
 
 
-# --- Tests for handle_openwebui_tool_check Decorator ---
+# --- Tests for check_openwebui_tool_request ---
 
-# Create a dummy endpoint to test the decorator
-@app.route('/test_decorator_openai', methods=['POST'])
-@handle_openwebui_tool_check(api_type="openaichatcompletion")
-def dummy_view_openai():
-    return "original_response", 200
-
-
-@app.route('/test_decorator_ollama', methods=['POST'])
-@handle_openwebui_tool_check(api_type="ollamaapichat")
-def dummy_view_ollama():
-    return "original_response", 200
-
-
-def test_decorator_passes_through_on_no_match(client):
+def test_check_openwebui_tool_request_returns_none_when_config_disabled(mocker):
     """
-    Tests that the decorator calls the original function when no tool pattern is matched.
+    When interceptOpenWebUIToolRequests is False (default), tool requests pass through.
     """
-    # Act: Make a real request to the dummy endpoint
-    response = client.post('/test_decorator_openai', json={"messages": [{"role": "user", "content": "Hello"}]})
-
-    # Assert
-    assert response.status_code == 200
-    assert response.data.decode() == "original_response"
-
-
-def test_decorator_handles_no_json(client):
-    """
-    Tests that the decorated function is called normally if the request has no JSON body.
-    """
-    response = client.post('/test_decorator_openai', data="not json")
-    assert response.status_code == 200
-    assert response.data.decode() == "original_response"
+    mocker.patch(
+        'Middleware.api.workflow_gateway.config_utils.get_intercept_openwebui_tool_requests',
+        return_value=False
+    )
+    payload = {"messages": [{"role": "system", "content": TOOL_PATTERN}]}
+    result = check_openwebui_tool_request(payload, 'openaichatcompletion')
+    assert result is None
 
 
-def test_decorator_intercepts_openai_request(client, mocker):
+def test_check_openwebui_tool_request_returns_none_when_no_match(mocker):
     """
-    Tests that the decorator intercepts an OpenAI request and returns an early response.
+    Even when interception is enabled, non-tool requests pass through.
     """
-    # Arrange
+    mocker.patch(
+        'Middleware.api.workflow_gateway.config_utils.get_intercept_openwebui_tool_requests',
+        return_value=True
+    )
+    payload = {"messages": [{"role": "user", "content": "Hello"}]}
+    result = check_openwebui_tool_request(payload, 'openaichatcompletion')
+    assert result is None
+
+
+def test_check_openwebui_tool_request_intercepts_openai(client, mocker):
+    """
+    When interception is enabled and a tool pattern is detected, returns an OpenAI response.
+    """
+    mocker.patch(
+        'Middleware.api.workflow_gateway.config_utils.get_intercept_openwebui_tool_requests',
+        return_value=True
+    )
     mock_builder = mocker.patch('Middleware.api.workflow_gateway.response_builder')
     mock_builder.build_openai_tool_call_response.return_value = {"status": "openai_tool_called"}
     payload = {"messages": [{"role": "system", "content": TOOL_PATTERN}]}
 
-    # Act
-    response = client.post('/test_decorator_openai', json=payload)
+    with app.test_request_context():
+        result = check_openwebui_tool_request(payload, 'openaichatcompletion')
 
-    # Assert
-    assert response.status_code == 200
-    assert response.json == {"status": "openai_tool_called"}
+    assert result is not None
     mock_builder.build_openai_tool_call_response.assert_called_once()
 
 
-def test_decorator_intercepts_ollama_request(client, mocker):
+def test_check_openwebui_tool_request_intercepts_ollama(client, mocker):
     """
-    Tests that the decorator intercepts an Ollama request and returns an early response.
+    When interception is enabled and a tool pattern is detected, returns an Ollama response.
     """
-    # Arrange
+    mocker.patch(
+        'Middleware.api.workflow_gateway.config_utils.get_intercept_openwebui_tool_requests',
+        return_value=True
+    )
     mock_builder = mocker.patch('Middleware.api.workflow_gateway.response_builder')
     mock_builder.build_ollama_tool_call_response.return_value = {"status": "ollama_tool_called"}
     mocker.patch('Middleware.api.workflow_gateway.api_helpers.get_model_name', return_value='test-model')
@@ -204,11 +200,8 @@ def test_decorator_intercepts_ollama_request(client, mocker):
         "messages": [{"role": "system", "content": TOOL_PATTERN}]
     }
 
-    # Act
-    response = client.post('/test_decorator_ollama', json=payload)
+    with app.test_request_context():
+        result = check_openwebui_tool_request(payload, 'ollamaapichat')
 
-    # Assert
-    assert response.status_code == 200
-    assert response.json == {"status": "ollama_tool_called"}
-    # Verifies it uses the model from the request payload
+    assert result is not None
     mock_builder.build_ollama_tool_call_response.assert_called_once_with("test-model-from-request")

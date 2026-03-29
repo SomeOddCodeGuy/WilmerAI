@@ -31,7 +31,6 @@ class BaseHandler(ABC):
         """
         self.workflow_manager = workflow_manager
         self.workflow_variable_service = workflow_variable_service
-        self.llm_handler = None
 
     @abstractmethod
     def handle(self, context: ExecutionContext) -> Any:

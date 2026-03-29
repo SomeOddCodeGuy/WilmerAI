@@ -4,13 +4,17 @@ import json
 import logging
 import re
 from copy import deepcopy
+from dataclasses import replace as dc_replace
 from typing import Any, Union, List
 
 from Middleware.common import instance_global_variables
 from Middleware.exceptions.early_termination_exception import EarlyTerminationException
 from Middleware.services.llm_dispatch_service import LLMDispatchService
 from Middleware.services.locking_service import LockingService
-from Middleware.utilities.file_utils import load_custom_file, save_custom_file
+from Middleware.utilities.config_utils import get_discussion_vision_responses_file_path
+from Middleware.utilities.file_utils import load_custom_file, save_custom_file, read_vision_responses, \
+    write_vision_responses
+from Middleware.utilities.hashing_utils import hash_message_with_images
 from Middleware.utilities.streaming_utils import stream_static_content
 from Middleware.workflows.handlers.base.base_workflow_node_handler import BaseHandler
 from Middleware.workflows.models.execution_context import ExecutionContext
@@ -89,6 +93,10 @@ class SpecializedNodeHandler(BaseHandler):
         s = s.strip()
         s_upper = s.upper()
 
+        # Parsing priority: boolean literals → quoted strings → float → fallback string.
+        # Booleans are checked first to prevent "TRUE"/"FALSE" from being parsed as floats.
+        # Quoted strings are stripped of their surrounding quote characters.
+        # Float parsing handles both integer and decimal numeric strings.
         if s_upper == 'TRUE':
             return True
         if s_upper == 'FALSE':
@@ -273,7 +281,12 @@ class SpecializedNodeHandler(BaseHandler):
         output_queue = []
         operator_stack = []
 
-        # This is a temporary list to buffer a comparison (e.g., [value, operator, value])
+        # comp_buffer accumulates the tokens of a single comparison triple
+        # (left-operand, operator, right-operand) before emitting it as a tuple
+        # to the output queue. Buffering is necessary because the tokeniser
+        # yields tokens one at a time; we can't emit a comparison until we've
+        # seen all three parts. A logical operator (AND/OR) or parenthesis acts
+        # as a flush trigger, signalling that the in-progress comparison is complete.
         comp_buffer = []
 
         def flush_comp_buffer():
@@ -383,6 +396,10 @@ class SpecializedNodeHandler(BaseHandler):
         try:
             if op == '==': return lhs == rhs
             if op == '!=': return lhs != rhs
+            # Ordering operators are restricted to numeric types to prevent
+            # lexicographic surprises (e.g. "9" > "10" is True in Python string
+            # comparison). Returning False for mixed or non-numeric operands is
+            # safer than raising an error from within a workflow condition.
             if isinstance(lhs, (int, float)) and isinstance(rhs, (int, float)):
                 if op == '>': return lhs > rhs
                 if op == '<': return lhs < rhs
@@ -535,24 +552,57 @@ class SpecializedNodeHandler(BaseHandler):
         LLM to generate a text description for each image. The combined descriptions are returned
         and can optionally be inserted back into the conversation history as a new user message.
 
+        When ``saveVisionResponsesToDiscussionId`` is ``true`` and a ``discussion_id`` is available,
+        vision responses are cached per-discussion so that identical image messages are not
+        re-processed. In this mode, ``addAsUserMessage`` injects a description message after each
+        image-bearing message instead of a single aggregated message near the end.
+
         Args:
             context (ExecutionContext): The central object containing all runtime data for the node.
 
         Returns:
             str: The combined text descriptions of all processed images, or a message indicating no images were found.
         """
-        text_messages = [msg for msg in context.messages if msg.get("role") != "images"]
-        image_messages = [msg for msg in context.messages if msg.get("role") == "images"]
-        if not image_messages:
+        save_setting = context.config.get("saveVisionResponsesToDiscussionId", False)
+        use_cache = (save_setting and context.discussion_id is not None)
+
+        logger.debug(
+            "ImageProcessor cache decision: saveVisionResponsesToDiscussionId=%s, "
+            "discussion_id=%s, use_cache=%s",
+            save_setting, context.discussion_id, use_cache
+        )
+
+        if use_cache:
+            return self._handle_image_processor_cached(context)
+        else:
+            return self._handle_image_processor_legacy(context)
+
+    def _handle_image_processor_legacy(self, context: ExecutionContext) -> str:
+        """Original (uncached) image processing path."""
+        image_tasks = []
+        for i, msg in enumerate(context.messages):
+            if "images" in msg and msg["images"]:
+                for img in msg["images"]:
+                    image_tasks.append((i, img))
+
+        if not image_tasks:
             logger.debug("No images found in conversation.")
             return "There were no images attached to the message"
 
-        llm_responses = []
-        for img_msg in image_messages:
-            temp_context = deepcopy(context)
-            temp_context.messages = text_messages + [img_msg]
+        # Deep copy once to produce a clean messages list with all images stripped.
+        # Each per-image dispatch then shallow-copies that list and injects only its
+        # own image, avoiding O(n_messages × n_images) deep copies.
+        stripped_messages = deepcopy(context.messages)
+        for m in stripped_messages:
+            m.pop("images", None)
 
-            response = LLMDispatchService.dispatch(context=temp_context, image_message=img_msg)
+        llm_responses = []
+        for msg_idx, single_image in image_tasks:
+            per_image_messages = [dict(m) for m in stripped_messages]
+            per_image_messages[msg_idx]["images"] = [single_image]
+            temp_context = dc_replace(context, messages=per_image_messages)
+
+            response = LLMDispatchService.dispatch(context=temp_context, llm_takes_images=True)
             llm_responses.append(response)
 
         image_descriptions = "\n-------------\n".join(filter(None, llm_responses))
@@ -571,6 +621,90 @@ class SpecializedNodeHandler(BaseHandler):
             context.messages.insert(insert_index, {"role": "user", "content": final_message})
 
         return image_descriptions
+
+    def _handle_image_processor_cached(self, context: ExecutionContext) -> str:
+        """Cached image processing path using per-discussion vision response files."""
+        logger.debug(f"_handle_image_processor_cached: api_key={'[present]' if context.api_key else '[None]'}")
+        cache_path = get_discussion_vision_responses_file_path(context.discussion_id, api_key_hash=context.api_key_hash)
+        logger.debug("Vision cache path: %s", cache_path)
+        cache = read_vision_responses(cache_path, encryption_key=context.encryption_key)
+        cache_updated = False
+
+        messages = context.messages
+        scan_limit = context.config.get("visionScanMessageLimit", 20)
+        scan_start = max(0, len(messages) - scan_limit)
+        scanned_messages = messages[scan_start:]
+
+        image_messages = []
+        for offset, msg in enumerate(scanned_messages):
+            if msg.get("images"):
+                image_messages.append((scan_start + offset, msg))
+
+        if not image_messages:
+            logger.debug("No images found in conversation (cached path).")
+            return "There were no images attached to the message"
+
+        per_message_descriptions = {}
+        for orig_idx, msg in image_messages:
+            msg_hash = hash_message_with_images(msg)
+
+            if msg_hash in cache:
+                logger.debug("Vision cache hit for message at index %d", orig_idx)
+                per_message_descriptions[orig_idx] = cache[msg_hash]
+            else:
+                logger.debug("Vision cache miss for message at index %d, calling LLM", orig_idx)
+                llm_responses = []
+                for single_image in msg["images"]:
+                    temp_context = deepcopy(context)
+                    for m in temp_context.messages:
+                        m.pop("images", None)
+                    temp_context.messages[orig_idx]["images"] = [single_image]
+
+                    response = LLMDispatchService.dispatch(context=temp_context, llm_takes_images=True)
+                    llm_responses.append(response)
+
+                description = "\n-------------\n".join(filter(None, llm_responses))
+                per_message_descriptions[orig_idx] = description
+                cache[msg_hash] = description
+                cache_updated = True
+
+        if cache_updated:
+            logger.info("Writing vision cache (%d entries) to: %s", len(cache), cache_path)
+            write_vision_responses(cache_path, cache, encryption_key=context.encryption_key)
+
+        if context.config.get("addAsUserMessage", False):
+            message_template = context.config.get("message",
+                                                  "[SYSTEM: The user recently added one or more images to the conversation. "
+                                                  "The images have been analyzed by an advanced vision AI, which has described them"
+                                                  " in detail. The descriptions of the images can be found below:\n\n"
+                                                  "<vision_llm_response>\n[IMAGE_BLOCK]\n</vision_llm_response>]")
+
+            # Insert per-message descriptions in reverse order to avoid index shifting
+            for orig_idx in sorted(per_message_descriptions.keys(), reverse=True):
+                desc = per_message_descriptions[orig_idx]
+                final_message = self.workflow_variable_service.apply_variables(message_template, context)
+                final_message = final_message.replace("[IMAGE_BLOCK]", desc)
+                context.messages.insert(orig_idx + 1, {"role": "user", "content": final_message})
+
+        if not context.config.get("addAsUserMessage", False):
+            # When not injecting descriptions back into the message history we still
+            # want to limit what we return, because older image descriptions may be
+            # for images the user has long since stopped discussing. Limiting to the
+            # last 10 messages keeps the returned string focused on recent context
+            # without discarding it entirely.
+            last_10_start = max(0, len(messages) - 10)
+            filtered_descriptions = [
+                per_message_descriptions[idx]
+                for idx in sorted(per_message_descriptions.keys())
+                if idx >= last_10_start
+            ]
+            return "\n-------------\n".join(filter(None, filtered_descriptions))
+
+        all_descriptions = [
+            per_message_descriptions[idx]
+            for idx in sorted(per_message_descriptions.keys())
+        ]
+        return "\n-------------\n".join(filter(None, all_descriptions))
 
     def _strip_markdown_code_block(self, text: str) -> str:
         """

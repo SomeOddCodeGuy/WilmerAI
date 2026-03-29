@@ -1,5 +1,3 @@
-# Tests/services/test_prompt_categorization_service.py
-
 import json
 from unittest.mock import MagicMock, patch
 
@@ -27,10 +25,12 @@ def mock_routing_config():
 def service(mocker, mock_routing_config) -> PromptCategorizationService:
     """
     Provides an initialized PromptCategorizationService instance with
-    config dependencies already mocked out.
+    config dependencies already mocked out. Defaults max attempts to 1.
     """
     mocker.patch('Middleware.services.prompt_categorization_service.get_categories_config',
                  return_value=mock_routing_config)
+    mocker.patch('Middleware.services.prompt_categorization_service.get_max_categorization_attempts',
+                 return_value=1)
     return PromptCategorizationService()
 
 
@@ -41,14 +41,11 @@ class TestInitialization:
         """
         Verifies that the service loads and processes a valid routing config correctly.
         """
-        # Arrange
         mock_get_config = mocker.patch('Middleware.services.prompt_categorization_service.get_categories_config',
                                        return_value=mock_routing_config)
 
-        # Act
         service = PromptCategorizationService()
 
-        # Assert
         mock_get_config.assert_called_once()
         assert len(service.categories) == 2
         assert service.categories["CODING"]["workflow"] == "CodingWorkflow"
@@ -58,11 +55,9 @@ class TestInitialization:
         """
         Ensures that a FileNotFoundError from the config utility is re-raised.
         """
-        # Arrange
         mocker.patch('Middleware.services.prompt_categorization_service.get_categories_config',
                      side_effect=FileNotFoundError)
 
-        # Act & Assert
         with pytest.raises(FileNotFoundError):
             PromptCategorizationService()
 
@@ -70,11 +65,9 @@ class TestInitialization:
         """
         Ensures that a JSONDecodeError from the config utility is re-raised.
         """
-        # Arrange
         mocker.patch('Middleware.services.prompt_categorization_service.get_categories_config',
                      side_effect=json.JSONDecodeError("mock error", "", 0))
 
-        # Act & Assert
         with pytest.raises(json.JSONDecodeError):
             PromptCategorizationService()
 
@@ -88,21 +81,19 @@ class TestStaticMethods:
         Verifies that the conversational_method correctly calls the WorkflowManager
         with the hardcoded '_DefaultWorkflow' and passes all arguments through.
         """
-        # Arrange
         messages = [{"role": "user", "content": "Hello"}]
         request_id = "req-123"
         discussion_id = "disc-456"
 
-        # Act
         PromptCategorizationService.conversational_method(messages, request_id, discussion_id, stream=True)
 
-        # Assert
         mock_run_workflow.assert_called_once_with(
             workflow_name='_DefaultWorkflow',
             request_id=request_id,
             discussion_id=discussion_id,
             messages=messages,
-            is_streaming=True
+            is_streaming=True,
+            api_key=None
         )
 
     @patch('Middleware.services.prompt_categorization_service.WorkflowManager')
@@ -112,14 +103,11 @@ class TestStaticMethods:
         Verifies that the helper method correctly instantiates WorkflowManager
         with the categorization workflow name and injected category data.
         """
-        # Arrange
         mock_get_workflow_name.return_value = "TestCategorizationWF"
         category_data = {"categoriesSeparatedByOr": "A or B"}
 
-        # Act
         PromptCategorizationService._configure_workflow_manager(category_data)
 
-        # Assert
         mock_get_workflow_name.assert_called_once()
         MockWorkflowManager.assert_called_once_with(
             workflow_config_name="TestCategorizationWF",
@@ -136,7 +124,6 @@ class TestCategorizationAndRouting:
         Tests the successful path where a category is identified and the
         corresponding workflow is executed.
         """
-        # Arrange
         mock_categorize = mocker.patch.object(service, '_categorize_request', return_value="CODING")
         mock_workflow_instance = MagicMock()
         MockWorkflowManager.return_value = mock_workflow_instance
@@ -144,10 +131,8 @@ class TestCategorizationAndRouting:
         request_id = "req-123"
         discussion_id = "disc-456"
 
-        # Act
         service.get_prompt_category(messages, request_id, discussion_id, stream=True)
 
-        # Assert
         mock_categorize.assert_called_once_with(messages, request_id)
         # Verify the correct workflow was instantiated and run
         MockWorkflowManager.assert_called_once_with(workflow_config_name="CodingWorkflow")
@@ -155,7 +140,8 @@ class TestCategorizationAndRouting:
             messages=messages,
             request_id=request_id,
             discussionId=discussion_id,
-            stream=True
+            stream=True,
+            api_key=None
         )
 
     @patch('Middleware.services.prompt_categorization_service.PromptCategorizationService.conversational_method')
@@ -164,28 +150,23 @@ class TestCategorizationAndRouting:
         Tests the fallback path where an unknown category results in calling
         the default conversational method.
         """
-        # Arrange
         mock_categorize = mocker.patch.object(service, '_categorize_request', return_value="UNKNOWN")
         messages = [{"role": "user", "content": "Just chatting."}]
         request_id = "req-123"
         discussion_id = "disc-456"
 
-        # Act
         service.get_prompt_category(messages, request_id, discussion_id, stream=False)
 
-        # Assert
         mock_categorize.assert_called_once_with(messages, request_id)
-        mock_conversational_method.assert_called_once_with(messages, request_id, discussion_id, False)
+        mock_conversational_method.assert_called_once_with(messages, request_id, discussion_id, False, api_key=None)
 
     def test_initialize_categories(self, service):
         """
         Verifies that category data is correctly formatted into various strings
         for prompt injection.
         """
-        # Act
         result = service._initialize_categories()
 
-        # Assert
         assert result['categoriesSeparatedByOr'] == 'CODING or TECHNICAL'
         assert result[
                    'category_colon_descriptions'] == 'CODING: Writing or editing code.; TECHNICAL: IT-related discussion, not code.'
@@ -209,40 +190,51 @@ class TestCategorizationAndRouting:
         """
         Verifies a successful categorization on the first attempt.
         """
-        # Arrange
         mock_workflow_manager_instance = MagicMock()
         mock_workflow_manager_instance.run_workflow.return_value = "The final category is CODING."
         mocker.patch.object(service, '_configure_workflow_manager', return_value=mock_workflow_manager_instance)
 
-        # Act
         result = service._categorize_request([{"role": "user", "content": "test"}], "req-123")
 
-        # Assert
         assert result == "CODING"
         mock_workflow_manager_instance.run_workflow.assert_called_once()
 
-    def test_categorize_request_fails_after_retries(self, service, mocker):
+    def test_categorize_request_fails_with_default_one_attempt(self, service, mocker):
         """
-        Verifies that after multiple failures, the category is 'UNKNOWN'.
+        Verifies that with the default of 1 attempt, a failed match returns 'UNKNOWN' immediately.
         """
-        # Arrange
         mock_workflow_manager_instance = MagicMock()
         mock_workflow_manager_instance.run_workflow.return_value = "This does not match anything."
         mocker.patch.object(service, '_configure_workflow_manager', return_value=mock_workflow_manager_instance)
 
-        # Act
         result = service._categorize_request([{"role": "user", "content": "test"}], "req-123")
 
-        # Assert
         assert result == "UNKNOWN"
-        assert mock_workflow_manager_instance.run_workflow.call_count == 4
+        assert mock_workflow_manager_instance.run_workflow.call_count == 1
+
+    def test_categorize_request_fails_after_configured_retries(self, service, mocker):
+        """
+        Verifies that with maxCategorizationAttempts set to 3, the workflow
+        is called 3 times before returning 'UNKNOWN'.
+        """
+        mocker.patch('Middleware.services.prompt_categorization_service.get_max_categorization_attempts',
+                     return_value=3)
+        mock_workflow_manager_instance = MagicMock()
+        mock_workflow_manager_instance.run_workflow.return_value = "This does not match anything."
+        mocker.patch.object(service, '_configure_workflow_manager', return_value=mock_workflow_manager_instance)
+
+        result = service._categorize_request([{"role": "user", "content": "test"}], "req-123")
+
+        assert result == "UNKNOWN"
+        assert mock_workflow_manager_instance.run_workflow.call_count == 3
 
     def test_categorize_request_succeeds_on_retry(self, service, mocker):
         """
         Verifies that if the workflow fails once but succeeds on a retry,
         the correct category is returned.
         """
-        # Arrange
+        mocker.patch('Middleware.services.prompt_categorization_service.get_max_categorization_attempts',
+                     return_value=3)
         mock_workflow_manager_instance = MagicMock()
         mock_workflow_manager_instance.run_workflow.side_effect = [
             "Invalid response",
@@ -250,9 +242,7 @@ class TestCategorizationAndRouting:
         ]
         mocker.patch.object(service, '_configure_workflow_manager', return_value=mock_workflow_manager_instance)
 
-        # Act
         result = service._categorize_request([{"role": "user", "content": "test"}], "req-123")
 
-        # Assert
         assert result == "TECHNICAL"
         assert mock_workflow_manager_instance.run_workflow.call_count == 2

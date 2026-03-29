@@ -5,8 +5,9 @@ from typing import Dict, Generator, Any, Optional, List
 
 from Middleware.api import api_helpers
 from Middleware.common import instance_global_variables
-from Middleware.utilities.config_utils import get_current_username, get_is_chat_complete_add_user_assistant, \
+from Middleware.utilities.config_utils import get_is_chat_complete_add_user_assistant, \
     get_is_chat_complete_add_missing_assistant
+from Middleware.utilities.sensitive_logging_utils import sensitive_log
 from Middleware.utilities.streaming_utils import StreamingThinkRemover
 
 logger = logging.getLogger(__name__)
@@ -30,7 +31,7 @@ class StreamingResponseHandler:
         """
         self.endpoint_config = endpoint_config
         self.workflow_node_config = workflow_node_config
-        self.output_format = instance_global_variables.API_TYPE
+        self.output_format = instance_global_variables.get_api_type()
         self.remover = StreamingThinkRemover(self.endpoint_config)
         self.full_response_text = ""
         self.request_id = request_id
@@ -46,14 +47,15 @@ class StreamingResponseHandler:
         self.workflow_custom_enabled = self.workflow_node_config.get("removeCustomTextFromResponseStart", False)
         self.endpoint_custom_enabled = self.endpoint_config.get("removeCustomTextFromResponseStartEndpointWide", False)
 
-        # NEW: Collect all prefixes that might need stripping for optimistic matching
         self._prefixes_to_strip = self._collect_prefixes()
 
-        # Set buffer limit based on active custom removals (preserve original logic for compatibility)
+        # When both workflow-level and endpoint-level prefix stripping are active,
+        # both configured prefixes might appear in sequence at the response start.
+        # 200 characters gives the buffer enough room to accumulate both without
+        # triggering the "buffer full" pessimistic flush path before the optimistic
+        # match logic has seen enough content to make a confident decision.
         if self.workflow_custom_enabled and self.endpoint_custom_enabled:
             self._prefix_buffer_limit = 200
-        elif self.workflow_custom_enabled or self.endpoint_custom_enabled:
-            self._prefix_buffer_limit = 100
         else:
             self._prefix_buffer_limit = 100
 
@@ -61,7 +63,14 @@ class StreamingResponseHandler:
         self._should_buffer_for_prefixes = self._is_prefix_stripping_needed() or (self.generation_prompt is not None)
 
     def _collect_prefixes(self) -> List[str]:
-        """Collects all potential prefixes to strip from the configuration."""
+        """
+        Collects all potential prefixes to strip from the configuration.
+
+        Returns:
+            List[str]: A deduplicated list of all prefix strings that may need to be
+                removed from the start of the LLM response, based on the active
+                workflow and endpoint configuration.
+        """
         prefixes = []
 
         # Workflow-level Custom Text (Matched exactly as configured)
@@ -96,7 +105,17 @@ class StreamingResponseHandler:
     def _matches_partial_prefix(self, buffer: str) -> bool:
         """
         Checks if the buffer (lstripped) partially matches the start of any prefix.
-        Optimistic matching: if it doesn't match any prefix partially, we can stop buffering.
+
+        Optimistic matching: if the buffer content does not partially match any
+        configured prefix, it is safe to stop buffering and release the content.
+
+        Args:
+            buffer (str): The accumulated prefix buffer content to check.
+
+        Returns:
+            bool: True if the buffer still potentially matches any prefix (keep
+                buffering), False if it definitively does not match any prefix
+                (safe to release).
         """
         # We must ignore leading whitespace in the buffer when checking for prefix matches
         lstripped_buffer = buffer.lstrip()
@@ -106,8 +125,11 @@ class StreamingResponseHandler:
             return True
 
         for prefix in self._prefixes_to_strip:
-            # Check if the prefix starts with the buffer content OR
-            # if the buffer content starts with the prefix (buffer is longer than prefix)
+            # Two cases both mean "still potentially matching, keep buffering":
+            # 1. prefix.startswith(buffer): buffer is a leading substring of the prefix
+            #    (e.g. buffer="Assi" vs prefix="Assistant:") — might complete into a prefix.
+            # 2. buffer.startswith(prefix): buffer is longer than the prefix but begins with it
+            #    (e.g. buffer="Assistant: hello" vs prefix="Assistant:") — prefix is present.
             if prefix.startswith(lstripped_buffer) or lstripped_buffer.startswith(prefix):
                 return True
 
@@ -117,6 +139,10 @@ class StreamingResponseHandler:
     def _is_prefix_stripping_needed(self) -> bool:
         """
         Checks if any prefix stripping logic is enabled in the configuration.
+
+        Returns:
+            bool: True if at least one prefix-stripping mechanism is active,
+                False otherwise.
         """
         if self.endpoint_config.get("trimBeginningAndEndLineBreaks", False):
             return True
@@ -131,6 +157,11 @@ class StreamingResponseHandler:
     def _requires_complex_buffering(self) -> bool:
         """
         Checks if buffering beyond simple whitespace trimming is required.
+
+        Returns:
+            bool: True if prefix matching or group-chat reconstruction logic needs
+                to inspect the buffer before releasing content, False if only
+                whitespace trimming is needed.
         """
         if self.generation_prompt is not None:
             return True
@@ -143,6 +174,10 @@ class StreamingResponseHandler:
         """
         Processes the accumulated prefix buffer to apply group chat reconstruction
         and then remove all configured prefixes sequentially.
+
+        Returns:
+            str: The buffer content after reconstruction and all prefix stripping
+                rules have been applied.
         """
         content = self._prefix_buffer
 
@@ -151,15 +186,22 @@ class StreamingResponseHandler:
             trimmed_prompt = self.generation_prompt.strip()
             content_lstripped = content.lstrip()
 
-            # Check if the content starts with a word ending in a colon
+            # Check if the content starts with a prefix ending in a colon.
+            # This handles both single-word ("Roland:") and multi-word
+            # ("Character Name:") prefixes by looking for the first colon
+            # within a reasonable range of the generation prompt length.
             if content_lstripped:
-                first_word = content_lstripped.split(' ', 1)[0]
-                llm_has_prefix = first_word.endswith(':')
+                colon_pos = content_lstripped.find(':')
+                # +10 provides a small buffer beyond the expected prompt length to account
+                # for minor variations in how the LLM formats the prefix (e.g. extra spaces
+                # or punctuation) while still reliably distinguishing intentional prefixes
+                # from unrelated colons that appear later in the response.
+                llm_has_prefix = 0 < colon_pos < len(trimmed_prompt) + 10
             else:
                 llm_has_prefix = False
 
             if not llm_has_prefix:
-                logger.debug(f"Reconstructing streaming group chat message. Prepended prompt: '{trimmed_prompt}'")
+                sensitive_log(logger, logging.DEBUG, "Reconstructing streaming group chat message. Prepended prompt: '%s'", trimmed_prompt)
                 content = f"{trimmed_prompt} {content_lstripped}"
                 self._reconstruction_applied = True
 
@@ -209,6 +251,19 @@ class StreamingResponseHandler:
     def process_stream(self, raw_dict_generator: Generator[Dict[str, Any], None, None]) -> Generator[str, None, None]:
         """
         Processes a raw dictionary stream from an LLM and yields formatted SSE strings.
+
+        Applies the full pipeline in order: think-block removal, prefix buffering and
+        stripping, group-chat reconstruction, and SSE formatting. Emits a terminal
+        stop event and (for non-Ollama formats) a ``[DONE]`` sentinel at the end of
+        the stream.
+
+        Args:
+            raw_dict_generator (Generator[Dict[str, Any], None, None]): A generator of
+                token dictionaries from an LLM handler, each containing 'token' and
+                'finish_reason' keys.
+
+        Yields:
+            str: Formatted SSE or NDJSON strings ready to be sent to the client.
         """
         # Determine buffering strategy
         requires_complex_buffering = self._requires_complex_buffering()
@@ -266,7 +321,7 @@ class StreamingResponseHandler:
             if content_to_yield:
                 self.full_response_text += content_to_yield
                 completion_json = api_helpers.build_response_json(
-                    token=content_to_yield, finish_reason=None, current_username=get_current_username(),
+                    token=content_to_yield, finish_reason=None,
                     request_id=self.request_id
                 )
                 yield api_helpers.sse_format(completion_json, self.output_format)
@@ -286,13 +341,12 @@ class StreamingResponseHandler:
         if final_content_to_yield:
             self.full_response_text += final_content_to_yield
             completion_json = api_helpers.build_response_json(
-                token=final_content_to_yield, finish_reason=None, current_username=get_current_username(),
+                token=final_content_to_yield, finish_reason=None,
                 request_id=self.request_id
             )
             yield api_helpers.sse_format(completion_json, self.output_format)
 
         final_completion_json = api_helpers.build_response_json(token="", finish_reason="stop",
-                                                                current_username=get_current_username(),
                                                                 request_id=self.request_id)
         yield api_helpers.sse_format(final_completion_json, self.output_format)
 

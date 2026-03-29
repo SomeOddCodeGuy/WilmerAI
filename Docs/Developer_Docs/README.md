@@ -10,7 +10,7 @@ KoboldCPP). Its primary
 function is to process user prompts by leveraging a modular and extensible **node-based workflow engine**.
 
 The architecture is centered on the **`$ExecutionContext$`** object. This data structure encapsulates all runtime
-information for a single operational step—including the full conversation history, the current node's configuration, and
+information for a single operational step -- including the full conversation history, the current node's configuration, and
 outputs from previous nodes. The core engine creates a new `ExecutionContext` for each node in a workflow and passes it
 as the sole argument to a specialized **Node Handler**.
 
@@ -50,9 +50,9 @@ A typical request in WilmerAI follows this path, transforming a client request i
    in `Middleware/api/` routes the request to the appropriate registered **API Handler** (e.g.,
    `openai_api_handler.py`).
 
-2. **API Pre-processing:** The API handler sets a global `API_TYPE` variable (e.g., `openaichatcompletion`) to inform
-   downstream components of the required response format. It then transforms the incoming request payload into a
-   standardized internal `messages` list.
+2. **API Pre-processing:** The API handler sets the request-scoped `API_TYPE` via `set_api_type()` (e.g.,
+   `set_api_type("openaichatcompletion")`) to inform downstream components of the required response format. It then
+   transforms the incoming request payload into a standardized internal `messages` list.
 
 3. **Engine Handoff:** The handler calls the `$workflow_gateway.handle_user_prompt()` function. This function serves as
    the **single bridge** between the API layer and the core workflow engine.
@@ -79,8 +79,8 @@ A typical request in WilmerAI follows this path, transforming a client request i
 8. **Response Cleaning:** The `$WorkflowProcessor$` receives the raw output from the designated **responder node** and
    orchestrates the final cleaning:
    a. For **streaming** responses (`stream=true`), it passes the raw data generator to the \*
-   \*`$StreamingResponseHandler$`\*\*. This handler processes the stream chunk-by-chunk—removing `<think>` tags and
-   stripping prefixes—to produce a clean stream.
+   \*`$StreamingResponseHandler$`\*\*. This handler processes the stream chunk-by-chunk -- removing `<think>` tags and
+   stripping prefixes -- to produce a clean stream.
    b. For **non-streaming** responses (`stream=false`), it passes the complete raw text to the `post_process_llm_output`
    utility function, which applies the identical cleaning logic all at once.
 
@@ -113,6 +113,7 @@ WilmerAI
 │   │   ├── api_helpers.py
 │   │   ├── api_server.py
 │   │   ├── app.py
+│   │   ├── concurrency_middleware.py
 │   │   └── workflow_gateway.py
 │   ├── common/
 │   │   ├── __init__.py
@@ -156,12 +157,14 @@ WilmerAI
 │   │   ├── __init__.py
 │   │   ├── config_utils.py
 │   │   ├── datetime_utils.py
+│   │   ├── encryption_utils.py
 │   │   ├── file_utils.py
 │   │   ├── hashing_utils.py
 │   │   ├── prompt_extraction_utils.py
 │   │   ├── prompt_manipulation_utils.py
 │   │   ├── prompt_template_utils.py
 │   │   ├── search_utils.py
+│   │   ├── sensitive_logging_utils.py
 │   │   ├── streaming_utils.py
 │   │   ├── text_utils.py
 │   │   └── vector_db_utils.py
@@ -172,6 +175,7 @@ WilmerAI
 │   │   │   │   └── base_workflow_node_handler.py
 │   │   │   ├── impl/
 │   │   │   │   ├── __init__.py
+│   │   │   │   ├── context_compactor_handler.py
 │   │   │   │   ├── memory_node_handler.py
 │   │   │   │   ├── specialized_node_handler.py
 │   │   │   │   ├── standard_node_handler.py
@@ -217,6 +221,12 @@ WilmerAI
 │     └─ Workflows
 │        ├─ folders named after usernames
 │        └─ ...
+├── Scripts/
+│   ├── __init__.py
+│   ├── rekey_encrypted_files.bat
+│   ├── rekey_encrypted_files.py
+│   └── rekey_encrypted_files.sh
+│
 ├── Tests/
 │   ├── api/
 │   │   ├── handlers/
@@ -227,6 +237,9 @@ WilmerAI
 │   │   ├── test_api_helpers.py
 │   │   ├── test_api_server.py
 │   │   └── test_workflow_gateway.py
+│   ├── common/
+│   │   ├── __init__.py
+│   │   └── test_instance_global_variables.py
 │   ├── integration/
 │   │   └── test_nested_workflow_cancellation.py
 │   ├── llmapis/
@@ -251,6 +264,9 @@ WilmerAI
 │   │   ├── test_prompt_categorization_service.py
 │   │   ├── test_response_builder_service.py
 │   │   └── test_timestamp_service.py
+│   ├── scripts/
+│   │   ├── __init__.py
+│   │   └── test_rekey_encrypted_files.py
 │   ├── utilities/
 │   │   ├── test_config_utils.py
 │   │   ├── test_datetime_utils.py
@@ -260,12 +276,15 @@ WilmerAI
 │   │   ├── test_prompt_manipulation_utils.py
 │   │   ├── test_prompt_template_utils.py
 │   │   ├── test_search_utils.py
+│   │   ├── test_sensitive_logging_utils.py
+│   │   ├── test_encryption_utils.py
 │   │   ├── test_streaming_utils.py
 │   │   ├── test_text_utils.py
 │   │   └── test_vector_db_utils.py
 │   ├── workflows/
 │   │   ├── handlers/
 │   │   │   └── impl/
+│   │   │       ├── test_context_compactor_handler.py
 │   │   │       ├── test_memory_node_handler.py
 │   │   │       ├── test_specialized_node_handler.py
 │   │   │       ├── test_standard_node_handler.py
@@ -283,6 +302,7 @@ WilmerAI
 │   │       ├── test_dynamic_module_loader.py
 │   │       ├── test_offline_wikipedia_api_tool.py
 │   │       └── test_slow_but_quality_rag_tool.py
+│   ├── test_server_logging.py
 │   └── conftest.py
 │
 ├── CONTRIBUTING.md
@@ -326,6 +346,12 @@ This is the application's core logic.
   `chunk_messages_by_token_size`).
   \* `streaming_utils.py`: Contains logic for response cleaning, including `post_process_llm_output` for non-streaming
   text and `$StreamingThinkRemover$` for stateful stream cleaning.
+  \* `encryption_utils.py`: Handles per-user encryption and API key hashing. Provides Fernet key derivation via
+  PBKDF2, encrypt/decrypt functions, and API key hashing for directory isolation. The `cryptography` library is
+  lazily imported so there is zero cost when no API key is present. See `Encryption.md` for details.
+  \* `sensitive_logging_utils.py`: Thread-local encryption context and sensitive logging helpers. When an encrypted
+  user's request is being processed, all log statements that could contain user content are automatically redacted.
+  See `Encryption.md` section 5.1 for details.
   \* `vector_db_utils.py`: The abstraction layer for the SQLite FTS5 vector memory database.
 * **`workflows/`**: The heart of the workflow engine. This is the most important directory for understanding the
   project's logic.
@@ -335,7 +361,9 @@ This is the application's core logic.
   is to create a new, fully populated **`$ExecutionContext$` for each node** before dispatching it to the correct
   handler.
   \* **`handlers/`**: Contains classes that implement the logic for each node `type` (e.g., `$StandardNodeHandler$`,
-  `$ToolNodeHandler$`). This is the **primary extension point** for adding new capabilities.
+  `$ToolNodeHandler$`). This is the **primary extension point** for adding new capabilities. Also contains
+  `context_compactor_handler.py`, the handler for the `ContextCompactor` node type. See `ContextCompactor.md` for
+  details on the compaction algorithm and file format.
   \* **`streaming/`**: Contains the crucial **`$StreamingResponseHandler$`**. This class encapsulates all logic for
   cleaning and formatting a raw LLM stream into a final, client-ready SSE stream.
   \* **`models/`**: Defines core data structures. The key file is **`$execution_context.py$`**, which defines the
@@ -371,13 +399,22 @@ Contains all user-facing JSON configuration files.
       is set in the User config (e.g., to `coding-workflows`), workflows are loaded from `_overrides/coding-workflows/`
       instead of the user's default folder.
 
-### **`run_linux/run_macos/run_windows`**
+### **`run_macos/run_windows`**
 
 Scripts to automatically generate a venv, install the requirements.txt for the app, and run the application by calling
 server.py. Takes two optional parameters:
 
 * `--ConfigDirectory` - String input that specifies where the Public/Configs folder is at.
-* `--User` - String input that specifies the name of the user you'd like to start the app as.
+* `--User` - Specifies the user(s) to start the app as. Can be repeated for multi-user mode
+  (e.g., `--User user-one --User user-two`). The concurrency gate serializes all requests across all users.
+* `--port` - The port to listen on. In single-user mode, falls back to the user's config. In multi-user mode,
+  per-user port settings are ignored and this defaults to `5050` if not specified.
+* `--listen` - Listen on the network. Without a value, binds to `0.0.0.0` (all interfaces). Optionally accepts
+  a specific address (e.g., `--listen 192.168.1.5`). If omitted, defaults to `127.0.0.1` (localhost only).
+* `--concurrency` - Integer input that sets the max concurrent requests. 0 = no limit. Default: 1.
+* `--concurrency-timeout` - Integer input that sets the seconds to wait for a concurrency slot before returning 503. Default: 900.
+* `--file-logging` - Enable file logging. In single-user mode, falls back to the user's `useFileLogging` config setting. In multi-user mode, defaults to off.
+* `--LoggingDirectory` - Directory for log files. Defaults to `logs`. Supports a `<user>` token for single-user mode.
 
 ### **`server.py`**
 
@@ -393,9 +430,9 @@ Main script of the app.
   in one place.
 
 * **Proxy Behavior & `API_TYPE`**: WilmerAI can act as a proxy. A client can connect to it as if it were an OpenAI
-  server, while Wilmer, in the background, talks to an Ollama backend. The internal `API_TYPE` variable tracks what kind
-  of API the front-end client expects. This is used by the **`$ResponseBuilderService$`** at the end of the process to
-  format the response correctly for that client.
+  server, while Wilmer, in the background, talks to an Ollama backend. The request-scoped `API_TYPE` (set via
+  `set_api_type()` and read via `get_api_type()`) tracks what kind of API the front-end client expects. This is used by
+  the **`$ResponseBuilderService$`** at the end of the process to format the response correctly for that client.
 
 * **LLM API Paradigms**: The `llmapis` layer internally handles the two main types of LLM backends: modern **Chat
   Completions** APIs that take a structured list of messages (role/content pairs), and legacy **Completions** APIs that
@@ -414,6 +451,14 @@ Main script of the app.
   the raw, unmodified response is received from the `llmapis` layer. This logic is implemented in parallel by
   `post_process_llm_output` (for non-streaming) and the `$StreamingResponseHandler$` (for streaming) to ensure
   consistent behavior.
+
+* **Per-User Encryption & Directory Isolation**: When an `Authorization: Bearer <key>` header is present, all
+  discussion files are stored under a hash-based subdirectory and encrypted at rest using Fernet symmetric encryption.
+  The API key is extracted at the API handler layer, threaded through the entire call chain via the `api_key` parameter,
+  and stored on the `ExecutionContext`. Consumers derive the encryption key and directory hash locally using helpers in
+  `encryption_utils.py`. When encryption is enabled, all log statements containing user content are automatically
+  redacted via `sensitive_logging_utils.py`. Without an API key, behavior is unchanged (plaintext files, flat
+  directory, full logging). See `Encryption.md` for the full developer guide.
 
 -----
 

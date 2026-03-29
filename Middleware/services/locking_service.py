@@ -6,6 +6,7 @@ import sqlite3
 import textwrap  # Import the textwrap module
 import traceback
 from datetime import datetime, timedelta
+from typing import Optional
 
 from Middleware.utilities import config_utils
 
@@ -49,14 +50,14 @@ class LockingService:
             return os.path.join(custom_path, db_filename)
         return db_filename
 
-    def _get_db_connection(self) -> sqlite3.Connection | None:
+    def _get_db_connection(self) -> Optional[sqlite3.Connection]:
         """
         Establishes and returns a connection to the SQLite database.
 
         If a connection cannot be established, an error is logged.
 
         Returns:
-            sqlite3.Connection | None: A database connection object, or None if
+            Optional[sqlite3.Connection]: A database connection object, or None if
                                         the connection failed.
         """
         try:
@@ -144,14 +145,19 @@ class LockingService:
         Deletes lock records based on the provided criteria.
 
         This method allows for the deletion of locks based on the session ID,
-        workflow ID, or the specific lock ID. If no criteria are provided, no
-        locks will be deleted.
+        workflow ID, or the specific lock ID. At least one criterion must be
+        provided; calling with no arguments is a no-op to prevent accidental
+        deletion of all locks.
 
         Args:
             wilmer_session_id (str, optional): The session ID to match.
             workflow_id (str, optional): The workflow ID to match.
             workflow_lock_id (str, optional): The specific lock ID to match.
         """
+        if wilmer_session_id is None and workflow_id is None and workflow_lock_id is None:
+            logger.warning("delete_node_locks called with no criteria; skipping to prevent accidental full deletion.")
+            return
+
         try:
             conn = self._get_db_connection()
             if conn is None:
@@ -200,25 +206,23 @@ class LockingService:
 
         try:
             cursor = conn.cursor()
-            # This query is single-line, so no dedent needed
             select_query = f'SELECT ExpirationDate FROM {self.TABLE_NAME} WHERE WorkflowLockId = ?'
             cursor.execute(select_query, (workflow_lock_id,))
             result = cursor.fetchone()
-
-            if result:
-                expiration_date = datetime.fromisoformat(result[0])
-                if expiration_date < datetime.now():
-                    # Lock is expired, delete it and report no active lock
-                    self.delete_node_locks(workflow_lock_id=workflow_lock_id)
-                    return False
-                # Lock is valid and current
-                return True
         except Exception as e:
             logger.error(f"Error in get_lock: {e}")
             traceback.print_exc()
             raise
         finally:
             conn.close()
+
+        if result:
+            expiration_date = datetime.fromisoformat(result[0])
+            if expiration_date < datetime.now():
+                # Lock is expired; connection is already closed, safe to open a new one
+                self.delete_node_locks(workflow_lock_id=workflow_lock_id)
+                return False
+            return True
 
         return False
 

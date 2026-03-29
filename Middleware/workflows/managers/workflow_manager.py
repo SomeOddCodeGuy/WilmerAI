@@ -15,6 +15,7 @@ from Middleware.utilities.config_utils import (
     get_workflow_path as default_get_workflow_path
 )
 from Middleware.utilities.prompt_extraction_utils import extract_discussion_id, remove_discussion_id_tag
+from Middleware.workflows.handlers.impl.context_compactor_handler import ContextCompactorHandler
 from Middleware.workflows.handlers.impl.memory_node_handler import MemoryNodeHandler
 from Middleware.workflows.handlers.impl.specialized_node_handler import SpecializedNodeHandler
 from Middleware.workflows.handlers.impl.standard_node_handler import StandardNodeHandler
@@ -37,7 +38,8 @@ class WorkflowManager:
                             first_node_system_prompt_override: str | None = None,
                             first_node_prompt_override: str | None = None,
                             scoped_inputs: Optional[List[str]] = None,
-                            workflow_user_folder_override: Optional[str] = None) -> Union[
+                            workflow_user_folder_override: Optional[str] = None,
+                            api_key: Optional[str] = None) -> Union[
         Generator[str, None, None], str, None]:
         """
         Initiates and executes a specified custom workflow.
@@ -59,10 +61,12 @@ class WorkflowManager:
                                          stream=is_streaming,
                                          first_node_system_prompt_override=first_node_system_prompt_override,
                                          first_node_prompt_override=first_node_prompt_override,
-                                         scoped_inputs=scoped_inputs)
+                                         scoped_inputs=scoped_inputs,
+                                         api_key=api_key)
 
     @staticmethod
-    def handle_conversation_memory_parser(request_id, discussion_id: str, messages: List[Dict[str, str]] = None) -> \
+    def handle_conversation_memory_parser(request_id, discussion_id: str, messages: List[Dict[str, str]] = None,
+                                          api_key: Optional[str] = None) -> \
             Union[str, None]:
         """
         Runs the workflow responsible for parsing and storing conversation memory.
@@ -71,15 +75,17 @@ class WorkflowManager:
             request_id (str): A unique identifier for the request.
             discussion_id (str): The identifier for the conversation thread.
             messages (Optional[List[Dict[str, str]]]): The conversation history. Defaults to None.
+            api_key (Optional[str]): The API key from the request, if present. Defaults to None.
 
         Returns:
             Union[str, None]: The result of the workflow execution, or None.
         """
         workflow_gen = WorkflowManager(workflow_config_name=get_active_conversational_memory_tool_name())
-        return workflow_gen.run_workflow(messages, request_id, discussion_id, nonResponder=True)
+        return workflow_gen.run_workflow(messages, request_id, discussion_id, nonResponder=True, api_key=api_key)
 
     @staticmethod
-    def handle_recent_memory_parser(request_id, discussion_id: str, messages: List[Dict[str, str]] = None) -> Union[
+    def handle_recent_memory_parser(request_id, discussion_id: str, messages: List[Dict[str, str]] = None,
+                                    api_key: Optional[str] = None) -> Union[
         str, None]:
         """
         Runs the workflow for parsing and storing recent memory.
@@ -88,15 +94,17 @@ class WorkflowManager:
             request_id (str): A unique identifier for the request.
             discussion_id (str): The identifier for the conversation thread.
             messages (Optional[List[Dict[str, str]]]): The conversation history. Defaults to None.
+            api_key (Optional[str]): The API key from the request, if present. Defaults to None.
 
         Returns:
             Union[str, None]: The result of the workflow execution, or None.
         """
         workflow_gen = WorkflowManager(workflow_config_name=get_active_recent_memory_tool_name())
-        return workflow_gen.run_workflow(messages, request_id, discussion_id, nonResponder=True)
+        return workflow_gen.run_workflow(messages, request_id, discussion_id, nonResponder=True, api_key=api_key)
 
     @staticmethod
-    def handle_full_chat_summary_parser(request_id, discussion_id: str, messages: List[Dict[str, str]] = None) -> Union[
+    def handle_full_chat_summary_parser(request_id, discussion_id: str, messages: List[Dict[str, str]] = None,
+                                        api_key: Optional[str] = None) -> Union[
         str, None]:
         """
         Runs the workflow that generates a full summary of the chat history.
@@ -105,15 +113,17 @@ class WorkflowManager:
             request_id (str): A unique identifier for the request.
             discussion_id (str): The identifier for the conversation thread.
             messages (Optional[List[Dict[str, str]]]): The conversation history. Defaults to None.
+            api_key (Optional[str]): The API key from the request, if present. Defaults to None.
 
         Returns:
             Union[str, None]: The result of the workflow execution, or None.
         """
         workflow_gen = WorkflowManager(workflow_config_name=get_chat_summary_tool_workflow_name())
-        return workflow_gen.run_workflow(messages, request_id, discussion_id, nonResponder=True)
+        return workflow_gen.run_workflow(messages, request_id, discussion_id, nonResponder=True, api_key=api_key)
 
     @staticmethod
-    def process_file_memories(request_id, discussion_id: str, messages: List[Dict[str, str]] = None) -> Union[
+    def process_file_memories(request_id, discussion_id: str, messages: List[Dict[str, str]] = None,
+                              api_key: Optional[str] = None) -> Union[
         str, None]:
         """
         Runs the workflow for processing and saving file-based memories.
@@ -122,12 +132,13 @@ class WorkflowManager:
             request_id (str): A unique identifier for the request.
             discussion_id (str): The identifier for the conversation thread.
             messages (Optional[List[Dict[str, str]]]): The conversation history. Defaults to None.
+            api_key (Optional[str]): The API key from the request, if present. Defaults to None.
 
         Returns:
             Union[str, None]: The result of the workflow execution, or None.
         """
         workflow_gen = WorkflowManager(workflow_config_name=get_file_memory_tool_name())
-        return workflow_gen.run_workflow(messages, request_id, discussion_id, nonResponder=True)
+        return workflow_gen.run_workflow(messages, request_id, discussion_id, nonResponder=True, api_key=api_key)
 
     def __init__(self, workflow_config_name, **kwargs):
         """
@@ -168,6 +179,7 @@ class WorkflowManager:
         tool_node_handler = ToolNodeHandler(**common_dependencies)
         specialized_node_handler = SpecializedNodeHandler(**common_dependencies)
         sub_workflow_handler = SubWorkflowHandler(**common_dependencies)
+        context_compactor_handler = ContextCompactorHandler(**common_dependencies)
 
         self.node_handlers = {
             "Standard": StandardNodeHandler(**common_dependencies),
@@ -210,13 +222,16 @@ class WorkflowManager:
             "StringConcatenator": specialized_node_handler,
             "JsonExtractor": specialized_node_handler,
             "TagTextExtractor": specialized_node_handler,
+
+            "ContextCompactor": context_compactor_handler,
         }
 
     def run_workflow(self, messages, request_id, discussionId: str = None, stream: bool = False,
                      nonResponder: bool | None = None,
                      first_node_system_prompt_override: str | None = None,
                      first_node_prompt_override: str | None = None,
-                     scoped_inputs: Optional[List[str]] = None) -> Union[
+                     scoped_inputs: Optional[List[str]] = None,
+                     api_key: Optional[str] = None) -> Union[
         Generator[str, None, None], str, None]:
         """
         Loads the workflow configuration and delegates execution to the WorkflowProcessor.
@@ -237,6 +252,11 @@ class WorkflowManager:
         workflow_id = str(uuid.uuid4())
         discussion_id = discussionId if discussionId is not None else extract_discussion_id(messages)
         remove_discussion_id_tag(messages)
+        # Drop messages whose content became empty after discussion ID tag removal.
+        # This prevents constant-hash collisions in the memory system: an empty message
+        # always hashes to the same SHA-256 value, which tricks find_last_matching_hash_message
+        # into reporting zero new messages on every subsequent run.
+        messages[:] = [m for m in messages if m.get('content', '').strip()]
 
         try:
             config_file = self.path_finder_func(self.workflowConfigName)
@@ -267,7 +287,8 @@ class WorkflowManager:
                 non_responder_flag=nonResponder,
                 first_node_system_prompt_override=first_node_system_prompt_override,
                 first_node_prompt_override=first_node_prompt_override,
-                scoped_inputs=scoped_inputs
+                scoped_inputs=scoped_inputs,
+                api_key=api_key
             )
 
             result_generator = processor.execute()

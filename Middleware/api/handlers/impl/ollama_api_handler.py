@@ -29,12 +29,16 @@ from werkzeug.exceptions import ClientDisconnected
 from Middleware.api import api_helpers
 from Middleware.api.app import app
 from Middleware.api.handlers.base.base_api_handler import BaseApiHandler
-from Middleware.api.workflow_gateway import handle_user_prompt, _sanitize_log_data, handle_openwebui_tool_check
+from Middleware.api.workflow_gateway import handle_user_prompt, _sanitize_log_data, check_openwebui_tool_request
 from Middleware.common import instance_global_variables
 from Middleware.services.response_builder_service import ResponseBuilderService
 from Middleware.utilities.config_utils import get_is_chat_complete_add_user_assistant, \
-    get_is_chat_complete_add_missing_assistant
+    get_is_chat_complete_add_missing_assistant, get_encrypt_using_api_key, get_redact_log_output
+from Middleware.common.instance_global_variables import clear_api_type
 from Middleware.utilities.prompt_extraction_utils import parse_conversation
+from Middleware.utilities.sensitive_logging_utils import (
+    set_encryption_context, clear_encryption_context, is_encryption_active, sensitive_log_lazy,
+)
 
 logger = logging.getLogger(__name__)
 response_builder = ResponseBuilderService()
@@ -42,15 +46,16 @@ response_builder = ResponseBuilderService()
 # Configuration for the heartbeat mechanism
 # 1 second was chosen because Wilmer won't react to an abort from the front-end until the next interval.
 # In an attempt to save the user some tokens, we want that reaction as fast as possible so we dont risk
-# kicking off another workflow node and processing another prompt. No guarantee this will work, but we
-# want to try
+# kicking off another workflow node and processing another prompt.
 HEARTBEAT_INTERVAL = 1  # seconds
-# Heartbeat must be valid NDJSON to avoid breaking frontend parsers
-# Use an empty content message that frontends will safely ignore
-HEARTBEAT_MESSAGE = b'{"message":{"role":"assistant","content":""},"done":false}\n'
+# Send a proper Ollama-format JSON heartbeat with empty content. This keeps the TCP
+# connection alive for disconnect detection. The stream-complete detection (return after
+# "done":true) ensures heartbeats are never sent after stream completion, so the
+# "done":false here cannot contradict a prior "done":true.
+HEARTBEAT_MESSAGE = b'{"model":"","created_at":"","message":{"role":"assistant","content":""},"done":false}\n'
 
 
-def _stream_with_eventlet_optimized(request_id: str, messages: List[Dict], stream: bool) -> Response:
+def _stream_with_eventlet_optimized(request_id: str, messages: List[Dict], stream: bool, api_key: str = None) -> Response:
     """
     Optimized streaming implementation for Eventlet with disconnect detection during prefill.
 
@@ -60,9 +65,12 @@ def _stream_with_eventlet_optimized(request_id: str, messages: List[Dict], strea
     logger.info(f"Ollama starting Eventlet optimized streaming for request_id: {request_id}")
     from Middleware.services.cancellation_service import cancellation_service
 
-    # Capture workflow override before spawning greenlet, since the finally block
-    # in the calling function will clear it before the greenlet runs
+    # Capture request-scoped state before spawning greenlet, since the finally
+    # block in the calling function will clear them before the greenlet runs
     captured_workflow_override = api_helpers.get_active_workflow_override()
+    captured_api_type = instance_global_variables.get_api_type()
+    captured_encryption_active = is_encryption_active()
+    captured_request_user = instance_global_variables.get_request_user()
 
     event_queue = EventletQueue()
     stop_signal = eventlet.event.Event()
@@ -70,10 +78,12 @@ def _stream_with_eventlet_optimized(request_id: str, messages: List[Dict], strea
 
     def backend_reader():
         """Background greenlet that reads from handle_user_prompt and queues chunks."""
-        # Restore the workflow override that was captured before spawning
-        instance_global_variables.WORKFLOW_OVERRIDE = captured_workflow_override
+        instance_global_variables.set_workflow_override(captured_workflow_override)
+        instance_global_variables.set_api_type(captured_api_type)
+        instance_global_variables.set_request_user(captured_request_user)
+        set_encryption_context(captured_encryption_active)
         try:
-            for chunk in handle_user_prompt(request_id, messages, stream):
+            for chunk in handle_user_prompt(request_id, messages, stream, api_key=api_key):
                 if stop_signal.ready():
                     break
                 event_queue.put(("data", chunk))
@@ -101,11 +111,20 @@ def _stream_with_eventlet_optimized(request_id: str, messages: List[Dict], strea
                     if msg_type == "error":
                         raise data
                     elif msg_type == "data":
-                        # Ensure bytes for WSGI compliance
                         if isinstance(data, str):
-                            yield data.encode('utf-8')
+                            encoded = data.encode('utf-8')
                         else:
-                            yield data
+                            encoded = data
+                        yield encoded
+
+                        # If this chunk signals stream completion (done:true), return
+                        # immediately. Without this, post-stream workflow processing
+                        # (non-responding nodes, cleanup) keeps the generator alive,
+                        # causing heartbeats with done:false to be sent AFTER done:true.
+                        # This corrupts the NDJSON stream and can permanently hang
+                        # front-end clients like SillyTavern.
+                        if b'"done": true' in encoded or b'"done":true' in encoded:
+                            return
 
                         # Force immediate socket write
                         eventlet.sleep(0)
@@ -129,11 +148,16 @@ def _stream_with_eventlet_optimized(request_id: str, messages: List[Dict], strea
                 logger.error(f"Unexpected error in Ollama streaming generator: {e}", exc_info=True)
             raise
         finally:
-            # Stop the backend greenlet
             if not stop_signal.ready():
                 stop_signal.send(True)
             if reader_greenlet:
-                reader_greenlet.kill()
+                # Kill the reader asynchronously to avoid blocking HTTP response
+                # finalization. A blocking kill() here would delay the chunked TE
+                # terminator and TCP close, since the generator's finally block runs
+                # before the WSGI server can finalize the response. If the reader is
+                # stuck in post-stream workflow processing, this delay can leave the
+                # client's HTTP connection in a half-finished state.
+                eventlet.spawn(reader_greenlet.kill)
 
     response = Response(
         streaming_generator(),
@@ -143,32 +167,57 @@ def _stream_with_eventlet_optimized(request_id: str, messages: List[Dict], strea
             'X-Accel-Buffering': 'no',
         }
     )
-    # Remove hop-by-hop headers that violate WSGI/PEP 3333
-    response.headers.pop('Connection', None)
+    # Force connection teardown after streaming completes. Some front-ends (notably Node.js-based apps)
+    # can have their HTTP connection pool corrupted by keep-alive connections that outlive a streaming response.
+    response.headers['Connection'] = 'close'
     return response
 
 
-# Helper function for simplified streaming (Fallback for non-Eventlet environments)
-def _stream_response_fallback(request_id: str, messages: List[Dict], stream: bool) -> Response:
-    # (Implementation remains the same, ensuring bytes are yielded and logging is present)
+def _stream_response_fallback(request_id: str, messages: List[Dict], stream: bool, api_key: str = None) -> Response:
+    """
+    Fallback streaming implementation for non-Eventlet environments.
+
+    Used when Eventlet is not installed or monkey-patching is not active (e.g., when
+    running under Waitress, Gunicorn, or the Flask development server). Disconnect
+    detection during the LLM prefill phase is unreliable in this mode because the
+    generator is driven synchronously by the WSGI server without a heartbeat mechanism.
+
+    Args:
+        request_id (str): The unique identifier for this request.
+        messages (List[Dict]): The conversation history in the internal message format.
+        stream (bool): Whether streaming mode is active.
+        api_key (str, optional): The API key for encryption context scoping.
+
+    Returns:
+        Response: A Flask streaming Response with NDJSON content type.
+    """
     logger.info(f"Ollama starting fallback (synchronous) streaming for request_id: {request_id}")
     from Middleware.services.cancellation_service import cancellation_service  # Import inside function
 
-    # Capture workflow override before creating generator, since the finally block
-    # in the calling function will clear it before the generator runs
+    # Capture request-scoped state before creating generator, since the finally
+    # block in the calling function will clear them before the generator runs
     captured_workflow_override = api_helpers.get_active_workflow_override()
+    captured_api_type = instance_global_variables.get_api_type()
+    captured_encryption_active = is_encryption_active()
+    captured_request_user = instance_global_variables.get_request_user()
 
     def streaming_generator():
-        # Restore the workflow override that was captured before creating the generator
-        instance_global_variables.WORKFLOW_OVERRIDE = captured_workflow_override
+        instance_global_variables.set_workflow_override(captured_workflow_override)
+        instance_global_variables.set_api_type(captured_api_type)
+        instance_global_variables.set_request_user(captured_request_user)
+        set_encryption_context(captured_encryption_active)
         logger.debug(f"Ollama Fallback Generator starting for request_id: {request_id}")
         try:
-            for chunk in handle_user_prompt(request_id, messages, stream):
-                # Explicitly encode to bytes for WSGI compliance
+            for chunk in handle_user_prompt(request_id, messages, stream, api_key=api_key):
                 if isinstance(chunk, str):
-                    yield chunk.encode('utf-8')
+                    encoded = chunk.encode('utf-8')
                 else:
-                    yield chunk
+                    encoded = chunk
+                yield encoded
+                # Stop after stream completion to prevent the generator from staying
+                # alive during post-stream workflow processing.
+                if b'"done": true' in encoded or b'"done":true' in encoded:
+                    return
         except (GeneratorExit, ClientDisconnected, BrokenPipeError, ConnectionError) as e:
             if request_id:
                 if not cancellation_service.is_cancelled(request_id):
@@ -192,20 +241,37 @@ def _stream_response_fallback(request_id: str, messages: List[Dict], stream: boo
             'X-Accel-Buffering': 'no',
         }
     )
-    # Remove hop-by-hop headers that violate WSGI/PEP 3333
-    response.headers.pop('Connection', None)
+    # Force connection teardown after streaming completes. Some front-ends (notably Node.js-based apps)
+    # can have their HTTP connection pool corrupted by keep-alive connections that outlive a streaming response.
+    response.headers['Connection'] = 'close'
     return response
 
 
-# Main entry point for streaming, dynamically choosing the implementation
-def _handle_streaming_request(request_id: str, messages: List[Dict], stream: bool) -> Response:
+def _handle_streaming_request(request_id: str, messages: List[Dict], stream: bool, api_key: str = None) -> Response:
+    """
+    Selects and invokes the appropriate streaming implementation.
+
+    Checks whether Eventlet is both installed and actively monkey-patching the
+    socket layer. If so, uses the optimized queue-based Eventlet implementation
+    which supports heartbeats and disconnect detection during LLM prefill. Otherwise,
+    falls back to synchronous streaming.
+
+    Args:
+        request_id (str): The unique identifier for this request.
+        messages (List[Dict]): The conversation history in the internal message format.
+        stream (bool): Whether streaming mode is active.
+        api_key (str, optional): The API key for encryption context scoping.
+
+    Returns:
+        Response: A Flask streaming Response with NDJSON content type.
+    """
     # Check if Eventlet is available AND if monkey-patching is active
     # We must check eventlet.patcher dynamically as it's only available if EVENTLET_AVAILABLE is True
     is_eventlet_active = EVENTLET_AVAILABLE and eventlet.patcher.is_monkey_patched('socket')
 
     if is_eventlet_active:
         # Call the optimized version
-        return _stream_with_eventlet_optimized(request_id, messages, stream)
+        return _stream_with_eventlet_optimized(request_id, messages, stream, api_key=api_key)
     else:
         # Provide warnings if Eventlet is expected but not active
         if not EVENTLET_AVAILABLE:
@@ -215,7 +281,7 @@ def _handle_streaming_request(request_id: str, messages: List[Dict], stream: boo
             # This case handles running under Gunicorn/Waitress/Flask Dev Server
             logger.debug(
                 "Eventlet installed but monkey patching is not active (not running via run_eventlet.py). Falling back to synchronous streaming.")
-        return _stream_response_fallback(request_id, messages, stream)
+        return _stream_response_fallback(request_id, messages, stream, api_key=api_key)
 
 
 class GenerateAPI(MethodView):
@@ -237,7 +303,9 @@ class GenerateAPI(MethodView):
         request_id = str(uuid.uuid4())
         g.current_request_id = request_id
 
-        instance_global_variables.API_TYPE = "ollamagenerate"
+        instance_global_variables.set_api_type("ollamagenerate")
+        api_key = api_helpers.extract_api_key()
+
         logger.debug(f"GenerateAPI request received (ID: {request_id})")
 
         # Use force=True and silent=True for robustness
@@ -246,16 +314,27 @@ class GenerateAPI(MethodView):
             logger.error("Failed to parse JSON in GenerateAPI")
             return jsonify({"error": "Invalid JSON data"}), 400
 
-        logger.debug(f"GenerateAPI request data (ID: {request_id}): {json.dumps(_sanitize_log_data(data))}")
+        sensitive_log_lazy(logger, logging.DEBUG,
+                           "GenerateAPI request data (ID: %s): %s",
+                           lambda: request_id,
+                           lambda: json.dumps(_sanitize_log_data(data)))
 
         model: str = data.get("model")
         if not model:
             return jsonify({"error": "The 'model' field is required."}), 400
 
-        # Set workflow override from model field if applicable
+        # Set workflow override from model field if applicable.
+        # This must happen before reading per-user config values like
+        # encryptUsingApiKey, because it determines which user's config to load.
         api_helpers.set_workflow_override(model)
 
         try:
+            rejection = api_helpers.require_identified_user()
+            if rejection:
+                return jsonify({"error": rejection}), 400
+
+            set_encryption_context((bool(api_key) and get_encrypt_using_api_key()) or get_redact_log_output())
+
             prompt: str = data.get("prompt", "")
             system: str = data.get("system", "")
             stream: bool = data.get("stream", True)
@@ -277,26 +356,33 @@ class GenerateAPI(MethodView):
 
             images = data.get("images", [])
             if images:
-                for image_base64 in images:
-                    messages.append({"role": "images", "content": image_base64})
+                attached = False
+                for msg in reversed(messages):
+                    if msg["role"] == "user":
+                        msg["images"] = list(images)
+                        attached = True
+                        break
+                if not attached:
+                    # No user message found; create one so images are not silently dropped
+                    messages.append({"role": "user", "content": "", "images": list(images)})
 
             if stream:
-                # Use the dynamic streaming handler selection
-                return _handle_streaming_request(request_id, messages, stream)
+                return _handle_streaming_request(request_id, messages, stream, api_key=api_key)
             else:
                 # Pass request_id. Use the model name from api_helpers to get username:workflow format
-                return_response: str = handle_user_prompt(request_id, messages, stream=False)
+                return_response: str = handle_user_prompt(request_id, messages, stream=False, api_key=api_key)
                 response_model = api_helpers.get_model_name()
                 response = response_builder.build_ollama_generate_response(return_response, model=response_model,
                                                                            request_id=request_id)
                 return jsonify(response)
         finally:
             api_helpers.clear_workflow_override()
+            clear_encryption_context()
+            clear_api_type()
 
 
 class ApiChatAPI(MethodView):
     @staticmethod
-    @handle_openwebui_tool_check('ollamaapichat')
     def post() -> Response:
         """
         Handles POST requests for the /api/chat endpoint.
@@ -313,9 +399,8 @@ class ApiChatAPI(MethodView):
         request_id = str(uuid.uuid4())
         g.current_request_id = request_id
 
-        instance_global_variables.API_TYPE = "ollamaapichat"
-        add_user_assistant = get_is_chat_complete_add_user_assistant()
-        add_missing_assistant = get_is_chat_complete_add_missing_assistant()
+        instance_global_variables.set_api_type("ollamaapichat")
+        api_key = api_helpers.extract_api_key()
 
         try:
             # Use force=True to ensure content-type is ignored if necessary
@@ -324,16 +409,36 @@ class ApiChatAPI(MethodView):
             logger.error(f"Failed to parse JSON: {e}")
             return jsonify({"error": "Invalid JSON data"}), 400
 
-        logger.info(f"ApiChatAPI request received (ID: {request_id}): {json.dumps(_sanitize_log_data(request_data))}")
+        logger.info(f"ApiChatAPI request received (ID: {request_id})")
+        sensitive_log_lazy(logger, logging.INFO,
+                           "ApiChatAPI request data (ID: %s): %s",
+                           lambda: request_id,
+                           lambda: json.dumps(_sanitize_log_data(request_data)))
 
         if 'model' not in request_data or 'messages' not in request_data:
             return jsonify({"error": "Both 'model' and 'messages' fields are required."}), 400
 
-        # Set workflow override from model field if applicable
+        # Set workflow override from model field if applicable.
+        # This must happen before reading per-user config values like
+        # addUserAssistant, because it determines which user's config to load.
         model_from_request = request_data.get("model")
         api_helpers.set_workflow_override(model_from_request)
 
         try:
+            rejection = api_helpers.require_identified_user()
+            if rejection:
+                return jsonify({"error": rejection}), 400
+
+            set_encryption_context((bool(api_key) and get_encrypt_using_api_key()) or get_redact_log_output())
+
+            # Intercept OpenWebUI tool-selection requests if the user has opted in
+            tool_response = check_openwebui_tool_request(request_data, 'ollamaapichat')
+            if tool_response:
+                return tool_response
+
+            add_user_assistant = get_is_chat_complete_add_user_assistant()
+            add_missing_assistant = get_is_chat_complete_add_missing_assistant()
+
             messages: List[Dict[str, Any]] = request_data["messages"]
             transformed_messages: List[Dict[str, Any]] = []
 
@@ -344,10 +449,6 @@ class ApiChatAPI(MethodView):
                 role = message["role"]
                 content = message["content"]
 
-                if "images" in message and isinstance(message["images"], list):
-                    for image_base64 in message["images"]:
-                        transformed_messages.append({"role": "images", "content": image_base64})
-
                 # Handle content modification safely
                 content_str = str(content) if content is not None else ""
 
@@ -357,7 +458,10 @@ class ApiChatAPI(MethodView):
                     elif role == "assistant":
                         content_str = "Assistant: " + content_str
 
-                transformed_messages.append({"role": role, "content": content_str})
+                msg = {"role": role, "content": content_str}
+                if "images" in message and isinstance(message["images"], list) and message["images"]:
+                    msg["images"] = list(message["images"])
+                transformed_messages.append(msg)
 
             if add_missing_assistant:
                 if add_user_assistant and transformed_messages and transformed_messages[-1]["role"] != "assistant":
@@ -370,17 +474,18 @@ class ApiChatAPI(MethodView):
                 stream = stream.lower() == 'true'
 
             if stream:
-                # Use the dynamic streaming handler selection
-                return _handle_streaming_request(request_id, transformed_messages, stream)
+                return _handle_streaming_request(request_id, transformed_messages, stream, api_key=api_key)
             else:
                 # Pass request_id. Use the model name from api_helpers to get username:workflow format
-                response_data = handle_user_prompt(request_id, transformed_messages, stream)
+                response_data = handle_user_prompt(request_id, transformed_messages, stream, api_key=api_key)
                 response_model = api_helpers.get_model_name()
                 response = response_builder.build_ollama_chat_response(response_data, model_name=response_model,
                                                                        request_id=request_id)
                 return jsonify(response)
         finally:
             api_helpers.clear_workflow_override()
+            clear_encryption_context()
+            clear_api_type()
 
 
 class TagsAPI(MethodView):

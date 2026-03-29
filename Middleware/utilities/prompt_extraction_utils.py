@@ -4,6 +4,7 @@ import logging
 import re
 from typing import Dict, Tuple, List, Optional, Any
 
+from Middleware.utilities.sensitive_logging_utils import sensitive_log
 from Middleware.utilities.text_utils import rough_estimate_token_length
 
 logger = logging.getLogger(__name__)
@@ -51,7 +52,7 @@ def extract_last_n_turns(messages: List[Dict[str, str]], n: int, include_sysmes:
     if not messages or n == 0:
         return []
 
-    filtered_messages = [message for message in messages if message["role"] != "images"]
+    filtered_messages = list(messages)
 
     if remove_all_systems_override:
         filtered_messages = [message for message in filtered_messages if message["role"] != "system"]
@@ -137,7 +138,7 @@ def extract_last_turns_by_estimated_token_limit(messages: List[Dict[str, str]], 
     if not messages:
         return []
 
-    filtered_messages = [message for message in messages if message["role"] != "images"]
+    filtered_messages = list(messages)
 
     if remove_all_systems_override:
         filtered_messages = [message for message in filtered_messages if message["role"] != "system"]
@@ -242,7 +243,7 @@ def extract_last_turns_with_min_messages_and_token_limit(messages: List[Dict[str
     if not messages:
         return []
 
-    filtered_messages = [message for message in messages if message["role"] != "images"]
+    filtered_messages = list(messages)
 
     if remove_all_systems_override:
         filtered_messages = [message for message in filtered_messages if message["role"] != "system"]
@@ -460,7 +461,7 @@ def parse_conversation(input_string: str) -> List[Dict[str, str]]:
 
         if role:
             conversation.append({"role": role, "content": content})
-    logger.debug("Parse conversation result: %s", conversation)
+    sensitive_log(logger, logging.DEBUG, "Parse conversation result: %s", conversation)
     return conversation
 
 

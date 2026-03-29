@@ -1,5 +1,3 @@
-# Tests/services/test_llm_dispatch_service.py
-
 from copy import deepcopy
 
 import pytest
@@ -18,7 +16,6 @@ SAMPLE_MESSAGES = [
     {"role": "user", "content": "Tell me a joke."},
 ]
 
-SAMPLE_IMAGE_MESSAGE = {"role": "images", "content": "base64_encoded_image_string"}
 
 
 # --- Fixtures ---
@@ -66,7 +63,6 @@ class TestLLMDispatchServiceCompletions:
         Verifies that when a 'prompt' is specified in the node config,
         it is used instead of the conversation history.
         """
-        # Arrange
         mock_context.config = {
             "systemPrompt": "System instruction.",
             "prompt": "User instruction."
@@ -77,10 +73,8 @@ class TestLLMDispatchServiceCompletions:
         mock_get_last_turns = mocker.patch(
             'Middleware.services.llm_dispatch_service.get_formatted_last_n_turns_as_string')
 
-        # Act
         LLMDispatchService.dispatch(context=mock_context)
 
-        # Assert
         # Verify the correct system prompt was formatted
         mock_format_system.assert_called_once_with("System instruction.", "test_template.json", False)
 
@@ -101,7 +95,6 @@ class TestLLMDispatchServiceCompletions:
         Verifies that when 'prompt' is absent, the service falls back to
         formatting the last N turns of the conversation history.
         """
-        # Arrange
         mock_context.config = {
             "systemPrompt": "System instruction.",
             "lastMessagesToSendInsteadOfPrompt": 3
@@ -113,10 +106,8 @@ class TestLLMDispatchServiceCompletions:
             return_value="formatted_last_3_turns"
         )
 
-        # Act
         LLMDispatchService.dispatch(context=mock_context)
 
-        # Assert
         # It should ask for n + 1 messages to get n turns
         mock_get_last_turns.assert_called_once_with(
             mock_context.messages, 4,
@@ -135,7 +126,6 @@ class TestLLMDispatchServiceCompletions:
         """
         Verifies that all boolean flags for prompt templating are correctly applied.
         """
-        # Arrange
         mock_context.config = {
             "systemPrompt": "System instruction.",
             "prompt": "base prompt",
@@ -155,10 +145,8 @@ class TestLLMDispatchServiceCompletions:
             'Middleware.services.llm_dispatch_service.add_assistant_end_token_to_user_turn',
             return_value="final_prompt")
 
-        # Act
         LLMDispatchService.dispatch(context=mock_context)
 
-        # Assert
         # Verify system prompt formatting was called
         mock_format_system.assert_called_once_with("System instruction.", "test_template.json", False)
         # Verify the chain of transformations
@@ -175,13 +163,11 @@ class TestLLMDispatchServiceCompletions:
             request_id=None
         )
 
-    def test_dispatch_with_image_message(self, mock_context, mocker):
+    def test_dispatch_with_llm_takes_images(self, mock_context, mocker):
         """
-        Verifies that an image message is correctly passed in the 'conversation'
-        argument for Completions APIs that can handle them.
-        llm_takes_images is now determined by whether image_message is not None.
+        Verifies that when llm_takes_images=True, the flag is passed through
+        to the LLM handler for Completions APIs.
         """
-        # Arrange
         mock_context.config = {
             "systemPrompt": "System prompt.",
             "prompt": "Describe this image."
@@ -190,12 +176,10 @@ class TestLLMDispatchServiceCompletions:
         mocker.patch('Middleware.services.llm_dispatch_service.format_system_prompt_with_template',
                      return_value="formatted_system_for_image_test")
 
-        # Act
-        LLMDispatchService.dispatch(context=mock_context, image_message=SAMPLE_IMAGE_MESSAGE)
+        LLMDispatchService.dispatch(context=mock_context, llm_takes_images=True)
 
-        # Assert
         mock_context.llm_handler.llm.get_response_from_llm.assert_called_once_with(
-            conversation=[SAMPLE_IMAGE_MESSAGE],
+            conversation=None,
             system_prompt="formatted_system_for_image_test",
             prompt="Describe this image.",
             llm_takes_images=True,
@@ -214,7 +198,6 @@ class TestLLMDispatchServiceChat:
         """
         Verifies that a 'prompt' from config is converted into a user message.
         """
-        # Arrange
         mock_context.llm_handler.takes_message_collection = True
         mock_context.config = {
             "systemPrompt": "System instruction.",
@@ -225,10 +208,8 @@ class TestLLMDispatchServiceChat:
             {"role": "user", "content": "User instruction."}
         ]
 
-        # Act
         LLMDispatchService.dispatch(context=mock_context)
 
-        # Assert
         mock_context.llm_handler.llm.get_response_from_llm.assert_called_once_with(
             conversation=expected_collection,
             llm_takes_images=False,
@@ -240,7 +221,6 @@ class TestLLMDispatchServiceChat:
         Verifies that the service extracts and uses the last N turns from
         the conversation history.
         """
-        # Arrange
         mock_context.llm_handler.takes_message_collection = True
         mock_context.config = {
             "systemPrompt": "System instruction.",
@@ -259,10 +239,8 @@ class TestLLMDispatchServiceChat:
                                   {"role": "system", "content": "System instruction."}
                               ] + last_turns_from_history
 
-        # Act
         LLMDispatchService.dispatch(context=mock_context)
 
-        # Assert
         mock_extract.assert_called_once_with(mock_context.messages, 2, True)
         mock_context.llm_handler.llm.get_response_from_llm.assert_called_once_with(
             conversation=expected_collection,
@@ -274,7 +252,6 @@ class TestLLMDispatchServiceChat:
         """
         Verifies that no system message is added if the system prompt is empty.
         """
-        # Arrange
         mock_context.llm_handler.takes_message_collection = True
         mock_context.config = {
             "systemPrompt": "",
@@ -284,36 +261,71 @@ class TestLLMDispatchServiceChat:
             {"role": "user", "content": "User instruction."}
         ]
 
-        # Act
         LLMDispatchService.dispatch(context=mock_context)
 
-        # Assert
         mock_context.llm_handler.llm.get_response_from_llm.assert_called_once_with(
             conversation=expected_collection,
             llm_takes_images=False,
             request_id=None
         )
 
-    def test_dispatch_with_image_message(self, mock_context):
+    def test_dispatch_with_llm_takes_images(self, mock_context):
         """
-        Verifies that an image message is correctly appended to the message list.
-        llm_takes_images is now determined by whether image_message is not None.
+        Verifies that when llm_takes_images=True, the flag is passed through
+        to the LLM handler for Chat APIs.
         """
-        # Arrange
         mock_context.llm_handler.takes_message_collection = True
         mock_context.config = {"prompt": "Describe this image."}
 
         expected_collection = [
             {"role": "user", "content": "Describe this image."},
-            SAMPLE_IMAGE_MESSAGE
         ]
 
-        # Act
-        LLMDispatchService.dispatch(context=mock_context, image_message=SAMPLE_IMAGE_MESSAGE)
+        LLMDispatchService.dispatch(context=mock_context, llm_takes_images=True)
 
-        # Assert
         mock_context.llm_handler.llm.get_response_from_llm.assert_called_once_with(
             conversation=expected_collection,
             llm_takes_images=True,
             request_id=None
         )
+
+    def test_dispatch_collects_images_from_recent_messages(self, mock_context):
+        """
+        Verifies that when llm_takes_images=True and messages have an 'images' key,
+        all images are collected into the user message.
+        """
+        mock_context.llm_handler.takes_message_collection = True
+        mock_context.config = {"prompt": "Describe these images."}
+        mock_context.messages = [
+            {"role": "user", "content": "First", "images": ["img_base64_1"]},
+            {"role": "assistant", "content": "Reply"},
+            {"role": "user", "content": "Second", "images": ["img_base64_2", "img_base64_3"]},
+        ]
+
+        LLMDispatchService.dispatch(context=mock_context, llm_takes_images=True)
+
+        call_args = mock_context.llm_handler.llm.get_response_from_llm.call_args
+        conversation = call_args[1]["conversation"]
+        user_msg = conversation[-1]
+        assert user_msg["role"] == "user"
+        assert user_msg["images"] == ["img_base64_1", "img_base64_2", "img_base64_3"]
+
+    def test_dispatch_no_images_key_when_messages_lack_images(self, mock_context):
+        """
+        Verifies that when llm_takes_images=True but no messages have an 'images' key,
+        the user message does not contain an 'images' key.
+        """
+        mock_context.llm_handler.takes_message_collection = True
+        mock_context.config = {"prompt": "No images here."}
+        mock_context.messages = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi"},
+        ]
+
+        LLMDispatchService.dispatch(context=mock_context, llm_takes_images=True)
+
+        call_args = mock_context.llm_handler.llm.get_response_from_llm.call_args
+        conversation = call_args[1]["conversation"]
+        user_msg = conversation[-1]
+        assert user_msg["role"] == "user"
+        assert "images" not in user_msg

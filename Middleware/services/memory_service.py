@@ -7,6 +7,7 @@ from Middleware.utilities import text_utils, vector_db_utils
 from Middleware.utilities.config_utils import get_discussion_memory_file_path, get_discussion_chat_summary_file_path
 from Middleware.utilities.file_utils import read_chunks_with_hashes
 from Middleware.utilities.hashing_utils import extract_text_blocks_from_hashed_chunks
+from Middleware.utilities.sensitive_logging_utils import sensitive_log
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,8 @@ class MemoryService:
         if not discussion_id:
             return "Cannot search vector memories without a discussionId."
 
-        logger.info(f"Searching vector memories for discussion '{discussion_id}' with keywords: '{keywords}'")
+        sensitive_log(logger, logging.INFO, "Searching vector memories for discussion '%s' with keywords: '%s'",
+                     discussion_id, keywords)
 
         found_memories = vector_db_utils.search_memories_by_keyword(discussion_id, keywords, limit)
 
@@ -45,7 +47,9 @@ class MemoryService:
         return '\n\n---\n\n'.join(summaries)
 
     def get_recent_memories(self, messages: List[Dict[str, str]], discussion_id: str, max_turns_to_search=0,
-                            max_summary_chunks_from_file=0, lookback_start=0) -> str:
+                            max_summary_chunks_from_file=0, lookback_start=0,
+                            encryption_key: Optional[bytes] = None,
+                            api_key_hash: Optional[str] = None) -> str:
         """
         Retrieves recent memories from chat messages or memory files.
 
@@ -65,8 +69,8 @@ class MemoryService:
             logger.debug("Recent Memory complete. Total number of pair chunks: {}".format(len(final_pairs)))
             return '--ChunkBreak--'.join(final_pairs)
         else:
-            filepath = get_discussion_memory_file_path(discussion_id)
-            hashed_chunks = read_chunks_with_hashes(filepath)
+            filepath = get_discussion_memory_file_path(discussion_id, api_key_hash=api_key_hash)
+            hashed_chunks = read_chunks_with_hashes(filepath, encryption_key=encryption_key)
             if not hashed_chunks:
                 return "No memories have been generated yet"
 
@@ -74,27 +78,34 @@ class MemoryService:
             if max_summary_chunks_from_file == -1:
                 return '--ChunkBreak--'.join(chunks)
 
-            # Simplified logic: Use provided value or default to 3. Slice handles shorter lists.
+            # Default to 3 chunks when the caller passes 0 (meaning "use default").
+            # 3 is a balance between recency (capturing the latest context) and avoiding
+            # excessive repetition, since adjacent memory chunks often overlap in content.
+            # Python slice handles lists shorter than max_chunks without error.
             max_chunks = max_summary_chunks_from_file or 3
             return '--ChunkBreak--'.join(chunks[-max_chunks:])
 
-    def get_latest_memory_chunks_with_hashes_since_last_summary(self, discussion_id: str) -> List[Tuple[str, str]]:
+    def get_latest_memory_chunks_with_hashes_since_last_summary(self, discussion_id: str,
+                                                                encryption_key: Optional[bytes] = None,
+                                                                api_key_hash: Optional[str] = None) -> List[Tuple[str, str]]:
         """
         Retrieves memory chunks and hashes since the last summary was created.
 
         Args:
             discussion_id (str): The ID of the discussion.
+            encryption_key (Optional[bytes]): Pre-computed Fernet key for file encryption.
+            api_key_hash (Optional[str]): Pre-computed hash for directory isolation.
 
         Returns:
             List[Tuple[str, str]]: A list of (text, hash) tuples for new memory chunks.
         """
-        memory_filepath = get_discussion_memory_file_path(discussion_id)
-        all_memory_chunks = read_chunks_with_hashes(memory_filepath)
+        memory_filepath = get_discussion_memory_file_path(discussion_id, api_key_hash=api_key_hash)
+        all_memory_chunks = read_chunks_with_hashes(memory_filepath, encryption_key=encryption_key)
         if not all_memory_chunks:
             return []
 
-        summary_filepath = get_discussion_chat_summary_file_path(discussion_id)
-        summary_chunks = read_chunks_with_hashes(summary_filepath)
+        summary_filepath = get_discussion_chat_summary_file_path(discussion_id, api_key_hash=api_key_hash)
+        summary_chunks = read_chunks_with_hashes(summary_filepath, encryption_key=encryption_key)
         if summary_chunks:
             last_used_index_from_end = self.find_how_many_new_memories_since_last_summary(summary_chunks,
                                                                                           all_memory_chunks)
@@ -107,7 +118,9 @@ class MemoryService:
         return all_memory_chunks
 
     def get_chat_summary_memories(self, messages: List[Dict[str, str]], discussion_id: str,
-                                  max_turns_to_search=0) -> str:
+                                  max_turns_to_search=0,
+                                  encryption_key: Optional[bytes] = None,
+                                  api_key_hash: Optional[str] = None) -> str:
         """
         Gathers new memories that need to be incorporated into a long-term chat summary.
 
@@ -123,7 +136,8 @@ class MemoryService:
             final_pairs = self._get_recent_chat_messages_up_to_max(max_turns_to_search, messages)
             return '\n------------\n'.join(final_pairs)
 
-        memory_chunks_with_hashes = self.get_latest_memory_chunks_with_hashes_since_last_summary(discussion_id)
+        memory_chunks_with_hashes = self.get_latest_memory_chunks_with_hashes_since_last_summary(
+            discussion_id, encryption_key=encryption_key, api_key_hash=api_key_hash)
         if not memory_chunks_with_hashes:
             return ''
 
@@ -158,36 +172,44 @@ class MemoryService:
         filtered_chunks = [s for s in pair_chunks if s]
         return text_utils.clear_out_user_assistant_from_chunks(filtered_chunks)
 
-    def get_current_summary(self, discussion_id: str) -> str:
+    def get_current_summary(self, discussion_id: str,
+                            encryption_key: Optional[bytes] = None,
+                            api_key_hash: Optional[str] = None) -> str:
         """
         Retrieves the most recent full summary text from its file.
 
         Args:
             discussion_id (str): The ID of the discussion.
+            encryption_key (Optional[bytes]): Pre-computed Fernet key for file encryption.
+            api_key_hash (Optional[str]): Pre-computed hash for directory isolation.
 
         Returns:
             str: The text of the most recent chat summary.
         """
-        filepath = get_discussion_chat_summary_file_path(discussion_id)
-        current_summary_chunks = read_chunks_with_hashes(filepath)
+        filepath = get_discussion_chat_summary_file_path(discussion_id, api_key_hash=api_key_hash)
+        current_summary_chunks = read_chunks_with_hashes(filepath, encryption_key=encryption_key)
 
         if not current_summary_chunks:
             return "There is not yet a summary file"
 
         return extract_text_blocks_from_hashed_chunks(current_summary_chunks)[0]
 
-    def get_current_memories(self, discussion_id: str) -> List[str]:
+    def get_current_memories(self, discussion_id: str,
+                             encryption_key: Optional[bytes] = None,
+                             api_key_hash: Optional[str] = None) -> List[str]:
         """
         Retrieves all current memory chunk texts from their file.
 
         Args:
             discussion_id (str): The ID of the discussion.
+            encryption_key (Optional[bytes]): Pre-computed Fernet key for file encryption.
+            api_key_hash (Optional[str]): Pre-computed hash for directory isolation.
 
         Returns:
             List[str]: A list containing all memory chunk texts.
         """
-        filepath = get_discussion_memory_file_path(discussion_id)
-        current_memory_chunks = read_chunks_with_hashes(filepath)
+        filepath = get_discussion_memory_file_path(discussion_id, api_key_hash=api_key_hash)
+        current_memory_chunks = read_chunks_with_hashes(filepath, encryption_key=encryption_key)
 
         if not current_memory_chunks:
             return ["There are not yet any memories"]
@@ -215,6 +237,10 @@ class MemoryService:
         memory_hashes = [hash_tuple[1] for hash_tuple in hashed_memory_chunks]
 
         try:
+            # Reverse the list so that index() searches from the newest chunk backward.
+            # The position of summary_hash in the reversed list equals the number of
+            # memory chunks that were added after it — i.e., the count of new memories
+            # since the last summary was written.
             return memory_hashes[::-1].index(summary_hash)
         except ValueError:
             return -1

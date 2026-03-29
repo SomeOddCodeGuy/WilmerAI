@@ -47,9 +47,9 @@ search.
 
 | Property    | Type    | Required? | Description                                                                                                                                                                                                                               |
 |:------------|:--------|:----------|:------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| **`type`**  | String  | ✅ Yes     | Must be exactly `"VectorMemorySearch"`.                                                                                                                                                                                                   |
-| **`input`** | String  | ✅ Yes     | A string of keywords to search for. **Keywords must be separated by a semicolon (`;`)**. This field supports all workflow variables. The system limits searches to a maximum of **60 keywords**; any additional keywords will be ignored. |
-| **`limit`** | Integer | ❌ No      | **Default: `5`**. The maximum number of memory summaries to retrieve from the database.                                                                                                                                                   |
+| **`type`**  | String  | Yes     | Must be exactly `"VectorMemorySearch"`.                                                                                                                                                                                                   |
+| **`input`** | String  | Yes     | A string of keywords to search for. **Keywords must be separated by a semicolon (`;`)**. This field supports all workflow variables. The system limits searches to a maximum of **60 keywords**; any additional keywords will be ignored. |
+| **`limit`** | Integer | No      | **Default: `5`**. The maximum number of memory summaries to retrieve from the database.                                                                                                                                                   |
 
 -----
 

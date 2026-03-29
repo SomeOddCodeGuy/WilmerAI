@@ -31,7 +31,7 @@ the entire conversation history).
 ## Modular and Reusable Workflows (Nesting)
 
 WilmerAI allows you to build complex processes by breaking them down into smaller, reusable components. This is achieved
-by "nesting" workflows—running one workflow file as a single step inside another. A **Parent** workflow uses a *
+by "nesting" workflows -- running one workflow file as a single step inside another. A **Parent** workflow uses a *
 *`CustomWorkflow` node** to call a self-contained **Child** workflow.
 
 This architecture promotes reusability (e.g., creating a single `summarize.json` workflow and calling it from anywhere),
