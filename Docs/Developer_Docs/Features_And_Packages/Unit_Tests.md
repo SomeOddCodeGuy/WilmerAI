@@ -265,7 +265,8 @@ Here is a summary of what each test file is responsible for.
       JSON responses. Uses parameterized tests to ensure graceful handling of malformed or incomplete response data from
       the API. Also tests the `_build_messages_from_conversation` method for multimodal support, verifying that
       messages with an `images` key are transformed into OpenAI's multimodal content block format on their originating
-      message, including handling of various image source types: HTTP URLs, file URIs, data URIs, and raw base64 strings.
+      message, including handling of various image source types: HTTP URLs, data URIs, and raw base64 strings.
+      File URIs (`file://`) are rejected for security reasons.
 
 * **`test_openai_completions_api_handler.py`**
 

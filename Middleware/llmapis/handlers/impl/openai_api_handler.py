@@ -193,9 +193,9 @@ class OpenAiApiHandler(BaseChatCompletionsHandler):
         Processes a single image source string into an API-compatible dictionary.
 
         This method identifies if the string is a data URI, a raw base64 string,
-        a file URI, or an HTTP(S) URL. It converts file URIs and raw base64
-        into data URIs and wraps the result in the dictionary format required by
-        the OpenAI API's multimodal endpoints.
+        or an HTTP(S) URL. It converts raw base64 into data URIs and wraps the
+        result in the dictionary format required by the OpenAI API's multimodal
+        endpoints. File URIs (file://) are rejected for security reasons.
 
         Args:
             content (str): The string representing the image source.
@@ -220,9 +220,7 @@ class OpenAiApiHandler(BaseChatCompletionsHandler):
                 return None
 
         if content.startswith('file://'):
-            data_uri = OpenAiApiHandler.convert_to_data_uri(content)
-            if data_uri:
-                return {"type": "image_url", "image_url": {"url": data_uri}}
+            logger.warning("file:// URIs are not supported for security reasons. Skipping.")
             return None
 
         if OpenAiApiHandler.is_valid_http_url(content):
@@ -267,36 +265,3 @@ class OpenAiApiHandler(BaseChatCompletionsHandler):
             return False
         return bool(re.match(r'^[A-Za-z0-9+/]+={0,2}$', s)) and len(s) % 4 == 0
 
-    @staticmethod
-    def convert_to_data_uri(uri: str) -> Optional[str]:
-        """
-        Converts a local file URI (e.g., 'file:///path/to/image.png') to a data URI.
-
-        This method resolves the local file path, opens the image to determine its
-        MIME type, reads the file bytes, base64 encodes them, and constructs a
-        full data URI string suitable for API transmission.
-
-        Args:
-            uri (str): The 'file://' URI of the local image.
-
-        Returns:
-            Optional[str]: The complete data URI (e.g.,
-            'data:image/png;base64,...'), or None if the file is not found, is not a
-            valid image, or another error occurs.
-        """
-        try:
-            parsed_uri = urlparse(uri)
-            if parsed_uri.scheme != 'file':
-                return None
-
-            actual_path = os.path.abspath(os.path.join(parsed_uri.netloc, parsed_uri.path))
-            with Image.open(actual_path) as img:
-                image_format = img.format.lower() if img.format else 'jpeg'
-                mime_type = f"image/{image_format}"
-
-            with open(actual_path, "rb") as image_file:
-                encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
-            return f"data:{mime_type};base64,{encoded_string}"
-        except (FileNotFoundError, Image.UnidentifiedImageError, ValueError, OSError) as e:
-            logger.warning(f"Could not process file URI {uri}: {e}. The file will not be sent.")
-            return None
