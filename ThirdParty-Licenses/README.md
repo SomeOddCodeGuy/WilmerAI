@@ -66,7 +66,7 @@ _Last Updated: 2026-03-29_
 
 #### cryptography:
 
-_Last Updated: 2026-03-17_
+_Last Updated: 2026-03-29_
 
 * License Type: `Apache License 2.0 / BSD 3-Clause` (dual-licensed)
 * Code: https://github.com/pyca/cryptography
