@@ -2,6 +2,7 @@
 import hashlib
 import logging
 from typing import List, Dict, Tuple
+from Middleware.utilities.sensitive_logging_utils import sensitive_log
 from Middleware.utilities.text_utils import chunk_messages_by_token_size, messages_to_text_block
 
 logger = logging.getLogger(__name__)
@@ -35,7 +36,12 @@ def chunk_messages_with_hashes(messages: List[Dict[str, str]], chunk_size: int =
     logger.debug("max_messages_before_chunk: %s", str(max_messages_before_chunk))
     chunked_messages = chunk_messages_by_token_size(messages, chunk_size, max_messages_before_chunk)
 
-    # Adjust whether we hash the first or last message based on the boolean flag
+    # Build (text_block, hash) tuples for each non-empty chunk.
+    # The hash is taken from the chunk's first message when use_first_message_hash=True,
+    # or its last message otherwise.  Hashing the last message is the default because
+    # memory services use the hash to detect the newest processed boundary; hashing the
+    # first is used when the caller needs to identify chunks by their starting point.
+    # Empty chunks are filtered out to prevent zero-content hashes from being stored.
     return [(messages_to_text_block(chunk), hash_single_message(chunk[0] if use_first_message_hash else chunk[-1]))
             for chunk in chunked_messages if chunk]
 
@@ -74,11 +80,38 @@ def hash_single_message(message: Dict[str, str]) -> str:
     Returns:
         str: The SHA-256 hash of the message content as a hexadecimal string.
     """
-    hash = _hash_message(message['content'])
-    logger.debug("Hashing message: %s", message['content'])
-    logger.debug("Hash is: %s", str(hash))
+    message_hash = hash_content(message['content'])
+    sensitive_log(logger, logging.DEBUG, "Hashing message: %s", message['content'])
+    logger.debug("Hash is: %s", str(message_hash))
     logger.debug("***************************************")
-    return hash
+    return message_hash
+
+
+def hash_message_with_images(message: Dict[str, str]) -> str:
+    """
+    Generates a SHA-256 hash for a message that may contain images.
+
+    This function creates a composite string from the message's role, content,
+    and sorted image data, then hashes the result. If the message has no images,
+    only the role and content are used.
+
+    Args:
+        message (Dict[str, str]): A message dictionary containing at least 'role' and 'content' keys,
+                                   and optionally an 'images' key with a list of image data strings.
+
+    Returns:
+        str: The SHA-256 hash of the composite string as a hexadecimal string.
+    """
+    role = message.get('role', '')
+    content = message.get('content', '')
+    images = message.get('images', [])
+
+    if images:
+        composite = role + content + "".join(sorted(images))
+    else:
+        composite = role + content
+
+    return hash_content(composite)
 
 
 def find_last_matching_hash_message(messagesOriginal: List[Dict[str, str]],
@@ -109,20 +142,22 @@ def find_last_matching_hash_message(messagesOriginal: List[Dict[str, str]],
     filtered_messages = [message for message in messagesOriginal if
                          message["role"] != "system"] if skip_system else messagesOriginal
 
-    filtered_messages = [message for message in filtered_messages if message["role"] != "images"]
-
     current_message_hashes = [hash_single_message(message) for message in filtered_messages]
 
-    # The search boundary - we don't look at the "junk" messages at the end
-    search_boundary = len(current_message_hashes) - turns_to_skip_looking_back
+    # The search boundary - we don't look at the "junk" messages at the end.
+    # Clamped to 0 so a short conversation never produces a negative boundary,
+    # which would cause Python negative-index access into the skip zone.
+    search_boundary = max(0, len(current_message_hashes) - turns_to_skip_looking_back)
+
+    # Pre-compute set of stored hashes for O(1) lookup instead of O(n) per iteration
+    stored_hashes = {hash_tuple[1] for hash_tuple in hashed_chunks_original}
 
     # Iterate from the search boundary backwards to find the last memorized message
     for i in range(search_boundary, -1, -1):
         message_hash = current_message_hashes[i]
         logger.debug(f"Searching for Hash {i}: {message_hash}")
 
-        # Compare hashes with the existing memory hashes
-        if message_hash in (hash_tuple[1] for hash_tuple in hashed_chunks_original):
+        if message_hash in stored_hashes:
             # Return count of NEW messages: from (matched + 1) to search_boundary (exclusive)
             # Message at index i was already memorized, so new messages start at i+1
             # Count = search_boundary - (i + 1) = search_boundary - i - 1
@@ -134,13 +169,9 @@ def find_last_matching_hash_message(messagesOriginal: List[Dict[str, str]],
     return search_boundary
 
 
-# Helper functions to be used internally
-def _hash_message(content: str) -> str:
+def hash_content(content: str) -> str:
     """
     Generates a SHA-256 hash for a given string.
-
-    This is an internal helper function used to generate a unique hash for
-    message content.
 
     Args:
         content (str): The string content to be hashed.

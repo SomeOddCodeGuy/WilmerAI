@@ -1,5 +1,3 @@
-# Tests/llmapis/handlers/impl/test_koboldcpp_api_handler.py
-
 import copy
 from unittest.mock import MagicMock
 
@@ -62,16 +60,13 @@ def test_prepare_payload_basic(base_handler_args):
     Verifies that the payload is correctly structured with the combined prompt
     and all generation parameters, including those added by set_gen_input.
     """
-    # Arrange
     handler = KoboldCppApiHandler(**base_handler_args, stream=False)
     system_prompt = "You are a helpful assistant. "
     user_prompt = "What is the capital of France?"
     expected_full_prompt = "You are a helpful assistant. What is the capital of France?"
 
-    # Act
     payload = handler._prepare_payload(conversation=None, system_prompt=system_prompt, prompt=user_prompt)
 
-    # Assert
     expected_payload = {
         "prompt": expected_full_prompt,
         "temperature": 0.5,
@@ -87,7 +82,6 @@ def test_prepare_payload_with_completion_text(base_handler_args):
     Ensures that when 'addTextToStartOfCompletion' is enabled, the specified
     text is correctly appended to the end of the final prompt string.
     """
-    # Arrange: Create a deep copy and modify the endpoint config for this specific test
     handler_args = copy.deepcopy(base_handler_args)
     handler_args["endpoint_config"]["addTextToStartOfCompletion"] = True
     handler_args["endpoint_config"]["textToAddToStartOfCompletion"] = "\nAssistant:"
@@ -95,10 +89,8 @@ def test_prepare_payload_with_completion_text(base_handler_args):
     handler = KoboldCppApiHandler(**handler_args, stream=False)
     full_prompt = "User: Hello"
 
-    # Act
     payload = handler._prepare_payload(conversation=None, system_prompt="", prompt=full_prompt)
 
-    # Assert
     assert payload["prompt"] == "User: Hello\nAssistant:", "Completion text should be appended to the prompt."
 
 
@@ -147,17 +139,14 @@ def test_handle_non_streaming_success(mocker, base_handler_args):
     Tests a successful end-to-end non-streaming request, verifying that
     the HTTP call is made with the correct payload and the response is parsed correctly.
     """
-    # Arrange
     handler = KoboldCppApiHandler(**base_handler_args, stream=False)
     mock_session = mocker.patch.object(handler, 'session', spec=requests.Session)
     mock_response = MagicMock()
     mock_response.json.return_value = {"results": [{"text": "Success!"}]}
     mock_session.post.return_value = mock_response
 
-    # Act
     result = handler.handle_non_streaming(prompt="Test prompt")
 
-    # Assert
     assert result == "Success!"
     mock_session.post.assert_called_once()
     call_args, call_kwargs = mock_session.post.call_args
@@ -179,7 +168,6 @@ def test_handle_streaming_success(mocker, base_handler_args):
     Tests a successful end-to-end streaming request. It verifies the correct
     HTTP call and ensures the SSE stream is parsed and yielded correctly.
     """
-    # Arrange
     handler = KoboldCppApiHandler(**base_handler_args, stream=True)
     mock_session = mocker.patch.object(handler, 'session', spec=requests.Session)
 
@@ -204,11 +192,9 @@ def test_handle_streaming_success(mocker, base_handler_args):
     mock_context_manager.__exit__.return_value = None
     mock_session.post.return_value = mock_context_manager
 
-    # Act
     generator = handler.handle_streaming(prompt="Test prompt")
     results = list(generator)
 
-    # Assert
     assert results == [
         {'token': 'Hello', 'finish_reason': None},
         {'token': ' World', 'finish_reason': None},
@@ -230,15 +216,30 @@ def test_handle_streaming_success(mocker, base_handler_args):
     assert call_kwargs['json'] == expected_payload
 
 
+def test_prepare_payload_images_only_from_user_messages(base_handler_args):
+    """
+    Verifies that only images from user messages are collected into
+    gen_input, not images from assistant or system messages.
+    """
+    handler = KoboldCppApiHandler(**base_handler_args, stream=False)
+    conversation = [
+        {"role": "system", "content": "Be helpful", "images": ["system_img"]},
+        {"role": "user", "content": "Describe", "images": ["user_img1", "user_img2"]},
+        {"role": "assistant", "content": "I see", "images": ["assistant_img"]},
+        {"role": "user", "content": "Another", "images": ["user_img3"]},
+    ]
+    handler._prepare_payload(conversation=conversation, system_prompt=None, prompt=None)
+
+    assert handler.gen_input["images"] == ["user_img1", "user_img2", "user_img3"]
+
+
 def test_handle_non_streaming_http_error(mocker, base_handler_args):
     """
     Ensures that an HTTP request failure is correctly propagated as an exception.
     """
-    # Arrange
     handler = KoboldCppApiHandler(**base_handler_args, stream=False)
     mock_session = mocker.patch.object(handler, 'session', spec=requests.Session)
     mock_session.post.side_effect = requests.exceptions.RequestException("Connection failed")
 
-    # Act & Assert
     with pytest.raises(requests.exceptions.RequestException, match="Connection failed"):
         handler.handle_non_streaming(prompt="Test prompt")

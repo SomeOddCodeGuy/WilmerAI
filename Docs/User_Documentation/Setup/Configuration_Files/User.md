@@ -7,6 +7,17 @@ User configuration files are located in the `Public/Configs/Users/` directory. T
 rename it (e.g., `MyUser.json`), and modify its contents. To activate a user configuration, either update the
 `_current-user.json` file with the username or use the `--User <username>` command-line argument at startup.
 
+Multiple users can be served from a single Wilmer instance by specifying `--User` multiple times:
+
+```bash
+bash run_macos.sh --User user-one --User user-two --User user-three
+```
+
+In multi-user mode, per-user `port` settings are ignored. The listening port must be specified via the `--port`
+command-line flag; if omitted it defaults to `5050`. The concurrency gate serializes all requests across all users,
+protecting shared LLM hardware. The front-end selects a user by setting the model field to the target username
+(e.g., `"model": "user-two"` or `"model": "user-two:coding"`).
+
 -----
 
 #### **Field Definitions**
@@ -16,10 +27,21 @@ Each User JSON file contains a single object with the following key-value pairs.
 ##### `port`
 
 * **Description**: Specifies the network port on which the WilmerAI instance will listen. This allows multiple instances
-  to run simultaneously. The server hosts on `0.0.0.0` by default, making it accessible on the local network.
+  to run simultaneously. The server binds to `127.0.0.1` (localhost only) by default; use `--listen` to bind to
+  `0.0.0.0` for network access. In multi-user mode this setting is ignored; use `--port` on the command line instead
+  (defaults to `5050`).
 * **Data Type**: `integer`
-* **Required**: Yes
+* **Required**: Yes (single-user mode)
 * **Example**: `5006`
+
+-----
+
+##### `stream`
+
+* **Description**: Controls whether LLM responses are streamed back to the client. When enabled, responses are sent incrementally as they are generated rather than waiting for the complete response.
+* **Data Type**: `boolean`
+* **Required**: Yes
+* **Example**: `true`
 
 -----
 
@@ -66,6 +88,19 @@ Each User JSON file contains a single object with the following key-value pairs.
 
 -----
 
+##### `maxCategorizationAttempts`
+
+* **Description**: The maximum number of times the categorization workflow will run before falling back to the default
+  workflow (`_DefaultWorkflow`). If the LLM's output does not match any configured category after this many attempts,
+  the request is routed to the default workflow. A value of `1` means a single attempt with no retries. Higher values
+  allow retries at the cost of additional LLM calls. Only relevant when `customWorkflowOverride` is `false`.
+* **Data Type**: `integer`
+* **Required**: No
+* **Default**: `1`
+* **Example**: `3`
+
+-----
+
 ##### `discussionIdMemoryFileWorkflowSettings`
 
 * **Description**: Specifies the workflow configuration file (without the `.json` extension) that governs how
@@ -90,7 +125,7 @@ Each User JSON file contains a single object with the following key-value pairs.
 
 * **Description**: The name of the workflow used to generate and update a rolling summary of the conversation history
   for a given `discussionId`.
-* \-**Data Type**: `string`
+* **Data Type**: `string`
 * **Required**: Yes
 * **Example**: `"GetChatSummaryToolWorkflow"`
 
@@ -113,6 +148,17 @@ Each User JSON file contains a single object with the following key-value pairs.
 * **Data Type**: `string`
 * **Required**: Yes
 * **Example**: `"RecentMemoryToolWorkflow"`
+
+-----
+
+##### `defaultParallelProcessWorkflow`
+
+* **Description**: The name of the workflow used for parallel LLM processing. This workflow is used by the memory
+  system to divide large text blocks into chunks and process each chunk concurrently using multiple LLM handlers.
+  If set to an empty string, parallel processing is not used.
+* **Data Type**: `string`
+* **Required**: No
+* **Example**: `"SlowButQualityRagParallelProcessor"`
 
 -----
 
@@ -245,6 +291,12 @@ Each User JSON file contains a single object with the following key-value pairs.
 
 * **Description**: If `true`, logs are written to a `wilmerai.log` file in the directory specified by the
   `--LoggingDirectory` command-line argument. If `false` or omitted, logs are only printed to the console.
+  This setting is only used as a fallback in **single-user mode** when `--file-logging` is not passed on the
+  command line. In **multi-user mode**, this per-user setting is ignored entirely; use the `--file-logging`
+  command-line flag instead to enable file logging for the server. When file logging is active in multi-user
+  mode, each user's log output is automatically written to a separate file under a per-user subdirectory
+  (e.g., `logs/alice/wilmerai.log`, `logs/bob/wilmerai.log`). System and startup logs go to
+  `logs/wilmerai.log`.
 * **Data Type**: `boolean`
 * **Required**: No
 * **Example**: `true`
@@ -261,6 +313,56 @@ Each User JSON file contains a single object with the following key-value pairs.
 * **Required**: No
 * **Default**: `false`
 * **Example**: `true`
+
+-----
+
+##### `encryptUsingApiKey`
+
+* **Description**: If `true`, enables per-user encryption of all discussion files (memories, timestamps, summaries,
+  etc.) using the API key provided in the `Authorization: Bearer <key>` header. When enabled, files are encrypted at
+  rest using Fernet symmetric encryption derived from the API key, and stored under a hash-based subdirectory for
+  directory isolation. Requires the `cryptography` library. Without an API key in the request, this setting has no
+  effect.
+* **Data Type**: `boolean`
+* **Required**: No
+* **Default**: `false`
+* **Example**: `true`
+
+-----
+
+##### `redactLogOutput`
+
+* **Description**: If `true`, log messages that could contain user conversation content are automatically redacted for all requests, regardless of whether encryption is enabled or an API key is present. This can be used standalone to protect log files even without encryption enabled. When encryption is active for a request, redaction also activates automatically even if this setting is `false`.
+* **Data Type**: `boolean`
+* **Required**: No
+* **Default**: `false`
+* **Example**: `true`
+
+-----
+
+##### `interceptOpenWebUIToolRequests`
+
+* **Description**: If `true`, OpenWebUI tool-selection requests are intercepted and answered with an empty tool-call
+  response, bypassing the workflow engine entirely. OpenWebUI sends these requests when "tools" (plugins) are enabled
+  in the UI; they contain a distinctive system prompt asking the model to choose from available tools. When `false`
+  (the default), these requests are routed through the normal workflow pipeline like any other prompt. This is
+  typically the desired behavior when Open WebUI is configured with a separate Task model that handles tool selection.
+* **Data Type**: `boolean`
+* **Required**: No
+* **Default**: `false`
+* **Example**: `true`
+
+-----
+
+##### `contextCompactorSettingsFile`
+
+* **Description**: The name of the JSON settings file (without the `.json` extension) that configures the
+  ContextCompactor feature. This file, located in the user's workflow folder (e.g., `Public/Configs/Workflows/<username>/`), controls parameters such as token budgets
+  for recent and old context windows, the LLM endpoint and preset used for summarization, and the prompts for each
+  compaction stage.
+* **Data Type**: `string`
+* **Required**: No
+* **Example**: `"ContextCompactorSettings"`
 
 -----
 
@@ -285,6 +387,8 @@ Here is a fully-commented example user configuration file.
 {
   // The network port for this WilmerAI instance to listen on.
   "port": 5006,
+  // If true, LLM responses are streamed incrementally back to the client.
+  "stream": true,
   // If true, bypasses routing and uses 'customWorkflow' for all requests.
   "customWorkflowOverride": false,
   // The workflow to use when 'customWorkflowOverride' is true.
@@ -293,6 +397,8 @@ Here is a fully-commented example user configuration file.
   "routingConfig": "assistantSingleModelCategoriesConfig",
   // The workflow that categorizes incoming prompts.
   "categorizationWorkflow": "CustomCategorizationWorkflow",
+  // Max attempts for categorization before falling back to the default workflow (default: 1).
+  "maxCategorizationAttempts": 1,
   // Workflow for managing long-term, persistent memory files.
   "discussionIdMemoryFileWorkflowSettings": "_DiscussionId-MemoryFile-Workflow-Settings",
   // Workflow triggered for file-based memory operations.
@@ -303,6 +409,8 @@ Here is a fully-commented example user configuration file.
   "conversationMemoryToolWorkflow": "CustomConversationMemoryToolWorkflow",
   // Workflow for retrieving recent conversation turns.
   "recentMemoryToolWorkflow": "RecentMemoryToolWorkflow",
+  // Workflow for parallel LLM processing of large text blocks.
+  "defaultParallelProcessWorkflow": "SlowButQualityRagParallelProcessor",
   // Directory to store all discussion-related files (memories, summaries).
   "discussionDirectory": "D:\\WilmerAI\\Discussions",
   // Directory to store the user's SQLite database for workflow locking.
@@ -332,6 +440,14 @@ Here is a fully-commented example user configuration file.
   // If true, lists workflow folders from the shared workflows folder in the models API endpoints.
   "allowSharedWorkflows": false,
   // Optional override for the shared workflows folder name (default is "_shared").
-  "sharedWorkflowsSubDirectoryOverride": "_shared"
+  "sharedWorkflowsSubDirectoryOverride": "_shared",
+  // If true, encrypts discussion files using the API key from the Authorization header.
+  "encryptUsingApiKey": false,
+  // If true, redacts user content from log output for all requests (not just encrypted ones).
+  "redactLogOutput": false,
+  // If true, intercepts OpenWebUI tool-selection requests with an empty response (default: false).
+  "interceptOpenWebUIToolRequests": false,
+  // Settings file for the ContextCompactor feature (without .json extension).
+  "contextCompactorSettingsFile": "ContextCompactorSettings"
 }
 ```

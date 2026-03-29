@@ -1,5 +1,3 @@
-# Tests/workflows/processors/test_workflows_processor.py
-
 import copy
 from unittest.mock import Mock, patch, ANY
 
@@ -250,7 +248,7 @@ class TestWorkflowProcessorTimestamping:
         processor = workflow_processor_factory(configs=configs)
         list(processor.execute())
         mock_internal_services["timestamp"].resolve_and_track_history.assert_called_once_with(
-            processor.messages, processor.discussion_id
+            processor.messages, processor.discussion_id, encryption_key=None, api_key_hash=None
         )
 
     def test_responder_skips_commit_when_group_chat_logic_is_off(self, workflow_processor_factory,
@@ -264,7 +262,7 @@ class TestWorkflowProcessorTimestamping:
 
         list(processor.execute())
 
-        mock_timestamp_service.save_placeholder_timestamp.assert_called_once_with("disc-123")
+        mock_timestamp_service.save_placeholder_timestamp.assert_called_once_with("disc-123", encryption_key=None, api_key_hash=None)
         mock_timestamp_service.commit_assistant_response.assert_not_called()
 
     @patch('Middleware.workflows.processors.workflows_processor.StreamingResponseHandler')
@@ -282,7 +280,7 @@ class TestWorkflowProcessorTimestamping:
 
         list(processor.execute())
 
-        mock_timestamp_service.save_placeholder_timestamp.assert_called_once_with("disc-123")
+        mock_timestamp_service.save_placeholder_timestamp.assert_called_once_with("disc-123", encryption_key=None, api_key_hash=None)
         mock_timestamp_service.commit_assistant_response.assert_not_called()
 
     def test_responder_commits_timestamp_when_group_chat_logic_is_on(self, workflow_processor_factory,
@@ -298,8 +296,8 @@ class TestWorkflowProcessorTimestamping:
 
         list(processor.execute())
 
-        mock_timestamp_service.save_placeholder_timestamp.assert_called_once_with("disc-123")
-        mock_timestamp_service.commit_assistant_response.assert_called_once_with("disc-123", final_result)
+        mock_timestamp_service.save_placeholder_timestamp.assert_called_once_with("disc-123", encryption_key=None, api_key_hash=None)
+        mock_timestamp_service.commit_assistant_response.assert_called_once_with("disc-123", final_result, encryption_key=None, api_key_hash=None)
 
     @patch('Middleware.workflows.processors.workflows_processor.StreamingResponseHandler')
     def test_responder_commits_timestamp_when_group_chat_logic_is_on_streaming(self, mock_stream_handler_cls,
@@ -320,8 +318,8 @@ class TestWorkflowProcessorTimestamping:
 
         list(processor.execute())
 
-        mock_timestamp_service.save_placeholder_timestamp.assert_called_once_with("disc-123")
-        mock_timestamp_service.commit_assistant_response.assert_called_once_with("disc-123", full_response_text)
+        mock_timestamp_service.save_placeholder_timestamp.assert_called_once_with("disc-123", encryption_key=None, api_key_hash=None)
+        mock_timestamp_service.commit_assistant_response.assert_called_once_with("disc-123", full_response_text, encryption_key=None, api_key_hash=None)
 
 
 class TestWorkflowProcessorRobustness:

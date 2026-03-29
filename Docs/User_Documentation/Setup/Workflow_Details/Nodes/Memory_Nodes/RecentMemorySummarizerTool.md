@@ -6,7 +6,7 @@ node's dual-mode logic, properties, and best practices for retrieving recent con
 ### Core Purpose
 
 The **`RecentMemorySummarizerTool`** node is the primary retriever for file-based memories. Its function is to quickly
-fetch the most recent memory chunks from the long-term memory file (`<id>_memories.jsonl`). A key feature is its ability
+fetch the most recent memory chunks from the long-term memory file (`<id>_memories.json`). A key feature is its ability
 to fall back to a stateless mode if no `discussionId` is active, making it versatile for retrieving context from both
 long-term storage and the immediate chat history.
 
@@ -18,7 +18,7 @@ The node operates in one of two modes depending on the presence of a `discussion
 
 * **Stateful Mode (with `discussionId`)**:
 
-    1. The node locates the discussion's `<id>_memories.jsonl` file.
+    1. The node locates the discussion's `<id>_memories.json` file.
     2. It reads all hashed memory chunks from the file.
     3. It slices the list to retrieve only the last `maxSummaryChunksFromFile` chunks.
     4. The text from these chunks is joined into a single string using the specified delimiter.
@@ -35,7 +35,7 @@ The node operates in one of two modes depending on the presence of a `discussion
 
 * **Direct Output (`{agent#Output}`)**: The node **always** returns a single string containing the requested memory
   chunks or conversation turns. If no memories exist in stateful mode, it returns a message like
-  `"There are not yet any memories"`.
+  `"No memories have been generated yet"`.
 
 -----
 
@@ -43,11 +43,11 @@ The node operates in one of two modes depending on the presence of a `discussion
 
 | Property                       | Type    | Required? | Description                                                                                                                                  |
 |:-------------------------------|:--------|:----------|:---------------------------------------------------------------------------------------------------------------------------------------------|
-| **`type`**                     | String  | ✅ Yes     | Must be exactly `"RecentMemorySummarizerTool"`.                                                                                              |
-| **`maxSummaryChunksFromFile`** | Integer | ✅ Yes     | **Used in Stateful Mode.** The number of most recent memory chunks to retrieve from the `.jsonl` file. Set to `-1` to retrieve all memories. |
-| **`maxTurnsToPull`**           | Integer | ✅ Yes     | **Used in Stateless Mode.** The number of recent conversation turns to pull from the chat history when no `discussionId` is present.         |
-| **`customDelimiter`**          | String  | ❌ No      | **Default: `"--ChunkBreak--"`**. A custom string to use for separating the retrieved memory chunks or turns.                                 |
-| **`lookbackStart`**            | Integer | ❌ No      | **Default: `0`**. The number of turns to skip from the very end of the conversation before starting to pull content.                         |
+| **`type`**                     | String  | Yes     | Must be exactly `"RecentMemorySummarizerTool"`.                                                                                              |
+| **`maxSummaryChunksFromFile`** | Integer | Yes     | **Used in Stateful Mode.** The number of most recent memory chunks to retrieve from the `.json` file. Set to `-1` to retrieve all memories. |
+| **`maxTurnsToPull`**           | Integer | Yes     | **Used in Stateless Mode.** The number of recent conversation turns to pull from the chat history when no `discussionId` is present.         |
+| **`customDelimiter`**          | String  | No      | **Default: `"--ChunkBreak--"`**. A custom string to use for separating the retrieved memory chunks or turns.                                 |
+| **`lookbackStart`**            | Integer | No      | **Default: `0`**. The number of turns to skip from the very end of the conversation before starting to pull content.                         |
 
 -----
 

@@ -6,14 +6,14 @@ function as fast file reader.
 ### Core Purpose
 
 The **`GetCurrentSummaryFromFile`** node is a simple, direct **"dumb" reader**. Its sole function is to read the
-complete content of the rolling summary file (`<id>_summary.jsonl`) and return it as a string. It performs no staleness
+complete content of the rolling summary file (`<id>_chat_summary.json`) and return it as a string. It performs no staleness
 checks, triggers no updates, and has no complex logic, making it the fastest way to retrieve the current summary.
 
 -----
 
 ### Internal Execution Flow
 
-1. **File Location**: The node identifies the path to the `<id>_summary.jsonl` file.
+1. **File Location**: The node identifies the path to the `<id>_chat_summary.json` file.
 2. **File Read**: It opens the file, reads its entire contents into a string.
 3. **Return Content**: It returns the string.
 
@@ -30,7 +30,7 @@ checks, triggers no updates, and has no complex logic, making it the fastest way
 
 | Property   | Type   | Required? | Description                            |
 |:-----------|:-------|:----------|:---------------------------------------|
-| **`type`** | String | ✅ Yes     | Must be `"GetCurrentSummaryFromFile"`. |
+| **`type`** | String | Yes     | Must be `"GetCurrentSummaryFromFile"`. |
 
 -----
 

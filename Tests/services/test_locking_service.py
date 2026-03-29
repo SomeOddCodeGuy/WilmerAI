@@ -1,5 +1,3 @@
-# Tests/services/test_locking_service.py
-
 import os
 import sqlite3
 import textwrap
@@ -133,7 +131,6 @@ class TestLockingService:
         ({"wilmer_session_id": "sess1"}, " AND WilmerSessionId = ?", ["sess1"]),
         ({"workflow_id": "wf1", "workflow_lock_id": "lock1"},
          " AND WorkflowId = ? AND WorkflowLockId = ?", ["wf1", "lock1"]),
-        ({}, "", []),
     ])
     def test_delete_node_locks(self, locking_service, mock_sqlite3, params, expected_where, expected_params):
         """Tests that locks are deleted with the correct dynamically generated SQL query."""
@@ -144,6 +141,14 @@ class TestLockingService:
         locking_service.delete_node_locks(**params)
         expected_query = f'DELETE FROM {locking_service.TABLE_NAME} WHERE 1=1{expected_where}'
         mock_cursor.execute.assert_called_once_with(expected_query, expected_params)
+
+    def test_delete_node_locks_no_criteria_is_noop(self, locking_service, mock_sqlite3):
+        """Tests that calling delete_node_locks with no criteria is a safe no-op."""
+        _, _, mock_cursor = mock_sqlite3
+        mock_cursor.reset_mock()
+
+        locking_service.delete_node_locks()
+        mock_cursor.execute.assert_not_called()
 
     def test_get_lock_exists_and_is_valid(self, locking_service, mock_sqlite3, mock_datetime):
         """Tests checking for a lock that exists and is not expired."""

@@ -19,6 +19,7 @@ from Middleware.utilities.config_utils import (
     get_endpoint_config,
     get_api_type_config,
 )
+from Middleware.utilities.sensitive_logging_utils import sensitive_log
 
 logger = logging.getLogger(__name__)
 
@@ -158,13 +159,13 @@ class LlmApiService:
                 prompt_to_pass = text_start_prompt + (prompt_to_pass or "")
 
             logger.debug("llm_api - Stream is: %s", self.stream)
-            logger.debug("llm_api - System prompt: %s", system_prompt_to_pass)
-            logger.debug("llm_api - Prompt: %s", prompt_to_pass)
+            sensitive_log(logger, logging.DEBUG, "llm_api - System prompt: %s", system_prompt_to_pass)
+            sensitive_log(logger, logging.DEBUG, "llm_api - Prompt: %s", prompt_to_pass)
 
             if not llm_takes_images:
-                logger.debug("llm_api does not take images. Removing images from the collection.")
+                logger.debug("llm_api does not take images. Stripping images key from messages.")
                 if conversation_copy:
-                    conversation_copy = [msg for msg in conversation_copy if msg.get("role") != "images"]
+                    conversation_copy = [{k: v for k, v in msg.items() if k != "images"} for msg in conversation_copy]
             else:
                 logger.debug("llm_api takes images. Leaving images in place.")
 

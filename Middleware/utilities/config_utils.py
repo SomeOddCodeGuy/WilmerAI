@@ -66,20 +66,53 @@ def get_current_username():
     """
     Retrieves the current username from the application configuration.
 
-    This function first checks for a globally set username. If not found,
-    it reads the `_current-user.json` file to get the active user.
+    Checks the following in order:
+    1. Request-scoped user (set from the model field for multi-user mode)
+    2. USERS list has exactly one entry (single-user mode) -- return that entry
+    3. USERS list has multiple entries but no request user -- raise RuntimeError
+    4. USERS is None -- fall back to _current-user.json (legacy, no --User arg)
 
     Returns:
         str: The name of the current user.
+
+    Raises:
+        RuntimeError: If multiple users are configured but no request-scoped
+            user has been set. This prevents silent cross-user data leaks.
     """
-    if (instance_global_variables.USER is None):
-        config_dir = str(get_root_config_directory())
-        config_file = os.path.join(config_dir, 'Users', '_current-user.json')
-        with open(config_file) as file:
-            data = json.load(file)
-        return data['currentUser']
-    else:
-        return instance_global_variables.USER
+    request_user = instance_global_variables.get_request_user()
+    if request_user:
+        return request_user
+    users = instance_global_variables.USERS
+    if users is not None:
+        if len(users) == 1:
+            return users[0]
+        raise RuntimeError(
+            f"Multi-user mode active with {len(users)} users but no request-scoped user set. "
+            f"This is a bug -- every request must identify a user. "
+            f"Configured users: {users}"
+        )
+    config_dir = str(get_root_config_directory())
+    config_file = os.path.join(config_dir, 'Users', '_current-user.json')
+    with open(config_file) as file:
+        data = json.load(file)
+    return data['currentUser']
+
+
+def get_user_config_for(username):
+    """
+    Retrieves the configuration for a specific user by name.
+
+    Args:
+        username (str): The username whose config to load.
+
+    Returns:
+        dict: The specified user's configuration data.
+    """
+    config_dir = str(get_root_config_directory())
+    config_path = os.path.join(config_dir, 'Users', f'{username.lower()}.json')
+    with open(config_path) as file:
+        config_data = json.load(file)
+    return config_data
 
 
 def get_user_config():
@@ -92,12 +125,7 @@ def get_user_config():
     Returns:
         dict: The current user's configuration data.
     """
-    config_dir = str(get_root_config_directory())
-    current_user_name = get_current_username()
-    config_path = os.path.join(config_dir, 'Users', f'{current_user_name.lower()}.json')
-    with open(config_path) as file:
-        config_data = json.load(file)
-    return config_data
+    return get_user_config_for(get_current_username())
 
 
 def get_config_value(key):
@@ -199,39 +227,91 @@ def get_config_with_subdirectory(directory, sub_directory, file_name, secondary_
     return config_file
 
 
-def get_discussion_file_path(discussion_id, file_name):
+def get_discussion_file_path(discussion_id, file_name, api_key_hash=None):
     """
     Constructs the file path for a discussion-related file.
 
     This function uses the discussion directory specified in the user config
-    to build a file path for a specific discussion ID and file name.
+    to build a file path for a specific discussion ID and file name. If the
+    configured directory is empty, missing, or cannot be created on the
+    current platform, it falls back to ``Public/DiscussionIds/`` under the
+    project root.
+
+    When ``api_key_hash`` is provided, files are stored under a per-user
+    subdirectory::
+
+        {discussionDirectory}/{api_key_hash}/{discussion_id}/{file_name}.json
+
+    Without an API key hash, the layout is::
+
+        {discussionDirectory}/{discussion_id}/{file_name}.json
+
+    For backwards compatibility, if the nested file does not exist but a
+    legacy flat file (``{discussionDirectory}/{discussion_id}_{file_name}.json``)
+    does, the legacy path is returned instead. New files are always created
+    in the nested structure.
 
     Args:
         discussion_id (str): The ID of the discussion.
         file_name (str): The base name of the file (e.g., 'memories', 'chat_summary').
+        api_key_hash (str, optional): A 16-char hex hash of the API key for
+            per-user directory isolation. Defaults to None.
 
     Returns:
         str: The full path to the discussion file.
+
+    Raises:
+        ValueError: If discussion_id is None.
     """
+    if discussion_id is None:
+        raise ValueError("discussion_id is required for discussion file path construction")
     directory = get_config_value('discussionDirectory')
-    return os.path.join(directory, f'{discussion_id}_{file_name}.json')
+    if directory:
+        if api_key_hash:
+            discussion_dir = os.path.join(directory, api_key_hash, discussion_id)
+        else:
+            discussion_dir = os.path.join(directory, discussion_id)
+        try:
+            os.makedirs(discussion_dir, exist_ok=True)
+        except OSError:
+            logger.warning("Configured discussionDirectory '%s' could not be created, using default.", directory)
+            directory = None
+
+    if not directory:
+        directory = os.path.join(get_project_root_directory_path(), 'Public', 'DiscussionIds')
+        if api_key_hash:
+            discussion_dir = os.path.join(directory, api_key_hash, discussion_id)
+        else:
+            discussion_dir = os.path.join(directory, discussion_id)
+        os.makedirs(discussion_dir, exist_ok=True)
+
+    nested_path = os.path.join(discussion_dir, f'{file_name}.json')
+    if not os.path.exists(nested_path) and not api_key_hash:
+        legacy_path = os.path.join(directory, f'{discussion_id}_{file_name}.json')
+        if os.path.exists(legacy_path):
+            logger.info("Using legacy discussion file: %s", legacy_path)
+            return legacy_path
+
+    return nested_path
 
 
-def get_discussion_timestamp_file_path(discussion_id):
+def get_discussion_timestamp_file_path(discussion_id, api_key_hash=None):
     """
     Constructs the file path for a discussion's timestamp file.
 
-    This function uses the discussion directory from the user config and appends
-    the discussion ID to create the path for the timestamp file.
+    This function delegates to ``get_discussion_file_path`` so that
+    timestamps benefit from the same per-user directory isolation and
+    legacy-fallback logic as all other discussion files.
 
     Args:
         discussion_id (str): The ID of the discussion.
+        api_key_hash (str, optional): A 16-char hex hash of the API key for
+            per-user directory isolation. Defaults to None.
 
     Returns:
         str: The full path to the discussion's timestamp file.
     """
-    directory = get_config_value('discussionDirectory')
-    return os.path.join(directory, f'{discussion_id}_timestamps.json')
+    return get_discussion_file_path(discussion_id, 'timestamps', api_key_hash=api_key_hash)
 
 
 def get_custom_dblite_filepath():
@@ -630,7 +710,7 @@ def get_shared_workflows_folder():
     return '_shared'
 
 
-def get_available_shared_workflow_folders():
+def get_available_shared_workflow_folders(shared_folder_override=None):
     """
     Retrieves a list of available workflow folder names from the shared workflows folder.
 
@@ -638,11 +718,16 @@ def get_available_shared_workflow_folders():
     subfolder names that can be used as model identifiers in API requests.
     Each folder should contain a DefaultWorkflow.json as the entry point.
 
+    Args:
+        shared_folder_override (str, optional): If provided, uses this folder name
+            instead of resolving via the current user's config. Used by multi-user
+            model aggregation to list workflows for a specific user.
+
     Returns:
         list: A list of folder names available in the shared folder.
     """
     config_dir = str(get_root_config_directory())
-    shared_folder = get_shared_workflows_folder()
+    shared_folder = shared_folder_override if shared_folder_override else get_shared_workflows_folder()
     workflows_path = os.path.join(config_dir, 'Workflows', shared_folder)
 
     folders = []
@@ -676,16 +761,20 @@ def workflow_folder_exists_in_shared(folder_name):
 
 
 # Backwards compatibility aliases
-def get_available_shared_workflows():
+def get_available_shared_workflows(shared_folder_override=None):
     """
     Retrieves a list of available workflow folder names from the shared workflows folder.
 
     This is an alias for get_available_shared_workflow_folders().
 
+    Args:
+        shared_folder_override (str, optional): If provided, uses this folder name
+            instead of resolving via the current user's config.
+
     Returns:
         list: A list of folder names available in the shared folder.
     """
-    return get_available_shared_workflow_folders()
+    return get_available_shared_workflow_folders(shared_folder_override=shared_folder_override)
 
 
 def workflow_exists_in_shared_folder(folder_name):
@@ -717,7 +806,7 @@ def get_discussion_id_workflow_path():
     return get_workflow_path(workflow_name)
 
 
-def get_discussion_memory_file_path(discussion_id):
+def get_discussion_memory_file_path(discussion_id, api_key_hash=None):
     """
     Retrieves the file path for a discussion's memory file.
 
@@ -726,16 +815,56 @@ def get_discussion_memory_file_path(discussion_id):
 
     Args:
         discussion_id (str): The ID of the discussion.
+        api_key_hash (str, optional): Hash of the API key for per-user isolation.
 
     Returns:
         str: The full path to the discussion's memory file.
     """
-    result = get_discussion_file_path(discussion_id, 'memories')
+    result = get_discussion_file_path(discussion_id, 'memories', api_key_hash=api_key_hash)
     logger.debug("Getting discussion id path: %s", result)
     return result
 
 
-def get_discussion_chat_summary_file_path(discussion_id):
+def get_discussion_condensation_tracker_file_path(discussion_id, api_key_hash=None):
+    """
+    Retrieves the file path for a discussion's memory condensation tracker file.
+
+    This function uses `get_discussion_file_path` to build the path for
+    the `_condensation_tracker.json` file associated with a given discussion ID.
+    The tracker stores the hash of the last memory that was included in a
+    condensation pass, so the system knows which memories are "new" since
+    the last condensation.
+
+    Args:
+        discussion_id (str): The ID of the discussion.
+        api_key_hash (str, optional): Hash of the API key for per-user isolation.
+
+    Returns:
+        str: The full path to the discussion's condensation tracker file.
+    """
+    return get_discussion_file_path(discussion_id, 'condensation_tracker', api_key_hash=api_key_hash)
+
+
+def get_discussion_vision_responses_file_path(discussion_id, api_key_hash=None):
+    """
+    Retrieves the file path for a discussion's vision response cache file.
+
+    This function uses `get_discussion_file_path` to build the path for
+    the `_vision_responses.json` file associated with a given discussion ID.
+    The cache stores hashed message keys mapped to their vision LLM responses,
+    so that identical images are not re-processed.
+
+    Args:
+        discussion_id (str): The ID of the discussion.
+        api_key_hash (str, optional): Hash of the API key for per-user isolation.
+
+    Returns:
+        str: The full path to the discussion's vision response cache file.
+    """
+    return get_discussion_file_path(discussion_id, 'vision_responses', api_key_hash=api_key_hash)
+
+
+def get_discussion_chat_summary_file_path(discussion_id, api_key_hash=None):
     """
     Retrieves the file path for a discussion's chat summary file.
 
@@ -744,24 +873,13 @@ def get_discussion_chat_summary_file_path(discussion_id):
 
     Args:
         discussion_id (str): The ID of the discussion.
+        api_key_hash (str, optional): Hash of the API key for per-user isolation.
 
     Returns:
         str: The full path to the discussion's chat summary file.
     """
-    return get_discussion_file_path(discussion_id, 'chat_summary')
+    return get_discussion_file_path(discussion_id, 'chat_summary', api_key_hash=api_key_hash)
 
-
-def get_is_streaming() -> bool:
-    """
-    Retrieves the stream configuration setting.
-
-    This function gets the 'stream' setting from the user configuration.
-
-    Returns:
-        bool: The boolean value indicating if streaming is enabled.
-    """
-    data = get_user_config()
-    return data['stream']
 
 
 def get_is_chat_complete_add_user_assistant() -> bool:
@@ -804,17 +922,124 @@ def get_connect_timeout() -> int:
         int: The connect timeout in seconds.
     """
     value = get_config_value('connectTimeoutInSeconds')
-    return 30 if value is None else int(value)
+    return 30 if value is None else max(1, int(value))
 
 
-def get_use_file_logging() -> bool:
+def get_max_categorization_attempts() -> int:
     """
-    Retrieves the `useFileLogging` configuration setting.
+    Retrieves the `maxCategorizationAttempts` configuration setting.
 
-    This function determines if WilmerAI should log to a file in addition
-    to the console.
+    This function returns the maximum number of times the categorization
+    workflow will run before falling back to the default workflow. If the
+    setting is not found, it defaults to 1 (no retries).
 
     Returns:
-        bool: The boolean value indicating whether to use file logging.
+        int: The maximum number of categorization attempts.
     """
-    return get_config_value('useFileLogging')
+    value = get_config_value('maxCategorizationAttempts')
+    return 1 if value is None else max(1, int(value))
+
+
+def get_encrypt_using_api_key() -> bool:
+    """
+    Retrieves the ``encryptUsingApiKey`` configuration setting.
+
+    When True, discussion files are encrypted at rest using a key derived
+    from the API key. When False (the default), API keys are still used
+    for directory isolation but files remain plaintext.
+
+    Returns:
+        bool: Whether file encryption is enabled.
+    """
+    value = get_config_value('encryptUsingApiKey')
+    return bool(value) if value is not None else False
+
+
+def get_redact_log_output() -> bool:
+    """
+    Retrieves the ``redactLogOutput`` configuration setting.
+
+    When True, all sensitive content (prompts, LLM responses, payloads)
+    is redacted from console and file log output, regardless of whether
+    encryption is enabled. When False (the default), log output is
+    unredacted unless encryption-based redaction is active.
+
+    Returns:
+        bool: Whether log redaction is enabled.
+    """
+    value = get_config_value('redactLogOutput')
+    return bool(value) if value is not None else False
+
+
+def get_intercept_openwebui_tool_requests() -> bool:
+    """
+    Retrieves the ``interceptOpenWebUIToolRequests`` configuration setting.
+
+    When True, OpenWebUI tool-selection requests (identifiable by a specific
+    system prompt pattern) are intercepted and answered with an empty tool-call
+    response, bypassing the workflow engine entirely. When False (the default),
+    these requests are routed through the normal workflow pipeline like any
+    other prompt.
+
+    Returns:
+        bool: Whether to intercept OpenWebUI tool requests.
+    """
+    value = get_config_value('interceptOpenWebUIToolRequests')
+    return bool(value) if value is not None else False
+
+
+def get_context_compactor_settings_name():
+    """
+    Retrieves the name of the context compactor settings file.
+
+    This function gets the 'contextCompactorSettingsFile' setting from the
+    user configuration.
+
+    Returns:
+        str or None: The name of the context compactor settings file, or None if not set.
+    """
+    return get_config_value('contextCompactorSettingsFile')
+
+
+def get_context_compactor_settings_path():
+    """
+    Retrieves the file path to the context compactor settings file.
+
+    This function gets the name of the context compactor settings file from the user
+    configuration and then returns its full file path within the user's workflow folder.
+
+    Returns:
+        str: The full path to the context compactor settings file.
+    """
+    settings_name = get_context_compactor_settings_name()
+    return get_workflow_path(settings_name)
+
+
+def get_discussion_context_compactor_old_file_path(discussion_id, api_key_hash=None):
+    """
+    Retrieves the file path for a discussion's context compactor 'Old' section file.
+
+    Args:
+        discussion_id (str): The ID of the discussion.
+        api_key_hash (str, optional): Hash of the API key for per-user isolation.
+
+    Returns:
+        str: The full path to the discussion's context compactor 'Old' file.
+    """
+    return get_discussion_file_path(discussion_id, 'context_compactor_old', api_key_hash=api_key_hash)
+
+
+def get_discussion_context_compactor_oldest_file_path(discussion_id, api_key_hash=None):
+    """
+    Retrieves the file path for a discussion's context compactor 'Oldest' section file.
+
+    Args:
+        discussion_id (str): The ID of the discussion.
+        api_key_hash (str, optional): Hash of the API key for per-user isolation.
+
+    Returns:
+        str: The full path to the discussion's context compactor 'Oldest' file.
+    """
+    return get_discussion_file_path(discussion_id, 'context_compactor_oldest', api_key_hash=api_key_hash)
+
+

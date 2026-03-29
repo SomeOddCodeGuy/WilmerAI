@@ -1,11 +1,10 @@
-# Tests/services/test_timestamp_service.py
 # We need the real datetime module/class for comparisons, internal logic, and functional implementations in mocks
 from datetime import datetime as original_datetime, timedelta
 
 import pytest
 
 # Import the service, the new placeholder constant, and the module-level helper
-from Middleware.services.timestamp_service import TimestampService, PLACEHOLDER_HASH, LEGACY_PLACEHOLDER_HASH, \
+from Middleware.services.timestamp_service import TimestampService, PLACEHOLDER_HASH, \
     _is_generation_prompt
 
 # ##################################
@@ -105,68 +104,60 @@ class TestTimestampService:
     # ##########################################
     def test_save_placeholder_timestamp(self, timestamp_service, mock_dependencies):
         """Verifies that a placeholder timestamp is correctly saved."""
-        # Arrange
         mock_dependencies["load_file"].return_value = {}
         T_NOW_STR = f"({MOCK_NOW.strftime(TS_FORMAT)})"
 
-        # Act
         timestamp_service.save_placeholder_timestamp("id")
 
-        # Assert
         expected_saved_data = {PLACEHOLDER_HASH: T_NOW_STR}
         mock_dependencies["save_file"].assert_called_once_with(
             mock_dependencies["get_path"].return_value,
-            expected_saved_data
+            expected_saved_data,
+            encryption_key=None
         )
 
     def test_commit_assistant_response_success(self, timestamp_service, mock_dependencies):
         """Tests that a placeholder is correctly committed to a new content hash."""
-        # Arrange
         T_PLACEHOLDER = "(Placeholder_Time)"
         mock_dependencies["load_file"].return_value = {PLACEHOLDER_HASH: T_PLACEHOLDER}
         mock_dependencies["hash"].return_value = "new_hash"
         content = "Final response"
 
-        # Act
         timestamp_service.commit_assistant_response("id", content)
 
-        # Assert
         expected_saved_data = {"new_hash": T_PLACEHOLDER}
         mock_dependencies["save_file"].assert_called_once_with(
             mock_dependencies["get_path"].return_value,
-            expected_saved_data
+            expected_saved_data,
+            encryption_key=None
         )
 
     def test_commit_assistant_response_no_placeholder(self, timestamp_service, mock_dependencies):
         """Tests fallback behavior: commit saves with current time if no placeholder exists."""
-        # Arrange
         mock_dependencies["load_file"].return_value = {}
         mock_dependencies["hash"].return_value = "new_hash"
         T_NOW_STR = f"({MOCK_NOW.strftime(TS_FORMAT)})"
 
-        # Act
         timestamp_service.commit_assistant_response("id", "content")
 
-        # Assert
         expected_saved_data = {"new_hash": T_NOW_STR}
         mock_dependencies["save_file"].assert_called_once_with(
             mock_dependencies["get_path"].return_value,
-            expected_saved_data
+            expected_saved_data,
+            encryption_key=None
         )
 
     def test_commit_assistant_response_empty_content(self, timestamp_service, mock_dependencies):
         """Tests that an empty response clears the placeholder without creating a new hash."""
-        # Arrange
         mock_dependencies["load_file"].return_value = {PLACEHOLDER_HASH: "(Some_Time)"}
 
-        # Act
         timestamp_service.commit_assistant_response("id", "")
 
-        # Assert
         mock_dependencies["hash"].assert_not_called()
         # The file is saved, but it's now empty.
         mock_dependencies["save_file"].assert_called_once_with(
-            mock_dependencies["get_path"].return_value, {}
+            mock_dependencies["get_path"].return_value, {},
+            encryption_key=None
         )
 
     # ##########################################
@@ -174,7 +165,6 @@ class TestTimestampService:
     # ##########################################
     def test_resolve_and_track_history_resolves_orphaned_placeholder(self, timestamp_service, mock_dependencies):
         """Tests that resolve_and_track_history correctly applies a leftover placeholder."""
-        # Arrange
         T_PLACEHOLDER = f"({(MOCK_NOW - timedelta(minutes=10)).strftime(TS_FORMAT)})"
         messages = [
             {'role': 'user', 'content': 'Previous message'},
@@ -184,10 +174,8 @@ class TestTimestampService:
         # Phase 0: hash for assistant message resolution, Phase 1: backward iteration (assistant, then user)
         mock_dependencies["hash"].side_effect = ['crashed_hash', 'crashed_hash', 'user_hash']
 
-        # Act
         timestamp_service.resolve_and_track_history(messages, "convo")
 
-        # Assert
         # The file should be saved with the resolved placeholder and the backfilled user message
         final_saved_data = {
             'crashed_hash': T_PLACEHOLDER,
@@ -199,7 +187,6 @@ class TestTimestampService:
 
     def test_resolve_and_track_new_conversation(self, timestamp_service, mock_dependencies):
         """Tests chronological backfill for a brand new conversation."""
-        # Arrange
         T_NOW_STR = f"({MOCK_NOW.strftime(TS_FORMAT)})"
         T_NOW_M1S = f"({(MOCK_NOW - timedelta(seconds=1)).strftime(TS_FORMAT)})"
         messages = [
@@ -209,10 +196,8 @@ class TestTimestampService:
         mock_dependencies["load_file"].return_value = {}
         mock_dependencies["hash"].side_effect = ['hash2', 'hash1']  # Hashed backwards during Phase 1
 
-        # Act
         timestamp_service.resolve_and_track_history(messages, "convo")
 
-        # Assert
         expected_saved_data = {"hash1": T_NOW_M1S, "hash2": T_NOW_STR}
         mock_dependencies["save_file"].assert_called_once()
         args, _ = mock_dependencies["save_file"].call_args
@@ -220,7 +205,6 @@ class TestTimestampService:
 
     def test_resolve_and_track_generation_prompt_skip(self, timestamp_service, mock_dependencies):
         """Tests that a generation prompt as the final message is skipped."""
-        # Arrange
         T_NOW_STR = f"({MOCK_NOW.strftime(TS_FORMAT)})"
         messages = [
             {'role': 'user', 'content': 'Msg1_New'},
@@ -229,10 +213,8 @@ class TestTimestampService:
         mock_dependencies["load_file"].return_value = {}
         mock_dependencies["hash"].side_effect = ['hash1']  # Only called once for user message
 
-        # Act
         timestamp_service.resolve_and_track_history(messages, "convo")
 
-        # Assert
         assert mock_dependencies["hash"].call_count == 1
         expected_saved_data = {"hash1": T_NOW_STR}
         mock_dependencies["save_file"].assert_called_once()
@@ -241,16 +223,13 @@ class TestTimestampService:
 
     def test_resolve_and_track_cleans_legacy_placeholder(self, timestamp_service, mock_dependencies):
         """Ensures a legacy placeholder is removed, forcing a save even with no new messages."""
-        # Arrange
         T_OLD = f"({(MOCK_NOW - timedelta(days=1)).strftime(TS_FORMAT)})"
         messages = [{'role': 'user', 'content': 'Msg1'}]
-        mock_dependencies["load_file"].return_value = {"hash1": T_OLD, LEGACY_PLACEHOLDER_HASH: "(T_Stale)"}
+        mock_dependencies["load_file"].return_value = {"hash1": T_OLD, PLACEHOLDER_HASH: "(T_Stale)"}
         mock_dependencies["hash"].return_value = 'hash1'
 
-        # Act
         timestamp_service.resolve_and_track_history(messages, "convo")
 
-        # Assert
         expected_saved_data = {"hash1": T_OLD}
         mock_dependencies["save_file"].assert_called_once()
         args, _ = mock_dependencies["save_file"].call_args
@@ -258,7 +237,6 @@ class TestTimestampService:
 
     def test_resolve_and_track_ignores_system_messages(self, timestamp_service, mock_dependencies):
         """Ensures system messages are neither hashed nor timestamped."""
-        # Arrange
         T_NOW_STR = f"({MOCK_NOW.strftime(TS_FORMAT)})"
         messages = [
             {'role': 'system', 'content': 'System instruction'},
@@ -267,10 +245,8 @@ class TestTimestampService:
         mock_dependencies["load_file"].return_value = {}
         mock_dependencies["hash"].return_value = 'hash_user'
 
-        # Act
         timestamp_service.resolve_and_track_history(messages, "convo")
 
-        # Assert
         mock_dependencies["hash"].assert_called_once_with(messages[1])
         expected_saved_data = {"hash_user": T_NOW_STR}
         mock_dependencies["save_file"].assert_called_once()
@@ -282,7 +258,6 @@ class TestTimestampService:
     # ##########################################
     def test_format_messages_basic(self, timestamp_service, mock_dependencies):
         """Tests basic message formatting with timestamps."""
-        # Arrange
         T_NOW_STR = f"({MOCK_NOW.strftime(TS_FORMAT)})"
         T_NOW_M1S = f"({(MOCK_NOW - timedelta(seconds=1)).strftime(TS_FORMAT)})"
         messages = [
@@ -295,46 +270,37 @@ class TestTimestampService:
         }
         mock_dependencies["hash"].side_effect = ['hash1', 'hash2']
 
-        # Act
         result = timestamp_service.format_messages_with_timestamps(messages, "convo")
 
-        # Assert
         assert result[0]['content'] == f"{T_NOW_M1S} Msg1"
         assert result[1]['content'] == f"{T_NOW_STR} Msg2"
 
     def test_format_messages_with_relative_time(self, timestamp_service, mock_dependencies):
         """Verifies that format_relative_time_ago is used when requested."""
-        # Arrange
         T_NOW_STR = f"({MOCK_NOW.strftime(TS_FORMAT)})"
         messages = [{'role': 'user', 'content': 'Hello again'}]
         mock_dependencies["load_file"].return_value = {"user_hash": T_NOW_STR}
         mock_dependencies["hash"].return_value = 'user_hash'
         mock_dependencies["format_ago"].return_value = "[Sent just now]"
 
-        # Act
         result = timestamp_service.format_messages_with_timestamps(messages, "convo", use_relative_time=True)
 
-        # Assert
         mock_dependencies["format_ago"].assert_called_with(T_NOW_STR)
         assert result[0]['content'] == "[Sent just now] Hello again"
 
     def test_format_messages_prevents_double_prepend(self, timestamp_service, mock_dependencies):
         """Ensures a timestamp is not added to content that already has it."""
-        # Arrange
         T_OLD = f"({(MOCK_NOW - timedelta(days=1)).strftime(TS_FORMAT)})"
         messages = [{'role': 'user', 'content': f'{T_OLD} Msg1'}]
         mock_dependencies["load_file"].return_value = {"hash1": T_OLD}
         mock_dependencies["hash"].return_value = 'hash1'
 
-        # Act
         result = timestamp_service.format_messages_with_timestamps(messages, "convo")
 
-        # Assert
         assert result[0]['content'] == f"{T_OLD} Msg1"  # Unchanged
 
     def test_format_messages_skips_generation_prompt(self, timestamp_service, mock_dependencies):
         """Tests that a generation prompt as the final message is not formatted."""
-        # Arrange
         T_NOW_STR = f"({MOCK_NOW.strftime(TS_FORMAT)})"
         messages = [
             {'role': 'user', 'content': 'Msg1'},
@@ -343,10 +309,8 @@ class TestTimestampService:
         mock_dependencies["load_file"].return_value = {"hash1": T_NOW_STR}
         mock_dependencies["hash"].side_effect = ['hash1']
 
-        # Act
         result = timestamp_service.format_messages_with_timestamps(messages, "convo")
 
-        # Assert
         assert result[0]['content'] == f"{T_NOW_STR} Msg1"
         assert result[1]['content'] == "Character:"  # Unchanged
 
@@ -355,17 +319,14 @@ class TestTimestampService:
     # ##########################################
     def test_save_specific_timestamp_success_new(self, timestamp_service, mock_dependencies):
         """Verifies that a new timestamp is correctly saved."""
-        # Arrange
         discussion_id = "id"
         content = "Response."
         timestamp = "(T_Now)"
         mock_dependencies["load_file"].return_value = {}
         mock_dependencies["hash"].return_value = "new_hash"
 
-        # Act
         timestamp_service.save_specific_timestamp(discussion_id, content, timestamp)
 
-        # Assert
         expected_saved_data = {"new_hash": "(T_Now)"}
         mock_dependencies["save_file"].assert_called_once()
         args, _ = mock_dependencies["save_file"].call_args
@@ -373,15 +334,12 @@ class TestTimestampService:
 
     def test_save_specific_timestamp_update_existing(self, timestamp_service, mock_dependencies):
         """Ensures the method updates a timestamp if the hash exists but the timestamp differs."""
-        # Arrange
         content = "Response."
         mock_dependencies["hash"].return_value = "existing_hash"
         mock_dependencies["load_file"].return_value = {"existing_hash": "(T_Old)"}
 
-        # Act
         timestamp_service.save_specific_timestamp("id", content, "(T_New)")
 
-        # Assert
         expected_saved_data = {"existing_hash": "(T_New)"}
         mock_dependencies["save_file"].assert_called_once()
         args, _ = mock_dependencies["save_file"].call_args
@@ -389,60 +347,44 @@ class TestTimestampService:
 
     def test_save_specific_timestamp_no_change(self, timestamp_service, mock_dependencies):
         """Ensures the method does not save if the hash and timestamp already match."""
-        # Arrange
         content = "Response."
         mock_dependencies["hash"].return_value = "existing_hash"
         mock_dependencies["load_file"].return_value = {"existing_hash": "(T_Now)"}
 
-        # Act
         timestamp_service.save_specific_timestamp("id", content, "(T_Now)")
 
-        # Assert
         mock_dependencies["save_file"].assert_not_called()
 
-    def test_save_specific_timestamp_cleans_legacy_placeholder(self, timestamp_service, mock_dependencies):
-        """Ensures that the legacy placeholder is removed when saving a new timestamp."""
-        # Arrange
+    def test_save_specific_timestamp_preserves_placeholder(self, timestamp_service, mock_dependencies):
+        """Ensures that placeholders in the file are preserved (cleanup is handled elsewhere)."""
         content = "Response."
         mock_dependencies["hash"].return_value = "new_hash"
-        mock_dependencies["load_file"].return_value = {LEGACY_PLACEHOLDER_HASH: "(T_Stale)"}
+        mock_dependencies["load_file"].return_value = {PLACEHOLDER_HASH: "(T_Stale)"}
 
-        # Act
         timestamp_service.save_specific_timestamp("id", content, "(T_New)")
 
-        # Assert
-        expected_saved_data = {"new_hash": "(T_New)"}
+        # Placeholder remains; only the new hash is added
+        expected_saved_data = {PLACEHOLDER_HASH: "(T_Stale)", "new_hash": "(T_New)"}
         mock_dependencies["save_file"].assert_called_once_with(
             mock_dependencies["get_path"].return_value,
-            expected_saved_data
+            expected_saved_data,
+            encryption_key=None
         )
 
-    def test_save_specific_timestamp_cleans_placeholder_when_hash_exists_and_ts_matches(
+    def test_save_specific_timestamp_no_save_when_hash_and_ts_match(
             self, timestamp_service, mock_dependencies
     ):
-        """Ensures the file is saved to remove the placeholder even if the hash and timestamp already match."""
-        # Arrange
+        """Ensures the file is NOT saved when the hash and timestamp already match."""
         content = "Response."
         mock_dependencies["hash"].return_value = "existing_hash"
-        # The file contains both a valid hash and the legacy placeholder
         mock_dependencies["load_file"].return_value = {
             "existing_hash": "(T1)",
-            LEGACY_PLACEHOLDER_HASH: "(T_Stale)"
+            PLACEHOLDER_HASH: "(T_Stale)"
         }
 
-        # Act
-        # We call the function with the SAME timestamp that already exists.
-        # The only change should be the removal of the placeholder.
         timestamp_service.save_specific_timestamp("id", content, "(T1)")
 
-        # Assert
-        # The file MUST be saved to persist the deletion of the placeholder.
-        # The existing timestamp should remain untouched.
-        expected_saved_data = {"existing_hash": "(T1)"}
-        mock_dependencies["save_file"].assert_called_once_with(
-            mock_dependencies["get_path"].return_value,
-            expected_saved_data
-        )
+        mock_dependencies["save_file"].assert_not_called()
 
     @pytest.mark.parametrize("discussion_id, content, timestamp", [
         (None, "content", "(TS)"), ("", "content", "(TS)"),
@@ -453,10 +395,8 @@ class TestTimestampService:
             self, timestamp_service, mock_dependencies, discussion_id, content, timestamp
     ):
         """Ensures the method exits gracefully if any input is missing."""
-        # Act
         timestamp_service.save_specific_timestamp(discussion_id, content, timestamp)
 
-        # Assert
         mock_dependencies["get_path"].assert_not_called()
         mock_dependencies["hash"].assert_not_called()
         mock_dependencies["save_file"].assert_not_called()
@@ -466,7 +406,6 @@ class TestTimestampService:
     # ##########################################
     def test_get_time_context_summary_success(self, timestamp_service, mock_dependencies):
         """Tests that a correct time context summary is generated from multiple timestamps."""
-        # Arrange
         timestamps = {
             "hash1": "(Monday, 2025-09-22 10:00:00)",
             "hash2": "(Monday, 2025-09-22 12:30:00)"
@@ -474,10 +413,8 @@ class TestTimestampService:
         mock_dependencies["load_file"].return_value = timestamps
         mock_dependencies["format_string"].side_effect = ["2 hours, 30 minutes", "5 minutes"]
 
-        # Act
         summary = timestamp_service.get_time_context_summary("test-discussion")
 
-        # Assert
         expected_summary = (
             "[Time Context: This conversation started 2 hours, 30 minutes ago. "
             "The most recent message was sent 5 minutes ago.]"
@@ -487,40 +424,18 @@ class TestTimestampService:
 
     def test_get_time_context_summary_single_timestamp(self, timestamp_service, mock_dependencies):
         """Tests that a correct summary is generated when only one timestamp exists."""
-        # Arrange
         timestamps = {"hash1": "(Monday, 2025-09-22 10:00:00)"}
         mock_dependencies["load_file"].return_value = timestamps
         mock_dependencies["format_string"].return_value = "10 minutes"
 
-        # Act
         summary = timestamp_service.get_time_context_summary("test-discussion")
 
-        # Assert
         expected_summary = "[Time Context: The conversation started 10 minutes ago.]"
         assert summary == expected_summary
         assert mock_dependencies["format_string"].call_count == 2
 
     def test_get_time_context_summary_ignores_legacy_placeholder(self, timestamp_service, mock_dependencies):
         """Ensures the summary ignores the legacy placeholder hash."""
-        # Arrange
-        timestamps = {
-            "hash1": "(Monday, 2025-09-22 10:00:00)",
-            LEGACY_PLACEHOLDER_HASH: "(Monday, 2025-09-22 15:00:00)"
-        }
-        mock_dependencies["load_file"].return_value = timestamps
-        mock_dependencies["format_string"].return_value = "5 hours"
-
-        # Act
-        summary = timestamp_service.get_time_context_summary("test-discussion")
-
-        # Assert
-        expected_summary = "[Time Context: The conversation started 5 hours ago.]"
-        assert summary == expected_summary
-        assert mock_dependencies["format_string"].call_count == 2
-
-    def test_get_time_context_summary_ignores_current_placeholder(self, timestamp_service, mock_dependencies):
-        """Ensures the summary ignores the current placeholder hash."""
-        # Arrange
         timestamps = {
             "hash1": "(Monday, 2025-09-22 10:00:00)",
             PLACEHOLDER_HASH: "(Monday, 2025-09-22 15:00:00)"
@@ -528,10 +443,23 @@ class TestTimestampService:
         mock_dependencies["load_file"].return_value = timestamps
         mock_dependencies["format_string"].return_value = "5 hours"
 
-        # Act
         summary = timestamp_service.get_time_context_summary("test-discussion")
 
-        # Assert
+        expected_summary = "[Time Context: The conversation started 5 hours ago.]"
+        assert summary == expected_summary
+        assert mock_dependencies["format_string"].call_count == 2
+
+    def test_get_time_context_summary_ignores_current_placeholder(self, timestamp_service, mock_dependencies):
+        """Ensures the summary ignores the current placeholder hash."""
+        timestamps = {
+            "hash1": "(Monday, 2025-09-22 10:00:00)",
+            PLACEHOLDER_HASH: "(Monday, 2025-09-22 15:00:00)"
+        }
+        mock_dependencies["load_file"].return_value = timestamps
+        mock_dependencies["format_string"].return_value = "5 hours"
+
+        summary = timestamp_service.get_time_context_summary("test-discussion")
+
         expected_summary = "[Time Context: The conversation started 5 hours ago.]"
         assert summary == expected_summary
         assert mock_dependencies["format_string"].call_count == 2
@@ -539,7 +467,7 @@ class TestTimestampService:
     @pytest.mark.parametrize("discussion_id, loaded_data", [
         (None, {}), ("", {}), ("test-id", {}),
         ("test-id", {"hash1": "invalid-timestamp-format"}),
-        ("test-id", {LEGACY_PLACEHOLDER_HASH: "(Monday, 2025-09-22 10:00:00)"}),
+        ("test-id", {PLACEHOLDER_HASH: "(Monday, 2025-09-22 10:00:00)"}),
         ("test-id", {PLACEHOLDER_HASH: "(Monday, 2025-09-22 10:00:00)"}),
         ("test-id", {"hash1": None})
     ])
@@ -547,13 +475,10 @@ class TestTimestampService:
             self, timestamp_service, mock_dependencies, discussion_id, loaded_data
     ):
         """Tests edge cases, ensuring an empty string is returned for invalid or empty data."""
-        # Arrange
         mock_dependencies["load_file"].return_value = loaded_data
 
-        # Act
         summary = timestamp_service.get_time_context_summary(discussion_id)
 
-        # Assert
         assert summary == ""
 
     # ##########################################
@@ -561,7 +486,6 @@ class TestTimestampService:
     # ##########################################
     def test_workflow_with_group_chat_logic_enabled(self, timestamp_service, mock_dependencies):
         """Tests the complete flow when useGroupChatTimestampLogic is true (behavior C)."""
-        # Arrange
         messages = [
             {'role': 'user', 'content': 'Hello'},
             {'role': 'assistant', 'content': 'Roland:'}  # Generation prompt
@@ -570,18 +494,13 @@ class TestTimestampService:
         mock_dependencies["hash"].side_effect = ['hash1']
         T_NOW_STR = f"({MOCK_NOW.strftime(TS_FORMAT)})"
 
-        # Act 1: Resolve and track (should only track user message)
         timestamp_service.resolve_and_track_history(messages, "convo")
-
-        # Act 2: Save placeholder for assistant response
         timestamp_service.save_placeholder_timestamp("convo")
 
-        # Act 3: Commit assistant response immediately (group chat logic)
         assistant_response = "Hi there! How can I help?"
         mock_dependencies["hash"].side_effect = ['hash2']
         timestamp_service.commit_assistant_response("convo", assistant_response)
 
-        # Assert
         # Should have saved twice: once for tracking, once for commit
         assert mock_dependencies["save_file"].call_count == 3
         # Final state should have both messages timestamped
@@ -591,7 +510,6 @@ class TestTimestampService:
 
     def test_workflow_with_group_chat_logic_disabled(self, timestamp_service, mock_dependencies):
         """Tests the complete flow when useGroupChatTimestampLogic is false (behavior B)."""
-        # Arrange
         messages = [
             {'role': 'user', 'content': 'Hello'},
             {'role': 'assistant', 'content': 'Hi there!'}
@@ -601,10 +519,7 @@ class TestTimestampService:
         T_NOW_STR = f"({MOCK_NOW.strftime(TS_FORMAT)})"
         T_NOW_M1S = f"({(MOCK_NOW - timedelta(seconds=1)).strftime(TS_FORMAT)})"
 
-        # Act 1: Initial resolve and track
         timestamp_service.resolve_and_track_history(messages, "convo")
-
-        # Act 2: Save placeholder (simulating assistant response generation)
         timestamp_service.save_placeholder_timestamp("convo")
 
         # Reset for next user turn
@@ -614,54 +529,44 @@ class TestTimestampService:
             PLACEHOLDER_HASH: T_NOW_STR
         }
 
-        # Act 3: Next user turn - should resolve placeholder
         new_messages = messages + [{'role': 'user', 'content': 'Thanks!'}]
         # Phase 0: hash for assistant (to resolve placeholder), Phase 1: backward iteration
         mock_dependencies["hash"].side_effect = ['hash2', 'hash3', 'hash2', 'hash1']
         timestamp_service.resolve_and_track_history(new_messages, "convo")
 
-        # Assert
         # Placeholder should have been resolved
         assert PLACEHOLDER_HASH not in mock_dependencies["save_file"].call_args_list[-1][0][1]
 
     def test_generation_prompt_reconstruction(self, timestamp_service, mock_dependencies):
         """Tests behavior D - generation prompt reconstruction logic."""
-        # Arrange
         generation_prompt = "Roland:"
         assistant_content = "Hello there!"  # Does not start with a colon-ending word
 
-        # Test via commit_assistant_response
         mock_dependencies["load_file"].return_value = {PLACEHOLDER_HASH: "(Time)"}
         mock_dependencies["hash"].return_value = "hash1"
 
-        # Act
         timestamp_service.commit_assistant_response("convo", assistant_content)
 
-        # Assert
         # The hash should be called with the original content (reconstruction happens at streaming level)
         mock_dependencies["hash"].assert_called_with({'role': 'assistant', 'content': assistant_content})
 
     def test_no_timestamp_file_when_disabled(self, timestamp_service, mock_dependencies):
         """Tests behavior A - no timestamp file is created when addDiscussionIdTimestampsForLLM is false."""
-        # Arrange
         messages = [
             {'role': 'user', 'content': 'Hello'},
             {'role': 'assistant', 'content': 'Hi'}
         ]
 
-        #  Act - these methods should do nothing when discussion_id is None
         timestamp_service.resolve_and_track_history(messages, None)
         timestamp_service.format_messages_with_timestamps(messages, None)
         timestamp_service.save_placeholder_timestamp(None)
         timestamp_service.commit_assistant_response(None, "content")
 
-        # Assert
         mock_dependencies["load_file"].assert_not_called()
         mock_dependencies["save_file"].assert_not_called()
 
     def test_multiple_regenerations_do_not_replace_placeholder(self, timestamp_service, mock_dependencies):
         """Tests behavior B - regenerations don't replace the placeholder until next user turn."""
-        # Arrange
         initial_messages = [
             {'role': 'user', 'content': 'Hello'},
             {'role': 'assistant', 'content': 'First response'}
@@ -675,7 +580,6 @@ class TestTimestampService:
             PLACEHOLDER_HASH: T_PLACEHOLDER
         }
 
-        # Act 1: Regeneration attempt (new assistant message)
         regen_messages = [
             {'role': 'user', 'content': 'Hello'},
             {'role': 'assistant', 'content': 'Regenerated response'}
@@ -684,7 +588,6 @@ class TestTimestampService:
         mock_dependencies["hash"].side_effect = ['hash3', 'hash3', 'hash1']
         timestamp_service.resolve_and_track_history(regen_messages, "convo")
 
-        # Assert: Placeholder should have been consumed and applied to the new response
         last_save_call = mock_dependencies["save_file"].call_args_list[-1][0][1]
         assert PLACEHOLDER_HASH not in last_save_call  # Placeholder was consumed
         assert 'hash3' in last_save_call  # New response was assigned the placeholder time
@@ -692,7 +595,6 @@ class TestTimestampService:
 
     def test_placeholder_resolution_with_generation_prompt_last(self, timestamp_service, mock_dependencies):
         """Tests behavior E - placeholder resolution when the last message is a generation prompt."""
-        # Arrange
         messages = [
             {'role': 'user', 'content': 'Hello'},
             {'role': 'assistant', 'content': 'Previous response'},
@@ -714,10 +616,8 @@ class TestTimestampService:
         # Phase 1: Backward iteration skips Character:, processes hash3, hash2, hash1
         mock_dependencies["hash"].side_effect = ['hash2', 'hash3', 'hash2', 'hash1']
 
-        # Act
         timestamp_service.resolve_and_track_history(messages, "convo")
 
-        # Assert
         # The placeholder should have been applied to the previous assistant message (not the generation prompt)
         last_save_call = mock_dependencies["save_file"].call_args_list[-1][0][1]
         assert PLACEHOLDER_HASH not in last_save_call

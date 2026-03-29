@@ -116,7 +116,7 @@ class TestHandleMethod:
         result = memory_handler.handle(base_context)
 
         mock_parser.assert_called_once_with(
-            base_context.request_id, base_context.discussion_id, base_context.messages
+            base_context.request_id, base_context.discussion_id, base_context.messages, api_key=None
         )
         assert result == "parsed conversation memory"
 
@@ -131,7 +131,7 @@ class TestHandleMethod:
 
         mock_rag.handle_discussion_id_flow.assert_called_once_with(base_context, force_file_memory=True)
         mock_parser.assert_called_once_with(
-            base_context.request_id, base_context.discussion_id, base_context.messages
+            base_context.request_id, base_context.discussion_id, base_context.messages, api_key=None
         )
         assert result == "parsed recent memory"
 
@@ -147,7 +147,7 @@ class TestHandleMethod:
 
         mock_rag.handle_discussion_id_flow.assert_not_called()
         mock_parser.assert_called_once_with(
-            base_context.request_id, None, base_context.messages
+            base_context.request_id, None, base_context.messages, api_key=None
         )
         assert result == "parsed stateless recent memory"
 
@@ -165,7 +165,7 @@ class TestHandleMethod:
         result = memory_handler.handle(base_context)
 
         mock_mem_service.get_recent_memories.assert_called_once_with(
-            base_context.messages, base_context.discussion_id, 5, 3, 1
+            base_context.messages, base_context.discussion_id, 5, 3, 1, encryption_key=None, api_key_hash=None
         )
         assert result == "chunk1--ChunkBreak--chunk2"
 
@@ -192,17 +192,42 @@ class TestHandleMethod:
 
         assert result == "There are not yet any memories"
 
-    @pytest.mark.parametrize("node_type", ["GetCurrentSummaryFromFile", "GetCurrentMemoryFromFile"])
-    def test_get_current_file_nodes(self, memory_handler, mock_dependencies, base_context, node_type):
-        """Tests nodes that perform a simple read of the current summary file."""
-        base_context.config = {"type": node_type}
+    def test_get_current_summary_from_file(self, memory_handler, mock_dependencies, base_context):
+        """Tests that GetCurrentSummaryFromFile reads the summary file."""
+        base_context.config = {"type": "GetCurrentSummaryFromFile"}
         mock_mem_service = mock_dependencies["memory_service"]
         mock_mem_service.get_current_summary.return_value = "current summary from file"
 
         result = memory_handler.handle(base_context)
 
-        mock_mem_service.get_current_summary.assert_called_once_with(base_context.discussion_id)
+        mock_mem_service.get_current_summary.assert_called_once_with(
+            base_context.discussion_id, encryption_key=None, api_key_hash=None
+        )
         assert result == "current summary from file"
+
+    def test_get_current_memory_from_file(self, memory_handler, mock_dependencies, base_context):
+        """Tests that GetCurrentMemoryFromFile reads the memory file, not the summary file."""
+        base_context.config = {"type": "GetCurrentMemoryFromFile"}
+        mock_mem_service = mock_dependencies["memory_service"]
+        mock_mem_service.get_current_memories.return_value = ["memory chunk 1", "memory chunk 2"]
+
+        result = memory_handler.handle(base_context)
+
+        mock_mem_service.get_current_memories.assert_called_once_with(
+            base_context.discussion_id, encryption_key=None, api_key_hash=None
+        )
+        mock_mem_service.get_current_summary.assert_not_called()
+        assert result == "memory chunk 1--ChunkBreak--memory chunk 2"
+
+    def test_get_current_memory_from_file_custom_delimiter(self, memory_handler, mock_dependencies, base_context):
+        """Tests that GetCurrentMemoryFromFile respects a custom delimiter."""
+        base_context.config = {"type": "GetCurrentMemoryFromFile", "customDelimiter": "\n---\n"}
+        mock_mem_service = mock_dependencies["memory_service"]
+        mock_mem_service.get_current_memories.return_value = ["chunk A", "chunk B", "chunk C"]
+
+        result = memory_handler.handle(base_context)
+
+        assert result == "chunk A\n---\nchunk B\n---\nchunk C"
 
     def test_quality_memory_with_discussion_id(self, memory_handler, mock_dependencies, base_context):
         """Tests 'QualityMemory' node with a discussion_id, triggering the RAG tool."""
@@ -224,8 +249,48 @@ class TestHandleMethod:
 
         result = memory_handler.handle(base_context)
 
-        mock_parser.assert_called_once_with(base_context.request_id, None, base_context.messages)
+        mock_parser.assert_called_once_with(base_context.request_id, None, base_context.messages, api_key=None)
         assert result == "stateless memory parsed"
+
+    def test_conversation_memory_no_discussion_id(self, memory_handler, mock_dependencies, base_context):
+        """Tests that ConversationMemory returns a fallback when discussion_id is None."""
+        base_context.config = {"type": "ConversationMemory"}
+        base_context.discussion_id = None
+
+        result = memory_handler.handle(base_context)
+
+        mock_dependencies["handle_conversation_memory_parser_func"].assert_not_called()
+        assert result == "There are not yet any memories"
+
+    def test_get_current_summary_from_file_no_discussion_id(self, memory_handler, mock_dependencies, base_context):
+        """Tests that GetCurrentSummaryFromFile returns a fallback when discussion_id is None."""
+        base_context.config = {"type": "GetCurrentSummaryFromFile"}
+        base_context.discussion_id = None
+
+        result = memory_handler.handle(base_context)
+
+        mock_dependencies["memory_service"].get_current_summary.assert_not_called()
+        assert result == "There is not yet a summary file"
+
+    def test_get_current_memory_from_file_no_discussion_id(self, memory_handler, mock_dependencies, base_context):
+        """Tests that GetCurrentMemoryFromFile returns a fallback when discussion_id is None."""
+        base_context.config = {"type": "GetCurrentMemoryFromFile"}
+        base_context.discussion_id = None
+
+        result = memory_handler.handle(base_context)
+
+        mock_dependencies["memory_service"].get_current_memories.assert_not_called()
+        assert result == "There are not yet any memories"
+
+    def test_chat_summary_summarizer_no_discussion_id(self, memory_handler, mock_dependencies, base_context):
+        """Tests that chatSummarySummarizer returns a fallback when discussion_id is None."""
+        base_context.config = {"type": "chatSummarySummarizer"}
+        base_context.discussion_id = None
+
+        result = memory_handler.handle(base_context)
+
+        mock_dependencies["memory_service"].get_latest_memory_chunks_with_hashes_since_last_summary.assert_not_called()
+        assert result == "There is not yet a summary file"
 
     def test_unhandled_node_type_raises_error(self, memory_handler, base_context):
         """Tests that an unknown node type raises a ValueError."""
@@ -257,7 +322,8 @@ class TestInternalSaveSummaryMethod:
         mock_update_chunks.assert_called_once_with(
             [("resolved summary", "some_hash_123")],
             mock_dependencies["get_summary_path_mock"].return_value,
-            "overwrite"
+            "overwrite",
+            encryption_key=None
         )
         assert result == "resolved summary"
 
@@ -278,7 +344,8 @@ class TestInternalSaveSummaryMethod:
         mock_update_chunks.assert_called_once_with(
             [("overridden summary", "overridden_hash_789")],
             mock_dependencies["get_summary_path_mock"].return_value,
-            "overwrite"
+            "overwrite",
+            encryption_key=None
         )
         assert result == "overridden summary"
 
@@ -404,7 +471,7 @@ class TestInternalFullChatSummaryMethod:
         mock_rag.handle_discussion_id_flow.assert_called_once_with(base_context, force_file_memory=True)
         mock_mem_service.find_how_many_new_memories_since_last_summary.assert_called_once()
         mock_parser.assert_called_once_with(
-            base_context.request_id, base_context.discussion_id, base_context.messages
+            base_context.request_id, base_context.discussion_id, base_context.messages, api_key=None
         )
         assert result == "newly parsed summary"
 

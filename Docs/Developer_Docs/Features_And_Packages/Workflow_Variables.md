@@ -154,8 +154,8 @@ Add your new key-value pair to the top level of your workflow's JSON file (e.g.,
 
 ```json
 {
-  "persona_details": "You are a witty pirate cartographer from the 17th century.",
-  "creative_guideline": "Your answers should be imaginative and slightly dramatic.",
+  "persona_details": "You are a senior data analyst at a financial services firm.",
+  "creative_guideline": "Your answers should be concise and data-driven.",
   "nodes": [
     {
       "type": "Standard",

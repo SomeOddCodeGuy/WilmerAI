@@ -43,7 +43,7 @@ class NodeExecutionInfo:
                 f"{self.endpoint_url} || {self.format_time()}")
 
 
-@dataclass
+@dataclass(repr=False)
 class ExecutionContext:
     """
     A unified context object holding all state for a single node's execution.
@@ -53,7 +53,9 @@ class ExecutionContext:
         workflow_id (str): The identifier for the current workflow being executed.
         discussion_id (Optional[str]): The identifier for the conversation or discussion thread.
         config (Dict[str, Any]): The configuration specific to the current node being executed.
-        messages (List[Dict[str, str]]): The complete history of the conversation.
+        messages (List[Dict[str, Any]]): The complete history of the conversation.
+            Each message has 'role' and 'content' (str) keys, and may optionally
+            include an 'images' key containing a list of image data strings.
         stream (bool): A flag indicating whether the final response should be streamed.
         workflow_config (Dict[str, Any]): The top-level configuration for the entire workflow.
         agent_inputs (Dict[str, Any]): Inputs passed from a parent workflow to a sub-workflow.
@@ -68,7 +70,7 @@ class ExecutionContext:
     workflow_id: str
     discussion_id: Optional[str]
     config: Dict[str, Any]
-    messages: List[Dict[str, str]]
+    messages: List[Dict[str, Any]]
     stream: bool
 
     # --- Fields WITH default values ---
@@ -79,3 +81,10 @@ class ExecutionContext:
     workflow_variable_service: Optional['WorkflowVariableManager'] = None
     workflow_manager: Optional[Any] = None
     node_handlers: Dict[str, Any] = field(default_factory=dict)
+    # WARNING: Contains the raw API key. This object must never be serialized,
+    # logged, or persisted. It exists only as an in-memory carrier during
+    # request processing.
+    api_key: Optional[str] = None
+    # Pre-computed from api_key to avoid repeated PBKDF2 derivation per request.
+    encryption_key: Optional[bytes] = None
+    api_key_hash: Optional[str] = None

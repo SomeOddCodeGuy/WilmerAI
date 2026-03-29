@@ -1,6 +1,7 @@
 # /Middleware/workflows/managers/workflow_variable_manager.py
 
 import logging
+import re
 from copy import deepcopy
 from datetime import datetime
 from typing import Dict, Any, List
@@ -107,16 +108,18 @@ class WorkflowVariableManager:
         if agent_inputs:
             variables.update(agent_inputs)
 
-        # Apply simple string formatting with partial substitution support
+        # Apply simple string formatting with partial substitution support.
+        # str.format() raises KeyError if the prompt references a variable that
+        # isn't available yet (e.g., {agent1Output} before any LLM node has run).
+        # The fallback performs manual string replacement for only the variables that
+        # are present, leaving unresolved placeholders intact for later substitution.
         try:
             return prompt.format(**variables)
         except KeyError as e:
             # Handle partial substitution - try to substitute what we can
-            import re
             result = prompt
             for key, value in variables.items():
-                # Replace both {key} and {{key}} patterns
-                result = re.sub(r'\{' + re.escape(key) + r'\}', str(value), result)
+                result = result.replace('{' + key + '}', str(value))
             if result != prompt:
                 # Some variables were substituted
                 missing_vars = re.findall(r'\{([^}]+)\}', result)
@@ -158,11 +161,21 @@ class WorkflowVariableManager:
             # Using str.format() can error if the prompt contains unused jinja syntax
             # This is a simple safeguard.
             try:
-                return prompt.format(**variables)
+                result = prompt.format(**variables)
             except KeyError as e:
                 logger.warning(f"A key error occurred during prompt formatting. This can happen if a prompt "
                                f"contains curly braces not intended for variables. Error: {e}")
                 return prompt
+            # Second pass: resolve nested variables (e.g., a workflow-level variable
+            # whose value itself contains {Discussion_Id} or other placeholders).
+            # A single extra pass is sufficient since variable values are not expected
+            # to nest more than one level deep.
+            if '{' in result:
+                try:
+                    result = result.format(**variables)
+                except KeyError:
+                    pass
+            return result
 
     def generate_variables(self, context: ExecutionContext, remove_all_system_override=None,
                            prompt: str = None) -> Dict[str, Any]:
@@ -205,7 +218,12 @@ class WorkflowVariableManager:
         # --- Context-specific variables ---
         if context.discussion_id:
             variables['Discussion_Id'] = context.discussion_id
-            variables['time_context_summary'] = self.timestamp_service.get_time_context_summary(context.discussion_id)
+            if not prompt or 'time_context_summary' in prompt:
+                variables['time_context_summary'] = self.timestamp_service.get_time_context_summary(
+                    context.discussion_id, encryption_key=context.encryption_key,
+                    api_key_hash=context.api_key_hash)
+            else:
+                variables['time_context_summary'] = ''
         else:
             variables['Discussion_Id'] = ''
             variables['time_context_summary'] = ''
@@ -226,72 +244,77 @@ class WorkflowVariableManager:
             ))
 
             # --- Configurable conversation-slice variables ---
+            # These are only computed when the prompt actually references them
+            # (or when prompt is None, meaning we don't know what's needed).
             include_sysmes = context.llm_handler.takes_message_collection
             messages_copy = deepcopy(context.messages)
 
             # N-messages variables
-            n_messages = 5
-            if context.config and isinstance(context.config, dict):
-                n_messages = context.config.get('nMessagesToIncludeInVariable', 5)
-            if prompt and ('chat_user_prompt_n_messages' in prompt
-                           or 'templated_user_prompt_n_messages' in prompt):
-                n_messages_selected = extract_last_n_turns(
+            if not prompt or 'chat_user_prompt_n_messages' in prompt or 'templated_user_prompt_n_messages' in prompt:
+                n_messages = 5
+                if context.config and isinstance(context.config, dict):
+                    n_messages = context.config.get('nMessagesToIncludeInVariable', 5)
+                if prompt and ('chat_user_prompt_n_messages' in prompt
+                               or 'templated_user_prompt_n_messages' in prompt):
+                    n_messages_selected = extract_last_n_turns(
+                        messages_copy, n_messages, include_sysmes, remove_all_system_override
+                    )
+                    logger.info("Including %d messages for variable `chat_user_prompt_n_messages`; N == %d",
+                                len(n_messages_selected), n_messages)
+                variables['chat_user_prompt_n_messages'] = extract_last_n_turns_as_string(
                     messages_copy, n_messages, include_sysmes, remove_all_system_override
                 )
-                logger.info("Including %d messages for variable `chat_user_prompt_n_messages`; N == %d",
-                            len(n_messages_selected), n_messages)
-            variables['chat_user_prompt_n_messages'] = extract_last_n_turns_as_string(
-                messages_copy, n_messages, include_sysmes, remove_all_system_override
-            )
-            variables['templated_user_prompt_n_messages'] = get_formatted_last_n_turns_as_string(
-                messages_copy, n_messages,
-                template_file_name=context.llm_handler.prompt_template_file_name,
-                isChatCompletion=context.llm_handler.takes_message_collection
-            )
+                variables['templated_user_prompt_n_messages'] = get_formatted_last_n_turns_as_string(
+                    messages_copy, n_messages,
+                    template_file_name=context.llm_handler.prompt_template_file_name,
+                    isChatCompletion=context.llm_handler.takes_message_collection
+                )
 
             # Estimated-token-limit variables
-            estimated_tokens = 2048
-            if context.config and isinstance(context.config, dict):
-                estimated_tokens = context.config.get('estimatedTokensToIncludeInVariable', 2048)
-            if prompt and ('chat_user_prompt_estimated_token_limit' in prompt
-                           or 'templated_user_prompt_estimated_token_limit' in prompt):
-                token_limit_selected = extract_last_turns_by_estimated_token_limit(
+            if not prompt or 'chat_user_prompt_estimated_token_limit' in prompt or 'templated_user_prompt_estimated_token_limit' in prompt:
+                estimated_tokens = 2048
+                if context.config and isinstance(context.config, dict):
+                    estimated_tokens = context.config.get('estimatedTokensToIncludeInVariable', 2048)
+                if prompt and ('chat_user_prompt_estimated_token_limit' in prompt
+                               or 'templated_user_prompt_estimated_token_limit' in prompt):
+                    token_limit_selected = extract_last_turns_by_estimated_token_limit(
+                        messages_copy, estimated_tokens, include_sysmes, remove_all_system_override
+                    )
+                    logger.info("Including messages up to token limit of %d. This came out to %d messages "
+                                "for variable `chat_user_prompt_estimated_token_limit`",
+                                estimated_tokens, len(token_limit_selected))
+                variables['chat_user_prompt_estimated_token_limit'] = extract_last_turns_by_estimated_token_limit_as_string(
                     messages_copy, estimated_tokens, include_sysmes, remove_all_system_override
                 )
-                logger.info("Including messages up to token limit of %d. This came out to %d messages "
-                            "for variable `chat_user_prompt_estimated_token_limit`",
-                            estimated_tokens, len(token_limit_selected))
-            variables['chat_user_prompt_estimated_token_limit'] = extract_last_turns_by_estimated_token_limit_as_string(
-                messages_copy, estimated_tokens, include_sysmes, remove_all_system_override
-            )
-            variables['templated_user_prompt_estimated_token_limit'] = get_formatted_last_turns_by_estimated_token_limit_as_string(
-                messages_copy, estimated_tokens,
-                template_file_name=context.llm_handler.prompt_template_file_name,
-                isChatCompletion=context.llm_handler.takes_message_collection
-            )
+                variables['templated_user_prompt_estimated_token_limit'] = get_formatted_last_turns_by_estimated_token_limit_as_string(
+                    messages_copy, estimated_tokens,
+                    template_file_name=context.llm_handler.prompt_template_file_name,
+                    isChatCompletion=context.llm_handler.takes_message_collection
+                )
 
             # Min-messages + max-tokens combo variables
-            min_messages = 5
-            max_tokens = 2048
-            if context.config and isinstance(context.config, dict):
-                min_messages = context.config.get('minMessagesInVariable', 5)
-                max_tokens = context.config.get('maxEstimatedTokensInVariable', 2048)
-            if prompt and ('chat_user_prompt_min_n_max_tokens' in prompt
-                           or 'templated_user_prompt_min_n_max_tokens' in prompt):
-                combo_selected = extract_last_turns_with_min_messages_and_token_limit(
+            if not prompt or 'chat_user_prompt_min_n_max_tokens' in prompt or 'templated_user_prompt_min_n_max_tokens' in prompt:
+                min_messages = 5
+                max_tokens = 2048
+                if context.config and isinstance(context.config, dict):
+                    min_messages = context.config.get('minMessagesInVariable', 5)
+                    max_tokens = context.config.get('maxEstimatedTokensInVariable', 2048)
+                if prompt and ('chat_user_prompt_min_n_max_tokens' in prompt
+                               or 'templated_user_prompt_min_n_max_tokens' in prompt):
+                    combo_selected = extract_last_turns_with_min_messages_and_token_limit(
+                        messages_copy, min_messages, max_tokens, include_sysmes, remove_all_system_override
+                    )
+                    logger.info("Including %d messages for variable `chat_user_prompt_min_n_max_tokens`; "
+                                "min messages == %d, max estimated tokens == %d",
+                                len(combo_selected), min_messages, max_tokens)
+                variables['chat_user_prompt_min_n_max_tokens'] = extract_last_turns_with_min_messages_and_token_limit_as_string(
                     messages_copy, min_messages, max_tokens, include_sysmes, remove_all_system_override
                 )
-                logger.info("Including %d messages for variable `chat_user_prompt_min_n_max_tokens`; "
-                            "min messages == %d, max estimated tokens == %d",
-                            len(combo_selected), min_messages, max_tokens)
-            variables['chat_user_prompt_min_n_max_tokens'] = extract_last_turns_with_min_messages_and_token_limit_as_string(
-                messages_copy, min_messages, max_tokens, include_sysmes, remove_all_system_override
-            )
-            variables['templated_user_prompt_min_n_max_tokens'] = get_formatted_last_turns_with_min_messages_and_token_limit_as_string(
-                messages_copy, min_messages, max_tokens,
-                template_file_name=context.llm_handler.prompt_template_file_name,
-                isChatCompletion=context.llm_handler.takes_message_collection
-            )
+                variables['templated_user_prompt_min_n_max_tokens'] = get_formatted_last_turns_with_min_messages_and_token_limit_as_string(
+                    messages_copy, min_messages, max_tokens,
+                    template_file_name=context.llm_handler.prompt_template_file_name,
+                    isChatCompletion=context.llm_handler.takes_message_collection
+                )
 
         # --- Inter-node variables ({agentXInput} and {agentXOutput}) ---
         variables.update(context.agent_outputs or {})
@@ -400,19 +423,3 @@ class WorkflowVariableManager:
                                                                         remove_all_system_override)
         }
 
-    def generate_chat_summary_variables(self, messages, discussion_id) -> Dict[str, str]:
-        """
-        Generates variables related to the chat summary from the MemoryService.
-
-        Args:
-            messages (List[Dict[str, str]]): The current conversation history.
-            discussion_id (str): The unique ID for the current discussion.
-
-        Returns:
-            Dict[str, str]: A dictionary containing chat summary variables.
-        """
-        return {
-            "newest_chat_summary_memories": self.memory_service.get_chat_summary_memories(messages,
-                                                                                          discussion_id),
-            "current_chat_summary": self.memory_service.get_current_summary(discussion_id)
-        }

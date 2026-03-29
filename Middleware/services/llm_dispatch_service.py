@@ -17,19 +17,27 @@ logger = logging.getLogger(__name__)
 
 
 class LLMDispatchService:
-    """Formats prompts based on API type and dispatches them to an LLM handler."""
+    """
+    Formats prompts based on API type and dispatches them to an LLM handler.
+
+    This service is the single point of contact between the workflow layer and the
+    underlying LLM API handlers. It reads the ExecutionContext to determine whether
+    the target endpoint expects a chat-completion message collection or a single
+    prompt string, applies variable substitution, and then calls the appropriate
+    method on the handler.
+    """
 
     @staticmethod
     def dispatch(
             context: ExecutionContext,
-            image_message: Optional[Dict] = None
+            llm_takes_images: bool = False
     ) -> Any:
         """
         Prepares prompts and dispatches them to the configured LLM handler.
 
         Args:
             context (ExecutionContext): The context object containing all runtime state.
-            image_message (Optional[Dict]): An optional message containing image data.
+            llm_takes_images (bool): If True, images on messages are preserved for the LLM.
 
         Returns:
             Any: The raw response from the LLM handler (e.g., a string or a generator).
@@ -41,9 +49,6 @@ class LLMDispatchService:
         workflow_variable_service = context.workflow_variable_service
 
         message_copy = deepcopy(context.messages)
-        # Images should only be processed when explicitly passed via image_message
-        # (i.e., from the ImageProcessor node). All other nodes filter out images.
-        llm_takes_images = image_message is not None
 
         # 1. Get and apply variables to base prompts from the node config
         system_prompt = workflow_variable_service.apply_variables(
@@ -81,10 +86,8 @@ class LLMDispatchService:
             system_prompt = format_system_prompt_with_template(
                 system_prompt, llm_handler.prompt_template_file_name, False)
 
-            conversation_arg = [image_message] if image_message else None
-
             return llm_handler.llm.get_response_from_llm(
-                conversation=conversation_arg, system_prompt=system_prompt,
+                conversation=None, system_prompt=system_prompt,
                 prompt=prompt, llm_takes_images=llm_takes_images,
                 request_id=getattr(context, 'request_id', None)
             )
@@ -99,10 +102,21 @@ class LLMDispatchService:
                 last_n_turns = extract_last_n_turns(message_copy, last_messages_to_send, True)
                 collection.extend(last_n_turns)
             else:
-                collection.append({"role": "user", "content": prompt})
-
-            if image_message:
-                collection.append(image_message)
+                user_msg = {"role": "user", "content": prompt}
+                if llm_takes_images:
+                    # When dispatching via a text prompt string (rather than the full
+                    # conversation), image data is not embedded in the prompt text.
+                    # Images must be gathered from recent messages and attached
+                    # explicitly to the outgoing user message; otherwise they are
+                    # silently dropped and the vision-capable LLM never sees them.
+                    image_lookback = config.get("lastMessagesToSendInsteadOfPrompt", 10)
+                    all_images = []
+                    for msg in message_copy[-image_lookback:]:
+                        if "images" in msg and msg["images"]:
+                            all_images.extend(msg["images"])
+                    if all_images:
+                        user_msg["images"] = all_images
+                collection.append(user_msg)
 
             return llm_handler.llm.get_response_from_llm(
                 conversation=collection, llm_takes_images=llm_takes_images,

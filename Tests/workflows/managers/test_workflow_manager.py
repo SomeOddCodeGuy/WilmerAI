@@ -1,5 +1,3 @@
-# tests/workflows/managers/test_workflow_manager.py
-
 import json
 from unittest.mock import MagicMock, mock_open, patch
 
@@ -89,7 +87,9 @@ class TestWorkflowManagerInitialization:
             "MemoryKeywordSearchPerformerTool", "VectorMemorySearch", "OfflineWikiApiFullArticle",
             "OfflineWikiApiBestFullArticle", "OfflineWikiApiTopNFullArticles",
             "OfflineWikiApiPartialArticle", "CustomWorkflow", "ConditionalCustomWorkflow",
-            "WorkflowLock", "GetCustomFile", "SaveCustomFile", "ImageProcessor", "StaticResponse"
+            "WorkflowLock", "GetCustomFile", "SaveCustomFile", "ImageProcessor", "StaticResponse",
+            "ContextCompactor", "ArithmeticProcessor", "Conditional", "StringConcatenator",
+            "JsonExtractor", "TagTextExtractor"
         ]
         for node_type in expected_node_types:
             assert node_type in manager.node_handlers
@@ -225,7 +225,8 @@ class TestStaticMethods:
             [{"role": "user", "content": "hi"}], "req-abc", "disc-123", nonResponder=False, stream=True,
             first_node_system_prompt_override="sys",
             first_node_prompt_override="prompt",
-            scoped_inputs=["input1"]
+            scoped_inputs=["input1"],
+            api_key=None
         )
 
     @pytest.mark.parametrize("static_method_name, config_getter_path", [
@@ -250,4 +251,4 @@ class TestStaticMethods:
         mock_config_getter.assert_called_once()
         MockWorkflowManager.assert_called_once_with(workflow_config_name="memory_workflow")
         mock_instance = MockWorkflowManager.return_value
-        mock_instance.run_workflow.assert_called_once_with([], "req-mem", "disc-mem", nonResponder=True)
+        mock_instance.run_workflow.assert_called_once_with([], "req-mem", "disc-mem", nonResponder=True, api_key=None)

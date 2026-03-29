@@ -9,7 +9,7 @@ vector search implementation, and the complete data schemas as verified by the c
 ## 1\. Core Concepts & Architecture
 
 WilmerAI's memory system is a sophisticated, multi-layered feature set implemented through specialized nodes within the
-workflow engine. This design allows for different types of memory operations—creation, retrieval, and summarization—to
+workflow engine. This design allows for different types of memory operations -- creation, retrieval, and summarization -- to
 be strategically placed within workflows.
 
 #### **Key Architectural Principles:**
@@ -40,15 +40,19 @@ be strategically placed within workflows.
       `MemoryNodeHandler`.
 
 * **Persistent Storage**: When a `discussionId` is active, the system maintains state in a user-specific directory using
-  a set of discussion-specific files:
+  a set of discussion-specific files. When an API key is present on the request, these files are stored under a
+  hash-based subdirectory and encrypted at rest (see `Encryption.md` for details). The file path functions in
+  `config_utils.py` and the I/O functions in `file_utils.py` accept optional `api_key_hash` and `encryption_key`
+  parameters respectively to support this:
 
-    1. **Memory File (`<id>_memories.jsonl`)**: Stores discrete, summarized chunks of the conversation for file-based
+    1. **Memory File (`<id>_memories.json`)**: Stores discrete, summarized chunks of the conversation for file-based
        memory. Each chunk is saved with a hash of the last message it's based on, creating a traceable, append-only
        ledger.
-    2. **Chat Summary File (`<id>_summary.jsonl`)**: Stores a single, continuously updated "rolling summary" of the
+    2. **Chat Summary File (`<id>_chat_summary.json`)**: Stores a single, continuously updated "rolling summary" of the
        entire conversation. It's linked via a hash to the last memory chunk from the memory file that it incorporated.
     3. **Vector Memory Database (`<id>_vector_memory.db`)**: A **discussion-specific SQLite database** created on-demand
-       for each `discussionId`. It uses the FTS5 extension for powerful, weighted, full-text search across two main
+       for each `discussionId`. Note: SQLite databases are **not** encrypted by the per-user encryption feature. It
+       uses the FTS5 extension for powerful, weighted, full-text search across two main
        tables:
         * **`memories` table**: Stores the ground-truth data. For vector memories, the `memory_text` column holds the *
           *LLM-generated summary**, not the raw conversation chunk. It also stores the full `metadata_json`.
@@ -84,7 +88,7 @@ These nodes perform the "heavy lifting" of creating and saving memories. They ar
            flag controls the behavior of the `QualityMemory` node specifically. Other nodes (like `RecentMemory`) can
            trigger the creation of file-based memories independently of this flag's value. **(Correction End)**
         4. For the chosen memory type, the tool generates memories using one of two methods, based on its configuration:
-            * **A) Workflow-Based Generation (Recommended)** ✨: If the config specifies a `fileMemoryWorkflowName` or
+            * **A) Workflow-Based Generation (Recommended)**: If the config specifies a `fileMemoryWorkflowName` or
               `vectorMemoryWorkflowName`, the tool executes that sub-workflow.
                 * **File-Based Workflow**: Passes the raw text chunk, recent memories, full memories, and the current
                   chat summary as `scoped_inputs`. The workflow's final output **must be a single summarized text block
@@ -101,7 +105,7 @@ These nodes perform fast, inexpensive "read" operations and are powered by **`Me
 * **`RecentMemory` & `RecentMemorySummarizerTool`**: The primary **file-based memory retriever**.
 
     * **With `discussionId` (Stateful)**: Calls `MemoryService.get_recent_memories`, which reads the last `N` memory
-      chunks from `<id>_memories.jsonl`.
+      chunks from `<id>_memories.json`.
     * **Without `discussionId` (Stateless)**: Falls back to an in-memory operation, grabbing the last `N` turns from the
       current `messages` list.
 
@@ -119,7 +123,7 @@ These nodes perform fast, inexpensive "read" operations and are powered by **`Me
           exceeding SQLite's expression depth limit.
         * **Ranking**: The final results are ranked by relevance using the `bm25` algorithm.
 
-* **`FullChatSummary`**: Retrieves the holistic, rolling summary of the conversation from `<id>_summary.jsonl`.
+* **`FullChatSummary`**: Retrieves the holistic, rolling summary of the conversation from `<id>_chat_summary.json`.
 
 -----
 
@@ -131,7 +135,7 @@ To modify or extend the memory system, you will primarily work with these five f
    change how memories are generated, including the logic for choosing between vector/file and workflow/LLM-call
    methods.
 2. **`Middleware/services/memory_service.py`**: The core of **memory retrieval**. Modify this file to change how
-   memories are read from `.jsonl` files or retrieved from the vector database.
+   memories are read from `.json` files or retrieved from the vector database.
 3. **`Middleware/utilities/vector_db_utils.py`**: The **database abstraction layer**. This contains all logic for
    interacting with the discussion-specific SQLite databases, including table creation, data insertion, FTS5 search
    query construction, and term sanitization.
@@ -176,14 +180,14 @@ Both thresholds are active. Memory generation triggers when **either** threshold
 This "whichever comes first" logic allows the system to generate memories based on either volume (tokens) or frequency
 (messages), depending on which condition is met first.
 
-The memory file does not need to contain any chunks for standard mode to apply — it just needs to exist on disk. In a
+The memory file does not need to contain any chunks for standard mode to apply -- it just needs to exist on disk. In a
 new conversation, the file is created (as an empty `[]`) on the first check (around message 3, after the early return
 for conversations with fewer than 3 messages). From that point on, standard mode applies and both thresholds are active.
 
 #### Consolidation Mode (Memory File Does Not Exist)
 
 Only the token threshold applies. The message count threshold is disabled. This mode activates only when the memory file
-has been deleted from disk — for example, when a user wants to regenerate memories with a larger chunk size to produce
+has been deleted from disk -- for example, when a user wants to regenerate memories with a larger chunk size to produce
 fewer, larger chunks.
 
 ### Implementation Details
@@ -207,14 +211,82 @@ The triggering logic lives in `SlowButQualityRAGTool.handle_discussion_id_flow()
 ### File Creation Side-Effect
 
 The `read_chunks_with_hashes()` function calls `ensure_json_file_exists()`, which creates the memory file as an empty
-JSON array (`[]`) if it does not exist on disk. This is why the `file_exists` check must happen before that call —
+JSON array (`[]`) if it does not exist on disk. This is why the `file_exists` check must happen before that call --
 otherwise the file would always appear to exist. The side-effect is intentional: it means that on the first memory
 check of a new conversation (around message 3), the file is created, and from message 4 onward the system operates in
 standard mode with both thresholds active.
 
 -----
 
-## 5\. How to Add a New Memory Feature
+## 5\. Memory Condensation
+
+Over long conversations, the file-based memory system can accumulate many individual memory chunks. Memory condensation
+is an optional feature that automatically consolidates older memories into fewer, denser summaries by sending a batch
+of memories to an LLM for re-summarization.
+
+### How It Works
+
+Condensation runs automatically after `process_new_memory_chunks()` writes new file-based memories, provided the
+feature is enabled in the discussion ID workflow configuration. The process:
+
+1. After new memories are written, `condense_memories()` is called on `SlowButQualityRAGTool`.
+2. The method reads all memories from `{discussion_id}_memories.json`.
+3. It reads the condensation tracker from `{discussion_id}_condensation_tracker.json` to find `lastCondensationHash`.
+4. Memories after that hash are considered "new since last condensation" (or all memories if no tracker exists).
+5. If `count(new_memories) >= memoriesBeforeCondensation + memoryCondensationBuffer`, the oldest
+   `memoriesBeforeCondensation` memories from the new batch are condensed.
+6. The memory text blocks are joined with `\n--------------\n` and substituted into the `[MemoriesToCondense]`
+   placeholder in the condensation prompt. The 3 memories immediately before the condensed batch are substituted
+   into the `[Memories_Before_Memories_to_Condense]` placeholder to provide narrative context.
+7. An LLM call produces a single condensed summary.
+8. The condensed batch is replaced with a single memory entry (using the hash of the last memory in the batch).
+9. The memory file is rewritten and the tracker is updated with the new hash.
+
+### Configuration Fields
+
+These fields are added to the `_DiscussionId-MemoryFile-Workflow-Settings.json` file:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `condenseMemories` | bool | `false` | Master toggle for the feature. |
+| `memoriesBeforeCondensation` | int | (required if enabled) | N - how many new memories trigger a condensation pass. |
+| `memoryCondensationBuffer` | int | `0` | X - number of most recent memories excluded from condensation. |
+| `condenseMemoriesSystemPrompt` | str | built-in default | System prompt for the condensation LLM call. |
+| `condenseMemoriesPrompt` | str | built-in default | User prompt; supports `[MemoriesToCondense]` and `[Memories_Before_Memories_to_Condense]` placeholders. |
+| `condenseMemoriesEndpointName` | str | falls back to `endpointName` | Optional endpoint override for condensation. |
+| `condenseMemoriesPreset` | str | falls back to `preset` | Optional preset override for condensation. |
+| `condenseMemoriesMaxResponseSizeInTokens` | int | falls back to `maxResponseSizeInTokens` | Optional max token override. |
+
+### Tracking Mechanism
+
+State is tracked in a separate file (`{discussion_id}_condensation_tracker.json`) containing
+`{"lastCondensationHash": "..."}`. This file is kept separate from the memory file to preserve the existing
+`[{text_block, hash}]` schema. The relevant utility functions are:
+
+* `config_utils.get_discussion_condensation_tracker_file_path(discussion_id)` - returns the tracker file path.
+* `file_utils.read_condensation_tracker(filepath)` - reads the tracker dict (or empty dict if missing).
+* `file_utils.write_condensation_tracker(filepath, data)` - writes the tracker dict, creating directories as needed.
+
+### Edge Cases
+
+* **No tracker file**: All memories are treated as new (first condensation).
+* **Stale tracker hash**: If the hash from the tracker is not found in the memory file, all memories are treated as new
+  and a warning is logged. This can happen if the memory file was manually edited or regenerated.
+* **Not enough memories**: If `new_count < N + X`, condensation is skipped silently.
+* **Empty LLM response**: Condensation is aborted, original memories are preserved, and an error is logged.
+* **Chat summary hash invalidation**: If condensation removes a hash that the chat summary tracker referenced, the
+  summary system gracefully handles this by returning -1 from `find_last_matching_hash_message`, which triggers
+  re-summarization from the beginning.
+* **Vector memory path**: Condensation only applies to file-based memories, not vector memories.
+
+### Implementation Location
+
+The condensation logic is entirely within `SlowButQualityRAGTool.condense_memories()`. It is called from
+`handle_discussion_id_flow()` immediately after `process_new_memory_chunks()` in the file-based memory path.
+
+-----
+
+## 6\. How to Add a New Memory Feature
 
 The system is designed for extension. Below are two common scenarios.
 

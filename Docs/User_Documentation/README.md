@@ -92,8 +92,16 @@ WilmerAI includes a robust, three-part memory system to provide long-term contex
 
 * **Long-Term Memory File**: Chronological, summarized chunks of the conversation.
 * **Rolling Chat Summary**: A continuously updated high-level summary of the entire discussion.
-* **Searchable Vector Memory**: A dedicated vector database for the discussion, allowing for efficient semantic search
-  to retrieve relevant information.
+* **Searchable Vector Memory**: A dedicated full-text search database for the discussion, allowing for efficient
+  keyword-based search to retrieve relevant information.
+
+### Per-User Encryption and Data Isolation
+
+When a client sends an `Authorization: Bearer <key>` header, WilmerAI stores all discussion files in an isolated
+directory derived from the API key. This allows multiple users or applications to share a single WilmerAI instance
+without risk of data leakage. Directory isolation activates automatically based on the presence of the header. To also
+encrypt files at rest, set `"encryptUsingApiKey": true` in your user configuration file. Without an API key, behavior
+is unchanged. See [Per-User Encryption and Data Isolation](Core_Features/Per_User_Encryption.md) for full details.
 
 ### External Tool Integration
 
@@ -145,7 +153,6 @@ WilmerAI
 │        ├─ folders named after usernames
 │        └─ ...
 │
-├─ run_linux.sh
 ├─ run_macos.sh
 ├─ run_windows.bat
 └─ server.py
@@ -181,13 +188,19 @@ Contains all user-facing JSON configuration files.
       `/v1/models` and `/api/tags` endpoints, allowing front-end applications to select them via the model dropdown.
       See "Workflow Selection via Model Field" below for details.
 
-#### **`run_linux/run_macos/run_windows`**
+#### **`run_macos/run_windows`**
 
 Scripts to automatically generate a venv, install the requirements.txt for the app, and run the application by calling
-server.py. Takes two optional parameters:
+server.py. Takes the following optional parameters:
 
 * `--ConfigDirectory` - String input that specifies where the Public/Configs folder is at.
-* `--User` - String input that specifies the name of the user you'd like to start the app as.
+* `--User` - String input that specifies the name of the user you'd like to start the app as. Can be repeated for multi-user mode.
+* `--port` - Integer input that specifies the port to listen on. In single-user mode, falls back to the user's config. In multi-user mode, defaults to 5050.
+* `--listen` - Listen on the network. With no value, binds to 0.0.0.0 (all interfaces). Optionally accepts a specific address.
+* `--concurrency` - Integer input that sets the max concurrent requests. 0 = no limit. Default: 1.
+* `--concurrency-timeout` - Integer input that sets the seconds to wait for a concurrency slot before returning 503. Default: 900.
+* `--file-logging` - Enable file logging. In single-user mode, falls back to the user's useFileLogging config setting. In multi-user mode, defaults to off.
+* `--LoggingDirectory` - Directory for log files. Defaults to `logs`.
 
 #### **`server.py`**
 
@@ -197,20 +210,39 @@ Main script of the app.
 
 ## Workflow Selection via Model Field
 
-When loading a user that has `allowSharedWorkflows` set to true, WilmerAI allows front-end applications to select 
-specific workflows by using the model field in API requests. This enables users to switch between different workflows 
+When loading a user that has `allowSharedWorkflows` set to true, WilmerAI allows front-end applications to select
+specific workflows by using the model field in API requests. This enables users to switch between different workflows
 directly from their front-end's model dropdown without changing configuration files.
 
 ### How It Works
 
 1. **Models List Endpoints**: The `/v1/models` (OpenAI) and `/api/tags` (Ollama) endpoints return a list of available
-   workflows from `Public/Configs/Workflows/_shared/`. Each workflow is presented in `username:workflow` format.
+   models. In single-user mode, these are workflows from `_shared/` in `username:workflow` format. In multi-user mode,
+   models are aggregated from all configured users.
 
 2. **Workflow Selection**: When your front-end sends a request with a model field like `"model": "chris:openwebui-coding"`,
-   WilmerAI extracts the workflow name and executes that workflow directly from the `_shared` folder.
+   WilmerAI extracts the workflow name and executes that workflow directly from the `_shared` folder. In multi-user
+   mode, if `chris` matches a configured user, that user's config is used for the request.
 
 3. **Response Format**: Responses include the model in `username:workflow` format when a workflow override is active,
    allowing your front-end to maintain the selected workflow across requests.
+
+### Multi-User Mode
+
+A single Wilmer instance can serve multiple users. Instead of running separate instances for each user, start one
+instance with multiple `--User` flags:
+
+```bash
+bash run_macos.sh --User user-one --User user-two --User user-three
+```
+
+Each user must have a configuration file in `Public/Configs/Users/` (e.g., `user-one.json`, `user-two.json`).
+In multi-user mode, the per-user `port` setting is ignored; use `--port` on the command line (defaults to `5050`).
+All users share the same concurrency gate, which serializes requests to shared LLM hardware regardless of which
+user they belong to.
+
+The models endpoint will list models from all configured users. A front-end can target a specific user by sending
+`"model": "user-two"` or `"model": "user-two:coding"` in the request.
 
 ### Folder Structure
 
@@ -241,12 +273,13 @@ The API accepts these model field formats:
 
 | Format | Example | Behavior |
 |--------|---------|----------|
-| `username:workflow` | `chris:openwebui-coding` | Uses the specified workflow |
+| `username:workflow` | `chris:openwebui-coding` | Uses the specified workflow (and user in multi-user mode) |
+| `username` | `chris` | In multi-user mode, routes to that user's default workflow |
 | `workflow` | `openwebui-coding` | Uses workflow if it exists in `_shared/` |
 | Anything else | `gpt-4` | Falls back to normal routing |
 
 ### workflowConfigsSubDirectoryOverride
 
-The `workflowConfigsSubDirectoryOverride` user config setting creates subfolders within `_shared/`. For example,
-setting `"workflowConfigsSubDirectoryOverride": "coding-workflows"` loads workflows from `_shared/coding-workflows/`
-instead of the username folder.
+The `workflowConfigsSubDirectoryOverride` user config setting loads workflows from a subfolder within `_overrides/`
+instead of the username folder. For example, setting `"workflowConfigsSubDirectoryOverride": "coding-workflows"` loads
+workflows from `_overrides/coding-workflows/`.

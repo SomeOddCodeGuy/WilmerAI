@@ -75,31 +75,31 @@ You can use any tag name that makes sense for your workflow. Common patterns inc
 - `<thinking>...</thinking>` for chain-of-thought reasoning
 - `<code>...</code>` for code blocks
 - `<summary>...</summary>` for summaries
-- `<character_name>...</character_name>` for specific data fields
+- `<project_name>...</project_name>` for specific data fields
 
 ```json
 {
-  "title": "Extract Character Name",
+  "title": "Extract Project Name",
   "type": "TagTextExtractor",
   "tagToExtractFrom": "{agent1Output}",
-  "fieldToExtract": "character_name"
+  "fieldToExtract": "project_name"
 }
 ```
 
 **Example Input:**
 ```
-Based on the story context, I've created a character:
+Based on the provided data, I've identified the following project:
 
-<character_name>
-Socg the Wanderer
-</character_name>
+<project_name>
+Quarterly Revenue Analysis
+</project_name>
 
-<character_description>
-A mysterious traveler with a penchant for riddles.
-</character_description>
+<project_description>
+An analysis of Q3 revenue trends across all business units.
+</project_description>
 ```
 
-**Example Output:** `Socg the Wanderer`
+**Example Output:** `Quarterly Revenue Analysis`
 
 -----
 
@@ -116,8 +116,8 @@ You can use variables to dynamically determine which tag to extract.
 }
 ```
 
-If `agent2Output` contains `"character_description"`, this will extract the content from the
-`<character_description>` tags.
+If `agent2Output` contains `"project_description"`, this will extract the content from the
+`<project_description>` tags.
 
 -----
 

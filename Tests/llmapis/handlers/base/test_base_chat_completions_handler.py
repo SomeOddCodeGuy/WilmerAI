@@ -11,7 +11,7 @@ class ConcreteChatHandler(BaseChatCompletionsHandler):
     """A concrete implementation of BaseChatCompletionsHandler for testing purposes."""
 
     def _get_api_endpoint_url(self) -> str:
-        return "http://test.com/chat"
+        return "http://test.local/chat"
 
     def _process_stream_data(self, data_str: str) -> Optional[Dict[str, Any]]:
         pass
@@ -37,7 +37,7 @@ def handler_factory(mocker):
             dont_include_model: bool = False
     ):
         return ConcreteChatHandler(
-            base_url="http://test.com",
+            base_url="http://test.local",
             api_key="test_key",
             gen_input=gen_input if gen_input is not None else {},
             model_name="test-model",
@@ -96,14 +96,12 @@ class TestBuildMessagesFromConversation:
         """
         handler = handler_factory()
         conversation = [
-            {"role": "user", "content": "What is in this image?"},
-            {"role": "images", "content": "base64_string_here"}
+            {"role": "user", "content": "What is in this image?", "images": ["base64_string_here"]}
         ]
         messages = handler._build_messages_from_conversation(conversation, None, None)
-        # Images pass through the base handler - filtering happens upstream
-        assert len(messages) == 2
+        assert len(messages) == 1
         assert messages[0]["role"] == "user"
-        assert messages[1]["role"] == "images"
+        assert messages[0]["images"] == ["base64_string_here"]
 
     def test_empty_last_assistant_message_removal(self, handler_factory):
         """

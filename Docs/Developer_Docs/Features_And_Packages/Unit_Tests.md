@@ -20,10 +20,9 @@ The testing requirements are defined in `requirements-test.txt` in the project r
 **`requirements-test.txt`**
 
 ```
-pytest
-pytest-mock
-pytest-cov
-flask
+pytest==9.0.1
+pytest-mock==3.15.1
+pytest-cov==7.0.0
 ```
 
 To install them, run the following command from your project's root directory:
@@ -42,7 +41,7 @@ and that all test files are located within the `tests/` directory.
 ```ini
 [pytest]
 pythonpath = .
-testpaths = tests
+testpaths = Tests
 ```
 
 -----
@@ -64,7 +63,10 @@ WilmerAI
 │   │   │       └── test_openai_api_handler.py
 │   │   ├── test_api_helpers.py
 │   │   ├── test_api_server.py
+│   │   ├── test_concurrency_middleware.py
 │   │   └── test_workflow_gateway.py
+│   ├── common/
+│   │   └── test_instance_global_variables.py
 │   ├── integration/
 │   │   └── test_nested_workflow_cancellation.py
 │   ├── llmapis/
@@ -91,6 +93,8 @@ WilmerAI
 │   │   ├── test_prompt_categorization_service.py
 │   │   ├── test_response_builder_service.py
 │   │   └── test_timestamp_service.py
+│   ├── scripts/
+│   │   └── test_rekey_encrypted_files.py
 │   ├── utilities/
 │   │   ├── test_config_utils.py
 │   │   ├── test_datetime_utils.py
@@ -100,6 +104,8 @@ WilmerAI
 │   │   ├── test_prompt_manipulation_utils.py
 │   │   ├── test_prompt_template_utils.py
 │   │   ├── test_search_utils.py
+│   │   ├── test_encryption_utils.py
+│   │   ├── test_sensitive_logging_utils.py
 │   │   ├── test_streaming_utils.py
 │   │   ├── test_text_utils.py
 │   │   └── test_vector_db_utils.py
@@ -107,6 +113,7 @@ WilmerAI
 │   │   ├── handlers/
 │   │   │   └── impl/
 │   │   │       ├── test_memory_node_handler.py
+│   │   │       ├── test_context_compactor_handler.py
 │   │   │       ├── test_specialized_node_handler.py
 │   │   │       ├── test_standard_node_handler.py
 │   │   │       ├── test_sub_workflow_node_handler.py
@@ -123,6 +130,7 @@ WilmerAI
 │   │       ├── test_dynamic_module_loader.py
 │   │       ├── test_offline_wikipedia_api_tool.py
 │   │       └── test_slow_but_quality_rag_tool.py
+│   ├── test_server_logging.py
 │   └── conftest.py
 ```
 
@@ -207,9 +215,26 @@ Here is a summary of what each test file is responsible for.
     * **Strategy**: Mocks the file system (`os.walk`) and module importer (`importlib`) to verify that the server
       correctly discovers and loads all API handler classes on startup.
 
+* **`test_concurrency_middleware.py`**
+
+    * **Purpose**: To test the WSGI concurrency-limiting middleware and its semaphore-releasing iterator.
+    * **Strategy**: Uses real `threading.BoundedSemaphore` instances and threads to verify correct semaphore
+      lifecycle under all conditions: non-streaming responses, streaming responses held across chunks, inner app
+      exceptions, mid-iteration exceptions, early `close()` without double-release, close delegation to the
+      underlying iterable, concurrency=2 blocking a third request, 503 on acquire timeout, and the no-middleware
+      path when the semaphore is None. Synchronization uses `threading.Event` and `threading.Semaphore` instead
+      of `time.sleep()` for deterministic assertions.
+
 ### **`tests/llmapis/`**
 
-* **`test_koboldcpp_api_handler.py`**
+* **`test_llmapis_claude_api_handler.py`**
+
+    * **Purpose**: To test the Claude API handler's message building and multimodal content block formatting.
+    * **Strategy**: Tests `_build_messages_from_conversation` for text-only messages, base64 images, data URI images,
+      HTTP URL images, and mixed content. Also tests PIL-based format detection for raw base64 strings, MIME regex
+      coverage for SVG+XML and vendor types, and graceful handling of invalid or unsupported image sources.
+
+* **`test_llmapis_koboldcpp_api_handler.py`**
 
     * **Purpose**: To test the handler for the KoboldCpp `generate` and `stream` endpoints.
     * **Strategy**: Verifies correct URL generation for streaming vs. non-streaming. Tests the parsing of KoboldCpp's
@@ -223,8 +248,8 @@ Here is a summary of what each test file is responsible for.
     * **Strategy**: Verifies correct URL generation. Tests the unique payload structure for Ollama, which nests
       generation parameters under an `options` key. It also tests parsing of Ollama's line-delimited JSON stream and
       includes parameterized tests for various valid and malformed stream chunks. Also tests the
-      `_build_messages_from_conversation` method for multimodal support, verifying that `images` role messages are
-      correctly processed and attached to user messages as required by the Ollama API.
+      `_build_messages_from_conversation` method for multimodal support, verifying that messages with an `images` key
+      are correctly passed through to the Ollama API format.
 
 * **`test_ollama_generate_api_handler.py`**
 
@@ -238,9 +263,9 @@ Here is a summary of what each test file is responsible for.
     * **Purpose**: To test the primary handler for OpenAI-compatible `/v1/chat/completions` endpoints.
     * **Strategy**: Verifies correct URL generation. Tests the parsing of standard OpenAI SSE streams and non-streaming
       JSON responses. Uses parameterized tests to ensure graceful handling of malformed or incomplete response data from
-      the API. Also tests the `_build_messages_from_conversation` method for multimodal support, verifying the
-      transformation of user and `images` messages into OpenAI's multimodal content block format, including handling of
-      various image source types: HTTP URLs, file URIs, data URIs, and raw base64 strings.
+      the API. Also tests the `_build_messages_from_conversation` method for multimodal support, verifying that
+      messages with an `images` key are transformed into OpenAI's multimodal content block format on their originating
+      message, including handling of various image source types: HTTP URLs, file URIs, data URIs, and raw base64 strings.
 
 * **`test_openai_completions_api_handler.py`**
 
@@ -280,6 +305,41 @@ Here is a summary of what each test file is responsible for.
       correct schema and data.
     * **Strategy**: Straightforward tests that call the service's `build_*` methods with sample data and assert that the
       output dictionaries match the expected API format.
+
+### **`tests/utilities/`**
+
+* **`test_encryption_utils.py`**
+
+    * **Purpose**: To test the per-user encryption utilities including Fernet key derivation, encrypt/decrypt round-trips,
+      and API key hashing.
+    * **Strategy**: Tests `derive_fernet_key` with various username/key combinations, verifies encrypt/decrypt symmetry
+      for `encrypt_bytes`/`decrypt_bytes`, and validates `hash_api_key` output format and determinism.
+
+* **`test_sensitive_logging_utils.py`**
+
+    * **Purpose**: To test the thread-local sensitive logging context and redaction behavior.
+    * **Strategy**: Verifies that `sensitive_log` and `sensitive_log_lazy` correctly redact log messages when the
+      encryption context is active, and pass them through unchanged when it is not.
+
+### **`tests/scripts/`**
+
+* **`test_rekey_encrypted_files.py`**
+
+    * **Purpose**: To test the re-key and decrypt script that migrates encrypted discussion files to a new API key or
+      removes encryption entirely.
+    * **Strategy**: Mocks filesystem operations and encryption utilities to verify re-key paths, decrypt-only paths,
+      directory rename on key change, environment variable key override, and plaintext pass-through when files are
+      already unencrypted.
+
+### **`tests/workflows/handlers/impl/`**
+
+* **`test_context_compactor_handler.py`**
+
+    * **Purpose**: To test the ContextCompactor node handler including boundary calculation, compaction triggers, and
+      state persistence.
+    * **Strategy**: Tests `_calculate_boundaries` with various token budgets, `_should_compact` with different state
+      combinations (first run, boundary shift, hash changes), and the full `handle` method with mocked settings and
+      LLM calls.
 
 -----
 

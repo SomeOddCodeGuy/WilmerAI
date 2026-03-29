@@ -1,17 +1,11 @@
-# tests/workflows/handlers/impl/test_specialized_node_handler.py
-
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-# Dependencies to mock
 from Middleware.common import instance_global_variables
-# Base classes and exceptions
 from Middleware.exceptions.early_termination_exception import EarlyTerminationException
 from Middleware.services.locking_service import LockingService
-# The refactored utility function to test
 from Middleware.utilities.streaming_utils import stream_static_content
-# The class to test
 from Middleware.workflows.handlers.impl.specialized_node_handler import SpecializedNodeHandler
 from Middleware.workflows.models.execution_context import ExecutionContext
 
@@ -31,7 +25,6 @@ def mock_locking_service(mocker):
 def mock_variable_service():
     """Provides a mock for the WorkflowVariableManager."""
     mock_service = MagicMock()
-    # Simplified mock for apply_variables that handles basic f-string like substitution
     mock_service.apply_variables.side_effect = lambda prompt, context: prompt.format(
         **(context.agent_inputs or {}), **(context.agent_outputs or {})
     )
@@ -173,7 +166,6 @@ class TestHandleGetCustomFile:
     @patch('Middleware.workflows.handlers.impl.specialized_node_handler.load_custom_file', return_value="file content")
     def test_applies_variables_to_filepath(self, mock_load_file, specialized_handler, base_context, mock_variable_service):
         """Should apply variable substitution to the filepath before loading the file."""
-        # Configure the mock to return a resolved filepath with Discussion_Id substituted
         mock_variable_service.apply_variables.side_effect = lambda path, ctx: path.replace(
             "{Discussion_Id}", "conv-123"
         ).replace("{YYYY_MM_DD}", "2025_12_07")
@@ -182,11 +174,9 @@ class TestHandleGetCustomFile:
 
         result = specialized_handler.handle_get_custom_file(base_context)
 
-        # Verify apply_variables was called with the filepath template
         mock_variable_service.apply_variables.assert_called_once_with(
             "/data/{Discussion_Id}_notes.txt", base_context
         )
-        # Verify the resolved filepath was passed to load_custom_file
         mock_load_file.assert_called_once_with(
             filepath="/data/conv-123_notes.txt",
             delimiter="\n",
@@ -239,12 +229,10 @@ class TestHandleSaveCustomFile:
         base_context.config = {"filepath": "/path/save.txt", "content": "Hello {agent1Output}"}
         base_context.agent_outputs = {"agent1Output": "World"}
 
-        # Manually resolve variables for assertion since the mock is simple
         resolved_content = base_context.config["content"].format(agent1Output="World")
 
         result = specialized_handler.handle_save_custom_file(base_context)
 
-        # apply_variables should be called twice: once for filepath, once for content
         assert mock_variable_service.apply_variables.call_count == 2
         mock_variable_service.apply_variables.assert_any_call("/path/save.txt", base_context)
         mock_variable_service.apply_variables.assert_any_call("Hello {agent1Output}", base_context)
@@ -274,7 +262,6 @@ class TestHandleSaveCustomFile:
     @patch('Middleware.workflows.handlers.impl.specialized_node_handler.save_custom_file')
     def test_applies_variables_to_filepath(self, mock_save_file, specialized_handler, base_context, mock_variable_service):
         """Should apply variable substitution to the filepath before saving."""
-        # Configure mock to substitute variables in both filepath and content
         def mock_apply(text, ctx):
             return text.replace("{Discussion_Id}", "conv-456").replace("{agent1Output}", "result")
 
@@ -286,12 +273,10 @@ class TestHandleSaveCustomFile:
 
         result = specialized_handler.handle_save_custom_file(base_context)
 
-        # Verify both filepath and content were processed through apply_variables
         assert mock_variable_service.apply_variables.call_count == 2
         mock_variable_service.apply_variables.assert_any_call("/data/{Discussion_Id}_output.txt", base_context)
         mock_variable_service.apply_variables.assert_any_call("Output: {agent1Output}", base_context)
 
-        # Verify save was called with resolved values
         mock_save_file.assert_called_once_with(
             filepath="/data/conv-456_output.txt",
             content="Output: result"
@@ -354,29 +339,25 @@ class TestHandleImageProcessorNode:
     @patch('Middleware.workflows.handlers.impl.specialized_node_handler.LLMDispatchService.dispatch',
            return_value="description of image 1")
     def test_processes_single_image(self, mock_dispatch, specialized_handler, base_context):
-        """Should correctly process a single image message."""
-        image_msg = {"role": "images", "content": "img1_data"}
-        user_msg = {"role": "user", "content": "describe this"}
-        base_context.messages = [user_msg, image_msg]
+        """Should correctly process a single image from a message's images key."""
+        user_msg = {"role": "user", "content": "describe this", "images": ["img1_data"]}
+        base_context.messages = [user_msg]
 
         result = specialized_handler.handle_image_processor_node(base_context)
 
         assert result == "description of image 1"
         mock_dispatch.assert_called_once()
 
-        # Check the context passed to the dispatch service
         call_context = mock_dispatch.call_args.kwargs['context']
-        assert call_context.messages == [user_msg, image_msg]
-        assert mock_dispatch.call_args.kwargs['image_message'] == image_msg
+        assert call_context.messages[0]["images"] == ["img1_data"]
+        assert mock_dispatch.call_args.kwargs['llm_takes_images'] is True
 
     @patch('Middleware.workflows.handlers.impl.specialized_node_handler.LLMDispatchService.dispatch',
            side_effect=["desc1", "desc2"])
     def test_processes_multiple_images(self, mock_dispatch, specialized_handler, base_context):
-        """Should process multiple image messages and join their descriptions."""
-        image_msg1 = {"role": "images", "content": "img1_data"}
-        image_msg2 = {"role": "images", "content": "img2_data"}
-        user_msg = {"role": "user", "content": "describe these"}
-        base_context.messages = [user_msg, image_msg1, image_msg2]
+        """Should process multiple images from a message and join their descriptions."""
+        user_msg = {"role": "user", "content": "describe these", "images": ["img1_data", "img2_data"]}
+        base_context.messages = [user_msg]
 
         result = specialized_handler.handle_image_processor_node(base_context)
 
@@ -384,24 +365,249 @@ class TestHandleImageProcessorNode:
         assert mock_dispatch.call_count == 2
 
     @patch('Middleware.workflows.handlers.impl.specialized_node_handler.LLMDispatchService.dispatch',
+           side_effect=["desc1", "desc2"])
+    def test_original_context_messages_not_mutated(self, mock_dispatch, specialized_handler, base_context):
+        """The original context.messages must not be modified during image processing."""
+        base_context.messages = [
+            {"role": "user", "content": "first", "images": ["img1", "img2"]},
+            {"role": "assistant", "content": "reply"},
+        ]
+        original_images = list(base_context.messages[0]["images"])
+
+        specialized_handler.handle_image_processor_node(base_context)
+
+        # Original message still has both images intact
+        assert base_context.messages[0]["images"] == original_images
+        # Assistant message unchanged
+        assert base_context.messages[1] == {"role": "assistant", "content": "reply"}
+
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.LLMDispatchService.dispatch',
            return_value="desc")
     def test_add_as_user_message_true(self, mock_dispatch, specialized_handler, base_context, mock_variable_service):
         """Should insert a new user message with the description into the conversation history."""
-        image_msg = {"role": "images", "content": "img_data"}
-        user_msg = {"role": "user", "content": "describe this"}
+        user_msg = {"role": "user", "content": "describe this", "images": ["img_data"]}
         base_context.config = {"addAsUserMessage": True}
-        base_context.messages = [image_msg, user_msg]
+        base_context.messages = [user_msg]
 
-        # Mock apply_variables to just return the template for simplicity in assertion
         mock_variable_service.apply_variables.side_effect = lambda t, c: t.replace('[IMAGE_BLOCK]', 'desc')
 
         specialized_handler.handle_image_processor_node(base_context)
 
-        assert len(base_context.messages) == 3
-        new_message = base_context.messages[1]  # Inserted before the last message
+        assert len(base_context.messages) == 2
+        new_message = base_context.messages[0]
         assert new_message["role"] == "user"
         assert "[IMAGE_BLOCK]" not in new_message["content"]
         assert "desc" in new_message["content"]
+
+
+class TestHandleImageProcessorNodeWithCaching:
+    """Tests the ImageProcessor node with vision response caching enabled."""
+
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.LLMDispatchService.dispatch')
+    def test_caching_disabled_by_default_uses_legacy_path(self, mock_dispatch, specialized_handler, base_context):
+        """When saveVisionResponsesToDiscussionId is not set, the legacy path is used."""
+        base_context.config = {}
+        base_context.messages = [{"role": "user", "content": "hi", "images": ["img1"]}]
+        mock_dispatch.return_value = "legacy desc"
+
+        result = specialized_handler.handle_image_processor_node(base_context)
+
+        assert result == "legacy desc"
+        mock_dispatch.assert_called_once()
+
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.LLMDispatchService.dispatch')
+    def test_caching_noop_when_discussion_id_is_none(self, mock_dispatch, specialized_handler, base_context):
+        """When discussion_id is None, falls back to legacy even if saveVisionResponsesToDiscussionId is true."""
+        base_context.config = {"saveVisionResponsesToDiscussionId": True}
+        base_context.discussion_id = None
+        base_context.messages = [{"role": "user", "content": "hi", "images": ["img1"]}]
+        mock_dispatch.return_value = "legacy desc"
+
+        result = specialized_handler.handle_image_processor_node(base_context)
+
+        assert result == "legacy desc"
+        mock_dispatch.assert_called_once()
+
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.write_vision_responses')
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.read_vision_responses', return_value={})
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.get_discussion_vision_responses_file_path',
+           return_value='/mock/disc_vision_responses.json')
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.LLMDispatchService.dispatch',
+           return_value="new description")
+    def test_cache_miss_processes_and_stores(self, mock_dispatch, mock_get_path, mock_read, mock_write,
+                                             specialized_handler, base_context):
+        """On cache miss, calls LLM and writes the result to the cache."""
+        base_context.config = {"saveVisionResponsesToDiscussionId": True}
+        base_context.messages = [{"role": "user", "content": "look", "images": ["img_data"]}]
+
+        result = specialized_handler.handle_image_processor_node(base_context)
+
+        assert result == "new description"
+        mock_dispatch.assert_called_once()
+        mock_write.assert_called_once()
+        written_data = mock_write.call_args[0][1]
+        assert len(written_data) == 1
+        assert "new description" in written_data.values()
+
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.write_vision_responses')
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.read_vision_responses')
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.get_discussion_vision_responses_file_path',
+           return_value='/mock/disc_vision_responses.json')
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.hash_message_with_images',
+           return_value="cached_hash")
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.LLMDispatchService.dispatch')
+    def test_cache_hit_skips_llm_call(self, mock_dispatch, mock_hash, mock_get_path, mock_read, mock_write,
+                                      specialized_handler, base_context):
+        """On cache hit, the LLM is not called and the cached response is returned."""
+        mock_read.return_value = {"cached_hash": "cached description"}
+        base_context.config = {"saveVisionResponsesToDiscussionId": True}
+        base_context.messages = [{"role": "user", "content": "look", "images": ["img_data"]}]
+
+        result = specialized_handler.handle_image_processor_node(base_context)
+
+        assert result == "cached description"
+        mock_dispatch.assert_not_called()
+        mock_write.assert_not_called()
+
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.write_vision_responses')
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.read_vision_responses')
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.get_discussion_vision_responses_file_path',
+           return_value='/mock/disc_vision_responses.json')
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.hash_message_with_images')
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.LLMDispatchService.dispatch',
+           return_value="new desc")
+    def test_partial_cache_hit_calls_llm_only_for_uncached(self, mock_dispatch, mock_hash, mock_get_path,
+                                                            mock_read, mock_write,
+                                                            specialized_handler, base_context):
+        """With partial cache hit, LLM is only called for uncached messages."""
+        mock_hash.side_effect = ["hash_cached", "hash_new"]
+        mock_read.return_value = {"hash_cached": "old cached desc"}
+        base_context.config = {"saveVisionResponsesToDiscussionId": True}
+        base_context.messages = [
+            {"role": "user", "content": "first", "images": ["img1"]},
+            {"role": "user", "content": "second", "images": ["img2"]},
+        ]
+
+        result = specialized_handler.handle_image_processor_node(base_context)
+
+        assert "old cached desc" in result
+        assert "new desc" in result
+        mock_dispatch.assert_called_once()
+        mock_write.assert_called_once()
+        written_data = mock_write.call_args[0][1]
+        assert "hash_cached" in written_data
+        assert "hash_new" in written_data
+
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.write_vision_responses')
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.read_vision_responses', return_value={})
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.get_discussion_vision_responses_file_path',
+           return_value='/mock/disc_vision_responses.json')
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.LLMDispatchService.dispatch')
+    def test_only_last_20_messages_scanned(self, mock_dispatch, mock_get_path, mock_read, mock_write,
+                                           specialized_handler, base_context):
+        """Only the last 20 messages are scanned for images."""
+        messages = [{"role": "user", "content": f"msg{i}"} for i in range(25)]
+        messages[3]["images"] = ["old_img"]
+        base_context.config = {"saveVisionResponsesToDiscussionId": True}
+        base_context.messages = messages
+
+        result = specialized_handler.handle_image_processor_node(base_context)
+
+        assert result == "There were no images attached to the message"
+        mock_dispatch.assert_not_called()
+
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.write_vision_responses')
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.read_vision_responses', return_value={})
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.get_discussion_vision_responses_file_path',
+           return_value='/mock/disc_vision_responses.json')
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.LLMDispatchService.dispatch',
+           return_value="desc")
+    def test_add_as_user_message_per_message_injection(self, mock_dispatch, mock_get_path, mock_read, mock_write,
+                                                       specialized_handler, base_context, mock_variable_service):
+        """With caching and addAsUserMessage=true, descriptions are injected after each image message."""
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+        base_context.config = {"saveVisionResponsesToDiscussionId": True, "addAsUserMessage": True}
+        base_context.messages = [
+            {"role": "user", "content": "first"},
+            {"role": "user", "content": "has image", "images": ["img1"]},
+            {"role": "user", "content": "last message"},
+        ]
+
+        specialized_handler.handle_image_processor_node(base_context)
+
+        assert len(base_context.messages) == 4
+        assert base_context.messages[0]["content"] == "first"
+        assert base_context.messages[1]["content"] == "has image"
+        assert "[IMAGE_BLOCK]" not in base_context.messages[2]["content"]
+        assert base_context.messages[2]["role"] == "user"
+        assert base_context.messages[3]["content"] == "last message"
+
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.write_vision_responses')
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.read_vision_responses', return_value={})
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.get_discussion_vision_responses_file_path',
+           return_value='/mock/disc_vision_responses.json')
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.LLMDispatchService.dispatch')
+    def test_add_as_user_message_false_returns_last_10_only(self, mock_dispatch, mock_get_path, mock_read,
+                                                            mock_write, specialized_handler, base_context):
+        """With addAsUserMessage=false, only descriptions from last 10 messages are returned."""
+        mock_dispatch.side_effect = ["early desc", "recent desc"]
+        messages = [{"role": "user", "content": f"msg{i}"} for i in range(15)]
+        messages[2]["images"] = ["old_img"]
+        messages[12]["images"] = ["new_img"]
+        base_context.config = {"saveVisionResponsesToDiscussionId": True, "addAsUserMessage": False}
+        base_context.messages = messages
+
+        result = specialized_handler.handle_image_processor_node(base_context)
+
+        assert result == "recent desc"
+
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.write_vision_responses')
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.read_vision_responses', return_value={})
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.get_discussion_vision_responses_file_path',
+           return_value='/mock/disc_vision_responses.json')
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.LLMDispatchService.dispatch',
+           side_effect=["desc_img1", "desc_img2"])
+    def test_multiple_images_in_one_message_aggregated(self, mock_dispatch, mock_get_path, mock_read, mock_write,
+                                                       specialized_handler, base_context):
+        """Multiple images in a single message are processed individually and stored as one cache entry."""
+        base_context.config = {"saveVisionResponsesToDiscussionId": True}
+        base_context.messages = [
+            {"role": "user", "content": "two pics", "images": ["imgA", "imgB"]}
+        ]
+
+        result = specialized_handler.handle_image_processor_node(base_context)
+
+        assert result == "desc_img1\n-------------\ndesc_img2"
+        assert mock_dispatch.call_count == 2
+        mock_write.assert_called_once()
+        written_data = mock_write.call_args[0][1]
+        assert len(written_data) == 1
+        cached_value = list(written_data.values())[0]
+        assert cached_value == "desc_img1\n-------------\ndesc_img2"
+
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.write_vision_responses')
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.read_vision_responses')
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.get_discussion_vision_responses_file_path',
+           return_value='/mock/disc_vision_responses.json')
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.hash_message_with_images',
+           return_value="new_hash")
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.LLMDispatchService.dispatch',
+           return_value="new desc")
+    def test_cache_write_preserves_old_entries(self, mock_dispatch, mock_hash, mock_get_path,
+                                               mock_read, mock_write, specialized_handler, base_context):
+        """Writing new cache entries does not remove existing entries."""
+        mock_read.return_value = {"old_hash": "old description"}
+        base_context.config = {"saveVisionResponsesToDiscussionId": True}
+        base_context.messages = [{"role": "user", "content": "new", "images": ["img"]}]
+
+        specialized_handler.handle_image_processor_node(base_context)
+
+        mock_write.assert_called_once()
+        written_data = mock_write.call_args[0][1]
+        assert "old_hash" in written_data
+        assert written_data["old_hash"] == "old description"
+        assert "new_hash" in written_data
+        assert written_data["new_hash"] == "new desc"
 
 
 class TestHandleStaticResponse:
@@ -425,7 +631,6 @@ class TestHandleStaticResponse:
         base_context.config = {"content": "stream this"}
         base_context.stream = True
 
-        # Resolve content manually for assertion
         resolved_content = "stream this"
 
         result = specialized_handler.handle_static_response(base_context)
@@ -444,13 +649,12 @@ class TestStreamStaticContentUtil:
         generator = stream_static_content(content)
         results = list(generator)
 
-        # Expects ['word1', ' ', 'word2'] + stop token
         assert len(results) == 4
         assert results[0] == {'token': 'word1', 'finish_reason': None}
         assert results[1] == {'token': ' ', 'finish_reason': None}
         assert results[2] == {'token': 'word2', 'finish_reason': None}
         assert results[3] == {'token': '', 'finish_reason': 'stop'}
-        assert mock_sleep.call_count == 2  # Only for non-whitespace
+        assert mock_sleep.call_count == 2
 
     @patch('time.sleep')
     def test_streams_preserves_whitespace_and_newlines(self, mock_sleep):
@@ -459,21 +663,16 @@ class TestStreamStaticContentUtil:
         generator = stream_static_content(content)
         results = list(generator)
 
-        # Expected tokens from re.split: ['Line', ' ', '1', '\n\n', 'Line', ' ', '2', ' \t', 'Done.']
-        # Total tokens = 9 from split + 1 for stop token = 10
         assert len(results) == 10
 
-        # Reconstruct the string from the generator's output to ensure it matches the original
         reconstructed_content = "".join([r['token'] for r in results if r['finish_reason'] is None])
         assert reconstructed_content == content
 
-        # Check key tokens at their correct indices
-        assert results[3] == {'token': '\n\n', 'finish_reason': None}  # Preserved newline
+        assert results[3] == {'token': '\n\n', 'finish_reason': None}
         assert results[6] == {'token': '2', 'finish_reason': None}
-        assert results[7] == {'token': ' \t', 'finish_reason': None}  # Preserved space and tab
+        assert results[7] == {'token': ' \t', 'finish_reason': None}
         assert results[9] == {'token': '', 'finish_reason': 'stop'}
 
-        # 'Line', '1', 'Line', '2', 'Done.' -> 5 non-whitespace tokens
         assert mock_sleep.call_count == 5
 
     @patch('time.sleep')
@@ -493,12 +692,12 @@ class TestHandleArithmeticProcessor:
 
     @pytest.mark.parametrize("expression, agent_outputs, expected", [
         ("10 + 5", {}, "15"),
-        ("10.5 - 5.5", {}, "5"),  # Test float result becomes int string
-        ("10 * 2.5", {}, "25"),  # Test float result becomes int string
+        ("10.5 - 5.5", {}, "5"),
+        ("10 * 2.5", {}, "25"),
         ("10 / 4", {}, "2.5"),
         ("-5 * 10", {}, "-50"),
         ("{val} + 2", {"val": "8"}, "10"),
-        (" 20  /  -4 ", {}, "-5"),  # Test extra whitespace
+        (" 20  /  -4 ", {}, "-5"),
     ])
     def test_valid_expressions(self, specialized_handler, base_context, mock_variable_service, expression,
                                agent_outputs, expected):
@@ -506,7 +705,6 @@ class TestHandleArithmeticProcessor:
         base_context.config = {"expression": expression}
         base_context.agent_outputs = agent_outputs
 
-        # Simulate variable replacement for this test
         mock_variable_service.apply_variables.side_effect = lambda t, c: t.format(val=c.agent_outputs.get('val'))
 
         result = specialized_handler.handle_arithmetic_processor(base_context)
@@ -524,7 +722,6 @@ class TestHandleArithmeticProcessor:
         base_context.config = {"expression": expression}
         base_context.agent_outputs = agent_outputs
 
-        # Simulate variable replacement for this test
         mock_variable_service.apply_variables.side_effect = lambda t, c: t.format(val=c.agent_outputs.get('val', ''))
 
         with patch('Middleware.workflows.handlers.impl.specialized_node_handler.logger.warning') as mock_log:
@@ -546,22 +743,18 @@ class TestHandleConditionalSimple:
     """Tests the 'Conditional' node logic for simple, single comparisons."""
 
     @pytest.mark.parametrize("condition_template, agent_outputs, expected", [
-        # Numeric comparisons
         ("10 > 5", {}, "TRUE"),
         ("5 > 10", {}, "FALSE"),
         ("10 >= 10", {}, "TRUE"),
         ("5.5 <= 5.4", {}, "FALSE"),
         ("5 == 5.0", {}, "TRUE"),
-        # String comparisons
         ("'hello' == 'hello'", {}, "TRUE"),
         ('"world" != "World"', {}, "TRUE"),
-        # Variable resolution simulation
         ("{val} > 5", {"val": "10"}, "TRUE"),
         ("'{status}' == 'done'", {"status": "done"}, "TRUE"),
         ("'{status}' == 'pending'", {"status": "done"}, "FALSE"),
-        # Type mismatch comparisons
         ("10 == '10'", {}, "FALSE"),
-        ("5 > 'hello'", {}, "FALSE"),  # Should be handled gracefully
+        ("5 > 'hello'", {}, "FALSE"),
     ])
     def test_valid_conditions(self, specialized_handler, base_context, mock_variable_service,
                               condition_template, agent_outputs, expected):
@@ -587,39 +780,30 @@ class TestHandleConditionalComplex:
     """Tests the 'Conditional' node with complex logic (AND, OR, parentheses)."""
 
     @pytest.mark.parametrize("condition_template, agent_outputs, expected", [
-        # Basic AND
         ("5 > 3 AND 'a' == 'a'", {}, "TRUE"),
         ("5 > 3 AND 'a' == 'b'", {}, "FALSE"),
-        # Basic OR
         ("a == a OR b == a", {}, "TRUE"),
         ("a == b OR b == a", {}, "FALSE"),
         ("5 < 3 OR 'a' == 'a'", {}, "TRUE"),
         ("5 < 3 OR 'a' == 'b'", {}, "FALSE"),
-        # Basic Parentheses
         ("(5 < 3) OR ('a' == 'a')", {}, "TRUE"),
         ("(2 < 3) OR ('a' == 'b')", {}, "TRUE"),
-        # Case-insensitivity of operators and boolean words
         ("true AND 5 > 3", {}, "TRUE"),
         ("5 < 3 or TRUE", {}, "TRUE"),
-        # Precedence (AND before OR)
         ("FALSE OR TRUE AND TRUE", {}, "TRUE"),
         ("TRUE AND FALSE OR TRUE", {}, "TRUE"),
         ("FALSE AND TRUE OR FALSE", {}, "FALSE"),
-        # Parentheses to override precedence
         ("(FALSE OR TRUE) AND FALSE", {}, "FALSE"),
         ("5 > 3 AND (5 < 3 OR 1 == 1)", {}, "TRUE"),
-        # Nested Parentheses
         ("((5 > 3 AND 1 == 1) OR 2 < 1) AND 'x' == 'x'", {}, "TRUE"),
         ("((5 > 3 AND 1 == 0) OR 2 < 1) AND 'x' == 'x'", {}, "FALSE"),
-        # With Variables
         ("{val} > 5 AND '{status}' == 'complete'", {"val": 10, "status": "complete"}, "TRUE"),
         ("{val} > 5 AND '{status}' == 'complete'", {"val": 3, "status": "complete"}, "FALSE"),
         ("({val} > 5 OR '{status}' == 'pending') AND {is_admin}", {"val": 3, "status": "pending", "is_admin": "TRUE"},
          "TRUE"),
-        # Truthiness of resolved variables
         ("{output} AND {val} > 10", {"output": "some_string", "val": 20}, "TRUE"),
-        ("{output} AND {val} > 10", {"output": "", "val": 20}, "FALSE"),  # Empty string is falsy
-        ("{output} OR {val} > 10", {"output": 0, "val": 5}, "FALSE"),  # 0 is falsy
+        ("{output} AND {val} > 10", {"output": "", "val": 20}, "FALSE"),
+        ("{output} OR {val} > 10", {"output": 0, "val": 5}, "FALSE"),
     ])
     def test_complex_expressions(self, specialized_handler, base_context, mock_variable_service,
                                  condition_template, agent_outputs, expected):
@@ -627,7 +811,6 @@ class TestHandleConditionalComplex:
         base_context.config = {"condition": condition_template}
         base_context.agent_outputs = agent_outputs
 
-        # Set up a more realistic mock that replaces variables
         def apply_vars_side_effect(template, context):
             return template.format(**context.agent_outputs)
 
@@ -659,17 +842,12 @@ class TestHandleStringConcatenator:
     """Tests the 'StringConcatenator' node logic."""
 
     @pytest.mark.parametrize("strings_template, agent_outputs, delimiter, expected", [
-        # Basic cases
         (["Hello", " ", "World"], {}, "", "Hello World"),
         (["Part1", "Part2"], {}, "-", "Part1-Part2"),
-        # With variables
         (["Name: {name}", "Age: {age}"], {"name": "Test", "age": 30}, "\n", "Name: Test\nAge: 30"),
-        # Mixed types from JSON config
         (["Count:", 100], {}, " ", "Count: 100"),
-        # Edge cases
         ([], {}, ",", ""),
         (["Single"], {}, ",", "Single"),
-        # No delimiter specified (should default to empty string)
         (["A", "B", "C"], {}, None, "ABC"),
     ])
     def test_non_streaming(self, specialized_handler, base_context, mock_variable_service,
@@ -682,7 +860,6 @@ class TestHandleStringConcatenator:
         base_context.agent_outputs = agent_outputs
         base_context.stream = False
 
-        # Set up a more realistic mock that replaces variables
         def apply_vars_side_effect(template, context):
             if isinstance(template, str):
                 return template.format(**context.agent_outputs)
@@ -701,14 +878,11 @@ class TestHandleStringConcatenator:
         base_context.config = {"strings": ["Streaming", " ", "test"], "delimiter": ""}
         base_context.stream = True
 
-        # Mock doesn't need to be complex; just return the input
         mock_variable_service.apply_variables.side_effect = lambda t, c: t
 
         result = specialized_handler.handle_string_concatenator(base_context)
 
-        # The result should be the mocked return value of the streamer
         assert result == mock_streamer.return_value
-        # And the streamer should have been called with the final string
         mock_streamer.assert_called_once_with("Streaming test")
 
     def test_handles_non_list_strings_property(self, specialized_handler, base_context):
@@ -773,7 +947,7 @@ class TestHandleJsonExtractor:
 
     def test_extracts_simple_string_field(self, specialized_handler, base_context, mock_variable_service):
         """Should extract a simple string field from JSON."""
-        json_string = '{"name": "Socg", "file": "Socg.txt"}'
+        json_string = '{"name": "Alice", "file": "notes.txt"}'
         base_context.config = {
             "jsonToExtractFrom": json_string,
             "fieldToExtract": "name"
@@ -782,11 +956,11 @@ class TestHandleJsonExtractor:
 
         result = specialized_handler.handle_json_extractor(base_context)
 
-        assert result == "Socg"
+        assert result == "Alice"
 
     def test_extracts_second_field(self, specialized_handler, base_context, mock_variable_service):
         """Should extract any specified field from JSON."""
-        json_string = '{"name": "Socg", "file": "Socg.txt"}'
+        json_string = '{"name": "Alice", "file": "notes.txt"}'
         base_context.config = {
             "jsonToExtractFrom": json_string,
             "fieldToExtract": "file"
@@ -795,7 +969,7 @@ class TestHandleJsonExtractor:
 
         result = specialized_handler.handle_json_extractor(base_context)
 
-        assert result == "Socg.txt"
+        assert result == "notes.txt"
 
     def test_extracts_numeric_field(self, specialized_handler, base_context, mock_variable_service):
         """Should extract numeric fields and convert to string."""
@@ -851,7 +1025,7 @@ class TestHandleJsonExtractor:
 
     def test_handles_markdown_json_code_block(self, specialized_handler, base_context, mock_variable_service):
         """Should handle JSON wrapped in ```json code block."""
-        json_string = '```json\n{"name": "Socg", "file": "Socg.txt"}\n```'
+        json_string = '```json\n{"name": "Alice", "file": "notes.txt"}\n```'
         base_context.config = {
             "jsonToExtractFrom": json_string,
             "fieldToExtract": "name"
@@ -860,11 +1034,11 @@ class TestHandleJsonExtractor:
 
         result = specialized_handler.handle_json_extractor(base_context)
 
-        assert result == "Socg"
+        assert result == "Alice"
 
     def test_handles_plain_markdown_code_block(self, specialized_handler, base_context, mock_variable_service):
         """Should handle JSON wrapped in plain ``` code block."""
-        json_string = '```\n{"name": "Socg", "file": "Socg.txt"}\n```'
+        json_string = '```\n{"name": "Alice", "file": "notes.txt"}\n```'
         base_context.config = {
             "jsonToExtractFrom": json_string,
             "fieldToExtract": "name"
@@ -873,7 +1047,7 @@ class TestHandleJsonExtractor:
 
         result = specialized_handler.handle_json_extractor(base_context)
 
-        assert result == "Socg"
+        assert result == "Alice"
 
     def test_applies_variables_to_json_source(self, specialized_handler, base_context, mock_variable_service):
         """Should apply variable substitution to jsonToExtractFrom."""
@@ -1233,7 +1407,7 @@ Line 3
         text = "<Tag>content</Tag>"
         base_context.config = {
             "tagToExtractFrom": text,
-            "fieldToExtract": "tag"  # lowercase - should not match
+            "fieldToExtract": "tag"
         }
         mock_variable_service.apply_variables.side_effect = lambda t, c: t
 
@@ -1417,7 +1591,6 @@ class TestJsonExtractorEdgeCases:
 
         result = specialized_handler.handle_json_extractor(base_context)
 
-        # "details.name" is not a top-level key, should return empty
         assert result == ""
 
     def test_uppercase_json_code_block_integration(self, specialized_handler, base_context, mock_variable_service):

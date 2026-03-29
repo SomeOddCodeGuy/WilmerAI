@@ -1,9 +1,14 @@
 # middleware/llmapis/handlers/impl/claude_api_handler.py
+import base64 as base64_module
+import io
 import json
 import logging
+import re
+import traceback
 from typing import Dict, Optional, Any, List
 
 from Middleware.llmapis.handlers.base.base_chat_completions_handler import BaseChatCompletionsHandler
+from Middleware.utilities.sensitive_logging_utils import sensitive_log
 
 logger = logging.getLogger(__name__)
 
@@ -177,14 +182,146 @@ class ClaudeApiHandler(BaseChatCompletionsHandler):
         # They guide Claude's response format (e.g., forcing JSON with "{")
         if non_system_messages and non_system_messages[-1].get('role') == 'assistant':
             prefill_content = non_system_messages[-1].get('content', '')
-            logger.debug(f"Claude prefill detected: '{prefill_content[:100]}...'")
+            sensitive_log(logger, logging.DEBUG, "Claude prefill detected: '%s...'", prefill_content[:100])
             # Validate: prefill cannot end with trailing whitespace
             if prefill_content != prefill_content.rstrip():
-                logger.warning(f"Claude prefill content ends with whitespace, which may cause API errors. "
-                             f"Trimming whitespace from: '{prefill_content}'")
+                sensitive_log(logger, logging.WARNING,
+                             "Claude prefill content ends with whitespace, which may cause API errors. "
+                             "Trimming whitespace from: '%s'", prefill_content)
                 non_system_messages[-1]['content'] = prefill_content.rstrip()
 
         return payload
+
+    def _build_messages_from_conversation(self, conversation: Optional[List[Dict[str, str]]],
+                                          system_prompt: Optional[str], prompt: Optional[str]) -> List[Dict[str, Any]]:
+        """
+        Overrides the base message building to convert per-message images into
+        Claude's multimodal content block format.
+
+        Claude expects images as content blocks with type "image" and a source
+        object containing the base64 data and media type. This differs from
+        the OpenAI format which uses "image_url" blocks with data URIs.
+
+        Args:
+            conversation: The historical conversation.
+            system_prompt: The system prompt.
+            prompt: The latest user prompt.
+
+        Returns:
+            List[Dict[str, Any]]: Messages with images converted to Claude's format.
+        """
+        messages = super()._build_messages_from_conversation(conversation, system_prompt, prompt)
+
+        try:
+            if not any("images" in msg for msg in messages):
+                return messages
+
+            for msg in messages:
+                if msg.get("role") == "user" and "images" in msg:
+                    image_list = msg.pop("images")
+                    image_blocks = []
+                    for img_source in image_list:
+                        img_block = self._process_single_image_source(img_source)
+                        if img_block:
+                            image_blocks.append(img_block)
+
+                    if image_blocks:
+                        if isinstance(msg["content"], str):
+                            msg["content"] = [{"type": "text", "text": msg["content"]}]
+                        # Claude recommends images before text for best results
+                        msg["content"] = image_blocks + msg["content"]
+
+            for msg in messages:
+                msg.pop("images", None)
+
+            return messages
+
+        except Exception as e:
+            logger.error(f"Critical error during Claude image processing: {e}\n{traceback.format_exc()}")
+            for msg in messages:
+                msg.pop("images", None)
+                if msg["role"] == "user" and isinstance(msg.get("content"), list):
+                    text_content = next(
+                        (item.get("text", "") for item in msg["content"] if item.get("type") == "text"), "")
+                    msg["content"] = text_content
+            if messages and messages[-1].get("role") == "user":
+                messages[-1]["content"] += "\n\n[System note: There was an error processing the provided image(s). I will respond based on the text alone.]"
+            else:
+                messages.append({"role": "user", "content": "[System note: There was an error processing the provided image(s). Please respond based on prior text.]"})
+            return messages
+
+    @staticmethod
+    def _process_single_image_source(content: str) -> Optional[Dict]:
+        """
+        Converts a single image source string into a Claude API image content block.
+
+        Claude's format:
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "..."}}
+
+        Supported input formats:
+        - Data URIs: "data:image/png;base64,iVBOR..."
+        - Raw base64 strings (media type inferred as image/jpeg)
+        - HTTP/HTTPS URLs: passed as URL source type
+
+        Args:
+            content: The string representing the image source.
+
+        Returns:
+            A Claude image content block dict, or None if unrecognized.
+        """
+        if content.startswith('data:image/'):
+            match = re.match(r'^data:(image/[a-zA-Z0-9.+\-]+);base64,(.+)$', content)
+            if match:
+                media_type = match.group(1)
+                data = match.group(2)
+                return {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": data,
+                    }
+                }
+            logger.warning("Could not parse data URI for Claude image block. Skipping.")
+            return None
+
+        if content.startswith('http://') or content.startswith('https://'):
+            return {
+                "type": "image",
+                "source": {
+                    "type": "url",
+                    "url": content,
+                }
+            }
+
+        # Treat the string as raw base64 if it looks structurally valid.
+        # len >= 100 avoids false positives on short strings that happen to be
+        # all alphanumeric. The character-set regex validates the base64 alphabet
+        # and optional trailing padding (=, ==). % 4 == 0 is required because
+        # base64 encodes groups of 3 bytes into 4 characters; any valid base64
+        # string (padded) has a length that is a multiple of 4.
+        if isinstance(content, str) and len(content) >= 100:
+            if bool(re.match(r'^[A-Za-z0-9+/]+={0,2}$', content)) and len(content) % 4 == 0:
+                media_type = "image/jpeg"
+                try:
+                    decoded_data = base64_module.b64decode(content)
+                    from PIL import Image
+                    with Image.open(io.BytesIO(decoded_data)) as image:
+                        if image.format:
+                            media_type = f"image/{image.format.lower()}"
+                except Exception:
+                    pass  # Fall back to image/jpeg default
+                return {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": content,
+                    }
+                }
+
+        logger.warning(f"Skipping unrecognized image source for Claude: {content[:100]}...")
+        return None
 
     def _parse_non_stream_response(self, response_json: Dict) -> str:
         """

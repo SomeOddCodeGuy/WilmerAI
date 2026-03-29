@@ -23,7 +23,7 @@ conversational memories. This process is not as configurable or efficient as the
 
 | Property   | Type   | Required? | Description                             |
 |:-----------|:-------|:----------|:----------------------------------------|
-| **`type`** | String | ✅ Yes     | Must be exactly `"ConversationMemory"`. |
+| **`type`** | String | Yes     | Must be exactly `"ConversationMemory"`. |
 
 -----
 

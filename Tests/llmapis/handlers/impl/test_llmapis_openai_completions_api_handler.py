@@ -11,7 +11,7 @@ from Middleware.llmapis.handlers.impl.openai_completions_api_handler import Open
 def handler_config():
     """Provides a baseline configuration for instantiating the handler."""
     return {
-        "base_url": "https://api.test.com",
+        "base_url": "https://api.test.local",
         "api_key": "test-key-123",
         "gen_input": {"temperature": 0.7, "top_p": 0.9},
         "model_name": "gpt-3.5-turbo-instruct",
@@ -50,7 +50,7 @@ class TestOpenAiCompletionsApiHandler:
         """
         Verifies that the correct API endpoint URL is constructed.
         """
-        assert handler._get_api_endpoint_url() == "https://api.test.com/v1/completions"
+        assert handler._get_api_endpoint_url() == "https://api.test.local/v1/completions"
 
     def test_iterate_by_lines_property(self, handler):
         """

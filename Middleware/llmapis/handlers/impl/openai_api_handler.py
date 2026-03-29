@@ -7,7 +7,6 @@ import logging
 import os
 import re
 import traceback
-from copy import deepcopy
 from typing import Dict, List, Optional, Any
 from urllib.parse import urlparse
 
@@ -113,10 +112,9 @@ class OpenAiApiHandler(BaseChatCompletionsHandler):
         Overrides the base message building to process and inject image data.
 
         This method first calls the parent implementation to get a standard, clean
-        conversation list. It then inspects the original conversation for messages with the
-        special role "images". It extracts all image sources (URLs, base64, file URIs),
-        processes them into the format required by vision APIs, and injects them into
-        the content of the last user message.
+        conversation list. It then inspects each message for an 'images' key. For each
+        message that has images, it converts the content to the OpenAI multimodal format,
+        attaching images to their originating message.
 
         Args:
             conversation (Optional[List[Dict[str, str]]]): The historical conversation.
@@ -130,52 +128,26 @@ class OpenAiApiHandler(BaseChatCompletionsHandler):
         messages = super()._build_messages_from_conversation(conversation, system_prompt, prompt)
 
         try:
-            original_convo = deepcopy(conversation) or []
-            if prompt:
-                original_convo.append({"role": "user", "content": prompt})
-
-            if not any(msg.get("role") == "images" for msg in original_convo):
+            if not any("images" in msg for msg in messages):
                 return messages
 
-            image_contents = []
-            potential_images = []
-            for msg in original_convo:
-                if msg.get("role") == "images":
-                    content = msg.get("content", "")
-                    if isinstance(content, str):
-                        potential_images.extend(content.split())
-                    elif isinstance(content, list):
-                        for item in content:
-                            if isinstance(item, str):
-                                potential_images.extend(item.split())
+            for msg in messages:
+                if msg.get("role") == "user" and "images" in msg:
+                    image_list = msg.pop("images")
+                    image_contents = []
+                    for img_source in image_list:
+                        img_dict = self._process_single_image_source(img_source)
+                        if img_dict:
+                            image_contents.append(img_dict)
 
-            for image_url_or_data in potential_images:
-                content = image_url_or_data.strip()
-                if not content:
-                    continue
-                img_dict = self._process_single_image_source(content)
-                if img_dict:
-                    image_contents.append(img_dict)
+                    if image_contents:
+                        if isinstance(msg["content"], str):
+                            msg["content"] = [{"type": "text", "text": msg["content"]}]
+                        for img_item in image_contents:
+                            msg["content"].append(img_item)
 
-            if image_contents:
-                last_user_msg_index = next(
-                    (i for i in range(len(messages) - 1, -1, -1) if messages[i]["role"] == "user"), -1)
-
-                if last_user_msg_index != -1:
-                    user_msg = messages[last_user_msg_index]
-                    if isinstance(user_msg["content"], str):
-                        user_msg["content"] = [{"type": "text", "text": user_msg["content"]}]
-
-                    existing_urls = {item['image_url']['url'] for item in user_msg.get('content', []) if
-                                     item.get('type') == 'image_url'}
-                    for img_item in image_contents:
-                        if img_item['image_url']['url'] not in existing_urls:
-                            user_msg['content'].append(img_item)
-                else:
-                    messages.append({
-                        "role": "user",
-                        "content": [{"type": "text", "text": "Please describe the image(s)."}, *image_contents]
-                    })
+            for msg in messages:
+                msg.pop("images", None)
 
             return messages
 
@@ -200,6 +172,7 @@ class OpenAiApiHandler(BaseChatCompletionsHandler):
             List[Dict[str, Any]]: A cleaned, text-only message list with an error notification.
         """
         for msg in messages:
+            msg.pop("images", None)
             if msg["role"] == "user" and isinstance(msg.get("content"), list):
                 text_content = next((item.get("text", "") for item in msg["content"] if item.get("type") == "text"), "")
                 msg["content"] = text_content
@@ -273,7 +246,7 @@ class OpenAiApiHandler(BaseChatCompletionsHandler):
         try:
             result = urlparse(url)
             return all([result.scheme in ('http', 'https'), result.netloc])
-        except:
+        except Exception:
             return False
 
     @staticmethod
@@ -290,7 +263,7 @@ class OpenAiApiHandler(BaseChatCompletionsHandler):
         Returns:
             bool: True if the string resembles a base64 encoding, False otherwise.
         """
-        if not isinstance(s, str) or not s:
+        if not isinstance(s, str) or len(s) < 100:
             return False
         return bool(re.match(r'^[A-Za-z0-9+/]+={0,2}$', s)) and len(s) % 4 == 0
 

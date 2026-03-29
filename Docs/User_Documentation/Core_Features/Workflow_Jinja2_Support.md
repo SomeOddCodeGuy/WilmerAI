@@ -1,4 +1,4 @@
-### **Developer Guide: Workflow Node Jinja2 Support**
+### **Workflow Node Jinja2 Support**
 
 This guide provides a comprehensive overview of how to leverage the **Jinja2 templating engine** within WilmerAI
 workflow nodes. While standard variable substitution (`{my_variable}`) is suitable for simple cases, enabling Jinja2
@@ -18,7 +18,7 @@ strings into dynamic, logic-driven templates that react to the state of the work
 
 * **Conditional Logic:** Use `{% if ... %}` statements to change parts of a prompt based on the output of previous nodes
   or other variables.
-* **Dynamic Loops:** Iterate over lists—most notably the `{messages}` variable—using `{% for ... %}` loops to format
+* **Dynamic Loops:** Iterate over lists -- most notably the `{messages}` variable -- using `{% for ... %}` loops to format
   conversation histories or other collections of data precisely.
 * **Direct Variable Access:** All standard workflow variables (e.g., `{agent1Output}`, `{todays_date_pretty}`) are
   available within the Jinja2 context.

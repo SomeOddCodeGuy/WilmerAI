@@ -26,12 +26,16 @@ from werkzeug.exceptions import ClientDisconnected
 from Middleware.api import api_helpers
 from Middleware.api.app import app
 from Middleware.api.handlers.base.base_api_handler import BaseApiHandler
-from Middleware.api.workflow_gateway import handle_user_prompt, _sanitize_log_data, handle_openwebui_tool_check
+from Middleware.api.workflow_gateway import handle_user_prompt, _sanitize_log_data, check_openwebui_tool_request
 from Middleware.common import instance_global_variables
 from Middleware.services.response_builder_service import ResponseBuilderService
 from Middleware.utilities.config_utils import get_is_chat_complete_add_user_assistant, \
-    get_is_chat_complete_add_missing_assistant
+    get_is_chat_complete_add_missing_assistant, get_encrypt_using_api_key, get_redact_log_output
+from Middleware.common.instance_global_variables import clear_api_type
 from Middleware.utilities.prompt_extraction_utils import parse_conversation
+from Middleware.utilities.sensitive_logging_utils import (
+    set_encryption_context, clear_encryption_context, is_encryption_active, sensitive_log_lazy,
+)
 
 logger = logging.getLogger(__name__)
 response_builder = ResponseBuilderService()
@@ -39,13 +43,12 @@ response_builder = ResponseBuilderService()
 # Configuration for the heartbeat mechanism
 # 1 second was chosen because Wilmer won't react to an abort from the front-end until the next interval.
 # In an attempt to save the user some tokens, we want that reaction as fast as possible so we dont risk
-# kicking off another workflow node and processing another prompt. No guarantee this will work, but we
-# want to try
+# kicking off another workflow node and processing another prompt.
 HEARTBEAT_INTERVAL = 1  # seconds
 HEARTBEAT_MESSAGE = b':\n\n'
 
 
-def _stream_with_eventlet_optimized(request_id: str, messages: List[Dict], stream: bool) -> Response:
+def _stream_with_eventlet_optimized(request_id: str, messages: List[Dict], stream: bool, api_key: str = None) -> Response:
     """
     Optimized streaming implementation for Eventlet with disconnect detection during prefill.
 
@@ -55,9 +58,12 @@ def _stream_with_eventlet_optimized(request_id: str, messages: List[Dict], strea
     logger.info(f"OpenAI starting Eventlet optimized streaming for request_id: {request_id}")
     from Middleware.services.cancellation_service import cancellation_service
 
-    # Capture workflow override before spawning greenlet, since the finally block
-    # in the calling function will clear it before the greenlet runs
+    # Capture request-scoped state before spawning greenlet, since the finally
+    # block in the calling function will clear them before the greenlet runs
     captured_workflow_override = api_helpers.get_active_workflow_override()
+    captured_api_type = instance_global_variables.get_api_type()
+    captured_encryption_active = is_encryption_active()
+    captured_request_user = instance_global_variables.get_request_user()
 
     event_queue = EventletQueue()
     stop_signal = eventlet.event.Event()
@@ -65,10 +71,12 @@ def _stream_with_eventlet_optimized(request_id: str, messages: List[Dict], strea
 
     def backend_reader():
         """Background greenlet that reads from handle_user_prompt and queues chunks."""
-        # Restore the workflow override that was captured before spawning
-        instance_global_variables.WORKFLOW_OVERRIDE = captured_workflow_override
+        instance_global_variables.set_workflow_override(captured_workflow_override)
+        instance_global_variables.set_api_type(captured_api_type)
+        instance_global_variables.set_request_user(captured_request_user)
+        set_encryption_context(captured_encryption_active)
         try:
-            for chunk in handle_user_prompt(request_id, messages, stream):
+            for chunk in handle_user_prompt(request_id, messages, stream, api_key=api_key):
                 if stop_signal.ready():
                     break
                 event_queue.put(("data", chunk))
@@ -95,9 +103,16 @@ def _stream_with_eventlet_optimized(request_id: str, messages: List[Dict], strea
                         raise data
                     elif msg_type == "data":
                         if isinstance(data, str):
-                            yield data.encode('utf-8')
+                            encoded = data.encode('utf-8')
                         else:
-                            yield data
+                            encoded = data
+                        yield encoded
+
+                        # If this chunk is the SSE stream terminator, return immediately.
+                        # Without this, post-stream workflow processing keeps the generator
+                        # alive, holding the connection open unnecessarily.
+                        if b'[DONE]' in encoded:
+                            return
 
                         eventlet.sleep(0)
 
@@ -121,7 +136,11 @@ def _stream_with_eventlet_optimized(request_id: str, messages: List[Dict], strea
             if not stop_signal.ready():
                 stop_signal.send(True)
             if reader_greenlet:
-                reader_greenlet.kill()
+                # Kill the reader asynchronously to avoid blocking HTTP response
+                # finalization. A blocking kill() here would delay the chunked TE
+                # terminator and TCP close, since the generator's finally block runs
+                # before the WSGI server can finalize the response.
+                eventlet.spawn(reader_greenlet.kill)
 
     response = Response(
         streaming_generator(),
@@ -131,30 +150,57 @@ def _stream_with_eventlet_optimized(request_id: str, messages: List[Dict], strea
             'X-Accel-Buffering': 'no',
         }
     )
-    # Remove hop-by-hop headers that violate WSGI/PEP 3333
-    response.headers.pop('Connection', None)
+    # Force connection teardown after streaming completes. Some front-ends (notably Node.js-based apps)
+    # can have their HTTP connection pool corrupted by keep-alive connections that outlive a streaming response.
+    response.headers['Connection'] = 'close'
     return response
 
 
-def _stream_response_fallback(request_id: str, messages: List[Dict], stream: bool) -> Response:
-    """Fallback streaming for non-Eventlet environments."""
+def _stream_response_fallback(request_id: str, messages: List[Dict], stream: bool, api_key: str = None) -> Response:
+    """
+    Fallback streaming implementation for non-Eventlet environments.
+
+    Used when Eventlet is not installed or monkey-patching is not active (e.g., when
+    running under Waitress, Gunicorn, or the Flask development server). Disconnect
+    detection during the LLM prefill phase is unreliable in this mode because the
+    generator is driven synchronously by the WSGI server without a heartbeat mechanism.
+
+    Args:
+        request_id (str): The unique identifier for this request.
+        messages (List[Dict]): The conversation history in the internal message format.
+        stream (bool): Whether streaming mode is active.
+        api_key (str, optional): The API key for encryption context scoping.
+
+    Returns:
+        Response: A Flask streaming Response with SSE (text/event-stream) content type.
+    """
     logger.info(f"OpenAI starting fallback (synchronous) streaming for request_id: {request_id}")
     from Middleware.services.cancellation_service import cancellation_service
 
-    # Capture workflow override before creating generator, since the finally block
-    # in the calling function will clear it before the generator runs
+    # Capture request-scoped state before creating generator, since the finally
+    # block in the calling function will clear them before the generator runs
     captured_workflow_override = api_helpers.get_active_workflow_override()
+    captured_api_type = instance_global_variables.get_api_type()
+    captured_encryption_active = is_encryption_active()
+    captured_request_user = instance_global_variables.get_request_user()
 
     def streaming_generator():
-        # Restore the workflow override that was captured before creating the generator
-        instance_global_variables.WORKFLOW_OVERRIDE = captured_workflow_override
+        instance_global_variables.set_workflow_override(captured_workflow_override)
+        instance_global_variables.set_api_type(captured_api_type)
+        instance_global_variables.set_request_user(captured_request_user)
+        set_encryption_context(captured_encryption_active)
         logger.debug(f"OpenAI Fallback Generator starting for request_id: {request_id}")
         try:
-            for chunk in handle_user_prompt(request_id, messages, stream):
+            for chunk in handle_user_prompt(request_id, messages, stream, api_key=api_key):
                 if isinstance(chunk, str):
-                    yield chunk.encode('utf-8')
+                    encoded = chunk.encode('utf-8')
                 else:
-                    yield chunk
+                    encoded = chunk
+                yield encoded
+                # Stop after stream terminator to prevent the generator from staying
+                # alive during post-stream workflow processing.
+                if b'[DONE]' in encoded:
+                    return
         except (GeneratorExit, ClientDisconnected, BrokenPipeError, ConnectionError) as e:
             if request_id:
                 if not cancellation_service.is_cancelled(request_id):
@@ -178,17 +224,34 @@ def _stream_response_fallback(request_id: str, messages: List[Dict], stream: boo
             'X-Accel-Buffering': 'no',
         }
     )
-    # Remove hop-by-hop headers that violate WSGI/PEP 3333
-    response.headers.pop('Connection', None)
+    # Force connection teardown after streaming completes. Some front-ends (notably Node.js-based apps)
+    # can have their HTTP connection pool corrupted by keep-alive connections that outlive a streaming response.
+    response.headers['Connection'] = 'close'
     return response
 
 
-def _handle_streaming_request(request_id: str, messages: List[Dict], stream: bool) -> Response:
-    """Main entry point for streaming, dynamically choosing the implementation."""
+def _handle_streaming_request(request_id: str, messages: List[Dict], stream: bool, api_key: str = None) -> Response:
+    """
+    Selects and invokes the appropriate streaming implementation.
+
+    Checks whether Eventlet is both installed and actively monkey-patching the
+    socket layer. If so, uses the optimized queue-based Eventlet implementation
+    which supports heartbeats and disconnect detection during LLM prefill. Otherwise,
+    falls back to synchronous streaming.
+
+    Args:
+        request_id (str): The unique identifier for this request.
+        messages (List[Dict]): The conversation history in the internal message format.
+        stream (bool): Whether streaming mode is active.
+        api_key (str, optional): The API key for encryption context scoping.
+
+    Returns:
+        Response: A Flask streaming Response with SSE (text/event-stream) content type.
+    """
     is_eventlet_active = EVENTLET_AVAILABLE and eventlet.patcher.is_monkey_patched('socket')
 
     if is_eventlet_active:
-        return _stream_with_eventlet_optimized(request_id, messages, stream)
+        return _stream_with_eventlet_optimized(request_id, messages, stream, api_key=api_key)
     else:
         if not EVENTLET_AVAILABLE:
             logger.warning(
@@ -196,7 +259,7 @@ def _handle_streaming_request(request_id: str, messages: List[Dict], stream: boo
         else:
             logger.debug(
                 "Eventlet installed but monkey patching is not active (not running via run_eventlet.py). Falling back to synchronous streaming.")
-        return _stream_response_fallback(request_id, messages, stream)
+        return _stream_response_fallback(request_id, messages, stream, api_key=api_key)
 
 
 class ModelsAPI(MethodView):
@@ -231,33 +294,52 @@ class CompletionsAPI(MethodView):
         request_id = str(uuid.uuid4())
         g.current_request_id = request_id
 
-        instance_global_variables.API_TYPE = "openaicompletion"
-        logger.info(f"CompletionsAPI request received (ID: {request_id})")
-        data: Dict[str, Any] = request.json
-        logger.debug(f"CompletionsAPI request received (ID: {request_id}): {json.dumps(_sanitize_log_data(data))}")
+        instance_global_variables.set_api_type("openaicompletion")
+        api_key = api_helpers.extract_api_key()
 
-        # Set workflow override from model field if applicable
+        logger.info(f"CompletionsAPI request received (ID: {request_id})")
+
+        data: Dict[str, Any] = request.get_json(force=True, silent=True)
+        if data is None:
+            logger.error("Failed to parse JSON in CompletionsAPI")
+            return jsonify({"error": "Invalid JSON data"}), 400
+
+        sensitive_log_lazy(logger, logging.DEBUG,
+                           "CompletionsAPI request data (ID: %s): %s",
+                           lambda: request_id,
+                           lambda: json.dumps(_sanitize_log_data(data)))
+
+        # Set workflow override from model field if applicable.
+        # This must happen before reading per-user config values like
+        # encryptUsingApiKey, because it determines which user's config to load.
         model_name = data.get("model")
         api_helpers.set_workflow_override(model_name)
 
         try:
+            rejection = api_helpers.require_identified_user()
+            if rejection:
+                return jsonify({"error": rejection}), 400
+
+            set_encryption_context((bool(api_key) and get_encrypt_using_api_key()) or get_redact_log_output())
+
             prompt: str = data.get("prompt", "")
             stream: bool = data.get("stream", True)
             messages = parse_conversation(prompt)
 
             if stream:
-                return _handle_streaming_request(request_id, messages, stream)
+                return _handle_streaming_request(request_id, messages, stream, api_key=api_key)
             else:
-                return_response: str = handle_user_prompt(request_id, messages, False)
+                return_response: str = handle_user_prompt(request_id, messages, False, api_key=api_key)
                 response = response_builder.build_openai_completion_response(return_response)
                 return jsonify(response)
         finally:
             api_helpers.clear_workflow_override()
+            clear_encryption_context()
+            clear_api_type()
 
 
 class ChatCompletionsAPI(MethodView):
     @staticmethod
-    @handle_openwebui_tool_check('openaichatcompletion')
     def post() -> Union[Response, Dict[str, Any]]:
         """
         Handles POST requests for OpenAI-compatible chat completions.
@@ -281,37 +363,92 @@ class ChatCompletionsAPI(MethodView):
         request_id = str(uuid.uuid4())
         g.current_request_id = request_id
 
-        instance_global_variables.API_TYPE = "openaichatcompletion"
-        add_user_assistant = get_is_chat_complete_add_user_assistant()
-        add_missing_assistant = get_is_chat_complete_add_missing_assistant()
-        request_data: Dict[str, Any] = request.get_json()
-        logger.info(
-            f"ChatCompletionsAPI request received (ID: {request_id}): {json.dumps(_sanitize_log_data(request_data))}")
+        instance_global_variables.set_api_type("openaichatcompletion")
+        api_key = api_helpers.extract_api_key()
+
+        request_data: Dict[str, Any] = request.get_json(force=True, silent=True)
+        if request_data is None:
+            logger.error("Failed to parse JSON in ChatCompletionsAPI")
+            return jsonify({"error": "Invalid JSON data"}), 400
+
+        logger.info(f"ChatCompletionsAPI request received (ID: {request_id})")
+        sensitive_log_lazy(logger, logging.INFO,
+                           "ChatCompletionsAPI request data (ID: %s): %s",
+                           lambda: request_id,
+                           lambda: json.dumps(_sanitize_log_data(request_data)))
         logger.info(f"ChatCompletionsAPI.post() called - stream={request_data.get('stream', False)}")
 
-        # Set workflow override from model field if applicable
+        # Set workflow override from model field if applicable.
+        # This must happen before reading per-user config values like
+        # addUserAssistant, because it determines which user's config to load.
         model_name = request_data.get("model")
         api_helpers.set_workflow_override(model_name)
 
         try:
+            rejection = api_helpers.require_identified_user()
+            if rejection:
+                return jsonify({"error": rejection}), 400
+
+            set_encryption_context((bool(api_key) and get_encrypt_using_api_key()) or get_redact_log_output())
+
+            # Intercept OpenWebUI tool-selection requests if the user has opted in
+            tool_response = check_openwebui_tool_request(request_data, 'openaichatcompletion')
+            if tool_response:
+                return tool_response
+
+            add_user_assistant = get_is_chat_complete_add_user_assistant()
+            add_missing_assistant = get_is_chat_complete_add_missing_assistant()
+
             stream: bool = request_data.get("stream", False)
             if 'messages' not in request_data:
-                raise ValueError("The 'messages' field is required.")
-            messages: List[Dict[str, str]] = request_data["messages"]
+                return jsonify({"error": "The 'messages' field is required."}), 400
+            messages: List[Dict[str, Any]] = request_data["messages"]
             for message in messages:
                 if "role" not in message or "content" not in message:
-                    raise ValueError("Each message must have 'role' and 'content' fields.")
+                    return jsonify({"error": "Each message must have 'role' and 'content' fields."}), 400
 
-            transformed_messages: List[Dict[str, str]] = []
+            transformed_messages: List[Dict[str, Any]] = []
             for message in messages:
                 role = message["role"]
-                content = message["content"]
+                raw_content = message["content"]
+                images = []
+
+                if isinstance(raw_content, list):
+                    text_parts = []
+                    for part in raw_content:
+                        if isinstance(part, dict):
+                            if part.get("type") == "text":
+                                text_parts.append(part.get("text", ""))
+                            elif part.get("type") == "image_url":
+                                url = part.get("image_url", {}).get("url", "")
+                                if url:
+                                    images.append(url)
+                            elif part.get("type") == "image":
+                                source = part.get("source", {})
+                                source_type = source.get("type", "")
+                                if source_type == "base64":
+                                    data = source.get("data", "")
+                                    media_type = source.get("media_type", "image/png")
+                                    if data:
+                                        images.append(f"data:{media_type};base64,{data}")
+                                elif source_type == "url":
+                                    url = source.get("url", "")
+                                    if url:
+                                        images.append(url)
+                    content = "\n".join(text_parts)
+                else:
+                    content = raw_content if raw_content is not None else ""
+
                 if add_user_assistant:
                     if role == "user":
                         content = "User: " + content
                     elif role == "assistant":
                         content = "Assistant: " + content
-                transformed_messages.append({"role": role, "content": content})
+
+                msg = {"role": role, "content": content}
+                if images:
+                    msg["images"] = images
+                transformed_messages.append(msg)
 
             if add_missing_assistant:
                 if add_user_assistant and messages and messages[-1]["role"] != "assistant":
@@ -321,13 +458,15 @@ class ChatCompletionsAPI(MethodView):
 
             if stream:
                 logger.info(f"ChatCompletionsAPI starting streaming response for request_id: {request_id}")
-                return _handle_streaming_request(request_id, transformed_messages, stream)
+                return _handle_streaming_request(request_id, transformed_messages, stream, api_key=api_key)
             else:
-                return_response = handle_user_prompt(request_id, transformed_messages, stream=False)
+                return_response = handle_user_prompt(request_id, transformed_messages, stream=False, api_key=api_key)
                 response = response_builder.build_openai_chat_completion_response(return_response)
                 return jsonify(response)
         finally:
             api_helpers.clear_workflow_override()
+            clear_encryption_context()
+            clear_api_type()
 
 
 class OpenAIApiHandler(BaseApiHandler):

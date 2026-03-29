@@ -8,7 +8,7 @@ This is a work in progress, and a first draft.
 
 This document provides an exhaustive, forensic analysis of the prompting strategies and workflow architectures employed
 in the provided examples. It is designed to serve as a blueprint for LLMs and human authors to generate novel WilmerAI
-workflows that precisely replicate the SOCG style—characterized by extreme explicitness, structured context management,
+workflows that precisely replicate the SOCG style -- characterized by extreme explicitness, structured context management,
 and the simulation of complex cognitive architectures.
 
 ## 1\. Core Philosophy: The Two Pillars of Workflow Design
@@ -18,7 +18,7 @@ The strategies employed depend entirely on which pillar the workflow falls under
 
 ### Pillar 1: Conversational Cognition (Personas and Assistants)
 
-When the goal is to simulate a believable, intelligent, and self-aware persona (e.g.,
+When the goal is to simulate a believable, intelligent, and simulated-aware persona (e.g.,
 `Assistant_with_Vector_Memory_Workflow`), the architecture mimics human cognitive processes. These personas can be valuable 
 for roles involving project management, strategic planning, creative brainstorming, or any scenario requiring a simulated 
 interlocutor with a consistent and detailed perspective, going beyond the capabilities of a standard, stateless LLM response.
@@ -85,7 +85,7 @@ to review different types of content.
 ### 2.2. The Conversational Backbone: The "Internal Monologue" (Thinker Node)
 
 This signature pattern is exclusive to **Pillar 1 (Conversational Cognition)**. This signature pattern is a prompting 
-technique designed to elicit responses that simulate self-awareness, empathy, and depth. It achieves this by 
+technique designed to elicit responses that simulate awareness, empathy, and depth. It achieves this by 
 instructing the model to generate text as if it were engaged in an internal monologue. It is *never* used in utilitarian 
 workflows.
 
@@ -197,8 +197,8 @@ and giving the LLM information that would harm the quality of a response.
 
 ### 3.2. The XML/HTML Tag Structure (Context Segmentation)
 
-This is a non-negotiable element of the SOCG style. All injected information—whether from previous nodes, conversation
-history, or external files—*must* be wrapped in descriptive XML/HTML-like tags.
+This is a non-negotiable element of the SOCG style. All injected information -- whether from previous nodes, conversation
+history, or external files -- *must* be wrapped in descriptive XML/HTML-like tags.
 
 * **Purpose:** To provide unambiguous boundaries for different data types, preventing the LLM from confusing data with
   instructions.

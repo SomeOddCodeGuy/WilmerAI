@@ -96,7 +96,6 @@ The `systemPrompt` and `prompt` fields can be made dynamic by using the followin
 * **Memory & Context:**
     * `{time_context_summary}`: A summary of the time passed since the last interaction (e.g., "It has been about 5
       minutes since your last message.").
-    * `{current_chat_summary}`: The most recent rolling summary of the conversation.
 * **Custom Workflow Variables:**
     * Any key-value pair defined at the top level of a workflow's JSON file (outside the `nodes` array) becomes a
       globally available variable.

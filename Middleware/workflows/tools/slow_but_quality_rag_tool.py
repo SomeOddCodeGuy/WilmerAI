@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+import threading
 from copy import deepcopy
 from typing import List, Dict, Any
 
@@ -9,9 +10,9 @@ from Middleware.services.llm_service import LlmHandlerService
 from Middleware.services.memory_service import MemoryService
 from Middleware.utilities import vector_db_utils
 from Middleware.utilities.config_utils import get_discussion_memory_file_path, get_endpoint_config, load_config, \
-    get_discussion_id_workflow_path
+    get_discussion_id_workflow_path, get_discussion_condensation_tracker_file_path
 from Middleware.utilities.file_utils import read_chunks_with_hashes, \
-    update_chunks_with_hashes
+    update_chunks_with_hashes, read_condensation_tracker, write_condensation_tracker
 from Middleware.utilities.hashing_utils import extract_text_blocks_from_hashed_chunks, find_last_matching_hash_message, \
     chunk_messages_with_hashes, hash_single_message
 from Middleware.utilities.prompt_extraction_utils import extract_last_n_turns
@@ -21,6 +22,27 @@ from Middleware.utilities.text_utils import get_message_chunks, clear_out_user_a
 from Middleware.workflows.models.execution_context import ExecutionContext
 
 logger = logging.getLogger(__name__)
+
+# Per-discussion locks to prevent concurrent condensation of the same memory file.
+# Capped at _MAX_CONDENSATION_LOCKS to prevent unbounded growth on long-running servers.
+_condensation_locks: Dict[str, threading.Lock] = {}
+_condensation_locks_guard = threading.Lock()
+_MAX_CONDENSATION_LOCKS = 500
+
+
+def _get_condensation_lock(discussion_id: str) -> threading.Lock:
+    """Returns a per-discussion lock, creating one if it doesn't exist yet."""
+    with _condensation_locks_guard:
+        if discussion_id not in _condensation_locks:
+            if len(_condensation_locks) >= _MAX_CONDENSATION_LOCKS:
+                # Evict the oldest entry (first key in insertion order),
+                # but only if it is not currently held by another thread.
+                oldest_key = next(iter(_condensation_locks))
+                oldest_lock = _condensation_locks[oldest_key]
+                if not oldest_lock.locked():
+                    del _condensation_locks[oldest_key]
+            _condensation_locks[discussion_id] = threading.Lock()
+        return _condensation_locks[discussion_id]
 
 
 class SlowButQualityRAGTool:
@@ -123,7 +145,8 @@ JSON Output:"""
                     discussion_id=context.discussion_id,
                     messages=context.messages,
                     non_responder=True,
-                    scoped_inputs=scoped_inputs
+                    scoped_inputs=scoped_inputs,
+                    api_key=context.api_key
                 )
             else:
                 json_string_output = self.process_single_chunk(
@@ -220,8 +243,13 @@ JSON Output:"""
         Returns:
             str: The search results, formatted as a string with newline delimiters.
         """
-        filepath = get_discussion_memory_file_path(context.discussion_id)
-        hash_chunks = read_chunks_with_hashes(filepath)
+        if not context.discussion_id:
+            logger.debug("No discussion_id available, cannot search memory files.")
+            return ""
+        api_key_hash = context.api_key_hash
+        encryption_key = context.encryption_key
+        filepath = get_discussion_memory_file_path(context.discussion_id, api_key_hash=api_key_hash)
+        hash_chunks = read_chunks_with_hashes(filepath, encryption_key=encryption_key)
         pair_chunks = extract_text_blocks_from_hashed_chunks(hash_chunks)
         if len(pair_chunks) > 3:
             pair_chunks = pair_chunks[:-3]
@@ -245,11 +273,15 @@ JSON Output:"""
             context (ExecutionContext): The current workflow execution context.
             force_file_memory (bool): If True, forces the file-based memory path, ignoring the config.
         """
+        if not context.discussion_id:
+            logger.debug("No discussion_id, skipping memory generation.")
+            return
+
         if len(context.messages) < 3:
             logger.debug("Less than 3 messages, no memory will be generated.")
             return
 
-        messages_copy = deepcopy(context.messages)
+        messages_copy = [m for m in deepcopy(context.messages) if m.get('role') != 'system']
         # This method uses a specific, separate config file to govern its behavior.
         discussion_id_workflow_config = load_config(get_discussion_id_workflow_path())
         use_vector_memory_from_config = discussion_id_workflow_config.get('useVectorForQualityMemory', False)
@@ -258,7 +290,7 @@ JSON Output:"""
             vector_db_utils.initialize_vector_db(context.discussion_id)
             logger.debug("Running vector memory check.")
 
-            lookback_turns = discussion_id_workflow_config.get('vectorMemoryLookBackTurns', 3)
+            lookback_turns = discussion_id_workflow_config.get('lookbackStartTurn', 3)
             if len(messages_copy) <= lookback_turns:
                 return
 
@@ -270,43 +302,63 @@ JSON Output:"""
 
             start_index = 0  # Default to the beginning if no hash is found
             if hash_history:
+                # Build a hash-to-index lookup for eligible messages (O(n) instead of O(n*m))
+                msg_hash_to_index = {}
+                for i in range(end_index):
+                    msg_hash = hash_single_message(messages_copy[i])
+                    msg_hash_to_index[msg_hash] = i  # Last occurrence wins
+
                 found_match = False
-                # 2. Loop through the historical hashes, from newest to oldest.
                 for historical_hash in hash_history:
-                    # 3. Search the full conversation for the current hash in the loop.
-                    for i in range(end_index - 1, -1, -1):
-                        if hash_single_message(messages_copy[i]) == historical_hash:
-                            # 4. If a hash is found, we have our starting point. Break the loops.
-                            start_index = i + 1
-                            found_match = True
-                            logger.info(
-                                f"Found matching historical hash at message index {i}. Starting memory generation from there.")
-                            break
-                    if found_match:
+                    matched_idx = msg_hash_to_index.get(historical_hash)
+                    if matched_idx is not None:
+                        start_index = matched_idx + 1
+                        found_match = True
+                        logger.info(
+                            f"Found matching historical hash at message index {matched_idx}. Starting memory generation from there.")
                         break
 
                 if not found_match:
                     logger.warning(
                         f"Could not find any of the last {len(hash_history)} historical hashes for {context.discussion_id}. Reprocessing all eligible messages.")
-                    # If no hashes in history match, start_index remains 0.
 
             new_message_content_to_process = []
             if start_index < end_index:
                 new_message_content_to_process = messages_copy[start_index:end_index]
 
             if new_message_content_to_process:
-                logger.info(
-                    f"Found {len(new_message_content_to_process)} new messages to consider for vector memory generation.")
-
                 chunk_size = discussion_id_workflow_config.get('vectorMemoryChunkEstimatedTokenSize', 1000)
                 max_messages = discussion_id_workflow_config.get('vectorMemoryMaxMessagesBetweenChunks', 5)
+
+                token_count = rough_estimate_token_length(
+                    '\n'.join(m['content'] for m in new_message_content_to_process if 'content' in m)
+                )
+
+                logger.info(
+                    f"Vector memory trigger check: {len(new_message_content_to_process)} new messages, "
+                    f"~{token_count} estimated tokens. "
+                    f"Thresholds: {max_messages} messages / {chunk_size} tokens.")
+
+                trigger_by_tokens = token_count >= chunk_size
+                trigger_by_messages = len(new_message_content_to_process) >= max_messages
+
+                if not trigger_by_tokens and not trigger_by_messages:
+                    logger.info("Neither threshold met. No vector memories generated.")
+                    return
+
+                if trigger_by_tokens and trigger_by_messages:
+                    logger.info("Both thresholds met (tokens and messages). Generating vector memories.")
+                elif trigger_by_tokens:
+                    logger.info("Token threshold met. Generating vector memories.")
+                else:
+                    logger.info("Message count threshold met. Generating vector memories.")
+
                 hashed_chunks = chunk_messages_with_hashes(new_message_content_to_process, chunk_size,
                                                            max_messages_before_chunk=max_messages)
                 text_chunks = extract_text_blocks_from_hashed_chunks(hashed_chunks)
 
                 if not text_chunks:
-                    logger.info(
-                        f"Messages did not meet chunking threshold (need {max_messages} messages or {chunk_size} estimated tokens). No memories generated.")
+                    logger.info("No text chunks produced. No memories generated.")
                 else:
                     # Pass hashed_chunks so that hashes are written after each successful chunk,
                     # making the process resumable if interrupted
@@ -318,13 +370,15 @@ JSON Output:"""
         else:
             # This is the file-based memory path
             logger.debug("Running file-based memory check.")
-            filepath = get_discussion_memory_file_path(context.discussion_id)
+            api_key_hash = context.api_key_hash
+            encryption_key = context.encryption_key
+            filepath = get_discussion_memory_file_path(context.discussion_id, api_key_hash=api_key_hash)
             # Check file existence BEFORE read_chunks_with_hashes, which creates the file
             # as an empty [] if it doesn't exist. We need to distinguish between:
             # - File doesn't exist: consolidation mode (user deleted it to regenerate)
             # - File exists (even if empty): standard mode (both thresholds active)
             file_exists = os.path.exists(filepath)
-            discussion_chunks = read_chunks_with_hashes(filepath)
+            discussion_chunks = read_chunks_with_hashes(filepath, encryption_key=encryption_key)
             lookback_turns = discussion_id_workflow_config.get('lookbackStartTurn', 3)
             new_message_content_to_process = []
             if not discussion_chunks:
@@ -374,8 +428,26 @@ JSON Output:"""
                     logger.info("Using original file-based memory creation flow.")
                     rag_system_prompt = discussion_id_workflow_config.get('systemPrompt', '')
                     rag_prompt = discussion_id_workflow_config.get('prompt', '')
-                    self.process_new_memory_chunks(text_chunks, hashed_chunks, rag_system_prompt, rag_prompt,
-                                                   discussion_id_workflow_config, context)
+                    # Hold the per-discussion lock across both write and condensation
+                    # to prevent concurrent memory operations from overwriting each other.
+                    lock = _get_condensation_lock(context.discussion_id)
+                    lock.acquire()
+                    try:
+                        self.process_new_memory_chunks(text_chunks, hashed_chunks, rag_system_prompt, rag_prompt,
+                                                       discussion_id_workflow_config, context)
+                        # When regenerating after file deletion, seed the condensation tracker
+                        # with the latest memory hash so condensation starts fresh from here.
+                        if not file_exists and discussion_id_workflow_config.get('condenseMemories', False):
+                            tracker_path = get_discussion_condensation_tracker_file_path(context.discussion_id, api_key_hash=api_key_hash)
+                            last_hash = hashed_chunks[-1][1]
+                            write_condensation_tracker(tracker_path, {'lastCondensationHash': last_hash}, encryption_key=encryption_key)
+                            logger.info(
+                                f"Memory file was regenerated from scratch. "
+                                f"Seeded condensation tracker with latest hash for {context.discussion_id}."
+                            )
+                        self._condense_memories_already_locked(context.discussion_id, discussion_id_workflow_config, context)
+                    finally:
+                        lock.release()
             else:
                 if not file_exists:
                     logger.info("Thresholds not met. Memory file does not exist; message threshold is disabled "
@@ -401,11 +473,19 @@ JSON Output:"""
         result = self.perform_rag_on_memory_chunk(rag_system_prompt, rag_prompt, all_chunks, context, workflow_config,
                                                   "--rag_break--", chunks_per_memory)
         results = result.split("--rag_break--")
+        if len(results) != len(hash_chunks):
+            logger.warning(
+                "RAG result count (%d) does not match hash_chunks count (%d); "
+                "zip will truncate to the shorter list.",
+                len(results), len(hash_chunks)
+            )
         replaced = [(summary, hash_code) for summary, (_, hash_code) in zip(results, hash_chunks)]
-        filepath = get_discussion_memory_file_path(context.discussion_id)
-        existing_chunks = read_chunks_with_hashes(filepath)
+        api_key_hash = context.api_key_hash
+        encryption_key = context.encryption_key
+        filepath = get_discussion_memory_file_path(context.discussion_id, api_key_hash=api_key_hash)
+        existing_chunks = read_chunks_with_hashes(filepath, encryption_key=encryption_key)
         updated_chunks = existing_chunks + replaced
-        update_chunks_with_hashes(updated_chunks, filepath, mode="overwrite")
+        update_chunks_with_hashes(updated_chunks, filepath, mode="overwrite", encryption_key=encryption_key)
 
     def perform_rag_on_conversation_chunk(self, rag_system_prompt: str, rag_prompt: str, text_chunk: str,
                                           context: ExecutionContext) -> str:
@@ -421,6 +501,9 @@ JSON Output:"""
         Returns:
             str: The generated summary string.
         """
+        if not context.discussion_id:
+            logger.debug("SlowButQualityRAGTool: No discussion_id, skipping file-based RAG.")
+            return ""
         return self.perform_rag_on_memory_chunk(
             rag_system_prompt, rag_prompt, text_chunk, context, context.config,
             custom_delimiter="", chunks_per_memory=context.config.get('chunksPerMemory', 3)
@@ -448,9 +531,16 @@ JSON Output:"""
             str: A string of the generated summaries, joined by the custom delimiter.
         """
         chunks = text_chunk.split('--ChunkBreak--')
-        discussion_chunks = read_chunks_with_hashes(get_discussion_memory_file_path(context.discussion_id))
+        api_key_hash = context.api_key_hash
+        encryption_key = context.encryption_key
+        discussion_chunks = read_chunks_with_hashes(
+            get_discussion_memory_file_path(context.discussion_id, api_key_hash=api_key_hash),
+            encryption_key=encryption_key
+        )
         memory_chunks = extract_text_blocks_from_hashed_chunks(discussion_chunks)
-        chat_summary = self.memory_service.get_current_summary(context.discussion_id)
+        chat_summary = self.memory_service.get_current_summary(context.discussion_id,
+                                                        encryption_key=context.encryption_key,
+                                                        api_key_hash=context.api_key_hash)
 
         endpoint_name = workflow_config.get('endpointName')
         preset_name = workflow_config.get('preset')
@@ -472,8 +562,8 @@ JSON Output:"""
         file_workflow_name = workflow_config.get('fileMemoryWorkflowName')
         result_chunks = []
         for chunk in chunks:
-            current_memories = '\n--------------\n'.join(memory_chunks[-3:])
-            full_memories = '\n--------------\n'.join(memory_chunks)
+            current_memories = '\n--------------\n'.join(memory_chunks[-3:]) or "No preceding memories to show"
+            full_memories = '\n--------------\n'.join(memory_chunks) or "No preceding memories to show"
             result_chunk = ""
             if file_workflow_name:
                 logger.info(f"Using workflow '{file_workflow_name}' to generate file-based memory.")
@@ -481,7 +571,8 @@ JSON Output:"""
                 result_chunk = context.workflow_manager.run_custom_workflow(
                     workflow_name=file_workflow_name, request_id=context.request_id,
                     discussion_id=context.discussion_id, messages=context.messages,
-                    non_responder=True, scoped_inputs=scoped_inputs
+                    non_responder=True, scoped_inputs=scoped_inputs,
+                    api_key=context.api_key
                 )
             else:
                 system_prompt = rag_system_prompt.replace('[Memory_file]', current_memories.strip()).replace(
@@ -540,3 +631,190 @@ JSON Output:"""
                 llm_takes_images=False,
                 request_id=context.request_id
             )
+
+    def _condense_memories_already_locked(self, discussion_id: str, workflow_config: Dict,
+                                          context: ExecutionContext) -> None:
+        """Runs condensation assuming the caller already holds the per-discussion lock."""
+        if not workflow_config.get('condenseMemories', False):
+            return
+
+        memories_before_condensation = workflow_config.get('memoriesBeforeCondensation')
+        if memories_before_condensation is None:
+            logger.error("condenseMemories is enabled but memoriesBeforeCondensation is not set. Skipping.")
+            return
+
+        self._condense_memories_locked(discussion_id, workflow_config, context,
+                                       memories_before_condensation)
+
+    def condense_memories(self, discussion_id: str, workflow_config: Dict,
+                          context: ExecutionContext) -> None:
+        """
+        Condenses older file-based memories into a single summary memory.
+
+        When enabled via `condenseMemories: true` in the workflow config, this method
+        checks whether enough new memories have accumulated since the last condensation.
+        If the threshold is met, it takes the oldest N memories (excluding a configurable
+        buffer of the most recent ones) and replaces them with a single LLM-generated
+        condensed summary.
+
+        The condensation state is tracked in a separate file
+        (`{discussion_id}_condensation_tracker.json`) to avoid modifying the memory
+        file's schema.
+
+        Args:
+            discussion_id (str): The ID of the discussion.
+            workflow_config (Dict): The discussion ID workflow configuration dictionary.
+            context (ExecutionContext): The current workflow execution context.
+        """
+        if not workflow_config.get('condenseMemories', False):
+            return
+
+        memories_before_condensation = workflow_config.get('memoriesBeforeCondensation')
+        if memories_before_condensation is None:
+            logger.error("condenseMemories is enabled but memoriesBeforeCondensation is not set. Skipping.")
+            return
+
+        lock = _get_condensation_lock(discussion_id)
+        if not lock.acquire(blocking=False):
+            logger.info(f"Condensation already in progress for {discussion_id}. Skipping.")
+            return
+
+        try:
+            self._condense_memories_locked(discussion_id, workflow_config, context,
+                                           memories_before_condensation)
+        finally:
+            lock.release()
+
+    def _condense_memories_locked(self, discussion_id: str, workflow_config: Dict,
+                                  context: ExecutionContext,
+                                  memories_before_condensation: int) -> None:
+        """Inner condensation logic, called while holding the per-discussion lock."""
+        buffer_size = workflow_config.get('memoryCondensationBuffer', 0)
+        required_new = memories_before_condensation + buffer_size
+
+        api_key_hash = context.api_key_hash
+        encryption_key = context.encryption_key
+        filepath = get_discussion_memory_file_path(discussion_id, api_key_hash=api_key_hash)
+        all_memories = read_chunks_with_hashes(filepath, encryption_key=encryption_key)
+
+        if not all_memories:
+            logger.debug("No memories to condense.")
+            return
+
+        tracker_path = get_discussion_condensation_tracker_file_path(discussion_id, api_key_hash=api_key_hash)
+        tracker = read_condensation_tracker(tracker_path, encryption_key=encryption_key)
+        last_hash = tracker.get('lastCondensationHash')
+
+        new_start_index = 0
+        if last_hash:
+            found = False
+            for i, (text, h) in enumerate(all_memories):
+                if h == last_hash:
+                    new_start_index = i + 1
+                    found = True
+                    break
+            if not found:
+                logger.warning(
+                    f"Condensation tracker hash not found in memory file for {discussion_id}. "
+                    f"Treating all memories as new."
+                )
+                new_start_index = 0
+
+        new_memories = all_memories[new_start_index:]
+        new_count = len(new_memories)
+
+        if new_count < required_new:
+            logger.debug(
+                f"Not enough new memories for condensation ({new_count} < {required_new}). Skipping."
+            )
+            return
+
+        memories_to_condense = new_memories[:memories_before_condensation]
+
+        separator = '\n--------------\n'
+        combined_text = separator.join(text for text, _ in memories_to_condense)
+
+        condense_start_index = new_start_index
+        preceding_start = max(0, condense_start_index - 3)
+        preceding_memories = all_memories[preceding_start:condense_start_index]
+        preceding_text = separator.join(text for text, _ in preceding_memories) if preceding_memories else "No preceding memories to show"
+
+        default_system_prompt = (
+            "You are an expert summarizer. You take a collection of conversation memories "
+            "and condense them into a single, cohesive summary that preserves all important "
+            "details, context, and narrative flow."
+        )
+        default_prompt = (
+            "A user is currently in an online conversation via a chat program. Over the course "
+            "of the conversation, memories have been generated summarizing what has transpired.\n\n"
+            "The most recent memories leading up to the ones being condensed, if any exist, can "
+            "be found here:\n\n"
+            "<preceding_memories>\n"
+            "[Memories_Before_Memories_to_Condense]\n"
+            "</preceding_memories>\n\n"
+            "The following are the memories to be condensed into a single cohesive summary:\n\n"
+            "<memories_to_condense>\n"
+            "[MemoriesToCondense]\n"
+            "</memories_to_condense>\n\n"
+            "Please condense the memories within <memories_to_condense> into a single cohesive "
+            "summary that captures all key details, events, and context. Preserve names, important "
+            "facts, and the narrative flow. If preceding memories exist, write the condensed summary "
+            "as a continuation of those events. Please respond with text only."
+        )
+
+        system_prompt = workflow_config.get('condenseMemoriesSystemPrompt', default_system_prompt)
+        prompt = workflow_config.get('condenseMemoriesPrompt', default_prompt)
+        prompt = prompt.replace('[MemoriesToCondense]', combined_text)
+        prompt = prompt.replace('[Memories_Before_Memories_to_Condense]', preceding_text)
+        system_prompt = system_prompt.replace('[Memories_Before_Memories_to_Condense]', preceding_text)
+
+        endpoint_name = workflow_config.get(
+            'condenseMemoriesEndpointName',
+            workflow_config.get('endpointName')
+        )
+        preset_name = workflow_config.get(
+            'condenseMemoriesPreset',
+            workflow_config.get('preset')
+        )
+        max_tokens = workflow_config.get(
+            'condenseMemoriesMaxResponseSizeInTokens',
+            workflow_config.get('maxResponseSizeInTokens', 500)
+        )
+
+        endpoint_data = get_endpoint_config(endpoint_name)
+        llm_handler_service = LlmHandlerService()
+        llm_handler = llm_handler_service.initialize_llm_handler(
+            endpoint_data, preset_name, endpoint_name, False,
+            endpoint_data.get("maxContextTokenSize", 4096), max_tokens
+        )
+
+        temp_context = deepcopy(context)
+        temp_context.llm_handler = llm_handler
+        temp_context.config = workflow_config
+
+        condensed_text = self.process_single_chunk(
+            combined_text, prompt, system_prompt, temp_context
+        )
+
+        if not condensed_text or not condensed_text.strip():
+            logger.error(
+                f"LLM returned empty response for memory condensation on {discussion_id}. "
+                f"Preserving original memories."
+            )
+            return
+
+        # Assign the final hash of the batch so the tracker can locate this condensed entry
+        # next run and avoid re-condensing the same memories.
+        condensed_hash = memories_to_condense[-1][1]
+
+        prefix = all_memories[:new_start_index]
+        suffix = new_memories[memories_before_condensation:]
+        updated_memories = prefix + [(condensed_text, condensed_hash)] + suffix
+
+        update_chunks_with_hashes(updated_memories, filepath, mode="overwrite", encryption_key=encryption_key)
+        write_condensation_tracker(tracker_path, {'lastCondensationHash': condensed_hash}, encryption_key=encryption_key)
+
+        logger.info(
+            f"Condensed {memories_before_condensation} memories into 1 for {discussion_id}. "
+            f"New total: {len(updated_memories)} memories."
+        )

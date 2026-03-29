@@ -1,7 +1,7 @@
 ### **Feature Guide: WilmerAI's Adaptable API Gateway**
 
 WilmerAI's Adaptable API Gateway acts as a compatibility layer for front-end applications. This allows you to connect
-existing tools and UIs—like SillyTavern, OpenWebUI, or your own custom scripts—as if you were connecting directly to
+existing tools and UIs -- like SillyTavern, OpenWebUI, or your own custom scripts -- as if you were connecting directly to
 industry-standard services like OpenAI or Ollama, without needing to learn a new API.
 
 This means you can use your existing user interface while utilizing the multi-step workflow capabilities of the WilmerAI
@@ -22,7 +22,7 @@ The client application is not aware of the backend processing, which allows it t
 1. **Standard Request:** Your UI (e.g., OpenWebUI) sends a standard request to WilmerAI's `/api/chat` endpoint, as if it
    were communicating with an Ollama server.
 2. **Internal Processing:** WilmerAI receives the request and passes it to its workflow engine. The engine may execute a
-   chain of actions—like using a local model to extract keywords, searching a database, and then sending the results to
+   chain of actions -- like using a local model to extract keywords, searching a database, and then sending the results to
    a cloud model like GPT-4o for the final answer.
 3. **Standard Response:** WilmerAI takes the final generated text and formats it into an Ollama-compliant JSON response.
 4. **Seamless Display:** Your UI receives the formatted response and displays it to the user, unaware of the multi-LLM
@@ -90,6 +90,13 @@ For example:
 
 WilmerAI will use this ID to load and save conversational memory, summaries, and other stateful data associated with
 that specific chat.
+
+### Per-User Encryption and Data Isolation
+
+If your client sends an `Authorization: Bearer <key>` header with its requests, WilmerAI will store discussion files
+in an isolated, per-key directory. If `encryptUsingApiKey` is enabled in the user config, files will also be encrypted
+at rest. This allows multiple users or applications to share a single WilmerAI instance securely. See the **Per-User
+Encryption** guide for details.
 
 ### Access to Complex Workflows
 

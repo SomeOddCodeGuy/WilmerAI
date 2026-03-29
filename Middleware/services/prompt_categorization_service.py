@@ -4,7 +4,9 @@ import json
 import string
 from typing import List, Dict, Union, Generator
 
-from Middleware.utilities.config_utils import get_active_categorization_workflow_name, get_categories_config
+from Middleware.utilities.config_utils import get_active_categorization_workflow_name, get_categories_config, \
+    get_max_categorization_attempts
+from Middleware.utilities.sensitive_logging_utils import log_prompt_content
 from Middleware.workflows.managers.workflow_manager import WorkflowManager, logger
 
 
@@ -15,7 +17,7 @@ class PromptCategorizationService:
 
     @staticmethod
     def conversational_method(messages: List[Dict[str, str]], request_id: str, discussion_id: str = None,
-                              stream: bool = False) -> Union[
+                              stream: bool = False, api_key: str = None) -> Union[
         Generator[str, None, None], str, None]:
         """
         Runs the default conversational workflow.
@@ -25,6 +27,7 @@ class PromptCategorizationService:
             request_id (str): The unique identifier for the request.
             discussion_id (str): The identifier for the conversation.
             stream (bool): Flag indicating if the output should be streamed.
+            api_key (str): The API key from the request, if present.
 
         Returns:
             Union[Generator[str, None, None], str, None]: The result of the workflow execution.
@@ -34,7 +37,8 @@ class PromptCategorizationService:
             request_id=request_id,
             discussion_id=discussion_id,
             messages=messages,
-            is_streaming=stream
+            is_streaming=stream,
+            api_key=api_key
         )
 
     @staticmethod
@@ -79,7 +83,7 @@ class PromptCategorizationService:
             raise
 
     def get_prompt_category(self, messages: List[Dict[str, str]], request_id: str, discussion_id: str = None,
-                            stream: bool = False) -> \
+                            stream: bool = False, api_key: str = None) -> \
             Union[Generator[str, None, None], str, None]:
         """
         Gets the prompt category and executes the corresponding workflow.
@@ -101,10 +105,10 @@ class PromptCategorizationService:
             workflow_name = self.categories[category]['workflow']
             workflow = WorkflowManager(workflow_config_name=workflow_name)
             return workflow.run_workflow(messages=messages, request_id=request_id, discussionId=discussion_id,
-                                         stream=stream)
+                                         stream=stream, api_key=api_key)
         else:
             logger.debug("Default response initiated")
-            return self.conversational_method(messages, request_id, discussion_id, stream)
+            return self.conversational_method(messages, request_id, discussion_id, stream, api_key=api_key)
 
     def _initialize_categories(self) -> Dict[str, Union[str, List[str]]]:
         """
@@ -148,21 +152,23 @@ class PromptCategorizationService:
         Determines the request category by executing the categorization workflow.
 
         This method runs the categorization workflow, processes the LLM's output,
-        and attempts to match it to a known category, retrying on failure.
+        and attempts to match it to a known category. The number of attempts is
+        controlled by the `maxCategorizationAttempts` user config setting (default: 1).
 
         Args:
             messages (List[Dict[str, str]]): The conversation history to be categorized.
             request_id (str): The unique identifier for the request.
 
         Returns:
-            str: The matched category name, or 'UNKNOWN' if no match is found after retries.
+            str: The matched category name, or 'UNKNOWN' if no match is found after all attempts.
         """
         logger.info("Categorizing request")
         category_data = self._initialize_categories()
         workflow_manager = self._configure_workflow_manager(category_data)
+        max_attempts = get_max_categorization_attempts()
         attempts = 0
 
-        while attempts < 4:
+        while attempts < max_attempts:
             workflow_result = workflow_manager.run_workflow(
                 messages=messages,
                 request_id=request_id,
@@ -177,9 +183,7 @@ class PromptCategorizationService:
             else:
                 category = raw_category_output.strip()
 
-            logger.info("\n\n*****************************************************************************\n")
-            logger.info("\n\nOutput from the LLM: %s", category)
-            logger.info("\n*****************************************************************************\n\n")
+            log_prompt_content(logger, "Output from the LLM", category)
             logger.debug(self.categories)
 
             category = category.translate(str.maketrans('', '', string.punctuation))

@@ -14,10 +14,10 @@ Wilmer will find it.
 
 WilmerAI's memory consists of three components. Each is stored in a separate file and linked by a unique discussion ID.
 
-* **Long-Term Memory File (`<id>_memories.jsonl`)**: This file stores chronological summaries of the conversation. The
+* **Long-Term Memory File (`<id>_memories.json`)**: This file stores chronological summaries of the conversation. The
   system periodically reviews the chat history, divides it into chunks, and uses an LLM to summarize each chunk. This
   forms the backbone of the conversation's timeline.
-* **Rolling Chat Summary (`<id>_summary.jsonl`)**: This file contains a single, continuously updated summary of the
+* **Rolling Chat Summary (`<id>_chat_summary.json`)**: This file contains a single, continuously updated summary of the
   entire conversation. It synthesizes the chunks from the Long-Term Memory File to provide a high-level overview.
 * **Searchable Vector Memory (`<id>_vector_memory.db`)**: A dedicated vector database for the discussion. When a memory
   is created, it can be stored here as a vector embedding with structured metadata (**title, summary, entities, key
@@ -97,8 +97,21 @@ memories before reading.
   }
   ```
 
+* **`GetCurrentMemoryFromFile`** (Pure/Fast Reader)
+  Performs a direct read of the Long-Term Memory File (`_memories.json`) and returns all memory chunks
+  joined into a single string. Use this when you need the full, raw contents of the memory file for
+  processing or display without triggering any updates.
+
+  ```json
+  {
+    "id": "get_all_memories_fast_node",
+    "type": "GetCurrentMemoryFromFile",
+    "customDelimiter": "\n\n---\n\n"
+  }
+  ```
+
 * **`GetCurrentSummaryFromFile`** (Pure/Fast Reader)
-  Performs a direct read of the Rolling Chat Summary file (`_summary.jsonl`).
+  Performs a direct read of the Rolling Chat Summary file (`_chat_summary.json`).
 
   ```json
   {
@@ -130,7 +143,7 @@ memories before reading.
     "id": "smart_search_node",
     "type": "VectorMemorySearch",
     "name": "Search for Specific Details",
-    "input": "Project Stardust;mission parameters;Dr. Evelyn Reed",
+    "input": "quarterly revenue;marketing strategy;client onboarding",
     "limit": 5
   }
   ```
@@ -170,7 +183,7 @@ File-based memory generation is controlled by two thresholds that work together:
 In normal operation (when the memory file exists on disk), the system uses **whichever threshold is reached first**. For
 example, if `chunkEstimatedTokenSize` is 1000 and `maxMessagesBetweenChunks` is 20, memories will generate either when
 ~1000 tokens of new messages accumulate or when 20 new messages are added, whichever happens first. The memory file does
-not need to contain any chunks for both thresholds to be active — it just needs to exist. In a new conversation, the
+not need to contain any chunks for both thresholds to be active -- it just needs to exist. In a new conversation, the
 file is automatically created on the first memory check (around message 3), so both thresholds are active from that
 point on.
 
@@ -226,7 +239,6 @@ timeline with other nodes in the same workflow.
   "vectorMemoryMaxResponseSizeInTokens": 1024,
   "vectorMemoryChunkEstimatedTokenSize": 1000,
   "vectorMemoryMaxMessagesBetweenChunks": 5,
-  "vectorMemoryLookBackTurns": 3,
   // ====================================================================
   // == File-based Memory Configuration
   // ====================================================================
@@ -237,6 +249,9 @@ timeline with other nodes in the same workflow.
   "prompt": "Please summarize the following: [TextChunk]",
   "chunkEstimatedTokenSize": 1000,
   "maxMessagesBetweenChunks": 5,
+  // ====================================================================
+  // == Shared Settings (apply to both vector and file-based paths)
+  // ====================================================================
   "lookbackStartTurn": 3,
   // ====================================================================
   // == General / Fallback LLM Settings
@@ -250,13 +265,67 @@ timeline with other nodes in the same workflow.
 
 -----
 
+## Memory Condensation
+
+Over long conversations, the Long-Term Memory File accumulates many individual chunks. Memory condensation
+is an optional feature that automatically consolidates older chunks into fewer, denser summaries to keep
+the file manageable.
+
+When enabled, after new memories are written, the system checks whether enough new memories have
+accumulated since the last condensation. If the threshold is met, the oldest batch of new memories is
+sent to an LLM to be summarized into a single condensed memory. The condensed memory replaces the batch
+in the file.
+
+### When to Use Condensation
+
+Condensation is useful for very long-running conversations where the memory file would otherwise grow
+without limit. It reduces the amount of data the system reads on each pass and keeps the memory file
+at a manageable size.
+
+Condensation applies only to file-based memories. Vector memories are not affected.
+
+### Configuration
+
+Add the following fields to your `_DiscussionId-MemoryFile-Workflow-Settings.json` file:
+
+```json
+{
+  "condenseMemories": true,
+  "memoriesBeforeCondensation": 5,
+  "memoryCondensationBuffer": 2,
+  "condenseMemoriesSystemPrompt": "You are an expert at condensing information.",
+  "condenseMemoriesPrompt": "Please condense the following memories into a single summary:\n\n[MemoriesToCondense]\n\nFor context, here are the memories that came before:\n[Memories_Before_Memories_to_Condense]",
+  "condenseMemoriesEndpointName": "my-endpoint",
+  "condenseMemoriesPreset": "my-preset",
+  "condenseMemoriesMaxResponseSizeInTokens": 800
+}
+```
+
+| Field | Required | Description |
+|:------|:---------|:------------|
+| `condenseMemories` | Yes | Set to `true` to enable condensation. Defaults to `false`. |
+| `memoriesBeforeCondensation` | Yes (if enabled) | Number of new memories that must accumulate before condensation runs. |
+| `memoryCondensationBuffer` | No | Number of most recent memories to exclude from condensation (kept for granular context). Defaults to `0`. |
+| `condenseMemoriesSystemPrompt` | No | System prompt for the condensation LLM call. |
+| `condenseMemoriesPrompt` | No | User prompt for the condensation call. Supports `[MemoriesToCondense]` and `[Memories_Before_Memories_to_Condense]` placeholders. |
+| `condenseMemoriesEndpointName` | No | Endpoint override for condensation. Falls back to `endpointName`. |
+| `condenseMemoriesPreset` | No | Preset override for condensation. Falls back to `preset`. |
+| `condenseMemoriesMaxResponseSizeInTokens` | No | Max token override for condensation. Falls back to `maxResponseSizeInTokens`. |
+
+-----
+
 ## Maintenance: Regenerating Memories
 
-To regenerate all memories for a discussion, **delete the corresponding memory files** from the `Public/` directory:
+To regenerate all memories for a discussion, **delete the corresponding memory files** from your discussion directory:
 
-1. `Public/<id>_memories.jsonl` (Long-Term Memory)
-2. `Public/<id>_summary.jsonl` (Rolling Summary)
-3. `Public/<id>_vector_memory.db` (Searchable Vector Memory)
+1. `<id>_memories.json` (Long-Term Memory)
+2. `<id>_chat_summary.json` (Rolling Summary)
+3. `<id>_vector_memory.db` (Searchable Vector Memory)
+
+If per-user encryption is active (i.e., an `Authorization: Bearer <key>` header is being sent), these files are
+located under a hash-based subdirectory within the discussion directory (e.g.,
+`{discussionDirectory}/{api_key_hash}/{discussion_id}/`). Note that encrypted files are not human-readable; they
+appear as binary data. See the **Per-User Encryption** guide for details.
 
 **Important:** To prevent state conflicts, delete all memory files for a given discussion ID. When a workflow with a
 memory creator node is next run, the system will detect the missing files and regenerate them from the full chat

@@ -1,13 +1,17 @@
 # Middleware/services/response_builder_service.py
 
 import hashlib
+import logging
 import time
 import uuid
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 
 from Middleware.api import api_helpers
+from Middleware.common import instance_global_variables
 from Middleware.utilities import config_utils
+
+logger = logging.getLogger(__name__)
 
 
 class ResponseBuilderService:
@@ -30,44 +34,72 @@ class ResponseBuilderService:
 
     # --- OpenAI Compatible Responses ---
 
+    def _get_configured_users(self) -> list:
+        """
+        Returns the list of configured users, falling back to the current username.
+
+        Returns:
+            list: List of username strings.
+        """
+        users = instance_global_variables.USERS
+        if users and len(users) > 0:
+            return list(users)
+        return [config_utils.get_current_username()]
+
+    def _get_shared_folder_for_user(self, user_config) -> str:
+        """
+        Resolves the shared workflows folder name from a specific user's config.
+
+        Args:
+            user_config (dict): The loaded user configuration dictionary.
+
+        Returns:
+            str: The shared workflows folder name for that user.
+        """
+        override = config_utils.get_config_property_if_exists('sharedWorkflowsSubDirectoryOverride', user_config)
+        return override if override else '_shared'
+
     def build_openai_models_response(self) -> Dict[str, Any]:
         """
         Builds the response payload for the OpenAI-compatible /v1/models endpoint.
 
-        If allowSharedWorkflows is enabled in user config, returns a list of
-        available workflow folders from _shared/. Otherwise, returns only the
-        username as a model.
+        In multi-user mode, aggregates models from all configured users.
+        For each user, if allowSharedWorkflows is enabled, lists their shared
+        workflows as username:workflow. Otherwise lists just the username.
 
         Returns:
             Dict[str, Any]: A dictionary representing the list of available models.
         """
-        # Use get_current_username() directly, not get_model_name(), to avoid
-        # including any active workflow override in the model list
-        username = config_utils.get_current_username()
         current_time = int(time.time())
-
         models_data = []
 
-        # Only list shared workflows if explicitly enabled in user config
-        if config_utils.get_allow_shared_workflows():
-            workflows = config_utils.get_available_shared_workflows()
-            for workflow in workflows:
-                model_id = f"{username}:{workflow}"
-                models_data.append({
-                    "id": model_id,
+        for username in self._get_configured_users():
+            user_models = []
+            try:
+                user_config = config_utils.get_user_config_for(username)
+                allow_shared = config_utils.get_config_property_if_exists('allowSharedWorkflows', user_config)
+                if allow_shared:
+                    shared_folder = self._get_shared_folder_for_user(user_config)
+                    workflows = config_utils.get_available_shared_workflows(shared_folder_override=shared_folder)
+                    for workflow in workflows:
+                        model_id = f"{username}:{workflow}"
+                        user_models.append({
+                            "id": model_id,
+                            "object": "model",
+                            "created": current_time,
+                            "owned_by": "Wilmer"
+                        })
+            except Exception as e:
+                logger.warning(f"Could not load config for user '{username}': {e}")
+
+            if not user_models:
+                user_models.append({
+                    "id": username,
                     "object": "model",
                     "created": current_time,
                     "owned_by": "Wilmer"
                 })
-
-        # If no workflows listed (either disabled or none found), return username
-        if not models_data:
-            models_data.append({
-                "id": username,
-                "object": "model",
-                "created": current_time,
-                "owned_by": "Wilmer"
-            })
+            models_data.extend(user_models)
 
         return {
             "object": "list",
@@ -219,49 +251,52 @@ class ResponseBuilderService:
         """
         Builds the response payload for the Ollama-compatible /api/tags endpoint.
 
-        If allowSharedWorkflows is enabled in user config, returns a list of
-        available workflow folders from _shared/. Otherwise, returns only the
-        username as a model.
+        In multi-user mode, aggregates models from all configured users.
+        For each user, if allowSharedWorkflows is enabled, lists their shared
+        workflows as username:workflow. Otherwise lists just the username.
 
         Returns:
             Dict[str, List[Dict[str, Any]]]: A dictionary containing a list of available models.
         """
-        # Use get_current_username() directly, not get_model_name(), to avoid
-        # including any active workflow override in the model list
-        username = config_utils.get_current_username()
-
         models_list = []
 
-        # Only list shared workflows if explicitly enabled in user config
-        if config_utils.get_allow_shared_workflows():
-            workflows = config_utils.get_available_shared_workflows()
-            for workflow in workflows:
-                model_id = f"{username}:{workflow}"
-                models_list.append({
-                    "name": model_id,
-                    "model": model_id + ":latest",
+        for username in self._get_configured_users():
+            user_models = []
+            try:
+                user_config = config_utils.get_user_config_for(username)
+                allow_shared = config_utils.get_config_property_if_exists('allowSharedWorkflows', user_config)
+                if allow_shared:
+                    shared_folder = self._get_shared_folder_for_user(user_config)
+                    workflows = config_utils.get_available_shared_workflows(shared_folder_override=shared_folder)
+                    for workflow in workflows:
+                        model_id = f"{username}:{workflow}"
+                        user_models.append({
+                            "name": model_id,
+                            "model": model_id + ":latest",
+                            "modified_at": "2024-11-23T00:00:00Z",
+                            "size": 1,
+                            "digest": hashlib.sha256(model_id.encode('utf-8')).hexdigest(),
+                            "details": {
+                                "format": "gguf", "family": "wilmer", "families": None,
+                                "parameter_size": "N/A", "quantization_level": "Q8"
+                            }
+                        })
+            except Exception as e:
+                logger.warning(f"Could not load config for user '{username}': {e}")
+
+            if not user_models:
+                user_models.append({
+                    "name": username,
+                    "model": username + ":latest",
                     "modified_at": "2024-11-23T00:00:00Z",
                     "size": 1,
-                    "digest": hashlib.sha256(model_id.encode('utf-8')).hexdigest(),
+                    "digest": hashlib.sha256(username.encode('utf-8')).hexdigest(),
                     "details": {
                         "format": "gguf", "family": "wilmer", "families": None,
                         "parameter_size": "N/A", "quantization_level": "Q8"
                     }
                 })
-
-        # If no workflows listed (either disabled or none found), return username
-        if not models_list:
-            models_list.append({
-                "name": username,
-                "model": username + ":latest",
-                "modified_at": "2024-11-23T00:00:00Z",
-                "size": 1,
-                "digest": hashlib.sha256(username.encode('utf-8')).hexdigest(),
-                "details": {
-                    "format": "gguf", "family": "wilmer", "families": None,
-                    "parameter_size": "N/A", "quantization_level": "Q8"
-                }
-            })
+            models_list.extend(user_models)
 
         return {"models": models_list}
 

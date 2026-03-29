@@ -1,5 +1,3 @@
-# Tests/utilities/test_prompt_extraction_utils.py
-
 import pytest
 
 from Middleware.utilities.prompt_extraction_utils import (
@@ -24,7 +22,7 @@ MESSAGES_FIXTURE = [
     {'role': 'system', 'content': 'Initial System Prompt.'},
     {'role': 'user', 'content': 'Hello'},
     {'role': 'assistant', 'content': 'Hi there!'},
-    {'role': 'images', 'content': 'image_data_here'},
+    {'role': 'user', 'content': 'Look at this', 'images': ['image_data_here']},
     {'role': 'system', 'content': 'Mid-conversation System Prompt.'},
     {'role': 'user', 'content': 'How are you?'},
     {'role': 'assistant', 'content': 'I am well.'}
@@ -37,22 +35,22 @@ class TestExtractLastNTurns:
     @pytest.mark.parametrize(
         "n, include_sysmes, remove_all_systems, expected_indices",
         [
-            # Basic cases
-            (3, True, False, [3, 4, 5]),  # Gets last 3 non-image, includes mid-convo system
-            (5, True, False, [1, 2, 3, 4, 5]),  # Gets last 5, excludes leading system
-            (10, True, False, [1, 2, 3, 4, 5]),  # n > messages, gets all non-leading-system
-            (2, False, False, [4, 5]),  # n=2, exclude all system messages
-            (4, False, False, [1, 2, 4, 5]),  # n=4, exclude all system messages
-            (2, True, True, [4, 5]),  # remove_all_systems override ignores include_sysmes
-            (1, True, False, [5]),  # Get just the last message
+            # Basic cases (7 messages total, images are now a key on regular messages)
+            (3, True, False, [4, 5, 6]),  # Gets last 3, includes mid-convo system
+            (6, True, False, [1, 2, 3, 4, 5, 6]),  # Gets last 6, excludes leading system
+            (10, True, False, [1, 2, 3, 4, 5, 6]),  # n > messages, gets all non-leading-system
+            (2, False, False, [5, 6]),  # n=2, exclude all system messages
+            (5, False, False, [1, 2, 3, 5, 6]),  # n=5, exclude all system messages
+            (2, True, True, [5, 6]),  # remove_all_systems override ignores include_sysmes
+            (1, True, False, [6]),  # Get just the last message
             (0, True, False, []),  # Get zero messages
         ],
         ids=[
             "n=3_include_sysmes",
-            "n=5_include_sysmes_strips_leading",
+            "n=6_include_sysmes_strips_leading",
             "n_greater_than_messages",
             "n=2_exclude_sysmes",
-            "n=4_exclude_sysmes",
+            "n=5_exclude_sysmes",
             "remove_all_systems_override",
             "get_last_one",
             "get_zero"
@@ -60,12 +58,10 @@ class TestExtractLastNTurns:
     )
     def test_extract_last_n_turns(self, n, include_sysmes, remove_all_systems, expected_indices):
         """
-        Tests various scenarios for slicing the last N turns from a conversation,
-        including handling of system and image messages.
+        Tests various scenarios for slicing the last N turns from a conversation.
+        Messages with 'images' key are normal messages and participate in turn counting.
         """
-        # Filter out the image message for expected result comparison as the function does
-        expected_messages = [msg for msg in MESSAGES_FIXTURE if msg['role'] != 'images']
-        expected = [expected_messages[i] for i in expected_indices]
+        expected = [MESSAGES_FIXTURE[i] for i in expected_indices]
 
         result = extract_last_n_turns(MESSAGES_FIXTURE, n, include_sysmes, remove_all_systems)
         assert result == expected
@@ -82,7 +78,6 @@ class TestExtractLastNTurnsAsString:
         """
         Verifies that the function calls the extractor and joins the content correctly.
         """
-        # Arrange
         mocker.patch(
             'Middleware.utilities.prompt_extraction_utils.extract_last_n_turns',
             return_value=[
@@ -90,9 +85,9 @@ class TestExtractLastNTurnsAsString:
                 {'role': 'assistant', 'content': 'Line 2'}
             ]
         )
-        # Act
+
         result = extract_last_n_turns_as_string(MESSAGES_FIXTURE, 2)
-        # Assert
+
         assert result == "Line 1\nLine 2"
 
     def test_extract_as_string_empty_list(self):
@@ -167,20 +162,19 @@ class TestExtractLastTurnsByEstimatedTokenLimit:
         """Tests that an empty message list returns an empty list."""
         assert extract_last_turns_by_estimated_token_limit([], 1000) == []
 
-    def test_images_role_excluded(self, mocker):
-        """Tests that messages with role 'images' are filtered out."""
+    def test_messages_with_images_key_included(self, mocker):
+        """Tests that messages with 'images' key are included normally."""
         mocker.patch(
             'Middleware.utilities.prompt_extraction_utils.rough_estimate_token_length',
             return_value=10
         )
         messages = [
-            {'role': 'user', 'content': 'hello'},
-            {'role': 'images', 'content': 'image_data'},
+            {'role': 'user', 'content': 'hello', 'images': ['image_data']},
             {'role': 'assistant', 'content': 'hi'},
         ]
         result = extract_last_turns_by_estimated_token_limit(messages, 1000)
         assert len(result) == 2
-        assert all(m['role'] != 'images' for m in result)
+        assert result[0]['content'] == 'hello'
 
     def test_system_messages_excluded_when_include_sysmes_false(self, mocker):
         """Tests that system messages are excluded when include_sysmes is False."""
@@ -446,20 +440,19 @@ class TestExtractLastTurnsWithMinMessagesAndTokenLimit:
         """Tests that empty messages returns empty list."""
         assert extract_last_turns_with_min_messages_and_token_limit([], 5, 1000) == []
 
-    def test_images_excluded(self, mocker):
-        """Tests that messages with role 'images' are filtered out."""
+    def test_messages_with_images_key_included(self, mocker):
+        """Tests that messages with 'images' key are included normally."""
         mocker.patch(
             'Middleware.utilities.prompt_extraction_utils.rough_estimate_token_length',
             return_value=10
         )
         messages = [
-            {'role': 'user', 'content': 'hello'},
-            {'role': 'images', 'content': 'image_data'},
+            {'role': 'user', 'content': 'hello', 'images': ['image_data']},
             {'role': 'assistant', 'content': 'hi'},
         ]
         result = extract_last_turns_with_min_messages_and_token_limit(messages, 2, 1000)
         assert len(result) == 2
-        assert all(m['role'] != 'images' for m in result)
+        assert result[0]['content'] == 'hello'
 
     def test_system_messages_excluded_when_include_sysmes_false(self, mocker):
         """Tests that system messages are excluded when include_sysmes is False."""
@@ -627,14 +620,18 @@ class TestTokenLimitEdgeCases:
         result = extract_last_turns_by_estimated_token_limit(messages, 1000, include_sysmes=False)
         assert result == []
 
-    def test_all_image_messages_returns_empty(self, mocker):
-        """Tests that all-image-message input returns empty list."""
+    def test_messages_with_only_images_key_still_returned(self, mocker):
+        """Tests that messages with images key are returned (they are regular user messages)."""
+        mocker.patch(
+            'Middleware.utilities.prompt_extraction_utils.rough_estimate_token_length',
+            return_value=10
+        )
         messages = [
-            {'role': 'images', 'content': 'img1'},
-            {'role': 'images', 'content': 'img2'},
+            {'role': 'user', 'content': 'look at this', 'images': ['img1']},
+            {'role': 'user', 'content': 'and this', 'images': ['img2']},
         ]
         result = extract_last_turns_by_estimated_token_limit(messages, 1000)
-        assert result == []
+        assert len(result) == 2
 
     def test_missing_content_key_handled_gracefully(self, mocker):
         """Tests that messages without 'content' key are handled via .get() default."""

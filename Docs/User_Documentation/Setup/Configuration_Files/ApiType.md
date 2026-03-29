@@ -4,7 +4,7 @@ The `ApiTypes` configuration files are the "drivers" for WilmerAI's `llmapis` la
 middleware should communicate with a specific type of Large Language Model (LLM) backend API. It acts as a translator,
 telling the system what to name the properties in the final JSON payload sent to the LLM.
 
-This allows WilmerAI to support various backends—like Ollama, KoboldCpp, or any OpenAI-compatible service—without
+This allows WilmerAI to support various backends -- like Ollama, KoboldCpp, or any OpenAI-compatible service -- without
 changing its core code. You can add support for a new LLM provider simply by creating a new `ApiTypes` file.
 
 -----

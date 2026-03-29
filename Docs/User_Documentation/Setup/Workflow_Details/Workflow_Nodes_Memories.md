@@ -32,7 +32,7 @@ controlled by the discussion's configuration settings.
 * **Action**: This node **writes** to memory. Depending on the `useVectorForQualityMemory` flag in the discussion's
   configuration, it will either:
     * Append a new structured memory to the vector database (`<id>_vector_memory.db`).
-    * Append a new summarized memory chunk to the long-term memory file (`<id>_memories.jsonl`).
+    * Append a new summarized memory chunk to the long-term memory file (`<id>_memories.json`).
 * **Output**: This node produces **no output**. Its `{agent#Output}` variable will be empty.
 
 -----
@@ -49,7 +49,7 @@ facts or details from the conversation's history. This node requires an active `
 {
   "title": "Search for Relevant Facts",
   "type": "VectorMemorySearch",
-  "input": "Project Stardust;mission parameters;Dr. Evelyn Reed",
+  "input": "quarterly revenue;marketing strategy;client onboarding",
   "limit": 5
 }
 ```
@@ -73,7 +73,7 @@ facts or details from the conversation's history. This node requires an active `
 ### RecentMemorySummarizerTool
 
 The **`RecentMemorySummarizerTool`** is a fast **retriever** node that fetches the most recent memory chunks from the
-long-term memory file (`_memories.jsonl`). It is ideal for giving an LLM a quick summary of recent events without
+long-term memory file (`_memories.json`). It is ideal for giving an LLM a quick summary of recent events without
 performing a complex search. It can also operate in a stateless mode if no `discussionId` is present.
 
 #### **Complete JSON Example**
@@ -104,7 +104,7 @@ performing a complex search. It can also operate in a stateless mode if no `disc
 
 #### **Actions & Output**
 
-* **Action**: This node **reads** from the long-term memory file (`<id>_memories.jsonl`).
+* **Action**: This node **reads** from the long-term memory file (`<id>_memories.json`).
 * **Output**: Returns a single string containing the text of the requested recent memories.
 
 -----
@@ -112,7 +112,7 @@ performing a complex search. It can also operate in a stateless mode if no `disc
 ### GetCurrentSummaryFromFile
 
 The **`GetCurrentSummaryFromFile`** node is a simple and extremely fast **retriever**. Its only job is to read the
-entire contents of the rolling chat summary file (`_summary.jsonl`) and return it as a string. It performs no checks and
+entire contents of the rolling chat summary file (`_chat_summary.json`) and return it as a string. It performs no checks and
 triggers no updates.
 
 #### **Complete JSON Example**
@@ -131,7 +131,7 @@ triggers no updates.
 
 #### **Actions & Output**
 
-* **Action**: This node **reads** from the rolling chat summary file (`<id>_summary.jsonl`).
+* **Action**: This node **reads** from the rolling chat summary file (`<id>_chat_summary.json`).
 * **Output**: Returns a single string containing the full text of the current chat summary.
 
 -----
@@ -139,7 +139,7 @@ triggers no updates.
 ### FullChatSummary
 
 The **`FullChatSummary`** is a combined **creator and retriever** node. By default, it first ensures the file-based
-memories (`_memories.jsonl`) are up-to-date, then checks if the rolling summary (`_summary.jsonl`) is stale and updates
+memories (`_memories.json`) are up-to-date, then checks if the rolling summary (`_chat_summary.json`) is stale and updates
 it if needed, and finally returns the summary's content. This process can be slow. Setting `isManualConfig` to `true`
 disables the creation/update logic, turning it into a fast "read-only" retriever.
 
@@ -163,7 +163,7 @@ disables the creation/update logic, turning it into a fast "read-only" retriever
 #### **Actions & Output**
 
 * **Action**: When `isManualConfig` is `false`, this node can **write** to both the long-term memory file (
-  `<id>_memories.jsonl`) and the rolling summary file (`<id>_summary.jsonl`). It always **reads** from the summary file.
+  `<id>_memories.json`) and the rolling summary file (`<id>_chat_summary.json`). It always **reads** from the summary file.
 * **Output**: Returns a single string containing the full text of the chat summary.
 
 -----
@@ -208,6 +208,100 @@ cohesive summary. It uses two special placeholders, `[CHAT_SUMMARY]` and `[LATES
 
 -----
 
+## Memory Condensation
+
+Over long conversations, the file-based memory system generates many individual memory chunks. Memory condensation is
+an optional feature that automatically consolidates older memories into fewer, denser summaries. When enabled, after
+new memories are created, the system checks whether enough new memories have accumulated and, if so, sends the oldest
+batch to an LLM to be condensed into a single summary.
+
+This feature only applies to file-based memories (not vector memories). It is configured in the
+`_DiscussionId-MemoryFile-Workflow-Settings.json` file.
+
+### Configuration Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `condenseMemories` | bool | `false` | Set to `true` to enable automatic memory condensation. |
+| `memoriesBeforeCondensation` | int | (required if enabled) | The number of new memories (N) that must accumulate before a condensation pass runs. |
+| `memoryCondensationBuffer` | int | `0` | The number of most recent memories (X) to exclude from condensation. These "buffer" memories are kept as-is so that the most recent context remains granular. |
+| `condenseMemoriesSystemPrompt` | str | built-in default | A custom system prompt for the condensation LLM call. |
+| `condenseMemoriesPrompt` | str | built-in default | A custom user prompt for the condensation LLM call. Supports two placeholders: `[MemoriesToCondense]` (replaced with the memories being condensed) and `[Memories_Before_Memories_to_Condense]` (replaced with the 3 memories immediately preceding the condensed batch, for narrative context). |
+| `condenseMemoriesEndpointName` | str | uses `endpointName` | An optional endpoint override for the condensation LLM call. If not set, the main memory endpoint is used. |
+| `condenseMemoriesPreset` | str | uses `preset` | An optional preset override for the condensation LLM call. |
+| `condenseMemoriesMaxResponseSizeInTokens` | int | uses `maxResponseSizeInTokens` | An optional max response token override for the condensation LLM call. |
+
+### How It Works
+
+1. After new memories are generated by the `QualityMemory` node (or any file-based memory creation path), the system
+   checks if `condenseMemories` is `true`.
+2. It counts how many new memories have been created since the last condensation.
+3. If the count meets or exceeds `memoriesBeforeCondensation + memoryCondensationBuffer`, the oldest
+   `memoriesBeforeCondensation` memories from the new batch are sent to an LLM.
+4. The 3 memories immediately before the condensed batch are also provided to the LLM (via the
+   `[Memories_Before_Memories_to_Condense]` placeholder) so it can write the condensed summary as a continuation
+   of the existing narrative.
+5. The LLM produces a single condensed summary that replaces the original batch in the memory file.
+6. The remaining buffer memories are left untouched.
+
+### Example Configuration
+
+```json
+{
+  "endpointName": "Memory-Generation-Endpoint",
+  "preset": "Memory-Generation-Preset",
+  "maxResponseSizeInTokens": 500,
+  "chunkEstimatedTokenSize": 1000,
+  "maxMessagesBetweenChunks": 15,
+  "lookbackStartTurn": 5,
+  "condenseMemories": true,
+  "memoriesBeforeCondensation": 10,
+  "memoryCondensationBuffer": 3
+}
+```
+
+In this example, after every memory generation pass, the system checks if at least 13 (10 + 3) new memories exist
+since the last condensation. If so, the oldest 10 are condensed into 1, and the 3 most recent are preserved as-is.
+
+### Tracking
+
+The condensation state is tracked in a separate file (`{discussion_id}_condensation_tracker.json`). This file is
+managed automatically. If you delete it, the system will treat all memories as new and may condense from the beginning
+on the next pass.
+
+-----
+
+### GetCurrentMemoryFromFile
+
+The **`GetCurrentMemoryFromFile`** node is a simple **retriever** that reads all current memory chunks from the
+discussion's long-term memory file (`_memories.json`) and returns them joined together as a single string. It performs
+no updates or searches -- it returns the full contents of the file. The chunks are joined using a configurable
+delimiter. This node requires an active `discussionId` to function; without one it returns a fallback message.
+
+#### **Complete JSON Example**
+
+```json
+{
+  "title": "Load all memory chunks from file",
+  "type": "GetCurrentMemoryFromFile",
+  "customDelimiter": "\n\n---\n\n"
+}
+```
+
+#### **Field Rundown**
+
+* **`title`**: (Optional) A descriptive name for the node.
+* **`type`**: (Required) Must be `"GetCurrentMemoryFromFile"`.
+* **`customDelimiter`**: (Optional) A string used to join the retrieved memory chunks. Defaults to `"--ChunkBreak--"`.
+
+#### **Actions & Output**
+
+* **Action**: This node **reads** from the long-term memory file (`<id>_memories.json`).
+* **Output**: Returns a single string containing all memory chunks joined by the configured delimiter. If no
+  `discussionId` is available, returns `"There are not yet any memories"`.
+
+-----
+
 ### RecentMemory (Legacy)
 
 The **`RecentMemory`** node is a legacy, dual-function node that combines **creation and retrieval**. It first triggers
@@ -231,7 +325,7 @@ separately instead.
 
 #### **Actions & Output**
 
-* **Action**: This node **writes** to the long-term memory file (`<id>_memories.jsonl`) and then **reads** from it in
+* **Action**: This node **writes** to the long-term memory file (`<id>_memories.json`) and then **reads** from it in
   the same step.
 * **Output**: Returns a single string containing the text of the most recent memories.
 
@@ -240,7 +334,7 @@ separately instead.
 ### ChatSummaryMemoryGatheringTool (Legacy)
 
 The **`ChatSummaryMemoryGatheringTool`** is a specialized legacy **retriever**. Its purpose is to gather all new memory
-chunks from the long-term memory file (`_memories.jsonl`) that have been created since the last rolling summary was
+chunks from the long-term memory file (`_memories.json`) that have been created since the last rolling summary was
 generated. It's intended to be the first step in a manual summary update workflow.
 
 #### **Complete JSON Example**
@@ -261,8 +355,8 @@ generated. It's intended to be the first step in a manual summary update workflo
 
 #### **Actions & Output**
 
-* **Action**: This node **reads** from both the long-term memory file (`<id>_memories.jsonl`) and the summary file (
-  `<id>_summary.jsonl`) to determine which memories are new.
+* **Action**: This node **reads** from both the long-term memory file (`<id>_memories.json`) and the summary file (
+  `<id>_chat_summary.json`) to determine which memories are new.
 * **Output**: Returns a single string containing the text of all new, unsummarized memory chunks. Returns an empty
   string if no new memories exist.
 

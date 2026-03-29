@@ -3,6 +3,7 @@ import json
 import logging
 from typing import Dict, Optional, List
 
+from Middleware.utilities.sensitive_logging_utils import sensitive_log_lazy, log_prompt_content
 from Middleware.utilities.text_utils import return_brackets
 from .base_llm_api_handler import LlmApiHandler
 
@@ -39,7 +40,8 @@ class BaseChatCompletionsHandler(LlmApiHandler):
         }
 
         logger.info(f"Payload prepared for {self.__class__.__name__}")
-        logger.debug(f"URL: {self.base_url}, Payload: {json.dumps(payload, indent=2)}")
+        sensitive_log_lazy(logger, logging.DEBUG, "URL: %s, Payload: %s",
+                          lambda: self.base_url, lambda: json.dumps(payload, indent=2))
         return payload
 
     def _build_messages_from_conversation(self, conversation: Optional[List[Dict[str, str]]],
@@ -125,9 +127,7 @@ class BaseChatCompletionsHandler(LlmApiHandler):
 
         return_brackets(corrected_conversation)
 
-        full_prompt_log = "\n".join(msg["content"] for msg in corrected_conversation)
-        logger.info("\n\n*****************************************************************************\n")
-        logger.info("\n\nFormatted_Prompt: %s", full_prompt_log)
-        logger.info("\n*****************************************************************************\n\n")
+        full_prompt_log = "\n".join(str(msg.get("content", "")) for msg in corrected_conversation)
+        log_prompt_content(logger, "Formatted_Prompt", full_prompt_log)
 
         return corrected_conversation

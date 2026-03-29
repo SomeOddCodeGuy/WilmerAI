@@ -30,25 +30,31 @@ Each field is explained in detail below.
 
 * #### **`title`**
 
-\* **Type**: `String`\* **Required**: No \* **Description**: An optional, human-readable name for the node. It's used
-for logging and makes the workflow easier to understand. It doesn't affect the node's execution.
+    * **Type**: `String`
+    * **Required**: No
+    * **Description**: An optional, human-readable name for the node. It's used for logging and makes the workflow
+      easier to understand. It doesn't affect the node's execution.
 
 * #### **`type`**
 
-\* **Type**: `String`\* **Required**: Yes \* **Description**: This **must** be the exact string `"StaticResponse"` to
-identify the node's function.
+    * **Type**: `String`
+    * **Required**: Yes
+    * **Description**: This **must** be the exact string `"StaticResponse"` to identify the node's function.
 
 * #### **`content`**
 
-\* **Type**: `String`\* **Required**: Yes \* **Description**: The static text content that the node will output. This
-can be a single word, a full paragraph, or even a large multi-line block of text. Standard JSON string escaping (e.g.,
-`\n` for newlines) applies.
+    * **Type**: `String`
+    * **Required**: Yes
+    * **Description**: The static text content that the node will output. This can be a single word, a full paragraph,
+      or even a large multi-line block of text. Standard JSON string escaping (e.g., `\n` for newlines) applies.
 
 * #### **`returnToUser`**
 
-\* **Type**: `Boolean`\* **Required**: No \* **Description**: A standard workflow flag that designates this node as the
-final responder. If set to `true`, this node's `content` will be sent to the user. This also enables the node's
-streaming capability. \* **Default Behavior**: If omitted, this field defaults to `false`.
+    * **Type**: `Boolean`
+    * **Required**: No
+    * **Description**: A standard workflow flag that designates this node as the final responder. If set to `true`,
+      this node's `content` will be sent to the user. This also enables the node's streaming capability.
+    * **Default Behavior**: If omitted, this field defaults to `false`.
 
 -----
 
@@ -67,10 +73,10 @@ question.
     {
       "title": "Set Persona",
       "type": "StaticResponse",
-      "content": "You are a ship's computer from a sci-fi show. Your designation is Unit 734. You are logical, precise, and respond only with factual data."
+      "content": "You are a helpful IT support assistant. Your role is to provide clear, step-by-step technical guidance. Be concise, accurate, and prioritize actionable solutions."
     },
     {
-      "title": "Respond to User as Unit 734",
+      "title": "System Information Response",
       "type": "Standard",
       "systemPrompt": "{agent1Output}",
       "prompt": "Analyze the user's query and provide a direct response.",
@@ -99,7 +105,7 @@ triggered in streaming mode, this text will appear to type out word-by-word.
     {
       "title": "Return System Status Message",
       "type": "StaticResponse",
-      "content": "Affirmative. All systems are operating within nominal parameters. This is a pre-recorded message. No further assistance is required.",
+      "content": "Acknowledged. All requested operations have been completed successfully. No further action is required.",
       "returnToUser": true
     }
   ]

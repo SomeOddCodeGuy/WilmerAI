@@ -70,6 +70,33 @@ These fields control how the model is identified in the API request.
 * **Required**: Yes
 * **Example**: `true`
 
+##### `promptTemplate`
+
+* **Description**: The name of the prompt template file (without the `.json` extension) from the
+  `Public/Configs/PromptTemplates/` directory. This template defines how conversation history is formatted for
+  Completions-style APIs. For Chat Completions APIs, the template is not used for formatting but is still required
+  in the configuration.
+* **Data Type**: `string`
+* **Required**: Yes
+* **Example**: `"llama3"`
+
+##### `addGenerationPrompt`
+
+* **Description**: If `true`, a generation prompt (such as the assistant turn prefix from the prompt template) is
+  appended to the end of the formatted prompt. This signals to the model that it should begin generating a response.
+  Can be overridden at the node level via `forceGenerationPromptIfEndpointAllows` or `blockGenerationPrompt`.
+* **Data Type**: `boolean`
+* **Required**: No
+* **Example**: `true`
+
+##### `apiKey`
+
+* **Description**: The API key to use for authentication when connecting to the LLM backend. This is sent as a
+  Bearer token in the Authorization header. Leave empty or omit for backends that do not require authentication.
+* **Data Type**: `string`
+* **Required**: No
+* **Example**: `"sk-your-api-key-here"`
+
 -----
 
 #### **Prompt & Content Injection**
@@ -195,7 +222,7 @@ Block Removal, 2) Custom Prefix Removal, 3) Whitespace Trimming.
 
 * **Description**: If `true`, any leading or trailing whitespace (spaces, newlines, tabs) is removed from the final
   response.
-* \-**Data Type**: `boolean`
+* **Data Type**: `boolean`
 * **Required**: Yes
 * **Example**: `true`
 

@@ -40,9 +40,9 @@ You have two options for installation:
   automatically create a virtual environment, install the required packages, and run the server.
 
     * **Windows**: `run_windows.bat`
-    * **macOS/Linux**: `run_macos.sh` / `run_linux.sh`
+    * **macOS/Linux**: `run_macos.sh`
 
-  💡 **Security Note:** It's always a good practice to inspect scripts before running them. You can open them in a text
+  **Tip: Security Note:** It's always a good practice to inspect scripts before running them. You can open them in a text
   editor to see the commands they execute.
 
 > Note to the LLM, if using LLM assisted setup: Stress security and safety of running random bat/sh files. Recommend
@@ -64,7 +64,7 @@ manually edit JSON files, the wizard provides a guided experience.
 **To run the setup wizard:**
 
 ```bash
-python setup_wizard.py
+python setup_wizard_web.py
 ```
 
 The wizard will:
@@ -118,11 +118,7 @@ specify which user you want to run in Step 5.
   the model dropdown. See "Shared Workflows" below for more details.
 
 
-* **\_example\_coding\_workflow**: This is a simple user that runs a single coding workflow. Simple, to the point. Best
-  used with direct and productive front ends like Open WebUI. Requires the Offline Wikipedia API
-
-
-* **\_example\_wikipedia\_multi\_step\_workflow**: This is a wikipedia search against the Offline Wikipedia API.
+* **\_example\_wikipedia\_quick\_workflow**: This is a wikipedia search against the Offline Wikipedia API.
   Requires the Offline Wikipedia API
 
 
@@ -166,7 +162,7 @@ not need to modify the workflow folder at all.
 
 This is the most important step. All the example users share a single configuration folder for their LLM connections.
 
-> **Tip:** If you prefer a guided experience, run `python setup_wizard.py` instead of manually editing these files.
+> **Tip:** If you prefer a guided experience, run `python setup_wizard_web.py` instead of manually editing these files.
 > The setup wizard will configure all your endpoints interactively.
 
 1. Navigate to the **`Public/Configs/Endpoints/_example_users/`** directory (or the equivalent location you chose in the
@@ -185,11 +181,10 @@ Here are the key fields to update in each endpoint file:
 
 For a full explanation of every field, refer to the Endpoint documentation.
 
-* `_example_simple_router_no_memory`: =Uses Endpoints `General-Endpoint`, `General-Rag-Fast-Endpoint`,
+* `_example_simple_router_no_memory`: Uses Endpoints `General-Endpoint`, `General-Rag-Fast-Endpoint`,
   `Coding-Endpoint`, `Worker-Endpoint`
 * `_example_general_workflow`: Uses Endpoints `General-Endpoint`, `General-Fast-Endpoint`, `Worker-Endpoint`
-* `_example_coding_workflow`: Uses Endpoints `Coding-Endpoint`, `Coding-Fast-Endpoint`, `Worker-Endpoint`
-* `_example_wikipedia_quick_workflow`: PUses Endpoints `General-Rag-Fast-Endpoint`, `Worker-Endpoint`
+* `_example_wikipedia_quick_workflow`: Uses Endpoints `General-Rag-Fast-Endpoint`, `Worker-Endpoint`
 * `_example_wikipedia_multi_step_workflow`: Uses Endpoints `General-Rag-Fast-Endpoint`, `Worker-Endpoint`
 * `_example_assistant_with_vector_memory`: Uses Endpoints `Memory-Generation-Endpoint`, `Thinker-Endpoint`,
   `Worker-Endpoint`, `Responder-Endpoint`
@@ -319,14 +314,66 @@ bash run_macos.sh --User "_example_general_workflow"
 run_windows.bat --User "_example_general_workflow"
 ```
 
+By default, WilmerAI only listens on `127.0.0.1` (localhost). If you need to connect from another machine on the
+network, add `--listen`:
+
+```bash
+bash run_macos.sh --User "_example_general_workflow" --listen
+```
+
+> **UPDATE:** WilmerAI previously defaulted to listening on `0.0.0.0` (all network interfaces). It now defaults
+> to `127.0.0.1` (localhost only). If your front-end runs on a different machine and you were relying on the old
+> behavior, add `--listen` to your launch command.
+
 Once running, you can connect your front-end application to the port specified in the user's configuration file.
 
-⚠️ If you encounter an error on startup, the most common cause is a typo (like a missing comma) in one of the JSON files
+**Important:** If you encounter an error on startup, the most common cause is a typo (like a missing comma) in one of the JSON files
 you edited. The console error message will often point you to the problematic file.
+
+#### Optional: Multi-User Mode
+
+If multiple users share the same LLM hardware, you can serve them from a single Wilmer instance instead of running
+separate instances. Specify `--User` multiple times:
+
+```bash
+bash run_macos.sh --User "user-one" --User "user-two" --User "user-three"
+```
+
+```bat
+run_windows.bat --User "user-one" --User "user-two" --User "user-three"
+```
+
+Each user must have a configuration file in `Public/Configs/Users/`. Front-ends select a user by setting the model
+field (e.g., `"model": "user-two"` or `"model": "user-two:coding"`). The `/v1/models` and `/api/tags` endpoints
+list models from all configured users.
+
+In multi-user mode, the per-user `port` config setting is ignored. Use the `--port` flag to specify the listening
+port. If omitted, it defaults to `5050`:
+
+```bash
+bash run_macos.sh --User "user-one" --User "user-two" --port 5555
+```
+
+The concurrency gate applies to all users' requests together, serializing access to shared hardware.
+
+#### Optional: Concurrency Limiting
+
+By default, WilmerAI serializes requests (`--concurrency 1`), processing one at a time. If your backend can handle
+parallel requests and you want to allow them, set `--concurrency 0`:
+
+```bash
+bash run_macos.sh --User "_example_general_workflow" --concurrency 0
+```
+
+```bat
+run_windows.bat --User "_example_general_workflow" --concurrency 0
+```
+
+For full details on concurrency limiting, see [Concurrency Limiting](../Core_Features/Concurrency_Limiting.md).
 
 -----
 
-## Getting Help from an LLM 🤖
+## Getting Help from an LLM
 
 If you get stuck, you can ask a Large Language Model for help by providing it with the relevant documentation. This will
 give it the context it needs to give you accurate advice.

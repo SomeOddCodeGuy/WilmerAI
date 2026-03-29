@@ -15,6 +15,8 @@ from Middleware.services.llm_service import LlmHandlerService
 from Middleware.services.locking_service import LockingService
 from Middleware.services.timestamp_service import TimestampService
 from Middleware.utilities.config_utils import get_chat_template_name, get_endpoint_config
+from Middleware.utilities.encryption_utils import get_encryption_key_if_available, get_api_key_hash_if_available
+from Middleware.utilities.sensitive_logging_utils import sensitive_log, log_prompt_content
 from Middleware.utilities.streaming_utils import post_process_llm_output
 from Middleware.workflows.models.execution_context import ExecutionContext, NodeExecutionInfo
 from Middleware.workflows.streaming.response_handler import StreamingResponseHandler
@@ -46,7 +48,8 @@ class WorkflowProcessor:
                  non_responder_flag: Optional[bool],
                  first_node_system_prompt_override: Optional[str],
                  first_node_prompt_override: Optional[str],
-                 scoped_inputs: Optional[List[str]] = None
+                 scoped_inputs: Optional[List[str]] = None,
+                 api_key: Optional[str] = None
                  ):
         """
         Initializes the WorkflowProcessor instance.
@@ -68,6 +71,9 @@ class WorkflowProcessor:
         self.non_responder_flag = non_responder_flag
         self.first_node_system_prompt_override = first_node_system_prompt_override
         self.first_node_prompt_override = first_node_prompt_override
+        self.api_key = api_key
+        self.encryption_key = get_encryption_key_if_available(api_key) if api_key else None
+        self.api_key_hash = get_api_key_hash_if_available(api_key) if api_key else None
 
         self.agent_inputs = {}
         if scoped_inputs:
@@ -91,7 +97,7 @@ class WorkflowProcessor:
         last_message = self.messages[-1]
         content = last_message.get('content', '').strip()
         if 0 < len(content) < 100 and content.endswith(':'):
-            logger.debug(f"Detected potential generation prompt in input messages: '{content}'")
+            sensitive_log(logger, logging.DEBUG, "Detected potential generation prompt in input messages: '%s'", content)
             return content
         return None
 
@@ -107,7 +113,7 @@ class WorkflowProcessor:
         first_word = llm_output_trimmed.split(' ', 1)[0]
         if first_word.endswith(':'):
             return llm_output_trimmed
-        logger.debug(f"Reconstructing non-streaming group chat message. Prepended prompt: '{generation_prompt}'")
+        sensitive_log(logger, logging.DEBUG, "Reconstructing non-streaming group chat message. Prepended prompt: '%s'", generation_prompt)
         return f"{generation_prompt} {llm_output_trimmed}"
 
     def _get_node_name(self, config: Dict) -> str:
@@ -228,10 +234,16 @@ class WorkflowProcessor:
                     is_any_node_timestamped = True
                     break
 
-        # If any node uses timestamps, resolve the history for the entire workflow run.
-        # This correctly handles placeholders from the previous turn.
+        # Timestamp history is resolved once at the start of the entire workflow run
+        # rather than once per node. This ensures that the placeholder written by the
+        # PREVIOUS turn's assistant response is resolved against the new incoming
+        # message list before any node reads timestamps. Doing it per-node would
+        # either resolve the placeholder redundantly on every node or race against
+        # the placeholder being written mid-workflow.
         if is_any_node_timestamped:
-            self.timestamp_service.resolve_and_track_history(self.messages, self.discussion_id)
+            self.timestamp_service.resolve_and_track_history(self.messages, self.discussion_id,
+                                                                 encryption_key=self.encryption_key,
+                                                                 api_key_hash=self.api_key_hash)
 
         try:
             for idx, config in enumerate(self.configs):
@@ -276,7 +288,9 @@ class WorkflowProcessor:
 
                     if is_timestamping_enabled_for_node:
                         logger.debug("Saving placeholder timestamp for assistant's response.")
-                        self.timestamp_service.save_placeholder_timestamp(self.discussion_id)
+                        self.timestamp_service.save_placeholder_timestamp(self.discussion_id,
+                                                                             encryption_key=self.encryption_key,
+                                                                             api_key_hash=self.api_key_hash)
 
                     result_gen = self._process_section(
                         config=config, agent_outputs=combined_agent_variables,
@@ -296,6 +310,12 @@ class WorkflowProcessor:
                             for chunk in result_gen:
                                 yield chunk
                                 if isinstance(chunk, str) and chunk.startswith("data: "):
+                                    # Reconstruct the full response text from the SSE stream for
+                                    # logging and downstream variable assignment.  Each chunk is an
+                                    # SSE line ("data: {...}").  Parse the JSON, navigate to
+                                    # choices[0].delta.content to extract the token, and accumulate
+                                    # all tokens into full_response_list.  "[DONE]" signals the end
+                                    # of the stream and contains no content token.
                                     try:
                                         data_content = chunk.split("data: ")[1].strip()
                                         if data_content and data_content != "[DONE]":
@@ -314,7 +334,7 @@ class WorkflowProcessor:
                             node_end_time = sub_workflow_end
                             timing_already_captured = True
                             result = "".join(full_response_list)
-                            logger.info("\n\nOutput from the LLM (raw SSE stream from sub-workflow): %s", result)
+                            log_prompt_content(logger, "Output from the LLM (raw SSE stream from sub-workflow)", result)
                         else:
                             # Apply early variable substitution for endpointName if needed
                             endpoint_name_template = config.get("endpointName")
@@ -335,7 +355,7 @@ class WorkflowProcessor:
                                                                       request_id=self.request_id)
                             yield from stream_handler.process_stream(result_gen)
                             result = stream_handler.full_response_text
-                            logger.info("\n\nOutput from the LLM: %s", result)
+                            log_prompt_content(logger, "Output from the LLM", result)
                     else:
                         result = result_gen
                         if not self.stream and generation_prompt:
@@ -346,7 +366,9 @@ class WorkflowProcessor:
                         if use_group_chat_logic:
                             logger.debug(
                                 "Committing timestamp immediately for assistant's response (GroupChatLogic enabled).")
-                            self.timestamp_service.commit_assistant_response(self.discussion_id, result)
+                            self.timestamp_service.commit_assistant_response(self.discussion_id, result,
+                                                                                 encryption_key=self.encryption_key,
+                                                                                 api_key_hash=self.api_key_hash)
                         else:
                             logger.debug(
                                 "Skipping immediate timestamp commit. Relying on fallback mechanism on next turn (GroupChatLogic disabled).")
@@ -484,7 +506,9 @@ class WorkflowProcessor:
                 messages_to_send = self.timestamp_service.format_messages_with_timestamps(
                     messages=deepcopy(self.messages),
                     discussion_id=self.discussion_id,
-                    use_relative_time=use_relative
+                    use_relative_time=use_relative,
+                    encryption_key=self.encryption_key,
+                    api_key_hash=self.api_key_hash
                 )
 
         context = ExecutionContext(
@@ -499,8 +523,11 @@ class WorkflowProcessor:
             agent_outputs=agent_outputs,
             llm_handler=self.llm_handler,
             workflow_variable_service=self.workflow_variable_service,
-            workflow_manager=self.node_handlers.get("CustomWorkflow").workflow_manager,
-            node_handlers=self.node_handlers
+            workflow_manager=self.node_handlers["CustomWorkflow"].workflow_manager,
+            node_handlers=self.node_handlers,
+            api_key=self.api_key,
+            encryption_key=self.encryption_key,
+            api_key_hash=self.api_key_hash
         )
 
         node_type = context.config.get("type", "Standard")
@@ -512,7 +539,6 @@ class WorkflowProcessor:
         if not handler:
             raise ValueError(f"No handler found for node type: {node_type}")
 
-        handler.llm_handler = context.llm_handler
         result = handler.handle(context)
 
         if not is_streaming_for_node and isinstance(result, str) and endpoint_config:

@@ -3,14 +3,14 @@
 import copy
 import logging
 import os
-from functools import wraps
 from typing import Any, Dict, List, Generator, Optional, Union
 
-from flask import jsonify, Response, request
+from flask import jsonify, Response
 
 from Middleware.api import api_helpers
 from Middleware.services.prompt_categorization_service import PromptCategorizationService
 from Middleware.services.response_builder_service import ResponseBuilderService
+from Middleware.utilities import config_utils
 from Middleware.utilities.config_utils import get_custom_workflow_is_active, get_active_custom_workflow_name, \
     get_shared_workflows_folder
 from Middleware.utilities.prompt_extraction_utils import extract_discussion_id
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 response_builder = ResponseBuilderService()
 
 
-def handle_user_prompt(request_id: str, prompt_collection: List[Dict[str, Any]], stream: bool) -> Union[str, Generator[str, None, None]]:
+def handle_user_prompt(request_id: str, prompt_collection: List[Dict[str, Any]], stream: bool, api_key: str = None) -> Union[str, Generator[str, None, None]]:
     """
     Processes a user prompt by routing it to the appropriate workflow.
 
@@ -60,7 +60,8 @@ def handle_user_prompt(request_id: str, prompt_collection: List[Dict[str, Any]],
             discussion_id=discussion_id,
             messages=sanitized_messages,
             is_streaming=stream,
-            workflow_user_folder_override=folder_path
+            workflow_user_folder_override=folder_path,
+            api_key=api_key
         )
 
     if not get_custom_workflow_is_active():
@@ -71,7 +72,8 @@ def handle_user_prompt(request_id: str, prompt_collection: List[Dict[str, Any]],
             messages=sanitized_messages,
             request_id=request_id,
             discussion_id=discussion_id,
-            stream=stream
+            stream=stream,
+            api_key=api_key
         )
     else:
         logger.info("Custom workflow is active, running workflow.")
@@ -81,7 +83,8 @@ def handle_user_prompt(request_id: str, prompt_collection: List[Dict[str, Any]],
             request_id=request_id,
             discussion_id=discussion_id,
             messages=sanitized_messages,
-            is_streaming=stream
+            is_streaming=stream,
+            api_key=api_key
         )
 
 
@@ -126,17 +129,28 @@ def _sanitize_log_data(data: Any, max_len: int = 200, head_tail_len: int = 50) -
     return _sanitize_recursive(data_copy)
 
 
-def _check_and_handle_openwebui_tool_request(request_data: Dict[str, Any], api_type: str) -> Optional[Response]:
+def check_openwebui_tool_request(request_data: Dict[str, Any], api_type: str) -> Optional[Response]:
     """
-    Checks for OpenWebUI tool selection requests and returns an early response if detected.
+    Checks for OpenWebUI tool selection requests and returns an early response
+    if the current user has ``interceptOpenWebUIToolRequests`` enabled.
+
+    This must be called **after** request context is set (after
+    ``set_workflow_override``), so that the correct user's config is read.
+
+    When interception is disabled (the default), tool selection requests are
+    routed through the normal workflow pipeline like any other request.
 
     Args:
         request_data (Dict[str, Any]): The incoming request JSON payload.
         api_type (str): The API compatibility type (e.g., 'openaichatcompletion').
 
     Returns:
-        Optional[Response]: A Flask Response object if a tool selection request is detected, otherwise None.
+        Optional[Response]: A Flask Response object if a tool selection request
+            is detected and interception is enabled, otherwise None.
     """
+    if not config_utils.get_intercept_openwebui_tool_requests():
+        return None
+
     openwebui_tool_pattern = "Your task is to choose and return the correct tool(s) from the list of available tools based on the query"
     if 'messages' in request_data:
         for message in request_data['messages']:
@@ -153,31 +167,3 @@ def _check_and_handle_openwebui_tool_request(request_data: Dict[str, Any], api_t
                     logger.warning(f"Unknown api_type '{api_type}' for OpenWebUI tool request handling.")
                     return None
     return None
-
-
-def handle_openwebui_tool_check(api_type: str):
-    """
-    Creates a decorator to intercept and handle OpenWebUI tool selection requests.
-
-    Args:
-        api_type (str): The API compatibility type to handle (e.g., 'openaichatcompletion').
-
-    Returns:
-        A decorator function.
-    """
-
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            request_data = request.get_json(force=True, silent=True)
-            if request_data is None:
-                logger.warning(f"Request to {func.__name__} did not contain valid JSON.")
-                return func(*args, **kwargs)
-            early_response = _check_and_handle_openwebui_tool_request(request_data, api_type)
-            if early_response:
-                return early_response
-            return func(*args, **kwargs)
-
-        return wrapper
-
-    return decorator

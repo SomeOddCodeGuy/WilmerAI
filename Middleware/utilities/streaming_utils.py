@@ -5,6 +5,8 @@ import re
 import time
 from typing import Any, Dict, Generator
 
+from Middleware.utilities.sensitive_logging_utils import sensitive_log
+
 logger = logging.getLogger(__name__)
 
 
@@ -22,6 +24,9 @@ def stream_static_content(content: str) -> Generator[Dict[str, Any], None, None]
         yield {'token': '', 'finish_reason': 'stop'}
         return
 
+    # 50 words/second (20 ms per word) produces a perceptible character-by-character
+    # effect without being so slow that it becomes annoying. The exact value is a
+    # UX heuristic; it does not need to match any real LLM generation rate.
     words_per_second = 50
     delay = 1.0 / words_per_second
 
@@ -93,6 +98,14 @@ class StreamingThinkRemover:
         self._buffer += delta
         content_to_yield = ""
 
+        # State machine with two modes:
+        # - expectOnlyClosing: assumes the response begins inside a think block (no opening
+        #   tag will appear); discard everything until the closing tag is found, then yield
+        #   everything after it.
+        # - Standard: look for an opening tag within the grace-period window.  If found,
+        #   enter think-block mode and suppress output until the closing tag.  If the buffer
+        #   grows past the grace period without an opening tag, disable further checks and
+        #   pass all content through unchanged.
         if self.expect_only_closing:
             if self._thinking_handled:
                 content_to_yield = self._buffer
@@ -286,7 +299,7 @@ def post_process_llm_output(text: str, endpoint_config: Dict, workflow_node_conf
     if should_remove_assistant and content.startswith("Assistant:"):
         content = api_helpers.remove_assistant_prefix(content)
 
-    logger.info(f"--- POST-CLEANING TEXT ---\n{content}\n-------------------------")
+    sensitive_log(logger, logging.INFO, "--- POST-CLEANING TEXT ---\n%s\n-------------------------", content)
 
     if endpoint_config.get("trimBeginningAndEndLineBreaks", False):
         return content.strip()

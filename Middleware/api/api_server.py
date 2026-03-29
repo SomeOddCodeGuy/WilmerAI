@@ -10,7 +10,6 @@ from flask import Flask  # Import Flask for type hinting
 
 from Middleware.api.app import app
 from Middleware.api.handlers.base.base_api_handler import BaseApiHandler
-from Middleware.utilities.config_utils import get_application_port
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +34,7 @@ class ApiServer:
         """
         self.app = app_instance if app_instance is not None else app
         self._discover_and_register_handlers()
+        self._apply_concurrency_middleware()
 
     def _discover_and_register_handlers(self):
         """
@@ -83,17 +83,17 @@ class ApiServer:
                     except Exception as e:
                         logger.error(f"Failed to load or register handler from {module_name}: {e}")
 
-    def run(self, debug: bool = False):
-        """
-        Starts the Flask web server.
+    def _apply_concurrency_middleware(self):
+        """Wraps the WSGI app with concurrency-limiting middleware if configured."""
+        from Middleware.common.instance_global_variables import get_request_semaphore
+        from Middleware.common import instance_global_variables
+        from Middleware.api.concurrency_middleware import ConcurrencyLimitMiddleware
 
-        This method retrieves the application port from the User Config and
-        starts the Flask server, making it accessible on the local network.
+        semaphore = get_request_semaphore()
+        if semaphore is not None:
+            self.app.wsgi_app = ConcurrencyLimitMiddleware(
+                self.app.wsgi_app, semaphore,
+                acquire_timeout=instance_global_variables.CONCURRENCY_TIMEOUT
+            )
+            logger.info("Concurrency limiting middleware applied")
 
-        Args:
-            debug (bool): A boolean flag to enable or disable Flask's debug mode.
-                          Defaults to False.
-        """
-        port = get_application_port()
-        logger.info(f"Starting Flask server on host 0.0.0.0, port {port}")
-        self.app.run(host='0.0.0.0', port=port, debug=debug)

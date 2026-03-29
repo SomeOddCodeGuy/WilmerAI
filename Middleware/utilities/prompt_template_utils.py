@@ -57,9 +57,9 @@ def format_system_prompts(messages: List[Dict[str, str]], llm_handler, chat_prom
                                                           , llm_handler.takes_message_collection)
 
     chat_user_prompt_content = [message["content"] for message in chat_user_prompt if
-                                message["role"] not in {"images", "system"}]
+                                message["role"] != "system"]
     template_user_prompt_content = [message["content"] for message in templates_user_prompt if
-                                    message["role"] not in {"images", "system"}]
+                                    message["role"] != "system"]
 
     return {
         "chat_system_prompt": format_templated_system_prompt(system_prompt, llm_handler, chat_prompt_template_name),
@@ -110,7 +110,6 @@ def format_messages_with_template(messages: List[Dict[str, str]], template_file_
     """
     prompt_template = load_template_from_json(template_file_name)
     message_copy = deepcopy(messages)
-    message_copy = [message for message in message_copy if message["role"] != "images"]
     formatted_messages = []
 
     for i, message in enumerate(message_copy):
@@ -316,7 +315,7 @@ def get_formatted_last_n_turns_as_string(messages: List[Dict[str, str]], n: int,
             and formatted.
     """
 
-    filtered_messages = [message for message in messages if message["role"] not in {"images", "system"}]
+    filtered_messages = [message for message in messages if message["role"] != "system"]
     trimmed_messages = deepcopy(filtered_messages[-n:])
     return_message = format_messages_with_template(trimmed_messages, template_file_name, isChatCompletion)
     return ''.join([message["content"] for message in return_message])
@@ -348,7 +347,7 @@ def get_formatted_last_turns_by_estimated_token_limit_as_string(messages: List[D
         str: A single string with the selected messages concatenated and
             formatted.
     """
-    filtered_messages = [message for message in messages if message["role"] not in {"images", "system"}]
+    filtered_messages = [message for message in messages if message["role"] != "system"]
 
     if not filtered_messages:
         return ""
@@ -401,7 +400,7 @@ def get_formatted_last_turns_with_min_messages_and_token_limit_as_string(message
         str: A single string with the selected messages concatenated and
             formatted.
     """
-    filtered_messages = [message for message in messages if message["role"] not in {"images", "system"}]
+    filtered_messages = [message for message in messages if message["role"] != "system"]
 
     if not filtered_messages:
         return ""

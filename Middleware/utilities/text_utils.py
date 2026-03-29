@@ -137,6 +137,9 @@ def chunk_messages_by_token_size(messages: List[Dict[str, str]], chunk_size: int
     for message in reversed(messages):
         message_token_count = rough_estimate_token_length(message.get('content', ''))
 
+        # The 0.8 (80%) threshold provides headroom so that the final message
+        # added to a chunk doesn't cause the rendered text block to exceed the
+        # chunk_size target after formatting overhead (newlines, role labels, etc.).
         if not current_chunk or (current_chunk_size + message_token_count <= chunk_size * 0.8):
             current_chunk.insert(0, message)
             current_chunk_size += message_token_count
@@ -167,6 +170,8 @@ def messages_into_chunked_text_of_token_size(messages: List[Dict[str, str]], chu
     Args:
         messages (List[Dict[str, str]]): The list of messages.
         chunk_size (int): The target size for each chunk, in tokens.
+        max_messages_before_chunk (int): The maximum number of messages allowed before
+            chunking is triggered.
 
     Returns:
         List[str]: A list of text blocks, each corresponding to a chunk of messages.
@@ -203,10 +208,13 @@ def get_message_chunks(messages: List[Dict[str, str]], lookbackStartTurn: int, c
     Args:
         messages (List[Dict[str, str]]): The list of message dictionaries for the discussion.
         lookbackStartTurn (int): The number of turns to look back in the conversation.
+            A value of 0 uses all messages except the last one.
         chunk_size (int): The maximum size of each chunk in tokens.
+        max_messages_before_chunk (int): The maximum number of messages allowed before
+            chunking is triggered. Defaults to 0.
 
     Returns:
-        List[str]: The list of message chunks.
+        List[str]: The list of message chunks as formatted text blocks.
     """
     pairs = []
     messageCopy = deepcopy(messages)
@@ -221,16 +229,17 @@ def get_message_chunks(messages: List[Dict[str, str]], lookbackStartTurn: int, c
 
 def clear_out_user_assistant_from_chunks(search_result_chunks):
     """
-    Clears out the user assistant from each chunk in the given search result chunks.
+    Strips role prefixes from each chunk in the given search result chunks.
 
-    :param search_result_chunks: A list of chunks, each representing a response from a user assistant.
-    :return: A new list of chunks with the user assistant removed.
+    Removes 'User: ', 'Assistant: ', and 'systemMes: ' prefixes (case-insensitive)
+    from each chunk so that only the raw message content remains.
 
-    Example usage:
-    search_result_chunks = ['User: Hello', 'Assistant: Hi', 'User: How are you?', 'Assistant: I'm good']
-    new_chunks = clear_out_user_assistant_from_chunks(search_result_chunks)
-    print(new_chunks)
-    # Output: ['Hello', 'Hi', 'How are you?', "I'm good"]
+    Args:
+        search_result_chunks: A list of chunks, each representing a segment of
+            conversation text that may contain role prefixes.
+
+    Returns:
+        list: A new list of chunks with role prefixes removed.
     """
     new_chunks = []
     for chunk in search_result_chunks:
@@ -260,25 +269,30 @@ def replace_brackets_in_list(input_list: List[Dict[str, str]]) -> List[Dict[str,
         List[Dict[str, str]]: The list of dictionaries with replaced brackets
                               in the 'content' element.
     """
-    bracket_dict = {r'{': r'|{{|', r'}': r'|}}|'}
+    # Literal curly braces in user content would be misinterpreted as format
+    # placeholders by str.format(). We replace them with sentinel tokens that
+    # are unlikely to appear in natural text and that contain no curly braces
+    # themselves (to avoid being mangled by str.format()), then restore them
+    # after formatting is complete (see return_brackets).
+    bracket_dict = {r'{': r'__WILMER_L_CURLY__', r'}': r'__WILMER_R_CURLY__'}
     return replace_characters_in_collection(input_list, bracket_dict)
 
 
 def return_brackets(input_list: List[Dict[str, str]]) -> List[Dict[str, str]]:
     """Replaces escaped brackets in the 'content' element of each dictionary in the list.
 
-     This function iterates over a list of dictionaries and replaces specific patterns
-     of brackets within the 'content' value to ensure they are properly escaped and
-     do not interfere with text processing.
+    This function iterates over a list of dictionaries and replaces specific patterns
+    of brackets within the 'content' value to ensure they are properly escaped and
+    do not interfere with text processing.
 
-     Args:
-         input_list (List[Dict[str, str]]): The list of dictionaries containing 'content'
-                                           to be replaced.
+    Args:
+        input_list (List[Dict[str, str]]): The list of dictionaries containing 'content'
+                                          to be replaced.
 
-     Returns:
-         List[Dict[str, str]]: The list of dictionaries with replaced brackets in 'content'.
-     """
-    bracket_dict = {r'|{{|': r'{', r'|}}|': r'}'}
+    Returns:
+        List[Dict[str, str]]: The list of dictionaries with replaced brackets in 'content'.
+    """
+    bracket_dict = {r'__WILMER_L_CURLY__': r'{', r'__WILMER_R_CURLY__': r'}'}
     return replace_characters_in_collection(input_list, bracket_dict)
 
 
@@ -317,7 +331,7 @@ def return_brackets_in_string(input: str) -> str:
     Returns:
         str: The string with replaced brackets.
     """
-    bracket_dict = {r'|{{|': r'{', r'|}}|': r'}'}
+    bracket_dict = {r'__WILMER_L_CURLY__': r'{', r'__WILMER_R_CURLY__': r'}'}
     return replace_characters_in_string(input, bracket_dict)
 
 
@@ -341,16 +355,17 @@ def replace_characters_in_string(input: str, characters_to_replace: Dict[str, st
 
 
 def tokenize(text: str) -> List[str]:
-    """Tokenizes text while excluding words followed directly by a colon.
+    r"""Extracts word tokens from text.
 
-    This function tokenizes the input text, excluding tokens that are immediately
-    followed by a colon, which are typically used as labels or identifiers.
+    Returns all word-boundary-delimited sequences of word characters. The
+    trailing lookbehind ``(?<!:)`` is a no-op in practice because ``\w``
+    cannot match ``:``; it does not filter words followed by a colon.
 
     Args:
         text (str): The text to be tokenized.
 
     Returns:
-        List[str]: A list of tokens extracted from the text.
+        List[str]: A list of word tokens extracted from the text.
     """
     return re.findall(r'\b\w+\b(?<!:)', text)
 

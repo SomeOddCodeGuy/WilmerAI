@@ -4,6 +4,7 @@ import logging
 from typing import Dict, Optional, Any, List
 
 from Middleware.llmapis.handlers.base.base_completions_handler import BaseCompletionsHandler
+from Middleware.utilities.sensitive_logging_utils import sensitive_log
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,7 @@ class OllamaGenerateApiHandler(BaseCompletionsHandler):
         }
 
         logger.info(f"Payload prepared for {self.__class__.__name__}")
-        logger.debug(f"URL: {self.base_url}, Payload: {json.dumps(payload, indent=2)}")
+        sensitive_log(logger, logging.DEBUG, "URL: %s, Payload: %s", self.base_url, json.dumps(payload, indent=2))
         return payload
 
     @property
