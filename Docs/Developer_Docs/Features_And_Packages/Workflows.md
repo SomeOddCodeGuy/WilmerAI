@@ -38,11 +38,14 @@ defined by a workflow.
   `$ExecutionContext$` as an argument, giving it access to all necessary data for substitutions. It resolves two primary
   variable types:
     - **Agent Output (`{agent1Output}`):** The result from a previously completed node within the *same* workflow run.
+      String values are sentinel-escaped (`{`/`}` → `__WILMER_L_CURLY__`/`__WILMER_R_CURLY__`) before entering the
+      variables dictionary to prevent `str.format()` from misinterpreting literal braces as placeholders.
     - **Agent Input (`{agent1Input}`):** A value passed from a *parent* workflow into a *child* sub-workflow. It is
-      available to all nodes within the child workflow.
+      available to all nodes within the child workflow. Also sentinel-escaped for the same reason.
 - **`$StreamingResponseHandler$`:** A dedicated class that processes a raw data stream from an LLM. It applies content
   modifications, such as removing `<think>` tags or custom prefixes defined in the workflow or endpoint configuration,
-  and formats the output into a client-ready Server-Sent Event (SSE) stream.
+  and formats the output into a client-ready Server-Sent Event (SSE) stream. Tool call chunks bypass the text
+  processing pipeline entirely and are emitted directly as SSE output.
 
 ### Architectural Flow
 
@@ -60,8 +63,11 @@ defined by a workflow.
    object**. This object is populated with the node's specific configuration, the full conversation history, the
    top-level workflow configuration, all available agent inputs and outputs, the appropriate LLM handler for that node,
    and other runtime data.
-6. **Handler Dispatch:** The `$WorkflowProcessor$` reads the node's `type` field and uses its injected registry to find
-   the matching **Node Handler** instance.
+6. **Handler Dispatch:** The `$WorkflowProcessor$` reads the node's `type` field, validates it against the
+   `VALID_NODE_TYPES` whitelist in `Middleware/common/constants.py`, and uses its injected registry to find the matching
+   **Node Handler** instance. **When adding a new node type, it must be registered in three places:** the
+   `VALID_NODE_TYPES` list in `constants.py`, the `node_handlers` dictionary in `$WorkflowManager$.__init__`, and the
+   handler's dispatch method (e.g., `SpecializedNodeHandler.handle`).
 7. **Node Execution:** The `$WorkflowProcessor$` calls the `handle()` method on the selected handler, passing it the
    single, comprehensive **`ExecutionContext` object**.
 8. **State Update:** The output returned by the handler is captured by the `$WorkflowProcessor$` and stored in its
@@ -119,14 +125,20 @@ This section details the responsibility of each key file in the `Middleware/work
 
 - **`impl/` (Implementations)**
 
-    - `standard_node_handler.py`: Handles the `"Standard"` node type for LLM calls.
+    - `standard_node_handler.py`: Handles the `"Standard"` node type for LLM calls. Supports optional image
+      passthrough via the `acceptImages` config flag, with `maxImagesToSend` controlling how many images reach the
+      backend. When `acceptImages` is `true`, the handler passes `llm_takes_images=True` and the resolved
+      `max_images` count to `LLMDispatchService.dispatch()`.
     - `tool_node_handler.py`: A router for tool-related nodes (`"PythonModule"`, `"OfflineWikiApi..."`, etc.).
     - `memory_node_handler.py`: A router for memory-related nodes (`"RecentMemory"`, `"VectorMemorySearch"`, etc.).
-    - `sub_workflow_handler.py`: Handles nodes that trigger other workflows (`"CustomWorkflow"`). It calls back to the
-      `$WorkflowManager$` to run a nested workflow, resolving and passing any `scoped_variables` from the parent
-      context.
-    - `specialized_node_handler.py`: A router for miscellaneous nodes like `"WorkflowLock"`, `"GetCustomFile"`,
-      `"StaticResponse"`, `"JsonExtractor"`, and `"TagTextExtractor"`.
+    - `sub_workflow_handler.py`: Handles nodes that trigger other workflows (`"CustomWorkflow"`,
+      `"ConditionalCustomWorkflow"`). It calls back to the `$WorkflowManager$` to run a nested workflow, resolving
+      and passing any `scoped_variables` from the parent context.
+    - `specialized_node_handler.py`: A router for miscellaneous nodes: `"WorkflowLock"`, `"GetCustomFile"`,
+      `"SaveCustomFile"`, `"StaticResponse"`, `"ImageProcessor"`, `"JsonExtractor"`, `"ArithmeticProcessor"`,
+      `"Conditional"`, `"StringConcatenator"`, `"TagTextExtractor"`, and `"DelimitedChunker"`.
+    - `context_compactor_handler.py`: Handles the `"ContextCompactor"` node type, which compacts conversation
+      history into rolling summaries.
 
 #### `streaming/`
 
@@ -146,11 +158,112 @@ This section details the responsibility of each key file in the `Middleware/work
 
 -----
 
-## 3\. How to Extend the Workflow System
+## 3\. Tool Call Passthrough
+
+WilmerAI can forward tool definitions from the incoming request to the backend LLM and relay tool call responses back
+to the client. This is controlled per-node via the `allowTools` boolean configuration property.
+
+### Node Configuration
+
+The `allowTools` property is a boolean that defaults to `false`. When set to `true` on a node, any `tools` and
+`tool_choice` values from the original client request are forwarded to the LLM for that node. When `false` (the
+default), tool definitions are silently suppressed.
+
+```json
+{
+  "type": "Standard",
+  "allowTools": true,
+  "endpoint": "my-endpoint",
+  "prompt": ""
+}
+```
+
+Memory nodes, summarizer nodes, categorizer nodes, and other internal processing nodes should never have `allowTools`
+enabled. Only nodes that produce a final response to the client should use it, and typically only the responder node
+in a workflow.
+
+### Data Flow
+
+1. **Ingestion:** The API gateway (`openai_api_handler.py`) extracts `tools` and `tool_choice` from the incoming
+   request payload and passes them into the workflow system.
+2. **ExecutionContext:** The `$WorkflowProcessor$` stores `tools` and `tool_choice` on the `$ExecutionContext$`
+   dataclass, making them available to every node.
+3. **Dispatch Gate:** `$LLMDispatchService.dispatch()$` reads `allowTools` from the node config. If `true`, it
+   forwards `context.tools` and `context.tool_choice` to the LLM handler. If `false`, it passes `None` for both.
+4. **LLM Handler:** `$LlmApiService.get_response_from_llm()$` includes the tool definitions in the payload sent to
+   the backend. The internal canonical format is OpenAI's tool format; the Claude and Ollama handlers convert as
+   needed (see the LLM APIs developer documentation).
+5. **Response:** Tool call responses from the LLM are returned as structured dictionaries rather than plain strings.
+   For streaming, `$StreamingResponseHandler$` detects `tool_calls` in the chunk data and emits them directly as SSE
+   output, bypassing the text processing pipeline (prefix stripping, think-block removal). For non-streaming, the
+   dispatch service returns a `Dict` with `content`, `tool_calls`, and `finish_reason` keys instead of a plain string.
+
+-----
+
+## 4\. Consecutive Assistant Message Normalization
+
+Agentic frontends (e.g., coding assistants using tool calling) can produce conversation histories with multiple
+assistant messages in a row without an intervening user message. Most LLM APIs reject this as invalid turn
+structure. WilmerAI provides two mutually exclusive normalization strategies, controlled per-node in the config.
+
+### Implementation
+
+Both strategies are implemented as static methods on `$LLMDispatchService$` in `services/llm_dispatch_service.py`,
+following the same pattern as `_apply_image_limit`:
+
+- **`_merge_consecutive_assistant_messages(messages, delimiter)`:** Walks the message list and collapses runs of
+  consecutive assistant messages into a single message, joining their content with the delimiter. Non-content keys
+  (e.g., `tool_calls`, `images`) from the first message in a run are preserved.
+
+- **`_insert_user_turns_between_assistant_messages(messages, text)`:** Walks the message list and inserts a synthetic
+  `{"role": "user", "content": text}` between each pair of consecutive assistant messages.
+
+Both methods modify the message list in place and are tool-call-aware: the standard sequence
+`assistant(tool_calls) -> tool(result) -> assistant(response)` is NOT considered consecutive because the `tool`
+role message separates the assistant messages. This is critical -- that sequence is valid per the OpenAI API spec.
+
+### Integration Point
+
+The methods are called in `dispatch()` within the chat API path, after the message collection is fully assembled
+(after `collection.extend(last_n_turns)` and after image limiting). They only run when `prompt` is empty (the
+raw-conversation path). When a text prompt is set, the conversation is flattened into a single user message, so
+consecutive assistants are impossible.
+
+Merge takes precedence if both booleans are enabled.
+
+### Automatic User Message Recovery
+
+After normalization, a separate safety net runs unconditionally in the `use_last_n_messages` chat API path:
+
+- **`_ensure_user_message_present(collection, full_messages)`:** Checks whether `collection` contains any message
+  with `role == "user"`. If not, it scans `full_messages` (the complete conversation history) in reverse to find
+  the most recent user message and inserts a copy after any leading system messages.
+
+This addresses a scenario that the merge/insert strategies do not cover: long agentic tool-calling chains where
+`tool`-role messages separate every assistant message, preventing any direct assistant-to-assistant adjacency.
+The `lastMessagesToSendInsteadOfPrompt` window can end up containing only `assistant` and `tool` messages with
+no `user` message at all. Many backend chat templates (e.g., `multi_step_tool`) raise errors when no user query
+is found.
+
+The method is a no-op when the collection already contains a user message. It modifies `collection` in place
+and uses `dict()` to shallow-copy the inserted message.
+
+### Node Config Properties
+
+| Property | Type | Default | Description |
+|:---------|:-----|:--------|:------------|
+| `mergeConsecutiveAssistantMessages` | Boolean | `false` | Merge runs of consecutive assistant messages into one. |
+| `mergeConsecutiveAssistantMessagesDelimiter` | String | `"\n"` | Delimiter for joined content. |
+| `insertUserTurnBetweenAssistantMessages` | Boolean | `false` | Insert a synthetic user turn between consecutive assistants. |
+| `insertedUserTurnText` | String | `"Continue."` | Content of the synthetic user message. |
+
+-----
+
+## 5\. How to Extend the Workflow System
 
 Adding new functionality typically involves one of the following methods.
 
-### A. Add a New Node Type (Advanced)
+### A. Add a New Node Type
 
 This is the most powerful way to extend the system and has been streamlined by the `ExecutionContext` architecture.
 
@@ -160,7 +273,7 @@ This is the most powerful way to extend the system and has been streamlined by t
    {
      "type": "DatabaseQuery",
      "connectionString": "your_db_connection_string",
-     "query": "SELECT * FROM users WHERE name = '{lastUserMessage}';"
+     "query": "SELECT * FROM users WHERE name = '{chat_user_prompt_last_one}';"
    }
    ```
 

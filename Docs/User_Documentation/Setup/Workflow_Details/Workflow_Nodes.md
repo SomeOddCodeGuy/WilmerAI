@@ -39,6 +39,15 @@ response.
 | **`addOpenEndedAssistantTurnTemplate`**     | Boolean | No       | `false`    | Appends the start of an assistant turn template to the end of the final prompt.                                                       |
 | **`forceGenerationPromptIfEndpointAllows`** | Boolean | No       | `false`    | Forces the addition of a generation prompt even if other settings would normally suppress it.                                         |
 | **`blockGenerationPrompt`**                 | Boolean | No       | `false`    | Explicitly blocks the addition of any automatic generation prompt.                                                                    |
+| **`acceptImages`**                          | Boolean | No       | `false`    | If `true`, images attached to conversation messages are preserved and sent to the LLM backend. The endpoint must support vision/multimodal input. When `false`, images are stripped. If `true` but no images are present, the node behaves as a normal text request. |
+| **`maxImagesToSend`**                       | Integer | No       | `0`        | Only relevant when `acceptImages` is `true`. Limits the number of images sent to the backend, keeping the most recent. `0` means no limit. **Supports LIMITED variables like endpointName.** |
+| **`allowTools`**                            | Boolean | No       | `false`    | If `true`, tool definitions from the frontend request are forwarded to the LLM when this node executes. Tool call responses from the LLM are passed back to the frontend. Should typically only be enabled on the responding node. See [Tool Call Passthrough](Workflow_Features.md#tool-call-passthrough). |
+| **`mergeConsecutiveAssistantMessages`**     | Boolean | No       | `false`    | If `true`, consecutive assistant messages are merged into one before sending to the LLM. Only applies when `prompt` is empty. Tool-call sequences (assistant -> tool -> assistant) are not affected. See [Consecutive Assistant Message Normalization](Workflow_Features.md#consecutive-assistant-message-normalization). |
+| **`mergeConsecutiveAssistantMessagesDelimiter`** | String | No   | `"\n"`     | Delimiter for joined content when merging consecutive assistant messages. |
+| **`insertUserTurnBetweenAssistantMessages`** | Boolean | No      | `false`    | If `true`, a synthetic user message is inserted between consecutive assistant messages. Alternative to merging. See [Consecutive Assistant Message Normalization](Workflow_Features.md#consecutive-assistant-message-normalization). |
+| **`insertedUserTurnText`**                  | String  | No       | `"Continue."` | Content of the synthetic user message when using insertion. |
+| **`addUserAssistantTags`**                  | Boolean | No       | `false`    | If `true`, prefixes each message in `chat_user_prompt_*` variables with its role (e.g., `User: `, `Assistant: `). Per-node setting. Does not affect `templated_user_prompt_*` variables. |
+| **`includeToolCallsInConversation`**        | Boolean | No       | `false`    | If `true`, injects text summaries of `tool_calls` into assistant message content for conversation history variables. Formatted as `[Tool Call: {name}] {summary}`. |
 
 #### **Limitations and Key Usage Notes**
 
@@ -436,6 +445,53 @@ I hope this helps.
 
 -----
 
+### **Data Manipulation: The `DelimitedChunker` Node**
+
+The **`DelimitedChunker`** node splits a string on a delimiter and returns either the first N or last N chunks, rejoined
+with the same delimiter. It functions like `head` and `tail` for delimited content — useful for trimming long
+delimited data such as logs, CSV rows, or section-separated documents.
+
+#### **Properties**
+
+| Property        | Type    | Required | Default | Description                                                                                                                |
+|:----------------|:--------|:---------|:--------|:---------------------------------------------------------------------------------------------------------------------------|
+| **`type`**      | String  | Yes      | N/A     | Must be `"DelimitedChunker"`.                                                                                              |
+| **`title`**     | String  | No       | `""`    | A descriptive name for the node, used for logging and debugging.                                                           |
+| **`content`**   | String  | Yes      | N/A     | The string to split. Supports variable substitution.                                                                       |
+| **`delimiter`** | String  | Yes      | N/A     | The string to split on. Supports variable substitution.                                                                    |
+| **`mode`**      | String  | Yes      | N/A     | Either `"head"` (first N chunks) or `"tail"` (last N chunks).                                                             |
+| **`count`**     | Integer | Yes      | N/A     | Number of chunks to keep. Must be >= 1.                                                                                    |
+
+#### **Limitations and Key Usage Notes**
+
+* **Variable Support:** `content` and `delimiter` support full variable substitution. `mode` and `count` must be literal
+  values.
+* **Count >= Total Chunks:** Returns the full original content unchanged.
+* **Empty Content:** Returns an empty string.
+* **Delimiter Not Found:** Returns the full content unchanged (one chunk).
+* **Validation:** Missing required fields, invalid `mode`, or non-positive-integer `count` all return descriptive error
+  message strings.
+
+#### **Full Syntax Example**
+
+This example keeps the last 5 lines from a newline-separated string.
+
+```json
+{
+  "title": "Keep Last 5 Lines",
+  "type": "DelimitedChunker",
+  "content": "{agent1Output}",
+  "delimiter": "\n",
+  "mode": "tail",
+  "count": 5
+}
+```
+
+For detailed documentation including additional examples and edge case behavior, see
+[DelimitedChunker Node](Nodes/DelimitedChunker.md).
+
+-----
+
 ### **Utility: The `GetCustomFile` Node**
 
 The **`GetCustomFile`** node loads the content of a local text file into the workflow as a string. This allows you to
@@ -467,7 +523,7 @@ This node loads a project specification and replaces a simple `---` separator wi
 {
   "title": "Load Project Specification",
   "type": "GetCustomFile",
-  "filepath": "C:\\Users\\User\\Desktop\\project_spec.txt",
+  "filepath": "D:\\Users\\User\\Desktop\\project_spec.txt",
   "delimiter": "---",
   "customReturnDelimiter": "\n**********\n"
 }
@@ -650,7 +706,7 @@ This node executes a script to process data, passing arguments from workflow var
 {
   "title": "My Custom Python Tool",
   "type": "PythonModule",
-  "module_path": "C:/WilmerAI/Public/Scripts/process_data.py",
+  "module_path": "D:/WilmerAI/Public/Scripts/process_data.py",
   "args": [
     "A static string argument",
     "{agent1Output}"

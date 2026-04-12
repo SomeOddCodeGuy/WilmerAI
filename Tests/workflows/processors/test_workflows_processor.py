@@ -1080,8 +1080,8 @@ class TestMaxResponseSizeVariableSubstitution:
         mock_llm_handler_service.load_model_from_config.assert_called_once_with(
             "TestEndpoint", None, False, 4096, 400, addGenerationPrompt=ANY
         )
-        # Should log an error
-        assert "maxResponseSizeInTokens resolved to non-integer value" in caplog.text
+        # Should log a warning
+        assert "'maxResponseSizeInTokens' resolved to non-integer value" in caplog.text
 
     def test_default_value_when_not_specified(self, workflow_processor_factory, mock_node_handlers,
                                               mock_llm_handler_service):
@@ -1122,10 +1122,10 @@ class TestMaxResponseSizeVariableSubstitution:
         }]
         mock_node_handlers["Standard"].handle.return_value = "Response"
         mock_workflow_variable_service.apply_early_variables.side_effect = [
-            "ResolvedEndpoint",  # For logging
-            "ResolvedEndpoint",  # For endpoint
-            "ResolvedPreset",    # For preset
-            "6000"               # For maxResponseSizeInTokens
+            "ResolvedEndpoint",  # For _get_endpoint_details (logging/display)
+            "6000",              # For _resolve_numeric_config_fields (maxResponseSizeInTokens)
+            "ResolvedEndpoint",  # For endpoint in _process_section
+            "ResolvedPreset",    # For preset in _process_section
         ]
         processor = workflow_processor_factory(configs=config, stream=False,
                                               scoped_inputs=["MyEndpoint", "MyPreset", "6000"])
@@ -1136,3 +1136,86 @@ class TestMaxResponseSizeVariableSubstitution:
         mock_llm_handler_service.load_model_from_config.assert_called_once_with(
             "ResolvedEndpoint", "ResolvedPreset", False, 4096, 6000, addGenerationPrompt=ANY
         )
+
+
+class TestToolCallDictResult:
+    """Tests that dict results (from tool call passthrough) bypass non-streaming reconstruction."""
+
+    def test_non_streaming_dict_result_skips_reconstruction(self, workflow_processor_factory, mock_node_handlers,
+                                                            mocker):
+        """When a node handler returns a dict (tool call data), _reconstruct_non_streaming must not be called."""
+        tool_call_result = {
+            'content': '',
+            'tool_calls': [{'id': 'call_1', 'type': 'function', 'function': {'name': 'get_weather', 'arguments': '{}'}}],
+            'finish_reason': 'tool_calls'
+        }
+        config = [{
+            "type": "Standard",
+            "endpointName": "TestEndpoint",
+            "useGroupChatTimestampLogic": True,
+        }]
+        mock_node_handlers["Standard"].handle.return_value = tool_call_result
+
+        processor = workflow_processor_factory(
+            configs=config, stream=False,
+            messages=[{"role": "user", "content": "hello"}, {"role": "user", "content": "CharName:"}]
+        )
+        spy = mocker.patch.object(processor, '_reconstruct_non_streaming', wraps=processor._reconstruct_non_streaming)
+
+        result_list = list(processor.execute())
+
+        spy.assert_not_called()
+        assert len(result_list) == 1
+        assert isinstance(result_list[0], dict)
+
+    def test_non_streaming_string_result_still_reconstructs(self, workflow_processor_factory, mock_node_handlers,
+                                                            mocker):
+        """When a node handler returns a string and a generation prompt is present, reconstruction IS called."""
+        config = [{
+            "type": "Standard",
+            "endpointName": "TestEndpoint",
+            "useGroupChatTimestampLogic": True,
+        }]
+        mock_node_handlers["Standard"].handle.return_value = "Hello world"
+
+        processor = workflow_processor_factory(
+            configs=config, stream=False,
+            messages=[{"role": "user", "content": "hello"}, {"role": "user", "content": "CharName:"}]
+        )
+        spy = mocker.patch.object(processor, '_reconstruct_non_streaming', wraps=processor._reconstruct_non_streaming)
+
+        result_list = list(processor.execute())
+
+        spy.assert_called_once()
+        assert len(result_list) == 1
+        assert isinstance(result_list[0], str)
+
+    def test_dict_result_yielded_as_is(self, workflow_processor_factory, mock_node_handlers):
+        """The dict result from a tool call should be yielded to the caller unchanged."""
+        tool_call_result = {
+            'content': '',
+            'tool_calls': [
+                {'id': 'call_abc', 'type': 'function', 'function': {'name': 'search', 'arguments': '{"q":"test"}'}},
+                {'id': 'call_def', 'type': 'function', 'function': {'name': 'lookup', 'arguments': '{"id":1}'}},
+            ],
+            'finish_reason': 'tool_calls'
+        }
+        config = [{
+            "type": "Standard",
+            "endpointName": "TestEndpoint",
+            "useGroupChatTimestampLogic": True,
+        }]
+        mock_node_handlers["Standard"].handle.return_value = tool_call_result
+
+        processor = workflow_processor_factory(
+            configs=config, stream=False,
+            messages=[{"role": "user", "content": "hello"}, {"role": "user", "content": "CharName:"}]
+        )
+
+        result_list = list(processor.execute())
+
+        assert len(result_list) == 1
+        assert result_list[0] is tool_call_result
+        assert result_list[0]['tool_calls'] == tool_call_result['tool_calls']
+        assert result_list[0]['finish_reason'] == 'tool_calls'
+        assert result_list[0]['content'] == ''

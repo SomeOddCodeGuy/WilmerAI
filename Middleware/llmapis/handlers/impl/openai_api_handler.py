@@ -7,7 +7,7 @@ import logging
 import os
 import re
 import traceback
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Union
 from urllib.parse import urlparse
 
 from PIL import Image
@@ -81,27 +81,43 @@ class OpenAiApiHandler(BaseChatCompletionsHandler):
             token = delta.get("content", "")
             finish_reason = choice.get("finish_reason")
 
-            return {'token': token, 'finish_reason': finish_reason}
+            result = {'token': token, 'finish_reason': finish_reason}
+            tool_calls_delta = delta.get("tool_calls")
+            if tool_calls_delta is not None:
+                result['tool_calls'] = tool_calls_delta
+            return result
         except (json.JSONDecodeError, IndexError):
             logger.warning(f"Could not parse OpenAI stream data string: {data_str}")
             return None
 
-    def _parse_non_stream_response(self, response_json: Dict) -> str:
+    def _parse_non_stream_response(self, response_json: Dict) -> Union[str, Dict[str, Any]]:
         """
         Extracts the generated text from a non-streaming OpenAI-compatible API response.
 
         This method navigates the JSON structure of a complete OpenAI response
-        to find and return the main message content.
+        to find and return the main message content. When tool calls are present,
+        returns a dictionary with content, tool_calls, and finish_reason.
 
         Args:
             response_json (Dict): The parsed JSON dictionary from the API response.
 
         Returns:
-            str: The extracted text content from `choices[0].message.content`,
+            Union[str, Dict[str, Any]]: The extracted text content from
+            `choices[0].message.content`, or a dictionary with 'content',
+            'tool_calls', and 'finish_reason' keys when tool calls are present,
             or an empty string if not found.
         """
         try:
-            return response_json['choices'][0]['message']['content'] or ""
+            message = response_json['choices'][0]['message']
+            content = message.get('content') or ""
+            tool_calls = message.get('tool_calls')
+            if tool_calls:
+                return {
+                    'content': content,
+                    'tool_calls': tool_calls,
+                    'finish_reason': response_json['choices'][0].get('finish_reason', 'tool_calls')
+                }
+            return content
         except (KeyError, IndexError, TypeError):
             logger.error(f"Could not find content in OpenAI response: {response_json}")
             return ""

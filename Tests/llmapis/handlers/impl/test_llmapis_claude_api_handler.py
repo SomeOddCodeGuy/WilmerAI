@@ -79,9 +79,9 @@ def test_iterate_by_lines_property(claude_handler):
 
 def test_required_event_name_property(claude_handler):
     """
-    Verifies that the handler filters for 'content_block_delta' events.
+    Verifies that the handler returns None so all SSE event types pass through.
     """
-    assert claude_handler._required_event_name == "content_block_delta"
+    assert claude_handler._required_event_name is None
 
 
 def test_claude_headers_set_correctly(claude_handler):
@@ -260,74 +260,160 @@ class TestParseNonStreamResponse:
 class TestProcessStreamData:
     """
     Tests the _process_stream_data method for handling individual SSE data chunks.
+    Now handles all Claude SSE event types and tool call extraction.
     """
 
-    def test_valid_data_chunk_with_content(self, claude_handler):
-        """
-        Tests parsing a standard streaming chunk that contains a text token.
-        """
+    def test_text_delta(self, claude_handler):
+        """Tests parsing a content_block_delta with text_delta type."""
         data_str = json.dumps({
-            "delta": {
-                "type": "text_delta",
-                "text": "Hello"
-            }
+            "type": "content_block_delta",
+            "delta": {"type": "text_delta", "text": "Hello"}
         })
-        expected = {'token': 'Hello', 'finish_reason': None}
-        assert claude_handler._process_stream_data(data_str) == expected
+        result = claude_handler._process_stream_data(data_str)
+        assert result == {'token': 'Hello', 'finish_reason': None}
 
-    def test_data_chunk_with_empty_text(self, claude_handler):
-        """
-        Tests parsing a chunk with an empty text field.
-        """
+    def test_text_delta_empty(self, claude_handler):
+        """Tests a text_delta with empty text."""
         data_str = json.dumps({
-            "delta": {
-                "type": "text_delta",
-                "text": ""
-            }
+            "type": "content_block_delta",
+            "delta": {"type": "text_delta", "text": ""}
         })
-        expected = {'token': '', 'finish_reason': None}
-        assert claude_handler._process_stream_data(data_str) == expected
+        result = claude_handler._process_stream_data(data_str)
+        assert result == {'token': '', 'finish_reason': None}
 
-    def test_empty_data_string_input(self, claude_handler):
-        """
-        Tests that an empty data string returns None without error.
-        """
+    def test_empty_data_string(self, claude_handler):
+        """Tests that an empty data string returns None."""
         assert claude_handler._process_stream_data("") is None
 
-    def test_invalid_json_string(self, claude_handler, mocker):
-        """
-        Tests that a non-JSON string is handled gracefully.
-        """
+    def test_invalid_json(self, claude_handler, mocker):
+        """Tests that invalid JSON is handled gracefully."""
         mock_logger_warning = mocker.patch.object(
             logging.getLogger('Middleware.llmapis.handlers.impl.claude_api_handler'), 'warning')
-        data_str = "this is not json"
-        result = claude_handler._process_stream_data(data_str)
+        result = claude_handler._process_stream_data("not json")
         assert result is None
         mock_logger_warning.assert_called_once()
-        assert f"Could not parse Claude stream data string: {data_str}" in mock_logger_warning.call_args[0][0]
 
-    def test_json_missing_delta_key(self, claude_handler):
-        """
-        Tests that JSON missing the 'delta' key returns a default empty chunk
-        due to the handler's defensive .get() calls.
-        """
-        malformed_json_str = '{"some_other_key": "value"}'
-        expected_result = {'token': '', 'finish_reason': None}
-        result = claude_handler._process_stream_data(malformed_json_str)
-        assert result == expected_result
+    def test_unrecognized_event_type_returns_none(self, claude_handler):
+        """Tests that unrecognized event types (ping, message_start) return None."""
+        data_str = json.dumps({"type": "ping"})
+        assert claude_handler._process_stream_data(data_str) is None
 
-    def test_delta_missing_text_key(self, claude_handler):
-        """
-        Tests that a delta object missing the 'text' key returns an empty token.
-        """
+        data_str = json.dumps({"type": "message_start", "message": {"id": "msg_123"}})
+        assert claude_handler._process_stream_data(data_str) is None
+
+    def test_missing_type_returns_none(self, claude_handler):
+        """Tests that JSON without a 'type' key returns None."""
+        data_str = json.dumps({"some_other_key": "value"})
+        assert claude_handler._process_stream_data(data_str) is None
+
+    def test_content_block_start_text_returns_none(self, claude_handler):
+        """Tests that a text content_block_start is skipped (text comes via deltas)."""
         data_str = json.dumps({
-            "delta": {
-                "type": "text_delta"
+            "type": "content_block_start",
+            "content_block": {"type": "text", "text": ""}
+        })
+        assert claude_handler._process_stream_data(data_str) is None
+
+    def test_content_block_start_tool_use(self, claude_handler):
+        """Tests that a tool_use content_block_start produces a tool_calls chunk."""
+        data_str = json.dumps({
+            "type": "content_block_start",
+            "content_block": {
+                "type": "tool_use",
+                "id": "toolu_abc123",
+                "name": "get_weather"
             }
         })
-        expected_result = {'token': '', 'finish_reason': None}
         result = claude_handler._process_stream_data(data_str)
-        assert result == expected_result
+        assert result is not None
+        assert result['token'] == ''
+        assert result['finish_reason'] is None
+        assert len(result['tool_calls']) == 1
+        tc = result['tool_calls'][0]
+        assert tc['id'] == 'toolu_abc123'
+        assert tc['type'] == 'function'
+        assert tc['function']['name'] == 'get_weather'
+        assert tc['function']['arguments'] == ''
+
+    def test_input_json_delta(self, claude_handler):
+        """Tests that input_json_delta events produce tool_calls argument fragments."""
+        # First start a tool use block
+        claude_handler._active_tool_call_id = "toolu_abc123"
+        claude_handler._tool_call_index = 0
+
+        data_str = json.dumps({
+            "type": "content_block_delta",
+            "delta": {"type": "input_json_delta", "partial_json": '{"loc'}
+        })
+        result = claude_handler._process_stream_data(data_str)
+        assert result is not None
+        assert result['token'] == ''
+        assert len(result['tool_calls']) == 1
+        assert result['tool_calls'][0]['function']['arguments'] == '{"loc'
+
+    def test_content_block_stop_advances_tool_index(self, claude_handler):
+        """Tests that content_block_stop advances the tool call index."""
+        claude_handler._active_tool_call_id = "toolu_abc123"
+        claude_handler._tool_call_index = 0
+
+        data_str = json.dumps({"type": "content_block_stop"})
+        result = claude_handler._process_stream_data(data_str)
+        assert result is None
+        assert claude_handler._tool_call_index == 1
+        assert claude_handler._active_tool_call_id is None
+
+    def test_message_delta_stop_reason_end_turn(self, claude_handler):
+        """Tests that a message_delta with stop_reason 'end_turn' sets finish_reason."""
+        data_str = json.dumps({
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"}
+        })
+        result = claude_handler._process_stream_data(data_str)
+        assert result == {'token': '', 'finish_reason': 'end_turn'}
+
+    def test_message_delta_stop_reason_tool_use(self, claude_handler):
+        """Tests that stop_reason 'tool_use' becomes finish_reason 'tool_calls'."""
+        data_str = json.dumps({
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use"}
+        })
+        result = claude_handler._process_stream_data(data_str)
+        assert result == {'token': '', 'finish_reason': 'tool_calls'}
+
+    def test_full_tool_call_sequence(self, claude_handler):
+        """Tests a complete tool call streaming sequence end-to-end."""
+        # 1. content_block_start with tool_use
+        r1 = claude_handler._process_stream_data(json.dumps({
+            "type": "content_block_start",
+            "content_block": {"type": "tool_use", "id": "toolu_1", "name": "search"}
+        }))
+        assert r1['tool_calls'][0]['id'] == 'toolu_1'
+        assert r1['tool_calls'][0]['function']['name'] == 'search'
+
+        # 2. input_json_delta fragments
+        r2 = claude_handler._process_stream_data(json.dumps({
+            "type": "content_block_delta",
+            "delta": {"type": "input_json_delta", "partial_json": '{"query"'}
+        }))
+        assert r2['tool_calls'][0]['function']['arguments'] == '{"query"'
+
+        r3 = claude_handler._process_stream_data(json.dumps({
+            "type": "content_block_delta",
+            "delta": {"type": "input_json_delta", "partial_json": ': "test"}'}
+        }))
+        assert r3['tool_calls'][0]['function']['arguments'] == ': "test"}'
+
+        # 3. content_block_stop
+        r4 = claude_handler._process_stream_data(json.dumps({"type": "content_block_stop"}))
+        assert r4 is None
+        assert claude_handler._tool_call_index == 1
+
+        # 4. message_delta with stop_reason
+        r5 = claude_handler._process_stream_data(json.dumps({
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use"}
+        }))
+        assert r5['finish_reason'] == 'tool_calls'
 
 
 class TestProcessSingleImageSource:
@@ -685,3 +771,382 @@ class TestBuildMessagesFromConversation:
         assert isinstance(result[0]["content"], str)
         assert isinstance(result[1]["content"], list)
         assert result[1]["content"][0]["type"] == "image"
+
+
+class TestConvertToolsToClaudeFormat:
+    """Tests for ClaudeApiHandler._convert_tools_to_claude_format() static method."""
+
+    def test_single_tool_conversion(self):
+        """Converts one OpenAI tool definition to Claude format."""
+        openai_tools = [{
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "city": {"type": "string"}
+                    }
+                }
+            }
+        }]
+        result = ClaudeApiHandler._convert_tools_to_claude_format(openai_tools)
+        assert len(result) == 1
+        assert result[0]["name"] == "get_weather"
+        assert result[0]["description"] == "Get weather"
+        assert result[0]["input_schema"] == {
+            "type": "object",
+            "properties": {"city": {"type": "string"}}
+        }
+
+    def test_multiple_tools_conversion(self):
+        """Converts a list of multiple tools. All should be converted."""
+        openai_tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get weather info",
+                    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_web",
+                    "description": "Search the web",
+                    "parameters": {"type": "object", "properties": {"query": {"type": "string"}}}
+                }
+            },
+        ]
+        result = ClaudeApiHandler._convert_tools_to_claude_format(openai_tools)
+        assert len(result) == 2
+        assert result[0]["name"] == "get_weather"
+        assert result[1]["name"] == "search_web"
+        assert "input_schema" in result[0]
+        assert "input_schema" in result[1]
+
+    def test_tool_without_parameters(self):
+        """When parameters is absent/None, result should NOT have input_schema key."""
+        openai_tools = [{
+            "type": "function",
+            "function": {
+                "name": "get_time",
+                "description": "Get current time"
+            }
+        }]
+        result = ClaudeApiHandler._convert_tools_to_claude_format(openai_tools)
+        assert len(result) == 1
+        assert result[0]["name"] == "get_time"
+        assert result[0]["description"] == "Get current time"
+        assert "input_schema" not in result[0]
+
+    def test_tool_with_empty_function(self):
+        """When function dict is empty, name and description should be empty strings."""
+        openai_tools = [{"type": "function", "function": {}}]
+        result = ClaudeApiHandler._convert_tools_to_claude_format(openai_tools)
+        assert len(result) == 1
+        assert result[0]["name"] == ""
+        assert result[0]["description"] == ""
+
+
+class TestConvertToolChoiceToClaudeFormat:
+    """Tests for ClaudeApiHandler._convert_tool_choice_to_claude_format() static method."""
+
+    def test_auto_maps_to_auto(self):
+        """'auto' maps to {'type': 'auto'}."""
+        result = ClaudeApiHandler._convert_tool_choice_to_claude_format("auto")
+        assert result == {"type": "auto"}
+
+    def test_none_string_maps_to_none(self):
+        """'none' maps to None (no tool_choice sent)."""
+        result = ClaudeApiHandler._convert_tool_choice_to_claude_format("none")
+        assert result is None
+
+    def test_required_maps_to_any(self):
+        """'required' maps to {'type': 'any'}."""
+        result = ClaudeApiHandler._convert_tool_choice_to_claude_format("required")
+        assert result == {"type": "any"}
+
+    def test_specific_function_maps_to_tool(self):
+        """OpenAI specific function choice maps to Claude tool choice with name."""
+        openai_choice = {"type": "function", "function": {"name": "my_func"}}
+        result = ClaudeApiHandler._convert_tool_choice_to_claude_format(openai_choice)
+        assert result == {"type": "tool", "name": "my_func"}
+
+    def test_none_input_returns_none(self):
+        """None input returns None."""
+        result = ClaudeApiHandler._convert_tool_choice_to_claude_format(None)
+        assert result is None
+
+    def test_unknown_string_returns_none(self):
+        """An unrecognized string returns None (no mapping)."""
+        result = ClaudeApiHandler._convert_tool_choice_to_claude_format("unknown_value")
+        assert result is None
+
+
+class TestPreparePayloadWithTools:
+    """Tests for ClaudeApiHandler._prepare_payload() with tools and tool_choice."""
+
+    def test_tools_converted_and_included(self, claude_handler):
+        """OpenAI-format tools appear in payload converted to Claude format."""
+        conversation = [{"role": "user", "content": "What is the weather?"}]
+        openai_tools = [{
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get weather",
+                "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}
+            }
+        }]
+        payload = claude_handler._prepare_payload(
+            conversation=conversation, system_prompt=None, prompt=None,
+            tools=openai_tools
+        )
+        assert "tools" in payload
+        assert len(payload["tools"]) == 1
+        assert payload["tools"][0]["name"] == "get_weather"
+        assert payload["tools"][0]["description"] == "Get weather"
+        assert payload["tools"][0]["input_schema"] == {
+            "type": "object", "properties": {"city": {"type": "string"}}
+        }
+        # Should NOT have the OpenAI wrapper keys
+        assert "type" not in payload["tools"][0] or payload["tools"][0].get("type") != "function"
+        assert "function" not in payload["tools"][0]
+
+    def test_tool_choice_converted_and_included(self, claude_handler):
+        """tool_choice='auto' appears in payload as {'type': 'auto'}."""
+        conversation = [{"role": "user", "content": "Help me"}]
+        tools = [{"type": "function", "function": {"name": "helper", "description": "Help"}}]
+        payload = claude_handler._prepare_payload(
+            conversation=conversation, system_prompt=None, prompt=None,
+            tools=tools, tool_choice="auto"
+        )
+        assert "tool_choice" in payload
+        assert payload["tool_choice"] == {"type": "auto"}
+
+    def test_tool_choice_none_not_in_payload(self, claude_handler):
+        """When tool_choice is None but tools are provided, tool_choice should not be in payload."""
+        conversation = [{"role": "user", "content": "Help me"}]
+        tools = [{"type": "function", "function": {"name": "helper", "description": "Help"}}]
+        payload = claude_handler._prepare_payload(
+            conversation=conversation, system_prompt=None, prompt=None,
+            tools=tools, tool_choice=None
+        )
+        assert "tools" in payload
+        assert "tool_choice" not in payload
+
+    def test_no_tools_no_tool_keys_in_payload(self, claude_handler):
+        """When tools is None, neither tools nor tool_choice should appear in payload."""
+        conversation = [{"role": "user", "content": "Hello"}]
+        payload = claude_handler._prepare_payload(
+            conversation=conversation, system_prompt=None, prompt=None,
+            tools=None, tool_choice=None
+        )
+        assert "tools" not in payload
+        assert "tool_choice" not in payload
+
+    def test_tool_choice_required_to_any(self, claude_handler):
+        """tool_choice='required' maps to {'type': 'any'} in payload."""
+        conversation = [{"role": "user", "content": "Do it"}]
+        tools = [{"type": "function", "function": {"name": "action", "description": "Act"}}]
+        payload = claude_handler._prepare_payload(
+            conversation=conversation, system_prompt=None, prompt=None,
+            tools=tools, tool_choice="required"
+        )
+        assert payload["tool_choice"] == {"type": "any"}
+
+
+class TestParseNonStreamResponseToolCalls:
+    """Tests for ClaudeApiHandler._parse_non_stream_response() with tool_use content blocks."""
+
+    def test_tool_use_blocks_converted_to_openai_format(self, claude_handler):
+        """Response with text + tool_use blocks returns dict with OpenAI-format tool_calls."""
+        response_json = {
+            "content": [
+                {"type": "text", "text": "Let me check"},
+                {"type": "tool_use", "id": "tu_123", "name": "get_weather", "input": {"city": "NYC"}}
+            ],
+            "stop_reason": "tool_use"
+        }
+        result = claude_handler._parse_non_stream_response(response_json)
+        assert isinstance(result, dict)
+        assert result["content"] == "Let me check"
+        assert result["finish_reason"] == "tool_calls"
+        assert len(result["tool_calls"]) == 1
+        tc = result["tool_calls"][0]
+        assert tc["id"] == "tu_123"
+        assert tc["type"] == "function"
+        assert tc["function"]["name"] == "get_weather"
+        assert json.loads(tc["function"]["arguments"]) == {"city": "NYC"}
+
+    def test_multiple_tool_use_blocks(self, claude_handler):
+        """Multiple tool_use blocks all appear in the tool_calls list."""
+        response_json = {
+            "content": [
+                {"type": "tool_use", "id": "tu_1", "name": "search", "input": {"q": "a"}},
+                {"type": "tool_use", "id": "tu_2", "name": "fetch", "input": {"url": "b"}}
+            ],
+            "stop_reason": "tool_use"
+        }
+        result = claude_handler._parse_non_stream_response(response_json)
+        assert isinstance(result, dict)
+        assert len(result["tool_calls"]) == 2
+        assert result["tool_calls"][0]["id"] == "tu_1"
+        assert result["tool_calls"][0]["function"]["name"] == "search"
+        assert result["tool_calls"][1]["id"] == "tu_2"
+        assert result["tool_calls"][1]["function"]["name"] == "fetch"
+
+    def test_tool_use_only_no_text(self, claude_handler):
+        """Only tool_use blocks, no text. content should be empty string."""
+        response_json = {
+            "content": [
+                {"type": "tool_use", "id": "tu_1", "name": "run", "input": {"cmd": "ls"}}
+            ],
+            "stop_reason": "tool_use"
+        }
+        result = claude_handler._parse_non_stream_response(response_json)
+        assert isinstance(result, dict)
+        assert result["content"] == ""
+        assert len(result["tool_calls"]) == 1
+
+    def test_text_only_returns_string(self, claude_handler):
+        """Only text blocks, no tool_use. Should return a plain string."""
+        response_json = {
+            "content": [
+                {"type": "text", "text": "Just text."}
+            ],
+            "stop_reason": "end_turn"
+        }
+        result = claude_handler._parse_non_stream_response(response_json)
+        assert isinstance(result, str)
+        assert result == "Just text."
+
+    def test_tool_use_with_stop_reason_tool_use(self, claude_handler):
+        """stop_reason='tool_use' maps to finish_reason='tool_calls'."""
+        response_json = {
+            "content": [
+                {"type": "tool_use", "id": "tu_1", "name": "f", "input": {}}
+            ],
+            "stop_reason": "tool_use"
+        }
+        result = claude_handler._parse_non_stream_response(response_json)
+        assert result["finish_reason"] == "tool_calls"
+
+    def test_tool_use_with_other_stop_reason(self, claude_handler):
+        """stop_reason='end_turn' is passed through as finish_reason."""
+        response_json = {
+            "content": [
+                {"type": "tool_use", "id": "tu_1", "name": "f", "input": {}}
+            ],
+            "stop_reason": "end_turn"
+        }
+        result = claude_handler._parse_non_stream_response(response_json)
+        assert result["finish_reason"] == "end_turn"
+
+
+class TestProcessStreamDataToolCalls:
+    """
+    Extended tests for tool call streaming events in _process_stream_data.
+    Focuses on multi-tool sequences and mixed content scenarios that are
+    not covered by the single-tool tests in TestProcessStreamData.
+    """
+
+    def test_full_multi_tool_call_sequence(self, claude_handler):
+        """
+        Complete sequence with two tool calls. Verifies tool_call_index
+        increments properly across the sequence.
+        """
+        # Tool #1: content_block_start
+        r1 = claude_handler._process_stream_data(json.dumps({
+            "type": "content_block_start",
+            "content_block": {"type": "tool_use", "id": "toolu_aaa", "name": "search"}
+        }))
+        assert r1["tool_calls"][0]["index"] == 0
+        assert r1["tool_calls"][0]["id"] == "toolu_aaa"
+        assert r1["tool_calls"][0]["function"]["name"] == "search"
+        assert claude_handler._active_tool_call_id == "toolu_aaa"
+
+        # Tool #1: input_json_delta
+        r2 = claude_handler._process_stream_data(json.dumps({
+            "type": "content_block_delta",
+            "delta": {"type": "input_json_delta", "partial_json": '{"query": "test"}'}
+        }))
+        assert r2["tool_calls"][0]["index"] == 0
+        assert r2["tool_calls"][0]["function"]["arguments"] == '{"query": "test"}'
+
+        # Tool #1: content_block_stop
+        r3 = claude_handler._process_stream_data(json.dumps({"type": "content_block_stop"}))
+        assert r3 is None
+        assert claude_handler._tool_call_index == 1
+        assert claude_handler._active_tool_call_id is None
+
+        # Tool #2: content_block_start
+        r4 = claude_handler._process_stream_data(json.dumps({
+            "type": "content_block_start",
+            "content_block": {"type": "tool_use", "id": "toolu_bbb", "name": "fetch"}
+        }))
+        assert r4["tool_calls"][0]["index"] == 1
+        assert r4["tool_calls"][0]["id"] == "toolu_bbb"
+        assert r4["tool_calls"][0]["function"]["name"] == "fetch"
+        assert claude_handler._active_tool_call_id == "toolu_bbb"
+
+        # Tool #2: input_json_delta
+        r5 = claude_handler._process_stream_data(json.dumps({
+            "type": "content_block_delta",
+            "delta": {"type": "input_json_delta", "partial_json": '{"url": "https://x.local"}'}
+        }))
+        assert r5["tool_calls"][0]["index"] == 1
+        assert r5["tool_calls"][0]["function"]["arguments"] == '{"url": "https://x.local"}'
+
+        # Tool #2: content_block_stop
+        r6 = claude_handler._process_stream_data(json.dumps({"type": "content_block_stop"}))
+        assert r6 is None
+        assert claude_handler._tool_call_index == 2
+        assert claude_handler._active_tool_call_id is None
+
+        # message_delta with stop_reason tool_use
+        r7 = claude_handler._process_stream_data(json.dumps({
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use"}
+        }))
+        assert r7["finish_reason"] == "tool_calls"
+
+    def test_mixed_text_and_tool_call_stream(self, claude_handler):
+        """
+        Text content_block_delta followed by tool_use content_block_start.
+        Verifies both produce the correct output types.
+        """
+        # Text block start (returns None since text comes via deltas)
+        r1 = claude_handler._process_stream_data(json.dumps({
+            "type": "content_block_start",
+            "content_block": {"type": "text", "text": ""}
+        }))
+        assert r1 is None
+
+        # Text delta with actual content
+        r2 = claude_handler._process_stream_data(json.dumps({
+            "type": "content_block_delta",
+            "delta": {"type": "text_delta", "text": "Let me look that up."}
+        }))
+        assert r2 is not None
+        assert r2["token"] == "Let me look that up."
+        assert r2["finish_reason"] is None
+        assert "tool_calls" not in r2
+
+        # Text block stop (no active tool, so index does not change)
+        r3 = claude_handler._process_stream_data(json.dumps({"type": "content_block_stop"}))
+        assert r3 is None
+        assert claude_handler._tool_call_index == 0  # unchanged, no tool was active
+
+        # Tool use block start
+        r4 = claude_handler._process_stream_data(json.dumps({
+            "type": "content_block_start",
+            "content_block": {"type": "tool_use", "id": "toolu_mixed", "name": "lookup"}
+        }))
+        assert r4 is not None
+        assert "tool_calls" in r4
+        assert r4["tool_calls"][0]["id"] == "toolu_mixed"
+        assert r4["tool_calls"][0]["function"]["name"] == "lookup"
+        assert r4["token"] == ""

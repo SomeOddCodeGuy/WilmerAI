@@ -46,7 +46,7 @@ def test_chat_completions_non_streaming(client, mocker):
     call_args = mock_handle_prompt.call_args[0]
     assert isinstance(call_args[0], str)  # First arg is request_id (UUID string)
     assert call_args[1] == expected_transformed_messages
-    assert mock_handle_prompt.call_args[1] == {'stream': False, 'api_key': None}
+    assert mock_handle_prompt.call_args[1] == {'stream': False, 'api_key': None, 'tools': None, 'tool_choice': None}
 
     mock_builder.build_openai_chat_completion_response.assert_called_once_with("This is a test response.")
 

@@ -28,7 +28,8 @@ class OpenAiCompletionsApiHandler(BaseCompletionsHandler):
         return f"{self.base_url.rstrip('/')}/v1/completions"
 
     def _prepare_payload(self, conversation: Optional[List[Dict[str, str]]], system_prompt: Optional[str],
-                         prompt: Optional[str]) -> Dict:
+                         prompt: Optional[str], *, tools: Optional[list] = None,
+                         tool_choice=None) -> Dict:
         """
         Prepares the OpenAI-specific payload for the API request.
 
@@ -37,10 +38,15 @@ class OpenAiCompletionsApiHandler(BaseCompletionsHandler):
         `model` name as a top-level key, which is required by the OpenAI
         Completions API.
 
+        The legacy completions API does not support tool definitions; tools and
+        tool_choice are accepted for interface compatibility but silently ignored.
+
         Args:
             conversation (Optional[List[Dict[str, str]]]): The historical conversation (unused in this handler).
             system_prompt (Optional[str]): A system-level instruction for the LLM.
             prompt (Optional[str]): The latest user prompt to be processed.
+            tools (Optional[list]): Ignored for completions APIs.
+            tool_choice: Ignored for completions APIs.
 
         Returns:
             Dict: The JSON payload ready to be sent to the OpenAI Completions API.

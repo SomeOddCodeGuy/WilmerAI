@@ -127,7 +127,9 @@ class LlmApiService:
             prompt: Optional[str] = None,
             llm_takes_images: bool = False,
             request_id: Optional[str] = None,
-    ) -> Union[Generator[Dict[str, Any], None, None], str]:
+            tools: Optional[List[Dict[str, Any]]] = None,
+            tool_choice: Optional[Any] = None,
+    ) -> Union[Generator[Dict[str, Any], None, None], str, Dict[str, Any]]:
         """
         Sends a prompt or conversation to the LLM and returns the raw response.
 
@@ -137,10 +139,14 @@ class LlmApiService:
             prompt (Optional[str]): The user prompt.
             llm_takes_images (bool): Flag indicating if the LLM can process images.
             request_id (Optional[str]): The request ID for cancellation tracking.
+            tools (Optional[List[Dict[str, Any]]]): Tool definitions in OpenAI format.
+            tool_choice (Optional[Any]): Tool selection policy.
 
         Returns:
-            Union[Generator[Dict[str, Any], None, None], str]: A generator yielding raw data
-            dictionaries if streaming, otherwise the complete raw response string.
+            Union[Generator[Dict[str, Any], None, None], str, Dict[str, Any]]: A generator
+            yielding raw data dictionaries if streaming, the complete raw response string
+            for text-only responses, or a dictionary with 'content', 'tool_calls', and
+            'finish_reason' keys when the response includes tool calls.
         """
         self.is_busy_flag = True
         try:
@@ -177,6 +183,8 @@ class LlmApiService:
                             system_prompt=system_prompt_to_pass,
                             prompt=prompt_to_pass,
                             request_id=request_id,
+                            tools=tools,
+                            tool_choice=tool_choice,
                         )
                     finally:
                         self.is_busy_flag = False
@@ -190,6 +198,8 @@ class LlmApiService:
                         system_prompt=system_prompt_to_pass,
                         prompt=prompt_to_pass,
                         request_id=request_id,
+                        tools=tools,
+                        tool_choice=tool_choice,
                     )
                     return response
                 finally:

@@ -93,6 +93,14 @@ handle all other prefix removals.
 3. **Streaming:** The cleaned text from the buffer is yielded to the client. From this point on, the prefix buffer is
    disabled, and all subsequent chunks from `$StreamingThinkRemover$` are yielded directly to the client without delay.
 
+### **Tool Call Chunks: Pipeline Bypass**
+
+When a chunk from the LLM handler contains a `tool_calls` key, the `$StreamingResponseHandler$` skips both cleaning
+stages entirely. The chunk is formatted directly into an SSE message and emitted to the client without passing through
+`$StreamingThinkRemover$` or the prefix buffer. This is intentional: tool call data is structured JSON, not natural
+language text, and applying prefix stripping, think-block removal, or group chat reconstruction to it would corrupt
+the payload. Once a tool call chunk with a `finish_reason` is received, the stream terminates immediately.
+
 -----
 
 ## 3\. How to Add a New Rule

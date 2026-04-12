@@ -40,7 +40,7 @@ of the child workflow is then returned to the parent and saved as the output of 
       ```json
       "scoped_variables": [
         "{agent1Output}",          // Becomes {agent1Input} in child
-        "{lastUserMessage}"        // Becomes {agent2Input} in child
+        "{chat_user_prompt_last_one}"  // Becomes {agent2Input} in child
       ]
       ```
     * **Usage anywhere in the Child Workflow's JSON:**

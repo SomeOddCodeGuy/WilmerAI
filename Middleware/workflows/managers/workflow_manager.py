@@ -39,16 +39,27 @@ class WorkflowManager:
                             first_node_prompt_override: str | None = None,
                             scoped_inputs: Optional[List[str]] = None,
                             workflow_user_folder_override: Optional[str] = None,
-                            api_key: Optional[str] = None) -> Union[
+                            api_key: Optional[str] = None,
+                            tools: Optional[list] = None,
+                            tool_choice=None) -> Union[
         Generator[str, None, None], str, None]:
         """
         Initiates and executes a specified custom workflow.
 
         Args:
-            ...
+            workflow_name (str): The name of the workflow configuration to execute.
+            request_id (str): A unique identifier for the request.
+            discussion_id (str): The identifier for the conversation thread.
+            messages (Optional[List[Dict[str, str]]]): The conversation history. Defaults to None.
+            non_responder (Optional[bool]): If True, the workflow runs without generating a final response. Defaults to None.
+            is_streaming (bool): If True, the response is returned as a stream. Defaults to False.
+            first_node_system_prompt_override (Optional[str]): A string to override the system prompt of the first node. Defaults to None.
             first_node_prompt_override (Optional[str]): A string to override the main prompt of the first node. Defaults to None.
             scoped_inputs (Optional[List[str]]): A list of inputs passed from a parent workflow. Defaults to None.
             workflow_user_folder_override (Optional[str]): An override for the user folder to load the workflow from. Defaults to None.
+            api_key (Optional[str]): The API key from the request, if present. Defaults to None.
+            tools (Optional[list]): Tool definitions from the incoming request.
+            tool_choice: Tool selection policy from the incoming request.
 
         Returns:
             Union[Generator[str, None, None], str, None]: A generator for streaming responses, a string for non-streaming responses, or None.
@@ -62,7 +73,9 @@ class WorkflowManager:
                                          first_node_system_prompt_override=first_node_system_prompt_override,
                                          first_node_prompt_override=first_node_prompt_override,
                                          scoped_inputs=scoped_inputs,
-                                         api_key=api_key)
+                                         api_key=api_key,
+                                         tools=tools,
+                                         tool_choice=tool_choice)
 
     @staticmethod
     def handle_conversation_memory_parser(request_id, discussion_id: str, messages: List[Dict[str, str]] = None,
@@ -222,6 +235,7 @@ class WorkflowManager:
             "StringConcatenator": specialized_node_handler,
             "JsonExtractor": specialized_node_handler,
             "TagTextExtractor": specialized_node_handler,
+            "DelimitedChunker": specialized_node_handler,
 
             "ContextCompactor": context_compactor_handler,
         }
@@ -231,7 +245,9 @@ class WorkflowManager:
                      first_node_system_prompt_override: str | None = None,
                      first_node_prompt_override: str | None = None,
                      scoped_inputs: Optional[List[str]] = None,
-                     api_key: Optional[str] = None) -> Union[
+                     api_key: Optional[str] = None,
+                     tools: Optional[list] = None,
+                     tool_choice=None) -> Union[
         Generator[str, None, None], str, None]:
         """
         Loads the workflow configuration and delegates execution to the WorkflowProcessor.
@@ -245,6 +261,8 @@ class WorkflowManager:
             first_node_system_prompt_override (Optional[str]): A string to override the system prompt of the first node. Defaults to None.
             first_node_prompt_override (Optional[str]): A string to override the main prompt of the first node. Defaults to None.
             scoped_inputs (Optional[List[str]]): A list of inputs passed from a parent workflow. Defaults to None.
+            tools (Optional[list]): Tool definitions from the incoming request.
+            tool_choice: Tool selection policy from the incoming request.
 
         Returns:
             Union[Generator[str, None, None], str, None]: A generator for streaming responses, a string for non-streaming responses, or None on error/no output.
@@ -256,7 +274,15 @@ class WorkflowManager:
         # This prevents constant-hash collisions in the memory system: an empty message
         # always hashes to the same SHA-256 value, which tricks find_last_matching_hash_message
         # into reporting zero new messages on every subsequent run.
-        messages[:] = [m for m in messages if m.get('content', '').strip()]
+        # Tool-related messages are preserved even if their content is empty, because
+        # assistant messages with tool_calls and tool-role responses with tool_call_id
+        # carry structural data that the LLM needs to maintain the tool call chain.
+        messages[:] = [
+            m for m in messages
+            if m.get('content', '').strip()
+            or m.get('tool_calls')
+            or m.get('tool_call_id')
+        ]
 
         try:
             config_file = self.path_finder_func(self.workflowConfigName)
@@ -288,7 +314,9 @@ class WorkflowManager:
                 first_node_system_prompt_override=first_node_system_prompt_override,
                 first_node_prompt_override=first_node_prompt_override,
                 scoped_inputs=scoped_inputs,
-                api_key=api_key
+                api_key=api_key,
+                tools=tools,
+                tool_choice=tool_choice
             )
 
             result_generator = processor.execute()

@@ -2,7 +2,7 @@
 
 import json
 import logging
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple
 
 from flask import request as flask_request
 
@@ -19,7 +19,8 @@ def build_response_json(
         token: str,
         finish_reason: Optional[str] = None,
         additional_fields: Optional[Dict[str, Any]] = None,
-        request_id: Optional[str] = None
+        request_id: Optional[str] = None,
+        tool_calls: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     """
     Constructs a response JSON payload based on the API type using the ResponseBuilderService.
@@ -29,6 +30,7 @@ def build_response_json(
         finish_reason (Optional[str]): The reason for the response termination (e.g., 'stop').
         additional_fields (Optional[Dict[str, Any]]): Extra fields to merge into the final JSON response.
         request_id (Optional[str]): The unique identifier for the request.
+        tool_calls (Optional[List[Dict[str, Any]]]): Tool call objects to include in the response.
 
     Returns:
         str: A JSON string representing the formatted response payload.
@@ -39,11 +41,11 @@ def build_response_json(
     if api_type == "ollamagenerate":
         response = response_builder.build_ollama_generate_chunk(token, finish_reason, request_id)
     elif api_type == "ollamaapichat":
-        response = response_builder.build_ollama_chat_chunk(token, finish_reason, request_id)
+        response = response_builder.build_ollama_chat_chunk(token, finish_reason, request_id, tool_calls=tool_calls)
     elif api_type == "openaicompletion":
         response = response_builder.build_openai_completion_chunk(token, finish_reason)
     elif api_type == "openaichatcompletion":
-        response = response_builder.build_openai_chat_completion_chunk(token, finish_reason)
+        response = response_builder.build_openai_chat_completion_chunk(token, finish_reason, tool_calls=tool_calls)
     else:
         raise ValueError(f"Unsupported API type for streaming: {api_type}")
 

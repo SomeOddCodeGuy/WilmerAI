@@ -9,5 +9,5 @@ VALID_NODE_TYPES = [
     "OfflineWikiApiBestFullArticle", "OfflineWikiApiTopNFullArticles", "OfflineWikiApiPartialArticle",
     "WorkflowLock", "CustomWorkflow", "ConditionalCustomWorkflow", "GetCustomFile", "ImageProcessor",
     "VectorMemorySearch", "SaveCustomFile", "StaticResponse", "ArithmeticProcessor", "Conditional",
-    "StringConcatenator", "JsonExtractor", "TagTextExtractor", "ContextCompactor"
+    "StringConcatenator", "JsonExtractor", "TagTextExtractor", "DelimitedChunker", "ContextCompactor"
 ]

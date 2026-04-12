@@ -320,6 +320,25 @@ def replace_characters_in_collection(input_list: List[Dict[str, str]], character
     return input_list
 
 
+def escape_brackets_in_string(input: str) -> str:
+    """Replaces literal curly braces with sentinel tokens.
+
+    This is the string-level counterpart of ``replace_brackets_in_list``.
+    It converts ``{`` and ``}`` into ``__WILMER_L_CURLY__`` and
+    ``__WILMER_R_CURLY__`` so that the string is safe to pass through
+    ``str.format()`` without misinterpreting the braces as placeholders.
+    Use ``return_brackets_in_string`` to restore them afterwards.
+
+    Args:
+        input (str): The string to be processed.
+
+    Returns:
+        str: The string with curly braces replaced by sentinel tokens.
+    """
+    bracket_dict = {r'{': r'__WILMER_L_CURLY__', r'}': r'__WILMER_R_CURLY__'}
+    return replace_characters_in_string(input, bracket_dict)
+
+
 def return_brackets_in_string(input: str) -> str:
     """Replaces escaped brackets in a string.
 

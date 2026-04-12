@@ -55,12 +55,24 @@ HEARTBEAT_INTERVAL = 1  # seconds
 HEARTBEAT_MESSAGE = b'{"model":"","created_at":"","message":{"role":"assistant","content":""},"done":false}\n'
 
 
-def _stream_with_eventlet_optimized(request_id: str, messages: List[Dict], stream: bool, api_key: str = None) -> Response:
+def _stream_with_eventlet_optimized(request_id: str, messages: List[Dict], stream: bool, api_key: str = None,
+                                    tools: list = None, tool_choice=None) -> Response:
     """
     Optimized streaming implementation for Eventlet with disconnect detection during prefill.
 
     Uses a queue-based approach where a background greenlet reads from handle_user_prompt()
     and the main generator uses timeouts to detect when heartbeats are needed.
+
+    Args:
+        request_id (str): The unique identifier for this request.
+        messages (List[Dict]): The conversation history in the internal message format.
+        stream (bool): Whether streaming mode is active.
+        api_key (str, optional): The API key for encryption context scoping.
+        tools (list, optional): Tool definitions from the incoming request.
+        tool_choice: Tool selection policy from the incoming request.
+
+    Returns:
+        Response: A Flask streaming Response with NDJSON content type.
     """
     logger.info(f"Ollama starting Eventlet optimized streaming for request_id: {request_id}")
     from Middleware.services.cancellation_service import cancellation_service
@@ -83,7 +95,8 @@ def _stream_with_eventlet_optimized(request_id: str, messages: List[Dict], strea
         instance_global_variables.set_request_user(captured_request_user)
         set_encryption_context(captured_encryption_active)
         try:
-            for chunk in handle_user_prompt(request_id, messages, stream, api_key=api_key):
+            for chunk in handle_user_prompt(request_id, messages, stream, api_key=api_key,
+                                            tools=tools, tool_choice=tool_choice):
                 if stop_signal.ready():
                     break
                 event_queue.put(("data", chunk))
@@ -173,7 +186,8 @@ def _stream_with_eventlet_optimized(request_id: str, messages: List[Dict], strea
     return response
 
 
-def _stream_response_fallback(request_id: str, messages: List[Dict], stream: bool, api_key: str = None) -> Response:
+def _stream_response_fallback(request_id: str, messages: List[Dict], stream: bool, api_key: str = None,
+                              tools: list = None, tool_choice=None) -> Response:
     """
     Fallback streaming implementation for non-Eventlet environments.
 
@@ -187,6 +201,8 @@ def _stream_response_fallback(request_id: str, messages: List[Dict], stream: boo
         messages (List[Dict]): The conversation history in the internal message format.
         stream (bool): Whether streaming mode is active.
         api_key (str, optional): The API key for encryption context scoping.
+        tools (list, optional): Tool definitions from the incoming request.
+        tool_choice: Tool selection policy from the incoming request.
 
     Returns:
         Response: A Flask streaming Response with NDJSON content type.
@@ -208,7 +224,8 @@ def _stream_response_fallback(request_id: str, messages: List[Dict], stream: boo
         set_encryption_context(captured_encryption_active)
         logger.debug(f"Ollama Fallback Generator starting for request_id: {request_id}")
         try:
-            for chunk in handle_user_prompt(request_id, messages, stream, api_key=api_key):
+            for chunk in handle_user_prompt(request_id, messages, stream, api_key=api_key,
+                                            tools=tools, tool_choice=tool_choice):
                 if isinstance(chunk, str):
                     encoded = chunk.encode('utf-8')
                 else:
@@ -247,7 +264,8 @@ def _stream_response_fallback(request_id: str, messages: List[Dict], stream: boo
     return response
 
 
-def _handle_streaming_request(request_id: str, messages: List[Dict], stream: bool, api_key: str = None) -> Response:
+def _handle_streaming_request(request_id: str, messages: List[Dict], stream: bool, api_key: str = None,
+                              tools: list = None, tool_choice=None) -> Response:
     """
     Selects and invokes the appropriate streaming implementation.
 
@@ -261,6 +279,8 @@ def _handle_streaming_request(request_id: str, messages: List[Dict], stream: boo
         messages (List[Dict]): The conversation history in the internal message format.
         stream (bool): Whether streaming mode is active.
         api_key (str, optional): The API key for encryption context scoping.
+        tools (list, optional): Tool definitions from the incoming request.
+        tool_choice: Tool selection policy from the incoming request.
 
     Returns:
         Response: A Flask streaming Response with NDJSON content type.
@@ -271,7 +291,8 @@ def _handle_streaming_request(request_id: str, messages: List[Dict], stream: boo
 
     if is_eventlet_active:
         # Call the optimized version
-        return _stream_with_eventlet_optimized(request_id, messages, stream, api_key=api_key)
+        return _stream_with_eventlet_optimized(request_id, messages, stream, api_key=api_key,
+                                               tools=tools, tool_choice=tool_choice)
     else:
         # Provide warnings if Eventlet is expected but not active
         if not EVENTLET_AVAILABLE:
@@ -281,7 +302,8 @@ def _handle_streaming_request(request_id: str, messages: List[Dict], stream: boo
             # This case handles running under Gunicorn/Waitress/Flask Dev Server
             logger.debug(
                 "Eventlet installed but monkey patching is not active (not running via run_eventlet.py). Falling back to synchronous streaming.")
-        return _stream_response_fallback(request_id, messages, stream, api_key=api_key)
+        return _stream_response_fallback(request_id, messages, stream, api_key=api_key,
+                                          tools=tools, tool_choice=tool_choice)
 
 
 class GenerateAPI(MethodView):
@@ -439,15 +461,21 @@ class ApiChatAPI(MethodView):
             add_user_assistant = get_is_chat_complete_add_user_assistant()
             add_missing_assistant = get_is_chat_complete_add_missing_assistant()
 
+            tools: list = request_data.get("tools")
+            tool_choice = None  # Ollama does not support tool_choice
+
             messages: List[Dict[str, Any]] = request_data["messages"]
             transformed_messages: List[Dict[str, Any]] = []
 
             for message in messages:
-                if "role" not in message or "content" not in message:
-                    return jsonify({"error": "Each message must have 'role' and 'content' fields."}), 400
+                if "role" not in message:
+                    return jsonify({"error": "Each message must have a 'role' field."}), 400
+                # Allow content to be absent for assistant messages with tool_calls
+                if "content" not in message and "tool_calls" not in message:
+                    return jsonify({"error": "Each message must have 'content' or 'tool_calls'."}), 400
 
                 role = message["role"]
-                content = message["content"]
+                content = message.get("content")
 
                 # Handle content modification safely
                 content_str = str(content) if content is not None else ""
@@ -461,6 +489,12 @@ class ApiChatAPI(MethodView):
                 msg = {"role": role, "content": content_str}
                 if "images" in message and isinstance(message["images"], list) and message["images"]:
                     msg["images"] = list(message["images"])
+                if "tool_calls" in message:
+                    msg["tool_calls"] = message["tool_calls"]
+                if "tool_call_id" in message:
+                    msg["tool_call_id"] = message["tool_call_id"]
+                if "name" in message:
+                    msg["name"] = message["name"]
                 transformed_messages.append(msg)
 
             if add_missing_assistant:
@@ -474,13 +508,23 @@ class ApiChatAPI(MethodView):
                 stream = stream.lower() == 'true'
 
             if stream:
-                return _handle_streaming_request(request_id, transformed_messages, stream, api_key=api_key)
+                return _handle_streaming_request(request_id, transformed_messages, stream, api_key=api_key,
+                                                  tools=tools, tool_choice=tool_choice)
             else:
                 # Pass request_id. Use the model name from api_helpers to get username:workflow format
-                response_data = handle_user_prompt(request_id, transformed_messages, stream, api_key=api_key)
+                response_data = handle_user_prompt(request_id, transformed_messages, stream, api_key=api_key,
+                                                    tools=tools, tool_choice=tool_choice)
                 response_model = api_helpers.get_model_name()
-                response = response_builder.build_ollama_chat_response(response_data, model_name=response_model,
-                                                                       request_id=request_id)
+                if isinstance(response_data, dict):
+                    response = response_builder.build_ollama_chat_response(
+                        full_text=response_data.get('content', ''),
+                        model_name=response_model,
+                        request_id=request_id,
+                        tool_calls=response_data.get('tool_calls'),
+                    )
+                else:
+                    response = response_builder.build_ollama_chat_response(response_data, model_name=response_model,
+                                                                           request_id=request_id)
                 return jsonify(response)
         finally:
             api_helpers.clear_workflow_override()

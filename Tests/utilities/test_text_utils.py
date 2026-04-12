@@ -16,6 +16,7 @@ from Middleware.utilities.text_utils import (
     replace_brackets_in_list,
     return_brackets,
     replace_characters_in_collection,
+    escape_brackets_in_string,
     return_brackets_in_string,
     replace_characters_in_string,
     tokenize,
@@ -238,6 +239,85 @@ def test_replace_characters_in_collection():
     result = replace_characters_in_collection(deepcopy(input_list), char_map)
     assert result[0]['content'] == "xbc"
     assert result[1]['content'] == "yef"
+
+
+class TestEscapeBracketsInString:
+    """Tests for escape_brackets_in_string and its round-trip with return_brackets_in_string."""
+
+    def test_simple_json(self):
+        """A simple JSON object should have all braces replaced with sentinels."""
+        result = escape_brackets_in_string('{"name": "test"}')
+        assert "{" not in result
+        assert "}" not in result
+        assert "__WILMER_L_CURLY__" in result
+
+    def test_nested_json(self):
+        """Deeply nested JSON should have every brace escaped."""
+        original = '{"a": {"b": {"c": [1, 2, {"d": true}]}}}'
+        escaped = escape_brackets_in_string(original)
+        assert escaped.count("__WILMER_L_CURLY__") == original.count("{")
+        assert escaped.count("__WILMER_R_CURLY__") == original.count("}")
+
+    def test_empty_braces(self):
+        """Empty brace pair should become a sentinel pair."""
+        assert escape_brackets_in_string("{}") == "__WILMER_L_CURLY____WILMER_R_CURLY__"
+
+    def test_no_braces(self):
+        """Strings without braces pass through unchanged."""
+        assert escape_brackets_in_string("hello world") == "hello world"
+
+    def test_empty_string(self):
+        """Empty string passes through unchanged."""
+        assert escape_brackets_in_string("") == ""
+
+    def test_mixed_content(self):
+        """Text mixed with JSON should only escape the brace characters."""
+        result = escape_brackets_in_string('prefix {"key": "val"} suffix')
+        assert result.startswith("prefix ")
+        assert result.endswith(" suffix")
+        assert "{" not in result
+
+    def test_round_trip_simple_json(self):
+        """escape then return should reproduce the original string exactly."""
+        original = '{"key": "value"}'
+        assert return_brackets_in_string(escape_brackets_in_string(original)) == original
+
+    def test_round_trip_nested_json(self):
+        """Round-trip on complex nested JSON."""
+        original = '{"tools": [{"type": "function", "function": {"name": "bash", "parameters": {"command": "ls"}}}]}'
+        assert return_brackets_in_string(escape_brackets_in_string(original)) == original
+
+    def test_round_trip_python_code(self):
+        """Round-trip on a Python code snippet with braces."""
+        original = 'def foo():\n    return {"status": True}'
+        assert return_brackets_in_string(escape_brackets_in_string(original)) == original
+
+    def test_round_trip_single_open_brace(self):
+        """A lone open brace should survive the round-trip."""
+        original = "incomplete { brace"
+        assert return_brackets_in_string(escape_brackets_in_string(original)) == original
+
+    def test_round_trip_single_close_brace(self):
+        """A lone close brace should survive the round-trip."""
+        original = "incomplete } brace"
+        assert return_brackets_in_string(escape_brackets_in_string(original)) == original
+
+    def test_return_on_already_plain_string_is_noop(self):
+        """return_brackets_in_string on a string with no sentinels is a no-op."""
+        plain = "Hello, this has no sentinels."
+        assert return_brackets_in_string(plain) == plain
+
+    def test_escape_on_already_escaped_is_idempotent_for_sentinels(self):
+        """Escaping a string that already has sentinel tokens should not double-escape,
+        because the sentinels themselves contain no curly braces."""
+        original = '{"key": "val"}'
+        once = escape_brackets_in_string(original)
+        twice = escape_brackets_in_string(once)
+        # No braces remain after either pass
+        assert "{" not in once
+        assert "{" not in twice
+        # Single return restores both levels since sentinels don't nest
+        assert return_brackets_in_string(once) == original
 
 
 def test_tokenize():

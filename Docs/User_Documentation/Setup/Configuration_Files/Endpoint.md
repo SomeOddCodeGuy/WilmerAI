@@ -233,10 +233,11 @@ Block Removal, 2) Custom Prefix Removal, 3) Whitespace Trimming.
 ```json
 {
   "modelNameForDisplayOnly": "Small model for all tasks",
-  "endpoint": "http://12.0.0.1:5000",
+  "endpoint": "http://127.0.0.1:5000",
   "apiTypeConfigFileName": "KoboldCpp",
   "maxContextTokenSize": 8192,
   "modelNameToSendToAPI": "",
+  "promptTemplate": "llama3",
   "trimBeginningAndEndLineBreaks": true,
   "dontIncludeModel": false,
   "removeThinking": true,

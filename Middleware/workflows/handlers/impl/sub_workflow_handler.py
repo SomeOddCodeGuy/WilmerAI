@@ -118,7 +118,9 @@ class SubWorkflowHandler(BaseHandler):
             first_node_system_prompt_override=system_prompt, first_node_prompt_override=prompt,
             scoped_inputs=scoped_inputs,
             workflow_user_folder_override=workflow_user_folder_override,
-            api_key=context.api_key
+            api_key=context.api_key,
+            tools=context.tools,
+            tool_choice=context.tool_choice,
         )
 
     def handle_conditional_custom_workflow(self, context: ExecutionContext):
@@ -190,5 +192,7 @@ class SubWorkflowHandler(BaseHandler):
             first_node_prompt_override=prompt,
             scoped_inputs=scoped_inputs,
             workflow_user_folder_override=workflow_user_folder_override,
-            api_key=context.api_key
+            api_key=context.api_key,
+            tools=context.tools,
+            tool_choice=context.tool_choice,
         )

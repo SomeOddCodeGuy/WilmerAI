@@ -35,6 +35,24 @@ To the client application, this entire multi-step process appears as a standard 
 logic without requiring changes to your existing front-end tools.
 
 ---
+## Maintainer's Note Addendum - UPDATED 2026-04-12
+
+> A year and a half after it was first requested, I finally have tool calling support in here. This
+> was something that I was regularly putting off because of how challenging it was to add in.
+> 
+> What this means, and how I've been using it the past two weeks- you can jam Wilmer in between something
+> like OpenCode and Llama.cpp. I've been working on improving OpenCode quality using Qwen 27b and 122b
+> by creating workflows that the OpenCode calls pass through. It slows everything down a lot, but the
+> result is far less engagement from me because it gets things right in far less tries.
+> 
+> I'm going to tinker with these workflows for a month or so and then start putting them out for folks.
+> Updating the workflows here are next on the list.
+> 
+> Also, another big change: finally added image passthrough for the standard node. When I first put the
+> ImageProcessor in, vision models were still really new. Now they're everywhere, so I've reworked the
+> ImageProcessor to be more tailored towards the specific purpose of long term efficiency, while
+> the Standard node could be used instead to just send images to a model like normal.
+
 
 ## Maintainer's Note - UPDATED 2026-03-29
 

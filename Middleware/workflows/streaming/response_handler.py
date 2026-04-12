@@ -257,21 +257,41 @@ class StreamingResponseHandler:
         stop event and (for non-Ollama formats) a ``[DONE]`` sentinel at the end of
         the stream.
 
+        Tool call chunks bypass the text-processing pipeline entirely (no prefix
+        stripping, no think-block removal) and are formatted directly into SSE output.
+
         Args:
             raw_dict_generator (Generator[Dict[str, Any], None, None]): A generator of
                 token dictionaries from an LLM handler, each containing 'token' and
-                'finish_reason' keys.
+                'finish_reason' keys, and optionally 'tool_calls'.
 
         Yields:
             str: Formatted SSE or NDJSON strings ready to be sent to the client.
         """
-        # Determine buffering strategy
         requires_complex_buffering = self._requires_complex_buffering()
         trim_whitespace = self.endpoint_config.get("trimBeginningAndEndLineBreaks", False)
+        finish_already_sent = False
+        stream_finish_reason = None
 
         for data_chunk in raw_dict_generator:
             content_delta = data_chunk.get("token") or ""
             finish_reason = data_chunk.get("finish_reason")
+            tool_calls_delta = data_chunk.get("tool_calls")
+
+            # Tool call chunks bypass all text processing (prefix stripping,
+            # think-block removal, etc.) and are emitted directly.
+            if tool_calls_delta is not None:
+                completion_json = api_helpers.build_response_json(
+                    token=content_delta,
+                    finish_reason=finish_reason,
+                    request_id=self.request_id,
+                    tool_calls=tool_calls_delta,
+                )
+                yield api_helpers.sse_format(completion_json, self.output_format)
+                if finish_reason:
+                    finish_already_sent = True
+                    break
+                continue
 
             content_from_remover = self.remover.process_delta(content_delta)
             content_to_yield = ""
@@ -279,41 +299,31 @@ class StreamingResponseHandler:
             if self._should_buffer_for_prefixes and not self._prefixes_processed:
                 self._prefix_buffer += content_from_remover
 
-                # Optimized Buffering Logic
                 buffer_full = len(self._prefix_buffer) >= self._prefix_buffer_limit
                 is_done = finish_reason is not None
 
-                # Determine if we should process the buffer now
                 should_process = False
                 if requires_complex_buffering:
-                    # For complex logic, use optimistic matching.
-
-                    # 1. Check if the buffer still matches any potential prefix
                     still_matching = self._matches_partial_prefix(self._prefix_buffer)
 
                     if not still_matching:
-                        # Optimistic success: Buffer content definitively does not start with any prefix.
                         should_process = True
                         logger.debug("Optimistic prefix match failed. Releasing buffer.")
                     elif buffer_full or is_done:
-                        # Pessimistic fallback: Buffer is full or stream ended, must process now.
                         should_process = True
                         logger.debug("Buffer full or stream ended. Processing buffer.")
 
                 elif trim_whitespace:
-                    # For whitespace trimming only, process as soon as we see a non-whitespace character or stream ends.
                     if self._prefix_buffer.strip() or is_done:
                          should_process = True
                 else:
-                    # Handle cases where buffering was only needed for potential reconstruction
                     if buffer_full or is_done:
                         should_process = True
-
 
                 if should_process:
                     content_to_yield = self._process_prefixes_from_buffer()
                     self._prefixes_processed = True
-                    self._prefix_buffer = "" # Clear buffer after processing
+                    self._prefix_buffer = ""
 
             else:
                 content_to_yield = content_from_remover
@@ -327,28 +337,30 @@ class StreamingResponseHandler:
                 yield api_helpers.sse_format(completion_json, self.output_format)
 
             if finish_reason:
+                stream_finish_reason = finish_reason
                 break
 
-        # Finalization logic (ensuring buffer is cleared)
-        final_content = self.remover.finalize()
-        if self._should_buffer_for_prefixes and not self._prefixes_processed:
-            self._prefix_buffer += final_content
-            final_content_to_yield = self._process_prefixes_from_buffer()
-            self._prefix_buffer = "" # Clear buffer
-        else:
-            final_content_to_yield = final_content
+        if not finish_already_sent:
+            # Finalization logic (ensuring buffer is cleared)
+            final_content = self.remover.finalize()
+            if self._should_buffer_for_prefixes and not self._prefixes_processed:
+                self._prefix_buffer += final_content
+                final_content_to_yield = self._process_prefixes_from_buffer()
+                self._prefix_buffer = ""
+            else:
+                final_content_to_yield = final_content
 
-        if final_content_to_yield:
-            self.full_response_text += final_content_to_yield
-            completion_json = api_helpers.build_response_json(
-                token=final_content_to_yield, finish_reason=None,
-                request_id=self.request_id
-            )
-            yield api_helpers.sse_format(completion_json, self.output_format)
+            if final_content_to_yield:
+                self.full_response_text += final_content_to_yield
+                completion_json = api_helpers.build_response_json(
+                    token=final_content_to_yield, finish_reason=None,
+                    request_id=self.request_id
+                )
+                yield api_helpers.sse_format(completion_json, self.output_format)
 
-        final_completion_json = api_helpers.build_response_json(token="", finish_reason="stop",
-                                                                request_id=self.request_id)
-        yield api_helpers.sse_format(final_completion_json, self.output_format)
+            final_completion_json = api_helpers.build_response_json(token="", finish_reason=stream_finish_reason or "stop",
+                                                                    request_id=self.request_id)
+            yield api_helpers.sse_format(final_completion_json, self.output_format)
 
         if self.output_format not in ('ollamagenerate', 'ollamaapichat'):
             yield api_helpers.sse_format("[DONE]", self.output_format)

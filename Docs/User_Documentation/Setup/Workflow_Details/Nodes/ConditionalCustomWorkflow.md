@@ -72,7 +72,7 @@ not supported, it returns a static message instead of running a general-purpose 
   },
   "UseDefaultContentInsteadOfWorkflow": "I'm sorry, I can only assist with Python and JavaScript at the moment.",
   "scoped_variables": [
-    "{lastUserMessage}"
+    "{chat_user_prompt_last_one}"
   ],
   "routeOverrides": {
     "Python": {

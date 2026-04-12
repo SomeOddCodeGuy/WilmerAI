@@ -30,4 +30,10 @@ class StandardNodeHandler(BaseHandler):
                  for streaming responses.
         """
         logger.debug("Handling 'Standard' node.")
-        return LLMDispatchService.dispatch(context=context)
+        accept_images = context.config.get("acceptImages", False)
+        max_images = context.config.get("maxImagesToSend", 0) if accept_images else 0
+        return LLMDispatchService.dispatch(
+            context=context,
+            llm_takes_images=accept_images,
+            max_images=max_images
+        )

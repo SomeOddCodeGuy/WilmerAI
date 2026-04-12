@@ -910,6 +910,36 @@ def get_is_chat_complete_add_missing_assistant() -> bool:
     return data['chatCompletionAddMissingAssistantGenerator']
 
 
+def get_separate_conversation_in_variables() -> bool:
+    """
+    Retrieves the ``separateConversationInVariables`` setting from the user config.
+
+    When ``True``, conversation variable strings (e.g. ``{chat_user_prompt_last_ten}``)
+    use the delimiter from ``conversationSeparationDelimiter`` between messages
+    instead of a plain newline.
+
+    Returns:
+        bool: ``True`` if custom separation is enabled, ``False`` otherwise.
+              Defaults to ``False`` when the key is absent.
+    """
+    data = get_user_config()
+    return data.get('separateConversationInVariables', False)
+
+
+def get_conversation_separation_delimiter() -> str:
+    """
+    Retrieves the ``conversationSeparationDelimiter`` setting from the user config.
+
+    This delimiter is inserted between messages in conversation variable strings
+    when ``separateConversationInVariables`` is ``True``.
+
+    Returns:
+        str: The delimiter string. Defaults to ``'\\n'`` when the key is absent.
+    """
+    data = get_user_config()
+    return data.get('conversationSeparationDelimiter', '\n')
+
+
 def get_connect_timeout() -> int:
     """
     Retrieves the `connectTimeoutInSeconds` configuration setting.

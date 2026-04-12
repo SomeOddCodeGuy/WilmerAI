@@ -1,7 +1,8 @@
 # middleware/llmapis/handlers/impl/ollama_chat_api_handler.py
 import json
 import logging
-from typing import Dict, List, Optional, Any
+import uuid
+from typing import Dict, List, Optional, Any, Union
 
 from Middleware.llmapis.handlers.base.base_chat_completions_handler import BaseChatCompletionsHandler
 from Middleware.utilities.sensitive_logging_utils import sensitive_log_lazy, log_prompt_content
@@ -48,7 +49,8 @@ class OllamaChatHandler(BaseChatCompletionsHandler):
         return f"{self.base_url.rstrip('/')}/api/chat"
 
     def _prepare_payload(self, conversation: Optional[List[Dict[str, str]]], system_prompt: Optional[str],
-                         prompt: Optional[str]) -> Dict:
+                         prompt: Optional[str], *, tools: Optional[list] = None,
+                         tool_choice=None) -> Dict:
         """
         Prepares the Ollama-specific payload for the API request.
 
@@ -61,6 +63,8 @@ class OllamaChatHandler(BaseChatCompletionsHandler):
             conversation (Optional[List[Dict[str, str]]]): The history of the conversation.
             system_prompt (Optional[str]): A system-level instruction for the LLM.
             prompt (Optional[str]): The latest user prompt to be processed.
+            tools (Optional[list]): Tool definitions in OpenAI format (Ollama uses the same format).
+            tool_choice: Ignored; Ollama does not support tool_choice.
 
         Returns:
             Dict: The JSON payload ready to be sent to the Ollama API.
@@ -76,6 +80,9 @@ class OllamaChatHandler(BaseChatCompletionsHandler):
 
         if not self.stream:
             payload["stream"] = False
+
+        if tools:
+            payload["tools"] = tools
 
         logger.info(f"Payload prepared for {self.__class__.__name__}")
         sensitive_log_lazy(logger, logging.DEBUG, "URL: %s, Payload: %s",
@@ -183,26 +190,68 @@ class OllamaChatHandler(BaseChatCompletionsHandler):
             is_done = chunk_data.get("done", False)
             finish_reason = "stop" if is_done else None
 
-            return {'token': token, 'finish_reason': finish_reason}
+            result = {'token': token, 'finish_reason': finish_reason}
+            tool_calls_data = message.get("tool_calls")
+            if tool_calls_data:
+                openai_tool_calls = []
+                for i, tc in enumerate(tool_calls_data):
+                    func = tc.get("function", {})
+                    openai_tc = {
+                        "index": i,
+                        "id": f"call_{uuid.uuid4().hex[:24]}",
+                        "type": "function",
+                        "function": {
+                            "name": func.get("name", ""),
+                            "arguments": json.dumps(func.get("arguments", {}))
+                        }
+                    }
+                    openai_tool_calls.append(openai_tc)
+                result['tool_calls'] = openai_tool_calls
+            return result
         except json.JSONDecodeError:
             logger.warning(f"Could not parse Ollama stream data string: {data_str}")
             return None
 
-    def _parse_non_stream_response(self, response_json: Dict) -> str:
+    def _parse_non_stream_response(self, response_json: Dict) -> Union[str, Dict[str, Any]]:
         """
         Extracts the generated text from a non-streaming Ollama API response.
 
         This method navigates the JSON structure of a complete Ollama response
-        to find and return the main message content.
+        to find and return the main message content. When tool calls are present,
+        converts them to OpenAI format and returns a dictionary.
 
         Args:
             response_json (Dict): The parsed JSON dictionary from the API response.
 
         Returns:
-            str: The extracted text content, or an empty string if not found.
+            Union[str, Dict[str, Any]]: The extracted text content, a dictionary
+            with 'content', 'tool_calls', and 'finish_reason' keys when tool calls
+            are present, or an empty string if not found.
         """
         try:
-            return response_json['message']['content'] or ""
+            message = response_json['message']
+            content = message.get('content') or ""
+            tool_calls_data = message.get('tool_calls')
+            if tool_calls_data:
+                openai_tool_calls = []
+                for i, tc in enumerate(tool_calls_data):
+                    func = tc.get("function", {})
+                    openai_tc = {
+                        "index": i,
+                        "id": f"call_{uuid.uuid4().hex[:24]}",
+                        "type": "function",
+                        "function": {
+                            "name": func.get("name", ""),
+                            "arguments": json.dumps(func.get("arguments", {}))
+                        }
+                    }
+                    openai_tool_calls.append(openai_tc)
+                return {
+                    'content': content,
+                    'tool_calls': openai_tool_calls,
+                    'finish_reason': 'tool_calls'
+                }
+            return content
         except (KeyError, IndexError, TypeError):
             logger.error(f"Could not find content in Ollama response: {response_json}")
             return ""

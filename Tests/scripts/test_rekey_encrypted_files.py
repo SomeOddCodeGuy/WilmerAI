@@ -1,7 +1,6 @@
 
 import json
 import os
-import tempfile
 from unittest.mock import patch, MagicMock, call
 
 import pytest

@@ -30,7 +30,8 @@ class OllamaGenerateApiHandler(BaseCompletionsHandler):
         return f"{self.base_url.rstrip('/')}/api/generate"
 
     def _prepare_payload(self, conversation: Optional[List[Dict[str, str]]], system_prompt: Optional[str],
-                         prompt: Optional[str]) -> Dict:
+                         prompt: Optional[str], *, tools: Optional[list] = None,
+                         tool_choice=None) -> Dict:
         """
         Prepares the Ollama-specific payload for the /api/generate request.
 
@@ -39,10 +40,15 @@ class OllamaGenerateApiHandler(BaseCompletionsHandler):
         a single prompt string and moves generation parameters into a nested
         'options' dictionary.
 
+        The /api/generate endpoint does not support tool definitions; tools and
+        tool_choice are accepted for interface compatibility but silently ignored.
+
         Args:
             conversation (Optional[List[Dict[str, str]]]): The history of the conversation.
             system_prompt (Optional[str]): A system-level instruction for the LLM.
             prompt (Optional[str]): The latest user prompt to be processed.
+            tools (Optional[list]): Ignored for generate APIs.
+            tool_choice: Ignored for generate APIs.
 
         Returns:
             Dict: The JSON payload ready to be sent to the Ollama API.

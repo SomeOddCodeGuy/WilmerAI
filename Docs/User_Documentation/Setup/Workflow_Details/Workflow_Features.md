@@ -125,13 +125,32 @@ Two primary methods for this are:
 
 ## Vision Capabilities
 
-WilmerAI can process and understand images provided in a user's message. The **`ImageProcessor` node** takes any images
-from the user's latest turn, sends them to a configured vision-capable LLM, and generates a detailed text description.
+WilmerAI can process and understand images provided in a user's message through two approaches:
 
-The aggregated text description is then made available as the node's output (`{agent#Output}`). This allows a
-subsequent, text-only `Standard` node to use the description as context, effectively giving the entire workflow "sight."
+**Approach 1: Direct Image Passthrough (Standard Node)**
 
-* **Key Node**: `ImageProcessor`
+The simplest approach is to set `acceptImages` to `true` on a `Standard` node. This passes images directly to the
+backend LLM along with the conversation. The endpoint must support vision/multimodal input. You can optionally limit
+the number of images sent with `maxImagesToSend` (keeping the most recent; `0` means no limit).
+
+```json
+{
+  "type": "Standard",
+  "acceptImages": true,
+  "maxImagesToSend": 5,
+  "endpointName": "Vision-Endpoint",
+  "prompt": ""
+}
+```
+
+**Approach 2: ImageProcessor Node (Text Description)**
+
+The **`ImageProcessor` node** takes any images from the user's latest turn, sends them to a configured vision-capable
+LLM, and generates a detailed text description. The aggregated text description is then made available as the node's
+output (`{agent#Output}`). This allows a subsequent, text-only `Standard` node to use the description as context,
+effectively giving the entire workflow "sight."
+
+* **Key Nodes**: `Standard` (with `acceptImages`), `ImageProcessor`
 * **Detailed Documentation**: `A Comprehensive Guide to WilmerAI Workflow Nodes`
 
 ---
@@ -150,9 +169,11 @@ script.
 * **Data Extraction**: The **`JsonExtractor`** node extracts a specific field from a JSON string (automatically handling
   markdown code block wrappers), and the **`TagTextExtractor`** node extracts content from XML/HTML-style tags within
   text.
+* **Text Chunking**: The **`DelimitedChunker`** node splits a string by a delimiter and returns a subset of the
+  resulting chunks (first N via `"head"` mode or last N via `"tail"` mode), rejoined with the same delimiter.
 
 * **Key Nodes**: `GetCustomFile`, `SaveCustomFile`, `StringConcatenator`, `ArithmeticProcessor`, `JsonExtractor`,
-  `TagTextExtractor`
+  `TagTextExtractor`, `DelimitedChunker`
 * **Detailed Documentation**: `A Comprehensive Guide to WilmerAI Workflow Nodes`
 
 ---
@@ -167,6 +188,129 @@ completes.
 
 * **Key Node**: `WorkflowLock`
 * **Detailed Documentation**: `A Comprehensive Guide to WilmerAI Workflow Nodes`
+
+---
+
+## Tool Call Passthrough
+
+WilmerAI can pass through tool (function calling) definitions from a frontend application to the backend LLM, and relay tool call responses back to the frontend. This allows frontends that support tool use (such as Open WebUI, SillyTavern, or custom applications) to use tool calling through WilmerAI without WilmerAI needing to understand or interpret the tools itself.
+
+### How It Works
+
+When a frontend sends a request that includes tool definitions (the `tools` field in an OpenAI-compatible request), WilmerAI stores those definitions on the execution context. If a `Standard` node has `allowTools` set to `true`, the tool definitions are forwarded to the backend LLM along with the rest of the request. If the LLM responds with tool calls instead of regular text content, WilmerAI passes those tool calls back to the frontend in the correct format.
+
+This works for both streaming and non-streaming modes. In streaming mode, tool call data is accumulated across chunks and emitted in the final response. In non-streaming mode, tool calls are returned directly in the response body.
+
+### Supported Backend Types
+
+Tool call passthrough is supported for the following backend API types:
+
+- **OpenAI-compatible** endpoints
+- **Claude** (Anthropic) endpoints
+- **Ollama** endpoints
+
+### Configuration
+
+Tool calling is controlled by the `allowTools` boolean property on workflow nodes. It defaults to `false`. When set to `true`, the node will include tool definitions in its LLM request if the frontend provided them.
+
+```json
+{
+  "title": "Respond to User",
+  "type": "Standard",
+  "endpointName": "Main-Endpoint",
+  "systemPrompt": "You are a helpful assistant.",
+  "prompt": "",
+  "allowTools": true,
+  "returnToUser": true
+}
+```
+
+### When to Enable `allowTools`
+
+Only enable `allowTools` on nodes where tool calling makes sense. In practice, this means the final responding node -- the node whose output is sent back to the user. Enabling it on non-responding nodes (internal "thinking" steps, summarizers, categorizers, etc.) is not useful, because those nodes are not communicating with the frontend and tool call responses would have nowhere to go.
+
+If a workflow has multiple `Standard` nodes, only the responding node should have `allowTools` set to `true`. If no tools are present in the frontend request, the flag has no effect and the node behaves normally.
+
+### Related: Tool Call Visibility in Conversation Variables
+
+When tool calls are present in the conversation history, assistant messages with `tool_calls` but no text `content`
+appear as blank turns in conversation variables by default. Setting `includeToolCallsInConversation` to `true` on a
+node injects a text summary of each tool call (formatted as `[Tool Call: {name}] {summary}`) into those messages,
+making them visible to downstream prompts.
+
+* **Key Node**: `Standard` (with `allowTools` flag)
+* **Detailed Documentation**: `A Comprehensive Guide to WilmerAI Workflow Nodes`
+
+---
+
+## Curly Brace Handling in Agent Outputs
+
+When a node produces output containing literal curly braces (common with JSON or code), those braces could be
+misinterpreted as variable placeholders by `str.format()` in subsequent nodes. WilmerAI handles this automatically:
+agent output and input values (`{agent#Output}`, `{agent#Input}`) are escaped before variable substitution using
+internal sentinel tokens, and the real braces are restored after substitution completes. This means workflow authors
+do not need to worry about JSON or code in agent outputs breaking the variable system.
+
+Custom workflow variables (top-level keys in the workflow JSON) are intentionally NOT escaped, because they may
+contain nested variable references that need to be resolved (e.g., `"my_path": "data/{Discussion_Id}/output.txt"`).
+
+---
+
+## Consecutive Assistant Message Normalization
+
+Agentic frontends (coding assistants, tool-calling clients, etc.) can produce conversation histories with multiple
+assistant messages in a row without a user message between them. Most LLM APIs reject this as invalid turn structure.
+WilmerAI provides two strategies to fix this automatically, configured per-node on `Standard` nodes.
+
+Both strategies only apply when `prompt` is empty (the raw conversation is sent to the LLM). They are tool-call-aware:
+the valid sequence `assistant(tool_calls) -> tool(result) -> assistant(text)` is never modified, because the `tool`
+role message separates the assistant turns.
+
+### Option A: Merge Consecutive Assistants
+
+Set `mergeConsecutiveAssistantMessages` to `true`. Runs of consecutive assistant messages are collapsed into a single
+assistant message, with their content joined by the delimiter (default `"\n"`).
+
+```json
+{
+  "type": "Standard",
+  "prompt": "",
+  "mergeConsecutiveAssistantMessages": true,
+  "mergeConsecutiveAssistantMessagesDelimiter": "\n---\n"
+}
+```
+
+### Option B: Insert Synthetic User Turns
+
+Set `insertUserTurnBetweenAssistantMessages` to `true`. A synthetic user message is inserted between each pair of
+consecutive assistant messages. The default text is `"Continue."`, but it can be customized.
+
+```json
+{
+  "type": "Standard",
+  "prompt": "",
+  "insertUserTurnBetweenAssistantMessages": true,
+  "insertedUserTurnText": "Proceed with the next step."
+}
+```
+
+### Precedence
+
+If both `mergeConsecutiveAssistantMessages` and `insertUserTurnBetweenAssistantMessages` are set to `true`, merging
+takes precedence.
+
+### Automatic User Message Recovery
+
+In addition to the above normalization strategies, WilmerAI includes an automatic safety net for the
+`lastMessagesToSendInsteadOfPrompt` path. When `prompt` is empty and the selected message window contains no user
+messages at all (common in long agentic tool-calling chains where `tool`-role messages separate each assistant turn),
+WilmerAI automatically recovers the most recent user message from the full conversation history and inserts it after
+any system messages. This prevents backend chat templates from rejecting the request due to a missing user query.
+
+This behavior is always active in the chat API path when `prompt` is empty. It runs after any merge/insert
+normalization and is a no-op if the message window already contains at least one user message.
+
+* **Key Node**: `Standard`
 
 ---
 
