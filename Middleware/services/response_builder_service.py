@@ -134,17 +134,28 @@ class ResponseBuilderService:
             "usage": {}
         }
 
-    def build_openai_chat_completion_response(self, full_text: str) -> Dict[str, Any]:
+    def build_openai_chat_completion_response(self, full_text: str, tool_calls=None) -> Dict[str, Any]:
         """
         Builds the final, non-streaming response for the OpenAI-compatible /v1/chat/completions endpoint.
 
         Args:
             full_text (str): The complete generated text from the LLM.
+            tool_calls: Optional list of tool call objects to include in the message.
 
         Returns:
             Dict[str, Any]: The complete, non-streaming chat response object.
         """
         current_time = int(time.time())
+        message = {
+            "role": "assistant",
+            "content": full_text,
+        }
+        finish_reason = "stop"
+        if tool_calls is not None:
+            message["tool_calls"] = tool_calls
+            finish_reason = "tool_calls"
+            if not full_text:
+                message["content"] = None
         return {
             "id": f"chatcmpl-{current_time}",
             "object": "chat.completion",
@@ -154,12 +165,9 @@ class ResponseBuilderService:
             "choices": [
                 {
                     "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": full_text,
-                    },
+                    "message": message,
                     "logprobs": None,
-                    "finish_reason": "stop"
+                    "finish_reason": finish_reason
                 }
             ],
             "usage": {}
@@ -218,17 +226,24 @@ class ResponseBuilderService:
             "system_fingerprint": "fp_44709d6fcb",
         }
 
-    def build_openai_chat_completion_chunk(self, token: str, finish_reason: Optional[str]) -> Dict[str, Any]:
+    def build_openai_chat_completion_chunk(self, token: str, finish_reason: Optional[str],
+                                              tool_calls=None) -> Dict[str, Any]:
         """
         Builds a single streaming chunk for the OpenAI-compatible /v1/chat/completions endpoint.
 
         Args:
             token (str): The token to include in the chunk's 'delta'.
             finish_reason (Optional[str]): The reason the stream ended, if applicable.
+            tool_calls: Optional list of tool call objects to include in the delta.
 
         Returns:
             Dict[str, Any]: A dictionary representing a single chat completion event stream chunk.
         """
+        delta = {}
+        if token:
+            delta["content"] = token
+        if tool_calls is not None:
+            delta["tool_calls"] = tool_calls
         return {
             "id": f"chatcmpl-{uuid.uuid4()}",
             "object": "chat.completion.chunk",
@@ -238,7 +253,7 @@ class ResponseBuilderService:
             "choices": [
                 {
                     "index": 0,
-                    "delta": {"content": token},
+                    "delta": delta,
                     "logprobs": None,
                     "finish_reason": finish_reason
                 }
@@ -341,7 +356,8 @@ class ResponseBuilderService:
             response["request_id"] = request_id
         return response
 
-    def build_ollama_chat_response(self, full_text: str, model_name: str, request_id: Optional[str] = None) -> Dict[str, Any]:
+    def build_ollama_chat_response(self, full_text: str, model_name: str, request_id: Optional[str] = None,
+                                       tool_calls=None) -> Dict[str, Any]:
         """
         Builds the final, non-streaming response for the Ollama-compatible /api/chat endpoint.
 
@@ -349,17 +365,21 @@ class ResponseBuilderService:
             full_text (str): The complete generated text from the LLM.
             model_name (str): The name of the model that generated the response.
             request_id (Optional[str]): The unique identifier for the request.
+            tool_calls: Optional list of tool call objects to include in the message.
 
         Returns:
             Dict[str, Any]: The complete, non-streaming chat response object.
         """
+        message = {
+            "role": "assistant",
+            "content": full_text
+        }
+        if tool_calls is not None:
+            message["tool_calls"] = tool_calls
         response = {
             "model": model_name,
             "created_at": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
-            "message": {
-                "role": "assistant",
-                "content": full_text
-            },
+            "message": message,
             "done_reason": "stop",
             "done": True,
             "total_duration": 4505727700, "load_duration": 23500100,
@@ -414,7 +434,8 @@ class ResponseBuilderService:
             response["request_id"] = request_id
         return response
 
-    def build_ollama_chat_chunk(self, token: str, finish_reason: Optional[str], request_id: Optional[str] = None) -> Dict[str, Any]:
+    def build_ollama_chat_chunk(self, token: str, finish_reason: Optional[str], request_id: Optional[str] = None,
+                                   tool_calls=None) -> Dict[str, Any]:
         """
         Builds a single streaming chunk for the Ollama-compatible /api/chat endpoint.
 
@@ -422,17 +443,21 @@ class ResponseBuilderService:
             token (str): The token to include in the chunk's message content.
             finish_reason (Optional[str]): The reason the stream ended, if applicable.
             request_id (Optional[str]): The unique identifier for the request.
+            tool_calls: Optional list of tool call objects to include in the message.
 
         Returns:
             Dict[str, Any]: A dictionary representing a single chat event stream chunk.
         """
+        message = {
+            "role": "assistant",
+            "content": token
+        }
+        if tool_calls is not None:
+            message["tool_calls"] = tool_calls
         response = {
             "model": self._get_model_name(),
             "created_at": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
-            "message": {
-                "role": "assistant",
-                "content": token
-            },
+            "message": message,
             "done": finish_reason == "stop"
         }
         if request_id:

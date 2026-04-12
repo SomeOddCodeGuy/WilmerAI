@@ -65,9 +65,6 @@ You **CAN** use variables in fields that are treated as content for the node to 
 **ONLY these variables work in `endpointName` and `preset`:**
 * `{agent#Input}` - Values passed from parent workflows via `scoped_variables`
 * `{custom_variable}` - Static variables defined at the top level of your workflow JSON
-* Date/time variables like `{todays_date_pretty}`, `{current_time_12h}`, etc.
-* `{chat_user_prompt_last_one}` and other conversation history variables
-* `{time_context_summary}` (if a discussionId is present)
 
 **These variables DO NOT work in `endpointName` and `preset`:**
 * No: `{agent#Output}` - These don't exist yet since nodes haven't executed!
@@ -156,6 +153,35 @@ This is an exhaustive list of all available variables, validated against `workfl
 * **`{chat_user_prompt_last_five}`**: Raw text of the last 5 turns.
 * **`{chat_user_prompt_last_ten}`**: Raw text of the last 10 turns.
 * **`{chat_user_prompt_last_twenty}`**: Raw text of the last 20 turns.
+
+**Formatting options for `chat_user_prompt_*` variables:** By default, messages in these variables are joined with a
+single newline. Two optional settings alter this behavior:
+
+* **Node-level `addUserAssistantTags`** (boolean, default `false`): When `true`, each message is prefixed with its
+  role (e.g., `User: `, `Assistant: `). This is set per-node, so different nodes can have different behavior. See the
+  [Standard Node](Nodes/Standard_Conversational.md) documentation for details.
+* **User-level `separateConversationInVariables`** (boolean, default `false`) and
+  **`conversationSeparationDelimiter`** (string, default `"\n"`): When `separateConversationInVariables` is `true`,
+  the delimiter specified in `conversationSeparationDelimiter` is used between messages instead of the default newline.
+  These are set in the user config and apply globally to all nodes. See the
+  [User Config](../Configuration_Files/User.md) documentation for details.
+
+Both options can be combined. For example, with `addUserAssistantTags` set to `true` and a delimiter of
+`"\n\n"`, the result would be:
+
+    User: First message
+
+    Assistant: Second message
+
+    User: Third message
+
+**Tool call visibility:** When the conversation contains assistant messages with `tool_calls` but empty `content`
+(common with agentic frontends), these messages appear as blank turns in the conversation variables by default.
+Setting the node-level property **`includeToolCallsInConversation`** to `true` injects a text summary of each tool
+call into the message content, formatted as `[Tool Call: {name}] {summary}`. This allows downstream prompts to see
+what tools were invoked without the full tool output. See the
+[Standard Node](Nodes/Standard_Conversational.md) documentation for details.
+
 * **`{chat_user_prompt_n_messages}`**: Raw text of the last N messages, where N is set by the node property
   `nMessagesToIncludeInVariable` (defaults to 5 if not specified). This is the preferred approach for custom message
   counts, as it allows any value of N without requiring a new hardcoded variable.
@@ -190,7 +216,10 @@ This is an exhaustive list of all available variables, validated against `workfl
 * **`{templated_user_prompt_last_ten}`**: Last 10 turns, templated.
 * **`{templated_user_prompt_last_twenty}`**: Last 20 turns, templated.
 * **`{chat_system_prompt}`**: The system prompt sent from the front-end client.
-* **`{system_prompts_as_string}`**: All system messages from the conversation history concatenated into a single string.
+* **`{templated_system_prompt}`**: The system prompt formatted with the LLM's specific chat template.
+* **`{templated_user_prompt_without_system}`**: The full conversation (excluding system messages) formatted with the
+  LLM's chat template.
+* **`{chat_user_prompt_without_system}`**: The full conversation (excluding system messages) as a raw string.
 * **`{messages}`**: The entire conversation history as a raw list of dictionaries (e.g.,
   `[{'role': 'user', 'content': '...'}]`). **Note**: This is available for both standard formatting and Jinja2, but it
   is most useful with Jinja2 for iterating over the conversation history.
@@ -200,7 +229,7 @@ This is an exhaustive list of all available variables, validated against `workfl
 * **`{todays_date_pretty}`**: e.g., "August 30, 2025"
 * **`{todays_date_iso}`**: e.g., "2025-08-30"
 * **`{YYYY_MM_DD}`**: e.g., "2025_08_30" (underscore-separated format, useful for filenames)
-* **`{current_time_12h}`**: e.g., "08:00 PM"
+* **`{current_time_12h}`**: e.g., "8:00 PM"
 * **`{current_time_24h}`**: e.g., "20:00"
 * **`{current_month_full}`**: e.g., "August"
 * **`{current_day_of_week}`**: e.g., "Saturday"
@@ -248,6 +277,7 @@ substitution in their `filepath` fields. This allows you to create per-conversat
 ```
 
 See the `GetCustomFile` and `SaveCustomFile` node documentation for more details.
+
 * **`{current_chat_summary}`**: **Warning: UNAVAILABLE VARIABLE:** The helper function `generate_chat_summary_variables` that
   populates this is **not called** by the main variable generation logic. **Do not use `{current_chat_summary}`** as it
   will not be substituted. To get the summary, you must use a dedicated node like `GetCurrentSummaryFromFile`.

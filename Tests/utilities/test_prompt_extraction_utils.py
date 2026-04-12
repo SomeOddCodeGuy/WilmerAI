@@ -14,7 +14,11 @@ from Middleware.utilities.prompt_extraction_utils import (
     parse_conversation,
     extract_initial_system_prompt,
     process_remaining_string,
-    template
+    template,
+    _format_messages_to_string,
+    _summarize_tool_arguments,
+    format_tool_calls_as_text,
+    enrich_messages_with_tool_calls
 )
 
 # Test Data
@@ -824,3 +828,436 @@ class TestComboExtractionEdgeCases:
         ]
         result = extract_last_turns_with_min_messages_and_token_limit(messages, 2, 1000)
         assert len(result) == 2
+
+
+class TestFormatMessagesToString:
+    """Tests for the _format_messages_to_string helper function."""
+
+    def test_default_join_with_newline(self):
+        """Tests that messages are joined with newline by default."""
+        messages = [
+            {'role': 'user', 'content': 'Hello'},
+            {'role': 'assistant', 'content': 'Hi there'}
+        ]
+        result = _format_messages_to_string(messages)
+        assert result == "Hello\nHi there"
+
+    def test_custom_separator(self):
+        """Tests that a custom separator is used between messages."""
+        messages = [
+            {'role': 'user', 'content': 'Hello'},
+            {'role': 'assistant', 'content': 'Hi there'}
+        ]
+        result = _format_messages_to_string(messages, separator='\n---\n')
+        assert result == "Hello\n---\nHi there"
+
+    def test_add_role_tags(self):
+        """Tests that role tags are prepended when add_role_tags is True."""
+        messages = [
+            {'role': 'user', 'content': 'Hello'},
+            {'role': 'assistant', 'content': 'Hi there'},
+            {'role': 'system', 'content': 'System note'}
+        ]
+        result = _format_messages_to_string(messages, add_role_tags=True)
+        assert result == "User: Hello\nAssistant: Hi there\nSystem: System note"
+
+    def test_add_role_tags_with_custom_separator(self):
+        """Tests role tags combined with a custom separator."""
+        messages = [
+            {'role': 'user', 'content': 'Hello'},
+            {'role': 'assistant', 'content': 'Hi'}
+        ]
+        result = _format_messages_to_string(messages, add_role_tags=True, separator='\n\n')
+        assert result == "User: Hello\n\nAssistant: Hi"
+
+    def test_unknown_role_gets_no_prefix(self):
+        """Tests that unknown roles do not get a prefix tag."""
+        messages = [
+            {'role': 'tool', 'content': 'Tool output'}
+        ]
+        result = _format_messages_to_string(messages, add_role_tags=True)
+        assert result == "Tool output"
+
+    def test_empty_messages(self):
+        """Tests that empty message list returns empty string."""
+        result = _format_messages_to_string([])
+        assert result == ""
+
+    def test_missing_content_key_with_role_tags(self):
+        """Tests that missing 'content' key defaults to empty string with role tags."""
+        messages = [{'role': 'user'}]
+        result = _format_messages_to_string(messages, add_role_tags=True)
+        assert result == "User: "
+
+    def test_role_tags_false_by_default(self):
+        """Tests that role tags are not added when add_role_tags is False (default)."""
+        messages = [
+            {'role': 'user', 'content': 'Hello'},
+            {'role': 'assistant', 'content': 'Hi'}
+        ]
+        result = _format_messages_to_string(messages)
+        assert "User: " not in result
+        assert "Assistant: " not in result
+        assert result == "Hello\nHi"
+
+
+class TestAsStringRoleTagsAndSeparator:
+    """Tests for the add_role_tags and separator parameters on all _as_string functions."""
+
+    def test_extract_last_n_turns_as_string_with_role_tags(self, mocker):
+        """Tests that extract_last_n_turns_as_string passes role tags through."""
+        mocker.patch(
+            'Middleware.utilities.prompt_extraction_utils.extract_last_n_turns',
+            return_value=[
+                {'role': 'user', 'content': 'Hello'},
+                {'role': 'assistant', 'content': 'Hi'}
+            ]
+        )
+        result = extract_last_n_turns_as_string(MESSAGES_FIXTURE, 2, add_role_tags=True)
+        assert result == "User: Hello\nAssistant: Hi"
+
+    def test_extract_last_n_turns_as_string_with_custom_separator(self, mocker):
+        """Tests that extract_last_n_turns_as_string uses a custom separator."""
+        mocker.patch(
+            'Middleware.utilities.prompt_extraction_utils.extract_last_n_turns',
+            return_value=[
+                {'role': 'user', 'content': 'Hello'},
+                {'role': 'assistant', 'content': 'Hi'}
+            ]
+        )
+        result = extract_last_n_turns_as_string(MESSAGES_FIXTURE, 2, separator='\n***\n')
+        assert result == "Hello\n***\nHi"
+
+    def test_extract_last_n_turns_as_string_combined(self, mocker):
+        """Tests role tags and custom separator together."""
+        mocker.patch(
+            'Middleware.utilities.prompt_extraction_utils.extract_last_n_turns',
+            return_value=[
+                {'role': 'user', 'content': 'Hello'},
+                {'role': 'assistant', 'content': 'Hi'}
+            ]
+        )
+        result = extract_last_n_turns_as_string(
+            MESSAGES_FIXTURE, 2, add_role_tags=True, separator='\n*** END MESSAGE ***\n'
+        )
+        assert result == "User: Hello\n*** END MESSAGE ***\nAssistant: Hi"
+
+    def test_token_limit_as_string_with_role_tags(self, mocker):
+        """Tests that token-limit string function supports role tags."""
+        mocker.patch(
+            'Middleware.utilities.prompt_extraction_utils.extract_last_turns_by_estimated_token_limit',
+            return_value=[
+                {'role': 'user', 'content': 'Msg1'},
+                {'role': 'assistant', 'content': 'Msg2'}
+            ]
+        )
+        result = extract_last_turns_by_estimated_token_limit_as_string(
+            MESSAGES_FIXTURE, 1000, add_role_tags=True
+        )
+        assert result == "User: Msg1\nAssistant: Msg2"
+
+    def test_token_limit_as_string_with_custom_separator(self, mocker):
+        """Tests that token-limit string function supports a custom separator."""
+        mocker.patch(
+            'Middleware.utilities.prompt_extraction_utils.extract_last_turns_by_estimated_token_limit',
+            return_value=[
+                {'role': 'user', 'content': 'Msg1'},
+                {'role': 'assistant', 'content': 'Msg2'}
+            ]
+        )
+        result = extract_last_turns_by_estimated_token_limit_as_string(
+            MESSAGES_FIXTURE, 1000, separator='\n\n'
+        )
+        assert result == "Msg1\n\nMsg2"
+
+    def test_min_n_max_tokens_as_string_with_role_tags(self, mocker):
+        """Tests that min-messages+token-limit string function supports role tags."""
+        mocker.patch(
+            'Middleware.utilities.prompt_extraction_utils.extract_last_turns_with_min_messages_and_token_limit',
+            return_value=[
+                {'role': 'user', 'content': 'A'},
+                {'role': 'assistant', 'content': 'B'}
+            ]
+        )
+        result = extract_last_turns_with_min_messages_and_token_limit_as_string(
+            MESSAGES_FIXTURE, 2, 1000, add_role_tags=True
+        )
+        assert result == "User: A\nAssistant: B"
+
+    def test_min_n_max_tokens_as_string_with_custom_separator(self, mocker):
+        """Tests that min-messages+token-limit string function supports a custom separator."""
+        mocker.patch(
+            'Middleware.utilities.prompt_extraction_utils.extract_last_turns_with_min_messages_and_token_limit',
+            return_value=[
+                {'role': 'user', 'content': 'A'},
+                {'role': 'assistant', 'content': 'B'}
+            ]
+        )
+        result = extract_last_turns_with_min_messages_and_token_limit_as_string(
+            MESSAGES_FIXTURE, 2, 1000, separator='\n---\n'
+        )
+        assert result == "A\n---\nB"
+
+
+class TestSummarizeToolArguments:
+    """Tests for _summarize_tool_arguments."""
+
+    def test_returns_first_string_field(self):
+        """The first string-valued field in the JSON object is returned."""
+        result = _summarize_tool_arguments('{"command": "git status", "description": "Check status"}')
+        assert result == "git status"
+
+    def test_returns_first_string_field_skipping_non_strings(self):
+        """Non-string fields are skipped; the first string field is returned."""
+        result = _summarize_tool_arguments('{"count": 5, "name": "foo"}')
+        assert result == "foo"
+
+    def test_truncates_long_value(self):
+        """String values longer than 200 characters are truncated."""
+        long_val = "x" * 300
+        result = _summarize_tool_arguments(f'{{"path": "{long_val}"}}')
+        assert len(result) == 200
+        assert result == long_val[:200]
+
+    def test_no_string_fields_falls_back_to_raw(self):
+        """If no string field exists, raw arguments are returned truncated."""
+        result = _summarize_tool_arguments('{"count": 5, "flag": true}')
+        assert result == '{"count": 5, "flag": true}'
+
+    def test_invalid_json_falls_back_to_raw(self):
+        """Invalid JSON is returned as raw text, truncated."""
+        result = _summarize_tool_arguments("not json at all")
+        assert result == "not json at all"
+
+    def test_empty_string(self):
+        """Empty arguments string returns empty string."""
+        result = _summarize_tool_arguments("")
+        assert result == ""
+
+    def test_none_argument(self):
+        """None is handled gracefully."""
+        result = _summarize_tool_arguments(None)
+        assert result == ""
+
+    def test_raw_truncation_at_200(self):
+        """Raw fallback is also truncated to 200 characters."""
+        long_raw = "z" * 300
+        result = _summarize_tool_arguments(long_raw)
+        assert len(result) == 200
+
+
+class TestFormatToolCallsAsText:
+    """Tests for format_tool_calls_as_text."""
+
+    def test_single_tool_call(self):
+        """A single tool call is formatted correctly."""
+        calls = [{"function": {"name": "bash", "arguments": '{"command": "git status"}'}}]
+        result = format_tool_calls_as_text(calls)
+        assert result == "[Tool Call: bash] git status"
+
+    def test_multiple_tool_calls(self):
+        """Multiple tool calls produce one line each, joined by newlines."""
+        calls = [
+            {"function": {"name": "bash", "arguments": '{"command": "git status"}'}},
+            {"function": {"name": "read", "arguments": '{"filePath": "/path/to/file.txt"}'}}
+        ]
+        result = format_tool_calls_as_text(calls)
+        assert result == "[Tool Call: bash] git status\n[Tool Call: read] /path/to/file.txt"
+
+    def test_missing_function_key(self):
+        """A tool call without a function key falls back to 'unknown'."""
+        calls = [{}]
+        result = format_tool_calls_as_text(calls)
+        assert result == "[Tool Call: unknown] "
+
+    def test_empty_list(self):
+        """An empty tool_calls list returns an empty string."""
+        assert format_tool_calls_as_text([]) == ""
+
+    def test_no_string_args_shows_raw(self):
+        """When arguments have no string fields, raw JSON is shown."""
+        calls = [{"function": {"name": "calc", "arguments": '{"value": 42}'}}]
+        result = format_tool_calls_as_text(calls)
+        assert result == '[Tool Call: calc] {"value": 42}'
+
+
+class TestEnrichMessagesWithToolCalls:
+    """Tests for enrich_messages_with_tool_calls."""
+
+    def test_assistant_with_tool_calls_and_empty_content(self):
+        """An assistant message with tool_calls and no content gets tool text as content."""
+        messages = [
+            {"role": "user", "content": "Run a command"},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"function": {"name": "bash", "arguments": '{"command": "ls"}'}}
+            ]}
+        ]
+        result = enrich_messages_with_tool_calls(messages)
+        assert result[1]["content"] == "[Tool Call: bash] ls"
+
+    def test_assistant_with_tool_calls_and_null_content(self):
+        """An assistant message with tool_calls and None content gets tool text."""
+        messages = [
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"function": {"name": "read", "arguments": '{"filePath": "/tmp/f.txt"}'}}
+            ]}
+        ]
+        result = enrich_messages_with_tool_calls(messages)
+        assert result[0]["content"] == "[Tool Call: read] /tmp/f.txt"
+
+    def test_assistant_with_tool_calls_and_existing_content(self):
+        """Tool text is appended to existing content with a newline separator."""
+        messages = [
+            {"role": "assistant", "content": "Sure, let me check.", "tool_calls": [
+                {"function": {"name": "bash", "arguments": '{"command": "git diff"}'}}
+            ]}
+        ]
+        result = enrich_messages_with_tool_calls(messages)
+        assert result[0]["content"] == "Sure, let me check.\n[Tool Call: bash] git diff"
+
+    def test_user_messages_unaffected(self):
+        """User messages are never enriched, even if they somehow have tool_calls."""
+        messages = [
+            {"role": "user", "content": "Hello", "tool_calls": [
+                {"function": {"name": "test", "arguments": "{}"}}
+            ]}
+        ]
+        result = enrich_messages_with_tool_calls(messages)
+        assert result[0]["content"] == "Hello"
+
+    def test_messages_without_tool_calls_unchanged(self):
+        """Messages without tool_calls pass through as-is."""
+        messages = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there!"}
+        ]
+        result = enrich_messages_with_tool_calls(messages)
+        assert result[0] is messages[0]
+        assert result[1] is messages[1]
+
+    def test_original_messages_not_mutated(self):
+        """The original message dicts are not modified."""
+        messages = [
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"function": {"name": "bash", "arguments": '{"command": "pwd"}'}}
+            ]}
+        ]
+        enrich_messages_with_tool_calls(messages)
+        assert messages[0]["content"] == ""
+
+    def test_empty_list(self):
+        """An empty messages list returns an empty list."""
+        assert enrich_messages_with_tool_calls([]) == []
+
+    def test_multiple_tool_calls_in_one_message(self):
+        """Multiple tool calls in a single message are all rendered."""
+        messages = [
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"function": {"name": "bash", "arguments": '{"command": "ls"}'}},
+                {"function": {"name": "read", "arguments": '{"filePath": "/tmp/a.txt"}'}}
+            ]}
+        ]
+        result = enrich_messages_with_tool_calls(messages)
+        assert "[Tool Call: bash] ls" in result[0]["content"]
+        assert "[Tool Call: read] /tmp/a.txt" in result[0]["content"]
+
+    def test_assistant_without_tool_calls_key(self):
+        """Assistant messages without tool_calls key are not modified."""
+        messages = [{"role": "assistant", "content": "Normal reply"}]
+        result = enrich_messages_with_tool_calls(messages)
+        assert result[0] is messages[0]
+        assert result[0]["content"] == "Normal reply"
+
+    def test_tool_call_braces_are_sentinel_escaped(self):
+        """Tool call text containing curly braces is sentinel-escaped to prevent str.format() breakage."""
+        messages = [
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"function": {"name": "write", "arguments": '{"data": {"nested": true}}'}}
+            ]}
+        ]
+        result = enrich_messages_with_tool_calls(messages)
+        content = result[0]["content"]
+        # The summary falls back to raw args since no string-valued field exists;
+        # braces from the raw args JSON should be replaced with sentinel tokens
+        assert "__WILMER_L_CURLY__" in content
+        assert "__WILMER_R_CURLY__" in content
+        assert "{" not in content
+        assert "}" not in content
+
+    def test_tool_call_string_arg_summary_has_no_braces(self):
+        """When the summary is a string field value (no braces), no escaping is needed
+        and the output should be plain text."""
+        messages = [
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"function": {"name": "bash", "arguments": '{"command": "ls -la"}'}}
+            ]}
+        ]
+        result = enrich_messages_with_tool_calls(messages)
+        content = result[0]["content"]
+        # "ls -la" has no braces, so no sentinels should appear
+        assert content == "[Tool Call: bash] ls -la"
+        assert "__WILMER_L_CURLY__" not in content
+
+    def test_tool_call_with_empty_json_args(self):
+        """Empty JSON args '{}' should have braces escaped."""
+        messages = [
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"function": {"name": "noop", "arguments": '{}'}}
+            ]}
+        ]
+        result = enrich_messages_with_tool_calls(messages)
+        content = result[0]["content"]
+        # The summary of '{}' is '' (empty dict, no string fields, fallback is empty)
+        # but the tool name line itself is produced by the f-string, so no braces in output
+        assert "[Tool Call: noop]" in content
+        assert "{" not in content
+
+    def test_tool_call_with_deeply_nested_json_fallback(self):
+        """Tool call args with only non-string values fall back to raw JSON,
+        which may have many braces. All should be escaped."""
+        args = '{"config": {"retries": 3, "backoff": {"initial": 1, "max": 30}}}'
+        messages = [
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"function": {"name": "setup", "arguments": args}}
+            ]}
+        ]
+        result = enrich_messages_with_tool_calls(messages)
+        content = result[0]["content"]
+        assert "{" not in content
+        assert "}" not in content
+        assert "setup" in content
+
+    def test_existing_gateway_escaped_content_not_double_escaped(self):
+        """If assistant content already has sentinel tokens (from gateway), and tool
+        call text is appended, the existing sentinels should not be mangled."""
+        messages = [
+            {"role": "assistant",
+             "content": "Data: __WILMER_L_CURLY__x__WILMER_R_CURLY__",
+             "tool_calls": [
+                 {"function": {"name": "bash", "arguments": '{"command": "pwd"}'}}
+             ]}
+        ]
+        result = enrich_messages_with_tool_calls(messages)
+        content = result[0]["content"]
+        # Original content preserved
+        assert "Data: __WILMER_L_CURLY__x__WILMER_R_CURLY__" in content
+        # Tool call appended
+        assert "[Tool Call: bash] pwd" in content
+
+    def test_multiple_tool_calls_with_mixed_brace_presence(self):
+        """Multiple tool calls: first has string args (no braces in summary),
+        second has non-string args (braces in raw fallback)."""
+        messages = [
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"function": {"name": "bash", "arguments": '{"command": "ls"}'}},
+                {"function": {"name": "config", "arguments": '{"timeout": 30, "retries": 3}'}}
+            ]}
+        ]
+        result = enrich_messages_with_tool_calls(messages)
+        content = result[0]["content"]
+        # bash summary is "ls" — no braces
+        assert "bash" in content
+        # config falls back to raw JSON — braces should be escaped
+        assert "config" in content
+        assert "{" not in content
+        assert "}" not in content

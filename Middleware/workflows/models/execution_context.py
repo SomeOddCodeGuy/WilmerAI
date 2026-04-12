@@ -88,3 +88,8 @@ class ExecutionContext:
     # Pre-computed from api_key to avoid repeated PBKDF2 derivation per request.
     encryption_key: Optional[bytes] = None
     api_key_hash: Optional[str] = None
+    # Tool definitions and selection policy from the incoming request.
+    # Stored in OpenAI format (the common denominator for OpenAI and Ollama);
+    # backend handlers convert to their native format as needed.
+    tools: Optional[List[Dict[str, Any]]] = None
+    tool_choice: Optional[Any] = None

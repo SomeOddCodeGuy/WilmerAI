@@ -39,7 +39,8 @@ class KoboldCppApiHandler(BaseCompletionsHandler):
         return image_str
 
     def _prepare_payload(self, conversation: Optional[List[Dict[str, str]]], system_prompt: Optional[str],
-                         prompt: Optional[str]) -> Dict:
+                         prompt: Optional[str], *, tools: Optional[list] = None,
+                         tool_choice=None) -> Dict:
         """
         Prepares the payload by adding image data before calling the parent implementation.
 
@@ -51,11 +52,16 @@ class KoboldCppApiHandler(BaseCompletionsHandler):
         `_prepare_payload` method to construct the text prompt and assemble the
         rest of the request payload.
 
+        KoboldCpp does not support tool definitions; tools and tool_choice are
+        accepted for interface compatibility but silently ignored.
+
         Args:
             conversation (Optional[List[Dict[str, str]]]): The history of the conversation,
                 which may include per-message images keys.
             system_prompt (Optional[str]): The system-level instruction for the LLM.
             prompt (Optional[str]): The latest user text prompt.
+            tools (Optional[list]): Ignored for KoboldCpp.
+            tool_choice: Ignored for KoboldCpp.
 
         Returns:
             Dict: The final JSON payload, including image data if present, ready to be

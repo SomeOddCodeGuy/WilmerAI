@@ -375,3 +375,91 @@ class TestMultiUserModels:
 
         names = [m["name"] for m in response["models"]]
         assert names == ['user-a:wf-alpha', 'user-b:wf-gamma']
+
+
+# --- Tests for tool_calls passthrough in response builders ---
+
+def test_build_openai_chat_completion_response_with_tool_calls(service):
+    """Verify that tool_calls appear in the message with finish_reason 'tool_calls' and content set to None."""
+    tool_calls = [
+        {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": '{"city":"NYC"}'}}
+    ]
+    response = service.build_openai_chat_completion_response("", tool_calls=tool_calls)
+    message = response["choices"][0]["message"]
+    assert message["tool_calls"] == tool_calls
+    assert message["content"] is None
+    assert response["choices"][0]["finish_reason"] == "tool_calls"
+
+
+def test_build_openai_chat_completion_response_tool_calls_with_content(service):
+    """When both tool_calls and content are present, both appear; finish_reason is 'tool_calls'."""
+    tool_calls = [
+        {"id": "call_1", "type": "function", "function": {"name": "search", "arguments": '{"q":"test"}'}}
+    ]
+    response = service.build_openai_chat_completion_response("Here is the result.", tool_calls=tool_calls)
+    message = response["choices"][0]["message"]
+    assert message["tool_calls"] == tool_calls
+    assert message["content"] == "Here is the result."
+    assert response["choices"][0]["finish_reason"] == "tool_calls"
+
+
+def test_build_openai_chat_completion_response_no_tool_calls(service):
+    """Without tool_calls, message has no 'tool_calls' key and finish_reason is 'stop'."""
+    response = service.build_openai_chat_completion_response("Hello!")
+    message = response["choices"][0]["message"]
+    assert "tool_calls" not in message
+    assert response["choices"][0]["finish_reason"] == "stop"
+
+
+def test_build_openai_chat_completion_chunk_with_tool_calls(service):
+    """Streaming chunk delta includes tool_calls when provided."""
+    tool_calls = [
+        {"index": 0, "id": "call_1", "type": "function", "function": {"name": "f", "arguments": ""}}
+    ]
+    response = service.build_openai_chat_completion_chunk("", finish_reason=None, tool_calls=tool_calls)
+    delta = response["choices"][0]["delta"]
+    assert delta["tool_calls"] == tool_calls
+
+
+def test_build_openai_chat_completion_chunk_no_tool_calls(service):
+    """Streaming chunk delta does not have 'tool_calls' when none are provided."""
+    response = service.build_openai_chat_completion_chunk("token", finish_reason=None)
+    delta = response["choices"][0]["delta"]
+    assert "tool_calls" not in delta
+
+
+def test_build_ollama_chat_response_with_tool_calls(service):
+    """Ollama chat response message includes tool_calls when provided."""
+    tool_calls = [
+        {"function": {"name": "do_thing", "arguments": {"key": "val"}}}
+    ]
+    response = service.build_ollama_chat_response("", model_name="ollama-model", tool_calls=tool_calls)
+    message = response["message"]
+    assert message["tool_calls"] == tool_calls
+    assert message["role"] == "assistant"
+
+
+def test_build_ollama_chat_response_no_tool_calls(service):
+    """Ollama chat response message has no 'tool_calls' key when none provided."""
+    response = service.build_ollama_chat_response("Hello", model_name="ollama-model")
+    message = response["message"]
+    assert "tool_calls" not in message
+    assert message["content"] == "Hello"
+
+
+def test_build_ollama_chat_chunk_with_tool_calls(service):
+    """Ollama chat chunk message includes tool_calls when provided."""
+    tool_calls = [
+        {"function": {"name": "lookup", "arguments": {"id": 1}}}
+    ]
+    response = service.build_ollama_chat_chunk("", finish_reason=None, tool_calls=tool_calls)
+    message = response["message"]
+    assert message["tool_calls"] == tool_calls
+
+
+def test_build_ollama_chat_chunk_no_tool_calls(service):
+    """Ollama chat chunk message has no 'tool_calls' key when none provided."""
+    response = service.build_ollama_chat_chunk("token", finish_reason=None)
+    message = response["message"]
+    assert "tool_calls" not in message
+    assert message["content"] == "token"

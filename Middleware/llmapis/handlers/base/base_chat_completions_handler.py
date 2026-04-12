@@ -17,7 +17,8 @@ class BaseChatCompletionsHandler(LlmApiHandler):
     """
 
     def _prepare_payload(self, conversation: Optional[List[Dict[str, str]]], system_prompt: Optional[str],
-                         prompt: Optional[str]) -> Dict:
+                         prompt: Optional[str], *, tools: Optional[list] = None,
+                         tool_choice=None) -> Dict:
         """
         Prepares the final data payload for the API request.
 
@@ -25,6 +26,8 @@ class BaseChatCompletionsHandler(LlmApiHandler):
             conversation (Optional[List[Dict[str, str]]]): The historical conversation, a list of message dictionaries.
             system_prompt (Optional[str]): The system prompt to guide the LLM's behavior.
             prompt (Optional[str]): The latest user prompt.
+            tools (Optional[list]): Tool definitions in OpenAI format.
+            tool_choice: Tool selection policy.
 
         Returns:
             Dict: The payload dictionary ready to be sent to the LLM API.
@@ -38,6 +41,11 @@ class BaseChatCompletionsHandler(LlmApiHandler):
             "messages": messages,
             **(self.gen_input or {})
         }
+
+        if tools:
+            payload["tools"] = tools
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
 
         logger.info(f"Payload prepared for {self.__class__.__name__}")
         sensitive_log_lazy(logger, logging.DEBUG, "URL: %s, Payload: %s",

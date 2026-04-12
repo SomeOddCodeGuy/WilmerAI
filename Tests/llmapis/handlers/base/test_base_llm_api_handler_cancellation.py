@@ -14,7 +14,7 @@ class MockLlmApiHandler(LlmApiHandler):
     def _get_api_endpoint_url(self) -> str:
         return "http://localhost:8000/api/test"
 
-    def _prepare_payload(self, conversation, system_prompt, prompt):
+    def _prepare_payload(self, conversation, system_prompt, prompt, *, tools=None, tool_choice=None):
         return {"prompt": prompt or "test", "stream": self.stream}
 
     def _process_stream_data(self, data_str: str):

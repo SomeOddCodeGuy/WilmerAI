@@ -246,6 +246,33 @@ Each User JSON file contains a single object with the following key-value pairs.
 
 -----
 
+##### `separateConversationInVariables`
+
+* **Description**: If `true`, conversation variable strings (e.g., `{chat_user_prompt_last_ten}`) use the delimiter
+  specified in `conversationSeparationDelimiter` between messages instead of the default single newline. This allows you
+  to visually separate messages from each other in the resulting text. Has no effect on the `templated_user_prompt_*`
+  variables, which use the prompt template's formatting instead.
+* **Data Type**: `boolean`
+* **Required**: No
+* **Default**: `false`
+* **Example**: `true`
+
+-----
+
+##### `conversationSeparationDelimiter`
+
+* **Description**: The delimiter string inserted between messages in `chat_user_prompt_*` conversation variables when
+  `separateConversationInVariables` is `true`. Common values include `"\n\n"` for double-newline separation, or a
+  visible marker like `"\n*** END MESSAGE ***\n"`. Escape sequences such as `\n` are interpreted as literal characters
+  in JSON; to get an actual newline, use the JSON unicode escape `\u000a` or rely on the JSON string supporting
+  embedded newlines.
+* **Data Type**: `string`
+* **Required**: No
+* **Default**: `"\n"`
+* **Example**: `"\n*** END MESSAGE ***\n"`
+
+-----
+
 ##### `connectTimeoutInSeconds`
 
 * **Description**: The timeout in seconds for establishing an HTTP connection to an LLM endpoint. This only covers the
@@ -425,6 +452,10 @@ Here is a fully-commented example user configuration file.
   "chatPromptTemplateName": "_chatonly",
   // If true, adds "User: " and "Assistant: " prefixes to messages.
   "chatCompleteAddUserAssistant": true,
+  // If true, uses a custom delimiter between messages in conversation variables.
+  "separateConversationInVariables": false,
+  // The delimiter to use between messages when separateConversationInVariables is true.
+  "conversationSeparationDelimiter": "\n",
   // If true, adds a final "Assistant: " to prompt the model's reply.
   "chatCompletionAddMissingAssistantGenerator": true,
   // If true, enables the local Wikipedia API tool.

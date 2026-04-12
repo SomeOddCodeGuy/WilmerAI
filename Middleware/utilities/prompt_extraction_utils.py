@@ -1,11 +1,12 @@
 # /Middleware/utilities/prompt_extraction_utils.py
 
+import json
 import logging
 import re
 from typing import Dict, Tuple, List, Optional, Any
 
 from Middleware.utilities.sensitive_logging_utils import sensitive_log
-from Middleware.utilities.text_utils import rough_estimate_token_length
+from Middleware.utilities.text_utils import escape_brackets_in_string, rough_estimate_token_length
 
 logger = logging.getLogger(__name__)
 
@@ -68,14 +69,48 @@ def extract_last_n_turns(messages: List[Dict[str, str]], n: int, include_sysmes:
     return filtered_messages[-n:]
 
 
+_ROLE_TAG_MAP = {
+    "user": "User: ",
+    "assistant": "Assistant: ",
+    "system": "System: ",
+}
+
+
+def _format_messages_to_string(messages: List[Dict[str, Any]], add_role_tags: bool = False,
+                                separator: str = '\n') -> str:
+    """
+    Formats a list of message dicts into a single string.
+
+    Args:
+        messages (List[Dict[str, Any]]): The messages to format.
+        add_role_tags (bool): If ``True``, prepends "User: ", "Assistant: ", or
+            "System: " to each message based on its role.
+        separator (str): The string used to join messages together.
+
+    Returns:
+        str: The formatted string.
+    """
+    formatted_lines = []
+    for message in messages:
+        content = message.get("content", "")
+        if add_role_tags:
+            role = message.get("role", "").lower()
+            prefix = _ROLE_TAG_MAP.get(role, "")
+            content = prefix + content
+        formatted_lines.append(content)
+
+    return separator.join(formatted_lines)
+
+
 def extract_last_n_turns_as_string(messages: List[Dict[str, Any]], n: int, include_sysmes: bool = True,
-                                   remove_all_systems_override=False) -> str:
+                                   remove_all_systems_override=False, add_role_tags: bool = False,
+                                   separator: str = '\n') -> str:
     """
     Extracts and joins the content of the last n messages into a single string.
 
     This function leverages `extract_last_n_turns` to get a filtered list of
     messages and then concatenates their content into a single string,
-    separated by newlines. The handling of system messages is delegated
+    separated by the given separator. The handling of system messages is delegated
     to the helper function.
 
     Args:
@@ -87,6 +122,11 @@ def extract_last_n_turns_as_string(messages: List[Dict[str, Any]], n: int, inclu
         remove_all_systems_override (bool, optional): If `True`, all system messages
                                                        are removed. See `extract_last_n_turns`
                                                        for details. Defaults to `False`.
+        add_role_tags (bool, optional): If `True`, prepends "User: ", "Assistant: ", or
+                                        "System: " to each message based on its role.
+                                        Defaults to `False`.
+        separator (str, optional): The string used to join messages together.
+                                    Defaults to ``'\\n'``.
 
     Returns:
         str: The content of the last `n` messages joined as a single string.
@@ -99,12 +139,7 @@ def extract_last_n_turns_as_string(messages: List[Dict[str, Any]], n: int, inclu
         messages, n, include_sysmes, remove_all_systems_override
     )
 
-    formatted_lines = []
-    for message in last_n_messages:
-        content = message.get("content", "")
-        formatted_lines.append(content)
-
-    return '\n'.join(formatted_lines)
+    return _format_messages_to_string(last_n_messages, add_role_tags, separator)
 
 
 def extract_last_turns_by_estimated_token_limit(messages: List[Dict[str, str]], token_limit: int,
@@ -173,13 +208,15 @@ def extract_last_turns_by_estimated_token_limit(messages: List[Dict[str, str]], 
 
 def extract_last_turns_by_estimated_token_limit_as_string(messages: List[Dict[str, Any]], token_limit: int,
                                                            include_sysmes: bool = True,
-                                                           remove_all_systems_override=False) -> str:
+                                                           remove_all_systems_override=False,
+                                                           add_role_tags: bool = False,
+                                                           separator: str = '\n') -> str:
     """
     Extracts recent messages within an estimated token budget and joins them
     into a single string.
 
     This function leverages ``extract_last_turns_by_estimated_token_limit`` to
-    select messages, then concatenates their content with newlines.
+    select messages, then concatenates their content with the given separator.
 
     Args:
         messages (List[Dict[str, Any]]): The list of conversation messages.
@@ -188,6 +225,10 @@ def extract_last_turns_by_estimated_token_limit_as_string(messages: List[Dict[st
             Defaults to ``True``.
         remove_all_systems_override (bool, optional): If ``True``, all system
             messages are removed. Defaults to ``False``.
+        add_role_tags (bool, optional): If ``True``, prepends role prefixes
+            to each message. Defaults to ``False``.
+        separator (str, optional): The string used to join messages together.
+            Defaults to ``'\\n'``.
 
     Returns:
         str: The content of the selected messages joined as a single string.
@@ -200,12 +241,7 @@ def extract_last_turns_by_estimated_token_limit_as_string(messages: List[Dict[st
         messages, token_limit, include_sysmes, remove_all_systems_override
     )
 
-    formatted_lines = []
-    for message in selected_messages:
-        content = message.get("content", "")
-        formatted_lines.append(content)
-
-    return '\n'.join(formatted_lines)
+    return _format_messages_to_string(selected_messages, add_role_tags, separator)
 
 
 def extract_last_turns_with_min_messages_and_token_limit(messages: List[Dict[str, str]], min_messages: int,
@@ -280,13 +316,15 @@ def extract_last_turns_with_min_messages_and_token_limit(messages: List[Dict[str
 
 def extract_last_turns_with_min_messages_and_token_limit_as_string(messages: List[Dict[str, Any]], min_messages: int,
                                                                     token_limit: int, include_sysmes: bool = True,
-                                                                    remove_all_systems_override=False) -> str:
+                                                                    remove_all_systems_override=False,
+                                                                    add_role_tags: bool = False,
+                                                                    separator: str = '\n') -> str:
     """
     Extracts recent messages with a minimum count floor and token budget ceiling,
     then joins them into a single string.
 
     This function leverages ``extract_last_turns_with_min_messages_and_token_limit``
-    to select messages, then concatenates their content with newlines.
+    to select messages, then concatenates their content with the given separator.
 
     Args:
         messages (List[Dict[str, Any]]): The list of conversation messages.
@@ -297,6 +335,10 @@ def extract_last_turns_with_min_messages_and_token_limit_as_string(messages: Lis
             Defaults to ``True``.
         remove_all_systems_override (bool, optional): If ``True``, all system
             messages are removed. Defaults to ``False``.
+        add_role_tags (bool, optional): If ``True``, prepends role prefixes
+            to each message. Defaults to ``False``.
+        separator (str, optional): The string used to join messages together.
+            Defaults to ``'\\n'``.
 
     Returns:
         str: The content of the selected messages joined as a single string.
@@ -309,12 +351,7 @@ def extract_last_turns_with_min_messages_and_token_limit_as_string(messages: Lis
         messages, min_messages, token_limit, include_sysmes, remove_all_systems_override
     )
 
-    formatted_lines = []
-    for message in selected_messages:
-        content = message.get("content", "")
-        formatted_lines.append(content)
-
-    return '\n'.join(formatted_lines)
+    return _format_messages_to_string(selected_messages, add_role_tags, separator)
 
 
 def extract_discussion_id(messages: List[Dict[str, str]]) -> Optional[str]:
@@ -521,3 +558,92 @@ def process_remaining_string(remaining_string: str, template: Dict[str, str]) ->
     if remaining_string.startswith(template["Begin_Sys"]):
         return remaining_string[len(template["Begin_Sys"]):].strip()
     return remaining_string.strip()
+
+
+def _summarize_tool_arguments(arguments_str: str) -> str:
+    """
+    Extracts a brief summary from a tool call's arguments JSON string.
+
+    Parses the JSON and returns the value of the first string-typed field,
+    truncated to 200 characters.  If parsing fails or no string field exists,
+    returns the raw arguments string truncated to 200 characters.
+
+    Args:
+        arguments_str (str): The raw JSON string of tool call arguments.
+
+    Returns:
+        str: A short summary of the arguments.
+    """
+    try:
+        args = json.loads(arguments_str)
+        if isinstance(args, dict):
+            for value in args.values():
+                if isinstance(value, str):
+                    return value[:200]
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return (arguments_str or "")[:200]
+
+
+def format_tool_calls_as_text(tool_calls: List[Dict[str, Any]]) -> str:
+    """
+    Converts a list of tool call objects into a human-readable text block.
+
+    Each tool call is rendered as ``[Tool Call: {name}] {summary}``, where
+    the summary is the first string-valued argument (or the raw arguments
+    truncated to 200 characters).
+
+    Args:
+        tool_calls (List[Dict[str, Any]]): A list of tool call dicts, each
+            containing a ``function`` key with ``name`` and ``arguments``.
+
+    Returns:
+        str: One line per tool call, joined by newlines.
+    """
+    parts = []
+    for call in tool_calls:
+        func = call.get("function", {})
+        name = func.get("name", "unknown")
+        args_str = func.get("arguments", "")
+        summary = _summarize_tool_arguments(args_str)
+        parts.append(f"[Tool Call: {name}] {summary}")
+    return "\n".join(parts)
+
+
+def enrich_messages_with_tool_calls(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Returns a shallow copy of messages with tool call text injected into
+    assistant message content.
+
+    For each assistant message that has a ``tool_calls`` field, the formatted
+    tool call text is appended to (or used as) the message content. Messages
+    without tool calls are returned unchanged.
+
+    Args:
+        messages (List[Dict[str, Any]]): The conversation messages.
+
+    Returns:
+        List[Dict[str, Any]]: A new list of message dicts.  Only messages
+            that needed enrichment are copied; others are passed through
+            as-is.
+    """
+    result = []
+    for message in messages:
+        tool_calls = message.get("tool_calls")
+        if tool_calls and message.get("role") == "assistant":
+            msg = dict(message)
+            tool_text = format_tool_calls_as_text(tool_calls)
+            # Tool call text may contain raw curly braces (e.g., JSON
+            # arguments).  Escape them with the same sentinel tokens used at
+            # the gateway for message content so that downstream
+            # str.format() in apply_variables() does not misinterpret them.
+            tool_text = escape_brackets_in_string(tool_text)
+            content = msg.get("content") or ""
+            if content:
+                msg["content"] = content + "\n" + tool_text
+            else:
+                msg["content"] = tool_text
+            result.append(msg)
+        else:
+            result.append(message)
+    return result

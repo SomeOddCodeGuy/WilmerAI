@@ -18,14 +18,21 @@ class BaseCompletionsHandler(LlmApiHandler):
     """
 
     def _prepare_payload(self, conversation: Optional[List[Dict[str, str]]], system_prompt: Optional[str],
-                         prompt: Optional[str]) -> Dict:
+                         prompt: Optional[str], *, tools: Optional[list] = None,
+                         tool_choice=None) -> Dict:
         """
         Prepares the final data payload for the API request.
+
+        Completions-style APIs do not support tool definitions; the tools and
+        tool_choice parameters are accepted for interface compatibility but
+        silently ignored.
 
         Args:
             conversation (Optional[List[Dict[str, str]]]): The historical conversation (unused in this handler).
             system_prompt (Optional[str]): The system prompt to guide the LLM's behavior.
             prompt (Optional[str]): The latest user prompt.
+            tools (Optional[list]): Ignored for completions APIs.
+            tool_choice: Ignored for completions APIs.
 
         Returns:
             Dict: The dictionary payload ready for the API request.

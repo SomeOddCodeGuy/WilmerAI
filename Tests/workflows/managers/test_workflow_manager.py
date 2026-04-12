@@ -226,7 +226,9 @@ class TestStaticMethods:
             first_node_system_prompt_override="sys",
             first_node_prompt_override="prompt",
             scoped_inputs=["input1"],
-            api_key=None
+            api_key=None,
+            tools=None,
+            tool_choice=None,
         )
 
     @pytest.mark.parametrize("static_method_name, config_getter_path", [
@@ -252,3 +254,61 @@ class TestStaticMethods:
         MockWorkflowManager.assert_called_once_with(workflow_config_name="memory_workflow")
         mock_instance = MockWorkflowManager.return_value
         mock_instance.run_workflow.assert_called_once_with([], "req-mem", "disc-mem", nonResponder=True, api_key=None)
+
+
+class TestEmptyContentFilter:
+    """Tests the message filter at the top of run_workflow (line 269)."""
+
+    def test_preserves_tool_calls_message_with_empty_content(self, mock_dependencies):
+        """An assistant message with tool_calls but empty content survives the filter."""
+        messages = [
+            {"role": "user", "content": "Do something."},
+            {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "function": {"name": "f"}}]},
+            {"role": "tool", "content": "result", "tool_call_id": "c1"},
+            {"role": "assistant", "content": "Done."},
+        ]
+        mock_dependencies["json_load"].return_value = {"nodes": []}
+        manager = WorkflowManager(workflow_config_name="test_workflow")
+        manager.run_workflow(messages=list(messages), request_id="req-1")
+
+        passed_messages = mock_dependencies["WorkflowProcessor"].call_args.kwargs["messages"]
+        roles = [m["role"] for m in passed_messages]
+        assert "tool" in roles
+        # The empty-content assistant with tool_calls should survive
+        tool_call_msgs = [m for m in passed_messages if m.get("tool_calls")]
+        assert len(tool_call_msgs) == 1
+
+    def test_preserves_tool_role_message_with_empty_content(self, mock_dependencies):
+        """A tool message with tool_call_id but empty content survives the filter."""
+        messages = [
+            {"role": "user", "content": "Do something."},
+            {"role": "assistant", "content": "calling tool", "tool_calls": [{"id": "c1"}]},
+            {"role": "tool", "content": "", "tool_call_id": "c1"},
+            {"role": "assistant", "content": "Done."},
+        ]
+        mock_dependencies["json_load"].return_value = {"nodes": []}
+        manager = WorkflowManager(workflow_config_name="test_workflow")
+        manager.run_workflow(messages=list(messages), request_id="req-1")
+
+        passed_messages = mock_dependencies["WorkflowProcessor"].call_args.kwargs["messages"]
+        tool_msgs = [m for m in passed_messages if m.get("role") == "tool"]
+        assert len(tool_msgs) == 1
+
+    def test_still_drops_plain_empty_messages(self, mock_dependencies):
+        """Messages with empty content and no tool data are still dropped."""
+        messages = [
+            {"role": "user", "content": "Hello."},
+            {"role": "assistant", "content": ""},
+            {"role": "user", "content": "   "},
+            {"role": "user", "content": "Real message."},
+        ]
+        mock_dependencies["json_load"].return_value = {"nodes": []}
+        manager = WorkflowManager(workflow_config_name="test_workflow")
+        manager.run_workflow(messages=list(messages), request_id="req-1")
+
+        passed_messages = mock_dependencies["WorkflowProcessor"].call_args.kwargs["messages"]
+        contents = [m["content"] for m in passed_messages]
+        assert "" not in contents
+        assert "   " not in contents
+        assert "Hello." in contents
+        assert "Real message." in contents

@@ -48,12 +48,24 @@ HEARTBEAT_INTERVAL = 1  # seconds
 HEARTBEAT_MESSAGE = b':\n\n'
 
 
-def _stream_with_eventlet_optimized(request_id: str, messages: List[Dict], stream: bool, api_key: str = None) -> Response:
+def _stream_with_eventlet_optimized(request_id: str, messages: List[Dict], stream: bool, api_key: str = None,
+                                    tools: list = None, tool_choice=None) -> Response:
     """
     Optimized streaming implementation for Eventlet with disconnect detection during prefill.
 
     Uses a queue-based approach where a background greenlet reads from handle_user_prompt()
     and the main generator uses timeouts to detect when heartbeats are needed.
+
+    Args:
+        request_id (str): The unique identifier for this request.
+        messages (List[Dict]): The conversation history in the internal message format.
+        stream (bool): Whether streaming mode is active.
+        api_key (str, optional): The API key for encryption context scoping.
+        tools (list, optional): Tool definitions from the incoming request.
+        tool_choice: Tool selection policy from the incoming request.
+
+    Returns:
+        Response: A Flask streaming Response with SSE (text/event-stream) content type.
     """
     logger.info(f"OpenAI starting Eventlet optimized streaming for request_id: {request_id}")
     from Middleware.services.cancellation_service import cancellation_service
@@ -76,7 +88,8 @@ def _stream_with_eventlet_optimized(request_id: str, messages: List[Dict], strea
         instance_global_variables.set_request_user(captured_request_user)
         set_encryption_context(captured_encryption_active)
         try:
-            for chunk in handle_user_prompt(request_id, messages, stream, api_key=api_key):
+            for chunk in handle_user_prompt(request_id, messages, stream, api_key=api_key,
+                                            tools=tools, tool_choice=tool_choice):
                 if stop_signal.ready():
                     break
                 event_queue.put(("data", chunk))
@@ -156,7 +169,8 @@ def _stream_with_eventlet_optimized(request_id: str, messages: List[Dict], strea
     return response
 
 
-def _stream_response_fallback(request_id: str, messages: List[Dict], stream: bool, api_key: str = None) -> Response:
+def _stream_response_fallback(request_id: str, messages: List[Dict], stream: bool, api_key: str = None,
+                              tools: list = None, tool_choice=None) -> Response:
     """
     Fallback streaming implementation for non-Eventlet environments.
 
@@ -170,6 +184,8 @@ def _stream_response_fallback(request_id: str, messages: List[Dict], stream: boo
         messages (List[Dict]): The conversation history in the internal message format.
         stream (bool): Whether streaming mode is active.
         api_key (str, optional): The API key for encryption context scoping.
+        tools (list, optional): Tool definitions from the incoming request.
+        tool_choice: Tool selection policy from the incoming request.
 
     Returns:
         Response: A Flask streaming Response with SSE (text/event-stream) content type.
@@ -191,7 +207,8 @@ def _stream_response_fallback(request_id: str, messages: List[Dict], stream: boo
         set_encryption_context(captured_encryption_active)
         logger.debug(f"OpenAI Fallback Generator starting for request_id: {request_id}")
         try:
-            for chunk in handle_user_prompt(request_id, messages, stream, api_key=api_key):
+            for chunk in handle_user_prompt(request_id, messages, stream, api_key=api_key,
+                                            tools=tools, tool_choice=tool_choice):
                 if isinstance(chunk, str):
                     encoded = chunk.encode('utf-8')
                 else:
@@ -230,7 +247,8 @@ def _stream_response_fallback(request_id: str, messages: List[Dict], stream: boo
     return response
 
 
-def _handle_streaming_request(request_id: str, messages: List[Dict], stream: bool, api_key: str = None) -> Response:
+def _handle_streaming_request(request_id: str, messages: List[Dict], stream: bool, api_key: str = None,
+                              tools: list = None, tool_choice=None) -> Response:
     """
     Selects and invokes the appropriate streaming implementation.
 
@@ -244,6 +262,8 @@ def _handle_streaming_request(request_id: str, messages: List[Dict], stream: boo
         messages (List[Dict]): The conversation history in the internal message format.
         stream (bool): Whether streaming mode is active.
         api_key (str, optional): The API key for encryption context scoping.
+        tools (list, optional): Tool definitions from the incoming request.
+        tool_choice: Tool selection policy from the incoming request.
 
     Returns:
         Response: A Flask streaming Response with SSE (text/event-stream) content type.
@@ -251,7 +271,8 @@ def _handle_streaming_request(request_id: str, messages: List[Dict], stream: boo
     is_eventlet_active = EVENTLET_AVAILABLE and eventlet.patcher.is_monkey_patched('socket')
 
     if is_eventlet_active:
-        return _stream_with_eventlet_optimized(request_id, messages, stream, api_key=api_key)
+        return _stream_with_eventlet_optimized(request_id, messages, stream, api_key=api_key,
+                                               tools=tools, tool_choice=tool_choice)
     else:
         if not EVENTLET_AVAILABLE:
             logger.warning(
@@ -259,7 +280,8 @@ def _handle_streaming_request(request_id: str, messages: List[Dict], stream: boo
         else:
             logger.debug(
                 "Eventlet installed but monkey patching is not active (not running via run_eventlet.py). Falling back to synchronous streaming.")
-        return _stream_response_fallback(request_id, messages, stream, api_key=api_key)
+        return _stream_response_fallback(request_id, messages, stream, api_key=api_key,
+                                          tools=tools, tool_choice=tool_choice)
 
 
 class ModelsAPI(MethodView):
@@ -404,13 +426,19 @@ class ChatCompletionsAPI(MethodView):
                 return jsonify({"error": "The 'messages' field is required."}), 400
             messages: List[Dict[str, Any]] = request_data["messages"]
             for message in messages:
-                if "role" not in message or "content" not in message:
-                    return jsonify({"error": "Each message must have 'role' and 'content' fields."}), 400
+                if "role" not in message:
+                    return jsonify({"error": "Each message must have a 'role' field."}), 400
+                # Allow content to be absent or null for assistant messages with tool_calls
+                if "content" not in message and "tool_calls" not in message:
+                    return jsonify({"error": "Each message must have 'content' or 'tool_calls'."}), 400
+
+            tools: list = request_data.get("tools")
+            tool_choice = request_data.get("tool_choice")
 
             transformed_messages: List[Dict[str, Any]] = []
             for message in messages:
                 role = message["role"]
-                raw_content = message["content"]
+                raw_content = message.get("content")
                 images = []
 
                 if isinstance(raw_content, list):
@@ -448,6 +476,12 @@ class ChatCompletionsAPI(MethodView):
                 msg = {"role": role, "content": content}
                 if images:
                     msg["images"] = images
+                if "tool_calls" in message:
+                    msg["tool_calls"] = message["tool_calls"]
+                if "tool_call_id" in message:
+                    msg["tool_call_id"] = message["tool_call_id"]
+                if "name" in message:
+                    msg["name"] = message["name"]
                 transformed_messages.append(msg)
 
             if add_missing_assistant:
@@ -458,10 +492,18 @@ class ChatCompletionsAPI(MethodView):
 
             if stream:
                 logger.info(f"ChatCompletionsAPI starting streaming response for request_id: {request_id}")
-                return _handle_streaming_request(request_id, transformed_messages, stream, api_key=api_key)
+                return _handle_streaming_request(request_id, transformed_messages, stream, api_key=api_key,
+                                                  tools=tools, tool_choice=tool_choice)
             else:
-                return_response = handle_user_prompt(request_id, transformed_messages, stream=False, api_key=api_key)
-                response = response_builder.build_openai_chat_completion_response(return_response)
+                return_response = handle_user_prompt(request_id, transformed_messages, stream=False, api_key=api_key,
+                                                     tools=tools, tool_choice=tool_choice)
+                if isinstance(return_response, dict):
+                    response = response_builder.build_openai_chat_completion_response(
+                        full_text=return_response.get('content', ''),
+                        tool_calls=return_response.get('tool_calls'),
+                    )
+                else:
+                    response = response_builder.build_openai_chat_completion_response(return_response)
                 return jsonify(response)
         finally:
             api_helpers.clear_workflow_override()
@@ -488,7 +530,8 @@ class OpenAIApiHandler(BaseApiHandler):
         """
         app_instance.add_url_rule('/v1/models', view_func=ModelsAPI.as_view('v1_models_api'))
         app_instance.add_url_rule('/v1/completions', view_func=CompletionsAPI.as_view('v1_completions_api'))
-        app_instance.add_url_rule('/chat/completions', view_func=ChatCompletionsAPI.as_view('chat_completions_api'))
+        app_instance.add_url_rule('/v1/chat/completions', view_func=ChatCompletionsAPI.as_view('v1_chat_completions_api'))
         # Add non-versioned aliases for broader compatibility
+        app_instance.add_url_rule('/chat/completions', view_func=ChatCompletionsAPI.as_view('chat_completions_api'))
         app_instance.add_url_rule('/models', view_func=ModelsAPI.as_view('models_api'))
         app_instance.add_url_rule('/completions', view_func=CompletionsAPI.as_view('completions_api'))

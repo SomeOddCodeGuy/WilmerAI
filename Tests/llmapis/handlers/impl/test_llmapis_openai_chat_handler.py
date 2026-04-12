@@ -139,7 +139,6 @@ class TestParseNonStreamResponse:
         ({}, "response with missing 'choices' key"),
         ({'choices': []}, "response with empty 'choices' list"),
         ({'choices': [{}]}, "response with choice missing 'message' key"),
-        ({'choices': [{'message': {}}]}, "response with message missing 'content' key")
     ])
     def test_malformed_responses(self, openai_handler, malformed_response, error_msg, mocker):
         """
@@ -153,6 +152,15 @@ class TestParseNonStreamResponse:
         assert result == ""
         mock_logger_error.assert_called_once()
         assert f"Could not find content in OpenAI response: {malformed_response}" in mock_logger_error.call_args[0][0]
+
+    def test_message_missing_content_key_returns_empty_string(self, openai_handler):
+        """
+        Tests that a message dict with no 'content' key returns an empty string
+        without raising an error, since .get() handles the missing key gracefully.
+        """
+        response_json = {'choices': [{'message': {}}]}
+        result = openai_handler._parse_non_stream_response(response_json)
+        assert result == ""
 
 
 class TestProcessStreamData:
@@ -405,3 +413,230 @@ class TestBuildMessagesFromConversation:
         assert result[0]["content"] == "Original text"
         assert "images" not in result[0]
         assert "error processing" in result[1]["content"]
+
+
+class TestProcessStreamDataToolCalls:
+    """
+    Tests for tool call extraction in streaming mode for the OpenAI backend handler.
+    """
+
+    def test_tool_call_initial_chunk(self, openai_handler):
+        """
+        A chunk with delta.tool_calls containing the initial tool call
+        (index, id, type, function name) should include tool_calls in the result dict.
+        """
+        data_str = json.dumps({
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": "call_abc123",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": ""}
+                    }]
+                },
+                "finish_reason": None
+            }]
+        })
+        result = openai_handler._process_stream_data(data_str)
+        assert 'tool_calls' in result
+        assert len(result['tool_calls']) == 1
+        assert result['tool_calls'][0]['id'] == 'call_abc123'
+        assert result['tool_calls'][0]['type'] == 'function'
+        assert result['tool_calls'][0]['function']['name'] == 'get_weather'
+        assert result['token'] == ''
+        assert result['finish_reason'] is None
+
+    def test_tool_call_argument_fragment(self, openai_handler):
+        """
+        A chunk with delta.tool_calls containing just an argument fragment
+        should pass it through in the result.
+        """
+        data_str = json.dumps({
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "function": {"arguments": '{"loc'}
+                    }]
+                },
+                "finish_reason": None
+            }]
+        })
+        result = openai_handler._process_stream_data(data_str)
+        assert 'tool_calls' in result
+        assert result['tool_calls'][0]['function']['arguments'] == '{"loc'
+        assert result['token'] == ''
+
+    def test_tool_call_finish_reason_tool_calls(self, openai_handler):
+        """
+        When finish_reason is "tool_calls", it should be passed through in the result.
+        """
+        data_str = json.dumps({
+            "choices": [{
+                "delta": {},
+                "finish_reason": "tool_calls"
+            }]
+        })
+        result = openai_handler._process_stream_data(data_str)
+        assert result['finish_reason'] == 'tool_calls'
+        assert result['token'] == ''
+
+    def test_tool_call_with_content(self, openai_handler):
+        """
+        A chunk with both content text AND tool_calls should include both in the result.
+        """
+        data_str = json.dumps({
+            "choices": [{
+                "delta": {
+                    "content": "Let me check",
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": "call_xyz",
+                        "type": "function",
+                        "function": {"name": "search", "arguments": ""}
+                    }]
+                },
+                "finish_reason": None
+            }]
+        })
+        result = openai_handler._process_stream_data(data_str)
+        assert result['token'] == 'Let me check'
+        assert 'tool_calls' in result
+        assert result['tool_calls'][0]['function']['name'] == 'search'
+
+    def test_no_tool_calls_key_in_normal_chunk(self, openai_handler):
+        """
+        Normal text chunks should NOT have a 'tool_calls' key in the result dict at all.
+        """
+        data_str = json.dumps({
+            "choices": [{
+                "delta": {"content": "Hello world"},
+                "finish_reason": None
+            }]
+        })
+        result = openai_handler._process_stream_data(data_str)
+        assert 'tool_calls' not in result
+        assert result['token'] == 'Hello world'
+
+
+class TestParseNonStreamResponseToolCalls:
+    """
+    Tests for tool call extraction in non-streaming mode for the OpenAI backend handler.
+    """
+
+    def test_tool_calls_present_returns_dict(self, openai_handler):
+        """
+        When response has tool_calls, should return a dict with 'content',
+        'tool_calls', and 'finish_reason' keys.
+        """
+        response_json = {
+            'choices': [{
+                'message': {
+                    'content': '',
+                    'tool_calls': [
+                        {
+                            'id': 'call_abc',
+                            'type': 'function',
+                            'function': {'name': 'get_weather', 'arguments': '{"city": "London"}'}
+                        }
+                    ]
+                },
+                'finish_reason': 'tool_calls'
+            }]
+        }
+        result = openai_handler._parse_non_stream_response(response_json)
+        assert isinstance(result, dict)
+        assert 'content' in result
+        assert 'tool_calls' in result
+        assert 'finish_reason' in result
+        assert len(result['tool_calls']) == 1
+        assert result['tool_calls'][0]['function']['name'] == 'get_weather'
+
+    def test_tool_calls_with_content(self, openai_handler):
+        """
+        Tool calls response with both content text and tool_calls should
+        include both in the returned dict.
+        """
+        response_json = {
+            'choices': [{
+                'message': {
+                    'content': 'I will look that up for you.',
+                    'tool_calls': [
+                        {
+                            'id': 'call_def',
+                            'type': 'function',
+                            'function': {'name': 'search', 'arguments': '{"q": "test"}'}
+                        }
+                    ]
+                },
+                'finish_reason': 'tool_calls'
+            }]
+        }
+        result = openai_handler._parse_non_stream_response(response_json)
+        assert isinstance(result, dict)
+        assert result['content'] == 'I will look that up for you.'
+        assert result['tool_calls'][0]['function']['name'] == 'search'
+
+    def test_tool_calls_finish_reason_from_response(self, openai_handler):
+        """
+        finish_reason should come from the response JSON's choices[0].finish_reason.
+        """
+        response_json = {
+            'choices': [{
+                'message': {
+                    'content': '',
+                    'tool_calls': [
+                        {
+                            'id': 'call_ghi',
+                            'type': 'function',
+                            'function': {'name': 'calculate', 'arguments': '{"x": 1}'}
+                        }
+                    ]
+                },
+                'finish_reason': 'tool_calls'
+            }]
+        }
+        result = openai_handler._parse_non_stream_response(response_json)
+        assert result['finish_reason'] == 'tool_calls'
+
+    def test_tool_calls_null_content(self, openai_handler):
+        """
+        When content is null but tool_calls are present, content should be empty string.
+        """
+        response_json = {
+            'choices': [{
+                'message': {
+                    'content': None,
+                    'tool_calls': [
+                        {
+                            'id': 'call_jkl',
+                            'type': 'function',
+                            'function': {'name': 'lookup', 'arguments': '{}'}
+                        }
+                    ]
+                },
+                'finish_reason': 'tool_calls'
+            }]
+        }
+        result = openai_handler._parse_non_stream_response(response_json)
+        assert isinstance(result, dict)
+        assert result['content'] == ''
+        assert len(result['tool_calls']) == 1
+
+    def test_no_tool_calls_returns_string(self, openai_handler):
+        """
+        Normal text response without tool_calls returns a plain string,
+        preserving existing behavior.
+        """
+        response_json = {
+            'choices': [{
+                'message': {
+                    'content': 'Just a normal response.'
+                },
+                'finish_reason': 'stop'
+            }]
+        }
+        result = openai_handler._parse_non_stream_response(response_json)
+        assert isinstance(result, str)
+        assert result == 'Just a normal response.'

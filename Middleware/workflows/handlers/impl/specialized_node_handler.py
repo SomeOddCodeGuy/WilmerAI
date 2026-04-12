@@ -73,6 +73,8 @@ class SpecializedNodeHandler(BaseHandler):
             return self.handle_json_extractor(context)
         elif node_type == "TagTextExtractor":
             return self.handle_tag_text_extractor(context)
+        elif node_type == "DelimitedChunker":
+            return self.handle_delimited_chunker(context)
 
         raise ValueError(f"Unknown specialized node type: {node_type}")
 
@@ -578,7 +580,18 @@ class SpecializedNodeHandler(BaseHandler):
             return self._handle_image_processor_legacy(context)
 
     def _handle_image_processor_legacy(self, context: ExecutionContext) -> str:
-        """Original (uncached) image processing path."""
+        """Original (uncached) image processing path.
+
+        Processes all images found in the conversation by dispatching each to a
+        vision-capable LLM individually, then aggregates the descriptions.
+
+        Args:
+            context (ExecutionContext): The central object containing all runtime data for the node.
+
+        Returns:
+            str: The combined text descriptions of all processed images, or a message
+                indicating no images were found.
+        """
         image_tasks = []
         for i, msg in enumerate(context.messages):
             if "images" in msg and msg["images"]:
@@ -623,7 +636,18 @@ class SpecializedNodeHandler(BaseHandler):
         return image_descriptions
 
     def _handle_image_processor_cached(self, context: ExecutionContext) -> str:
-        """Cached image processing path using per-discussion vision response files."""
+        """Cached image processing path using per-discussion vision response files.
+
+        Checks a per-discussion cache keyed by message hash before calling the
+        vision LLM, avoiding redundant processing of previously seen images.
+
+        Args:
+            context (ExecutionContext): The central object containing all runtime data for the node.
+
+        Returns:
+            str: The combined text descriptions of all processed images, or a message
+                indicating no images were found.
+        """
         logger.debug(f"_handle_image_processor_cached: api_key={'[present]' if context.api_key else '[None]'}")
         cache_path = get_discussion_vision_responses_file_path(context.discussion_id, api_key_hash=context.api_key_hash)
         logger.debug("Vision cache path: %s", cache_path)
@@ -819,3 +843,72 @@ class SpecializedNodeHandler(BaseHandler):
 
         logger.debug(f"TagTextExtractor: Tag '<{resolved_tag}>' not found in text.")
         return ""
+
+    def handle_delimited_chunker(self, context: ExecutionContext) -> str:
+        """
+        Handles the logic for a "DelimitedChunker" node.
+
+        This method splits a string on a delimiter and returns either the first N
+        or last N chunks rejoined with the same delimiter. It functions like head/tail
+        for delimited content.
+
+        Args:
+            context (ExecutionContext): The central object containing all runtime data for the node.
+
+        Returns:
+            str: The selected chunks rejoined with the delimiter, or an error message
+                if a required field is missing or invalid.
+        """
+        content_template = context.config.get("content")
+        if content_template is None:
+            logger.warning("DelimitedChunker node is missing 'content'.")
+            return "No content specified"
+
+        delimiter_template = context.config.get("delimiter")
+        if delimiter_template is None:
+            logger.warning("DelimitedChunker node is missing 'delimiter'.")
+            return "No delimiter specified"
+
+        mode = context.config.get("mode")
+        if mode is None:
+            logger.warning("DelimitedChunker node is missing 'mode'.")
+            return "No mode specified"
+
+        count = context.config.get("count")
+        if count is None:
+            logger.warning("DelimitedChunker node is missing 'count'.")
+            return "No count specified"
+
+        if not isinstance(count, int) or isinstance(count, bool):
+            logger.warning(f"DelimitedChunker 'count' must be an integer, got: {type(count).__name__}")
+            return f"Invalid count: must be an integer, got {type(count).__name__}"
+
+        if count < 1:
+            logger.warning(f"DelimitedChunker 'count' must be >= 1, got: {count}")
+            return f"Invalid count: must be >= 1, got {count}"
+
+        if mode not in ("head", "tail"):
+            logger.warning(f"DelimitedChunker 'mode' must be 'head' or 'tail', got: '{mode}'")
+            return f"Invalid mode: must be 'head' or 'tail', got '{mode}'"
+
+        resolved_content = self.workflow_variable_service.apply_variables(
+            content_template, context
+        )
+        resolved_delimiter = self.workflow_variable_service.apply_variables(
+            delimiter_template, context
+        )
+
+        if not resolved_content:
+            return ""
+
+        chunks = resolved_content.split(resolved_delimiter)
+
+        if count >= len(chunks):
+            return resolved_content
+
+        if mode == "head":
+            selected = chunks[:count]
+        else:
+            selected = chunks[-count:]
+
+        return resolved_delimiter.join(selected)

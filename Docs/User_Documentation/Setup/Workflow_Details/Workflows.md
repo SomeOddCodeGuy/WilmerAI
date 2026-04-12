@@ -144,7 +144,8 @@ This is a catalog of available node types, validated against the `WorkflowManage
 
 #### Core & Utility Nodes
 
-* **`Standard`**: The most fundamental node. Makes a direct call to an LLM.
+* **`Standard`**: The most fundamental node. Makes a direct call to an LLM. Supports `allowTools` to forward
+  tool definitions from the frontend to the backend LLM for tool call passthrough.
 * **`PythonModule`**: Executes a custom Python script as long as it matches the required signature, and returns the
   string output from that script as the nodes output.
 * **`GetCustomFile`**: Loads a `.txt` file from disk and places its content into the node's output. Its `filepath` field
@@ -231,7 +232,8 @@ The system provides variables for the last 1, 2, 3, 4, 5, 10, and 20 turns of th
 * **LLM-Templated Format**: `templated_user_prompt_last_one`, `templated_user_prompt_last_two`, etc. (This format is
   pre-processed to match the specific chat template of the target LLM).
 * `{chat_system_prompt}`: The system prompt sent from the front-end client.
-* `{system_prompts_as_string}`: All system messages from the conversation history concatenated into a single string.
+* `{templated_system_prompt}`: The system prompt formatted with the LLM's chat template.
+* `{chat_user_prompt_without_system}`: The full conversation (excluding system messages) as a raw string.
 * `{messages}`: The entire conversation history as a raw list of dictionaries (e.g.,
   `[{'role': 'user', 'content': '...'}]`). **Note**: This is available for both standard and Jinja2 formatting, but it
   is most useful with Jinja2 for iterating over the conversation.
@@ -316,3 +318,11 @@ not send its response to the user; that work will simply be lost.
 true. That field was specifically created for a very niche use-case where the user would want to have work continue
 after a response was sent, such as the lengthy process of generating memories, while a workflow lock node allows the
 user to continue talking to the LLM in the meantime. As such- do not use this unless you are CERTAIN you need it.**
+
+#### Important note about `allowTools`
+
+The `allowTools` boolean on `Standard` nodes controls whether tool definitions from the frontend request are forwarded
+to the backend LLM. Like `returnToUser`, this property only makes sense on the responding node. When `allowTools` is
+`true`, the LLM may respond with tool calls instead of text content, and WilmerAI passes those tool calls back to the
+frontend. Enabling it on non-responding nodes has no useful effect because tool call responses from internal nodes have
+no path back to the frontend. If the frontend request does not include tool definitions, this flag has no effect.

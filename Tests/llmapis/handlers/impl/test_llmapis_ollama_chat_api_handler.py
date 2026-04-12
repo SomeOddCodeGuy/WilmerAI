@@ -232,3 +232,311 @@ class TestBuildMessagesFromConversation:
         assert result[0]["images"] == ["user_img"]
         assert "images" not in result[1]
         assert "images" not in result[2]
+
+
+class TestProcessStreamDataToolCalls:
+    """
+    Tests for tool call extraction and OpenAI format conversion in streaming
+    for the Ollama handler.
+    """
+
+    def test_stream_tool_calls_converted_to_openai_format(self, mock_handler_config, mocker):
+        """
+        Ollama tool calls (function.arguments as dict) should be converted to
+        OpenAI format (arguments as JSON string, with id, type: "function", index).
+        """
+        fake_hex = "a1b2c3d4e5f6a1b2c3d4e5f6"
+        mock_uuid = mocker.MagicMock()
+        mock_uuid.hex = fake_hex
+        mocker.patch("Middleware.llmapis.handlers.impl.ollama_chat_api_handler.uuid.uuid4",
+                     return_value=mock_uuid)
+
+        handler = OllamaChatHandler(**mock_handler_config, stream=True)
+        data_str = json.dumps({
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": {"city": "London"}
+                    }
+                }]
+            },
+            "done": False
+        })
+        result = handler._process_stream_data(data_str)
+        assert 'tool_calls' in result
+        tc = result['tool_calls'][0]
+        assert tc['index'] == 0
+        assert tc['id'] == f"call_{fake_hex[:24]}"
+        assert tc['type'] == 'function'
+        assert tc['function']['name'] == 'get_weather'
+        assert tc['function']['arguments'] == json.dumps({"city": "London"})
+
+    def test_stream_multiple_tool_calls(self, mock_handler_config, mocker):
+        """
+        Multiple tool calls in one chunk should all be converted with
+        sequential indices.
+        """
+        hex_values = ["aaaa1111bbbb2222cccc3333", "dddd4444eeee5555ffff6666"]
+        call_count = {"n": 0}
+
+        def fake_uuid4():
+            mock_u = mocker.MagicMock()
+            mock_u.hex = hex_values[call_count["n"]]
+            call_count["n"] += 1
+            return mock_u
+
+        mocker.patch("Middleware.llmapis.handlers.impl.ollama_chat_api_handler.uuid.uuid4",
+                     side_effect=fake_uuid4)
+
+        handler = OllamaChatHandler(**mock_handler_config, stream=True)
+        data_str = json.dumps({
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"function": {"name": "func_a", "arguments": {"x": 1}}},
+                    {"function": {"name": "func_b", "arguments": {"y": 2}}}
+                ]
+            },
+            "done": False
+        })
+        result = handler._process_stream_data(data_str)
+        assert len(result['tool_calls']) == 2
+        assert result['tool_calls'][0]['index'] == 0
+        assert result['tool_calls'][0]['function']['name'] == 'func_a'
+        assert result['tool_calls'][1]['index'] == 1
+        assert result['tool_calls'][1]['function']['name'] == 'func_b'
+
+    def test_stream_tool_calls_with_empty_arguments(self, mock_handler_config, mocker):
+        """
+        Empty arguments dict should become '{}' JSON string.
+        """
+        mock_uuid = mocker.MagicMock()
+        mock_uuid.hex = "abcdef1234567890abcdef12"
+        mocker.patch("Middleware.llmapis.handlers.impl.ollama_chat_api_handler.uuid.uuid4",
+                     return_value=mock_uuid)
+
+        handler = OllamaChatHandler(**mock_handler_config, stream=True)
+        data_str = json.dumps({
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "function": {"name": "no_args_func", "arguments": {}}
+                }]
+            },
+            "done": False
+        })
+        result = handler._process_stream_data(data_str)
+        assert result['tool_calls'][0]['function']['arguments'] == '{}'
+
+    def test_stream_no_tool_calls_no_key(self, mock_handler_config):
+        """
+        Normal chunks without tool_calls should NOT have 'tool_calls' key in result.
+        """
+        handler = OllamaChatHandler(**mock_handler_config, stream=True)
+        data_str = json.dumps({
+            "message": {"role": "assistant", "content": "Hello"},
+            "done": False
+        })
+        result = handler._process_stream_data(data_str)
+        assert 'tool_calls' not in result
+        assert result['token'] == 'Hello'
+
+
+class TestParseNonStreamResponseToolCalls:
+    """
+    Tests for non-streaming tool call extraction and conversion for Ollama.
+    """
+
+    def test_non_stream_tool_calls_converted_to_openai_format(self, mock_handler_config, mocker):
+        """
+        Non-streaming tool calls should be converted from Ollama format
+        (arguments as dict) to OpenAI format (arguments as JSON string).
+        """
+        fake_hex = "112233445566778899aabbcc"
+        mock_uuid = mocker.MagicMock()
+        mock_uuid.hex = fake_hex
+        mocker.patch("Middleware.llmapis.handlers.impl.ollama_chat_api_handler.uuid.uuid4",
+                     return_value=mock_uuid)
+
+        handler = OllamaChatHandler(**mock_handler_config, stream=False)
+        response_json = {
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": {"city": "Paris"}
+                    }
+                }]
+            },
+            "done": True
+        }
+        result = handler._parse_non_stream_response(response_json)
+        assert isinstance(result, dict)
+        tc = result['tool_calls'][0]
+        assert tc['index'] == 0
+        assert tc['id'] == f"call_{fake_hex[:24]}"
+        assert tc['type'] == 'function'
+        assert tc['function']['name'] == 'get_weather'
+        assert tc['function']['arguments'] == json.dumps({"city": "Paris"})
+
+    def test_non_stream_multiple_tool_calls(self, mock_handler_config, mocker):
+        """
+        Multiple tool calls should each get a unique id and sequential index.
+        """
+        hex_values = ["aaa111bbb222ccc333ddd444", "eee555fff666aaa777bbb888"]
+        call_count = {"n": 0}
+
+        def fake_uuid4():
+            mock_u = mocker.MagicMock()
+            mock_u.hex = hex_values[call_count["n"]]
+            call_count["n"] += 1
+            return mock_u
+
+        mocker.patch("Middleware.llmapis.handlers.impl.ollama_chat_api_handler.uuid.uuid4",
+                     side_effect=fake_uuid4)
+
+        handler = OllamaChatHandler(**mock_handler_config, stream=False)
+        response_json = {
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"function": {"name": "func_x", "arguments": {"a": 1}}},
+                    {"function": {"name": "func_y", "arguments": {"b": 2}}}
+                ]
+            },
+            "done": True
+        }
+        result = handler._parse_non_stream_response(response_json)
+        assert len(result['tool_calls']) == 2
+        assert result['tool_calls'][0]['index'] == 0
+        assert result['tool_calls'][0]['id'] == f"call_{hex_values[0][:24]}"
+        assert result['tool_calls'][1]['index'] == 1
+        assert result['tool_calls'][1]['id'] == f"call_{hex_values[1][:24]}"
+
+    def test_non_stream_tool_calls_finish_reason_is_tool_calls(self, mock_handler_config, mocker):
+        """
+        finish_reason should be "tool_calls" when tool calls are present.
+        """
+        mock_uuid = mocker.MagicMock()
+        mock_uuid.hex = "deadbeefdeadbeefdeadbeef"
+        mocker.patch("Middleware.llmapis.handlers.impl.ollama_chat_api_handler.uuid.uuid4",
+                     return_value=mock_uuid)
+
+        handler = OllamaChatHandler(**mock_handler_config, stream=False)
+        response_json = {
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "function": {"name": "some_func", "arguments": {}}
+                }]
+            },
+            "done": True
+        }
+        result = handler._parse_non_stream_response(response_json)
+        assert result['finish_reason'] == 'tool_calls'
+
+    def test_non_stream_tool_calls_with_content(self, mock_handler_config, mocker):
+        """
+        Both content text and tool calls should be present in the returned dict.
+        """
+        mock_uuid = mocker.MagicMock()
+        mock_uuid.hex = "cafe0123456789abcdef0123"
+        mocker.patch("Middleware.llmapis.handlers.impl.ollama_chat_api_handler.uuid.uuid4",
+                     return_value=mock_uuid)
+
+        handler = OllamaChatHandler(**mock_handler_config, stream=False)
+        response_json = {
+            "message": {
+                "role": "assistant",
+                "content": "Let me look that up.",
+                "tool_calls": [{
+                    "function": {"name": "search", "arguments": {"query": "test"}}
+                }]
+            },
+            "done": True
+        }
+        result = handler._parse_non_stream_response(response_json)
+        assert isinstance(result, dict)
+        assert result['content'] == 'Let me look that up.'
+        assert len(result['tool_calls']) == 1
+        assert result['tool_calls'][0]['function']['name'] == 'search'
+
+    def test_non_stream_no_tool_calls_returns_string(self, mock_handler_config):
+        """
+        Normal response without tool calls returns a plain string.
+        """
+        handler = OllamaChatHandler(**mock_handler_config, stream=False)
+        response_json = {
+            "message": {
+                "role": "assistant",
+                "content": "A normal text response."
+            },
+            "done": True
+        }
+        result = handler._parse_non_stream_response(response_json)
+        assert isinstance(result, str)
+        assert result == "A normal text response."
+
+
+class TestPreparePayloadTools:
+    """
+    Tests for the Ollama handler's _prepare_payload method with tools parameter.
+    """
+
+    def test_tools_included_in_payload(self, mock_handler_config, mocker):
+        """
+        When tools param is provided, payload should have "tools" key.
+        """
+        handler = OllamaChatHandler(**mock_handler_config, stream=False)
+        mock_messages = [{"role": "user", "content": "Hello"}]
+        mocker.patch.object(handler, '_build_messages_from_conversation', return_value=mock_messages)
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the weather",
+                    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}
+                }
+            }
+        ]
+        payload = handler._prepare_payload(conversation=[], system_prompt=None, prompt="Hello", tools=tools)
+        assert "tools" in payload
+        assert payload["tools"] == tools
+
+    def test_tools_not_included_when_none(self, mock_handler_config, mocker):
+        """
+        When tools is None, payload should NOT have "tools" key.
+        """
+        handler = OllamaChatHandler(**mock_handler_config, stream=False)
+        mock_messages = [{"role": "user", "content": "Hello"}]
+        mocker.patch.object(handler, '_build_messages_from_conversation', return_value=mock_messages)
+
+        payload = handler._prepare_payload(conversation=[], system_prompt=None, prompt="Hello", tools=None)
+        assert "tools" not in payload
+
+    def test_tool_choice_ignored(self, mock_handler_config, mocker):
+        """
+        tool_choice should NOT appear in payload (Ollama doesn't support it).
+        """
+        handler = OllamaChatHandler(**mock_handler_config, stream=False)
+        mock_messages = [{"role": "user", "content": "Hello"}]
+        mocker.patch.object(handler, '_build_messages_from_conversation', return_value=mock_messages)
+
+        tools = [{"type": "function", "function": {"name": "test", "parameters": {}}}]
+        payload = handler._prepare_payload(
+            conversation=[], system_prompt=None, prompt="Hello",
+            tools=tools, tool_choice="auto"
+        )
+        assert "tool_choice" not in payload
+        assert "tools" in payload

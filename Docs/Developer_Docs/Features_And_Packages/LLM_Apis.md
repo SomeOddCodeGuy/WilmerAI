@@ -73,9 +73,13 @@ A request to an LLM follows a clear, sequential path from service instantiation 
    public `$LlmApiService.get_response_from_llm()` method, providing the conversation history, prompts, and an optional
    **`request_id`** for cancellation.
 
-5. **Initial Prompt Manipulation**: Inside `$get_response_from_llm()$`, some initial, universal prompt modifications
-   occur. Based on endpoint configuration, text can be prepended to the system or user prompts. If the target LLM cannot
-   handle images, the `images` key is stripped from all messages here.
+5. **Initial Prompt Manipulation**: Inside `$get_response_from_llm()$`, some initial modifications occur. If the
+   target LLM cannot handle images, the `images` key is stripped from all messages here. For the **completions** path
+   (where `system_prompt` and `prompt` strings are passed directly), `addTextToStartOfSystem` and
+   `addTextToStartOfPrompt` are applied to those strings. For the **chat completions** path (where a `conversation`
+   list is passed instead), these text injections are handled one layer deeper in
+   `BaseChatCompletionsHandler._build_messages_from_conversation()`, which also handles `addTextToStartOfCompletion`
+   and `ensureTextAddedToAssistantWhenChatCompletion` for response seeding/prefilling.
 
 6. **Delegation to Handler**: `$LlmApiService$` determines if the request is for streaming or non-streaming and
    delegates the call to the appropriate method on the instantiated handler: `$handler.handle_streaming()`
@@ -94,7 +98,9 @@ A request to an LLM follows a clear, sequential path from service instantiation 
    to the original caller.
 
     * **Streaming**: A generator that yields standardized dictionaries, like `{'token': '...', 'finish_reason': '...'}`.
-    * **Non-streaming**: A single raw string containing the full generated text.
+      When the LLM produces tool calls, chunks may also contain a `'tool_calls'` key.
+    * **Non-streaming**: A single raw string containing the full generated text, or a dictionary with `'content'`,
+      `'tool_calls'`, and `'finish_reason'` keys when the LLM response includes tool calls.
 
 Final formatting and content cleaning (e.g., removing `<think>` tags) are the responsibility of higher-level components,
 such as a `$WorkflowProcessor$` or `$StreamingResponseHandler$`, which consume this raw output.
@@ -144,15 +150,27 @@ such as a `$WorkflowProcessor$` or `$StreamingResponseHandler$`, which consume t
     * **`$OllamaChatHandler$`**: Inherits from `$BaseChatCompletionsHandler$`. It overrides `_prepare_payload` to place
       generation parameters in an `options` object and sets `$_iterate_by_lines$` to `True` to handle line-delimited
       JSON streaming.
+    * **`$OpenAiApiHandler$`**: Inherits from `$BaseChatCompletionsHandler$`. It overrides
+      `_build_messages_from_conversation` to convert per-message `"images"` keys into OpenAI's multimodal content format
+      (`{"type": "image_url", "image_url": {"url": "..."}}`), handling base64 data URIs, raw base64 strings (with MIME
+      type detection), and HTTP URLs.
     * **`$KoboldCppApiHandler$`**: Inherits from `$BaseCompletionsHandler$`. It implements `_get_api_endpoint_url` to
-      return the correct Kobold endpoint.
+      return the correct Kobold endpoint. As a completions handler, it flattens conversation into a single prompt string
+      and does not process images.
 
 **Note on Image/Multimodal Support**: Images are carried as a per-message `"images"` key on regular message dicts (e.g.,
 `{"role": "user", "content": "What's this?", "images": ["base64data"]}`). There are no separate `role: "images"` messages.
-Standard handlers (`OllamaChatHandler`, `OpenAiApiHandler`, `ClaudeApiHandler`, `KoboldCppApiHandler`) detect the
-`"images"` key and format images appropriately for each API in their `_build_messages_from_conversation` methods. The `LlmApiService` gatekeeper
+Chat completion handlers (`OllamaChatHandler`, `OpenAiApiHandler`, `ClaudeApiHandler`) detect the
+`"images"` key and format images appropriately for each API in their `_build_messages_from_conversation` methods.
+Completions handlers (e.g., `KoboldCppApiHandler`) do not process images. The `LlmApiService` gatekeeper
 strips the `"images"` key from all messages when `llm_takes_images` is False, ensuring non-vision models never see image
 data. Separate "ImageSpecific" handlers are no longer needed and have been deprecated.
+
+The `Standard` node supports direct image passthrough via `acceptImages: true` in its config, with an optional
+`maxImagesToSend` integer to cap the number of images sent to the backend (keeping the most recent). The
+`StandardNodeHandler` reads these flags and passes `llm_takes_images` and `max_images` to
+`LLMDispatchService.dispatch()`. Inside dispatch, `_apply_image_limit()` trims images from oldest to newest across
+the message collection or the gathered image list, depending on code path.
 
 The `ImageProcessor` workflow node supports optional per-discussion caching of vision responses via the
 `saveVisionResponsesToDiscussionId` property. When enabled, vision LLM responses are stored in
@@ -177,3 +195,52 @@ The process for adding a new LLM remains the same. The guide below provides the 
    unique `type` string.
 6. **Register the New Handler**: Add your new handler to the factory method `$LlmApiService.create_api_handler()`
    in `$Middleware/llmapis/llm_api.py$`.
+
+-----
+
+## 6\. Tool Call Support
+
+The `llmapis` layer supports forwarding tool definitions to backend LLMs and returning structured tool call responses.
+The internal canonical format for tools, tool_choice, and tool call responses is OpenAI's format. Handlers for
+non-OpenAI backends are responsible for converting to and from their native formats.
+
+### Payload Preparation
+
+`_prepare_payload` on `$BaseChatCompletionsHandler$` accepts optional `tools` and `tool_choice` keyword arguments. When
+provided, these are included in the outgoing payload. Each concrete handler may convert them to the backend's native
+format:
+
+* **`$OpenAiApiHandler$`**: Passes `tools` and `tool_choice` through unchanged, as they are already in OpenAI format.
+* **`$ClaudeApiHandler$`**: Converts tool definitions via `_convert_tools_to_claude_format()`, which transforms the
+  OpenAI structure (`{"type": "function", "function": {"name": ..., "parameters": ...}}`) into Claude's structure
+  (`{"name": ..., "input_schema": ...}`). Similarly, `_convert_tool_choice_to_claude_format()` maps OpenAI's
+  `tool_choice` strings and objects to Claude's equivalents (e.g., `"auto"` becomes `{"type": "auto"}`).
+* **`$OllamaChatHandler$`**: Passes `tools` and `tool_choice` through directly, as Ollama accepts OpenAI-format tool
+  definitions.
+
+### Streaming Responses (`_process_stream_data`)
+
+`_process_stream_data` can now return dictionaries that include a `tool_calls` key alongside `token` and
+`finish_reason`. The format of `tool_calls` in the returned dict is always OpenAI's delta format. Each handler
+normalizes its backend's streaming output:
+
+* **`$OpenAiApiHandler$`**: Extracts `tool_calls` directly from the SSE delta object.
+* **`$ClaudeApiHandler$`**: Converts Claude's `content_block_start` (type `tool_use`) and `content_block_delta`
+  (type `input_json_delta`) events into OpenAI-format tool call deltas.
+* **`$OllamaChatHandler$`**: Converts Ollama's tool call format (where `arguments` is a dict) to OpenAI's format
+  (where `arguments` is a JSON string), generating synthetic `id` values for each call.
+
+### Non-Streaming Responses (`_parse_non_stream_response`)
+
+`_parse_non_stream_response` returns `Union[str, Dict[str, Any]]`. When the response contains tool calls, it returns
+a dictionary with three keys:
+
+* `content` (str): Any text content from the response.
+* `tool_calls` (list): Tool calls in OpenAI format.
+* `finish_reason` (str): Typically `"tool_calls"` when tool calls are present.
+
+When no tool calls are present, the method returns a plain string as before.
+
+The same normalization rules apply: Claude and Ollama handlers convert their native tool call structures to OpenAI
+format before returning. Ollama specifically converts `arguments` from a dict to a JSON string to match OpenAI's
+convention.

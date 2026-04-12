@@ -21,7 +21,8 @@ logger = logging.getLogger(__name__)
 response_builder = ResponseBuilderService()
 
 
-def handle_user_prompt(request_id: str, prompt_collection: List[Dict[str, Any]], stream: bool, api_key: str = None) -> Union[str, Generator[str, None, None]]:
+def handle_user_prompt(request_id: str, prompt_collection: List[Dict[str, Any]], stream: bool, api_key: str = None,
+                       tools: list = None, tool_choice=None) -> Union[str, Generator[str, None, None]]:
     """
     Processes a user prompt by routing it to the appropriate workflow.
 
@@ -34,6 +35,9 @@ def handle_user_prompt(request_id: str, prompt_collection: List[Dict[str, Any]],
         request_id (str): The unique identifier for this request.
         prompt_collection (List[Dict[str, Any]]): The list of messages representing the conversation.
         stream (bool): A flag indicating whether to return a streaming response.
+        api_key (str): The API key from the request, if present.
+        tools (list): Tool definitions from the incoming request.
+        tool_choice: Tool selection policy from the incoming request.
 
     Returns:
         Union[str, Generator[str, None, None]]: The complete response string or a generator for streaming chunks.
@@ -61,7 +65,9 @@ def handle_user_prompt(request_id: str, prompt_collection: List[Dict[str, Any]],
             messages=sanitized_messages,
             is_streaming=stream,
             workflow_user_folder_override=folder_path,
-            api_key=api_key
+            api_key=api_key,
+            tools=tools,
+            tool_choice=tool_choice
         )
 
     if not get_custom_workflow_is_active():
@@ -73,7 +79,9 @@ def handle_user_prompt(request_id: str, prompt_collection: List[Dict[str, Any]],
             request_id=request_id,
             discussion_id=discussion_id,
             stream=stream,
-            api_key=api_key
+            api_key=api_key,
+            tools=tools,
+            tool_choice=tool_choice
         )
     else:
         logger.info("Custom workflow is active, running workflow.")
@@ -84,7 +92,9 @@ def handle_user_prompt(request_id: str, prompt_collection: List[Dict[str, Any]],
             discussion_id=discussion_id,
             messages=sanitized_messages,
             is_streaming=stream,
-            api_key=api_key
+            api_key=api_key,
+            tools=tools,
+            tool_choice=tool_choice
         )
 
 

@@ -36,6 +36,18 @@ def mock_context(mock_llm_handler) -> MagicMock:
     context.api_key_hash = None
     return context
 
+@pytest.fixture(autouse=True)
+def _mock_conversation_format_config(mocker):
+    """Mocks the user-level conversation formatting config for all tests in this module."""
+    mocker.patch(
+        'Middleware.workflows.managers.workflow_variable_manager.get_separate_conversation_in_variables',
+        return_value=False
+    )
+    mocker.patch(
+        'Middleware.workflows.managers.workflow_variable_manager.get_conversation_separation_delimiter',
+        return_value='\n'
+    )
+
 @patch('Middleware.workflows.managers.workflow_variable_manager.TimestampService')
 @patch('Middleware.workflows.managers.workflow_variable_manager.MemoryService')
 def test_init_and_set_categories(MockMemoryService, MockTimestampService):
@@ -90,7 +102,7 @@ def test_generate_conversation_turn_variables(mocker):
     """
     mock_extract_str = mocker.patch(
         'Middleware.workflows.managers.workflow_variable_manager.extract_last_n_turns_as_string',
-        side_effect=lambda messages, n, *args: f"raw_string_n{n}")
+        side_effect=lambda messages, n, *args, **kwargs: f"raw_string_n{n}")
     mock_get_formatted_str = mocker.patch(
         'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_n_turns_as_string',
         side_effect=lambda messages, n, *args, **kwargs: f"templated_string_n{n}")
@@ -112,7 +124,8 @@ def test_generate_conversation_turn_variables(mocker):
     assert result["chat_user_prompt_last_twenty"] == "raw_string_n20"
     assert result["templated_user_prompt_last_twenty"] == "templated_string_n20"
 
-    mock_extract_str.assert_any_call(messages, 1, True, False)
+    mock_extract_str.assert_any_call(messages, 1, True, False,
+                                     add_role_tags=False, separator='\n')
     mock_get_formatted_str.assert_any_call(
         messages, 1,
         template_file_name="test.json",
@@ -326,6 +339,71 @@ def test_apply_variables_key_error_fallback(mocker, mock_context):
     assert result == prompt
     mock_log_warning.assert_called_once()
     assert "A key error occurred" in mock_log_warning.call_args[0][0]
+
+
+def test_agent_output_braces_escaped_in_variables(mocker, mock_context):
+    """
+    Tests that curly braces in agent output values are sentinel-escaped
+    before entering the variables dict, preventing str.format() from
+    crashing on JSON-like content (e.g., tool call data loaded via
+    GetCustomFile).
+    """
+    manager = WorkflowVariableManager()
+    mock_context.agent_outputs = {
+        "agent1Output": 'tool: {"fn": {"args": "{\\"x\\": 1}"}}'
+    }
+    mock_context.agent_inputs = None
+    mock_context.messages = None  # Skip conversation variable generation
+
+    variables = manager.generate_variables(mock_context)
+
+    # The value should contain sentinel tokens, not raw braces
+    assert "__WILMER_L_CURLY__" in variables["agent1Output"]
+    assert "__WILMER_R_CURLY__" in variables["agent1Output"]
+    # Raw braces should NOT appear in the escaped value
+    assert "{" not in variables["agent1Output"]
+    assert "}" not in variables["agent1Output"]
+
+
+def test_agent_input_braces_escaped_in_variables(mocker, mock_context):
+    """
+    Tests that curly braces in agent input values are sentinel-escaped.
+    """
+    manager = WorkflowVariableManager()
+    mock_context.agent_outputs = {}
+    mock_context.agent_inputs = {
+        "agent1Input": '{"key": "value"}'
+    }
+    mock_context.messages = None  # Skip conversation variable generation
+
+    variables = manager.generate_variables(mock_context)
+
+    assert "__WILMER_L_CURLY__" in variables["agent1Input"]
+    assert "{" not in variables["agent1Input"]
+
+
+def test_apply_variables_with_braces_in_agent_output(mocker, mock_context):
+    """
+    End-to-end test: agent output containing JSON braces is substituted
+    into a prompt via apply_variables() without crashing, and the final
+    result has real braces restored.
+    """
+    manager = WorkflowVariableManager()
+    json_value = '{"function": {"name": "test", "arguments": "{\\"x\\": 1}"}}'
+    # Mock generate_variables to return sentinel-escaped value (as the real
+    # implementation now does), plus the variable key for format resolution.
+    escaped_value = json_value.replace("{", "__WILMER_L_CURLY__").replace("}", "__WILMER_R_CURLY__")
+    mocker.patch.object(manager, 'generate_variables', return_value={
+        "agent1Output": escaped_value
+    })
+    mock_context.config = {'jinja2': False}
+
+    prompt = "Result: {agent1Output}"
+    result = manager.apply_variables(prompt, mock_context)
+
+    # Braces should be restored in the final output
+    assert json_value in result
+
 
 # --- NEW TESTS FOR apply_early_variables METHOD ---
 # These tests verify the functionality we added to support early variable
@@ -766,7 +844,8 @@ class TestNMessagesVariables:
 
         # Verify extract was called with n=15
         mock_extract.assert_called_with(
-            mocker.ANY, 15, True, None
+            mocker.ANY, 15, True, None,
+            add_role_tags=False, separator='\n'
         )
         mock_formatted.assert_called_with(
             mocker.ANY, 15,
@@ -814,7 +893,8 @@ class TestNMessagesVariables:
 
         # Verify extract was called with default n=5
         mock_extract.assert_called_with(
-            mocker.ANY, 5, True, None
+            mocker.ANY, 5, True, None,
+            add_role_tags=False, separator='\n'
         )
         mock_formatted.assert_called_with(
             mocker.ANY, 5,
@@ -859,7 +939,8 @@ class TestNMessagesVariables:
 
         assert variables['chat_user_prompt_n_messages'] == "raw_default"
         assert variables['templated_user_prompt_n_messages'] == "templated_default"
-        mock_extract.assert_called_with(mocker.ANY, 5, True, None)
+        mock_extract.assert_called_with(mocker.ANY, 5, True, None,
+                                        add_role_tags=False, separator='\n')
 
     def test_n_messages_variable_usable_in_standard_format(self, mocker, mock_context):
         """Tests that the n-messages variable can be used with standard str.format()."""
@@ -933,7 +1014,8 @@ class TestEstimatedTokenLimitVariables:
 
         # Verify extract was called with token_limit=5000
         mock_extract_token.assert_called_with(
-            mocker.ANY, 5000, True, None
+            mocker.ANY, 5000, True, None,
+            add_role_tags=False, separator='\n'
         )
         mock_formatted_token.assert_called_with(
             mocker.ANY, 5000,
@@ -981,7 +1063,8 @@ class TestEstimatedTokenLimitVariables:
 
         # Verify extract was called with default token_limit=2048
         mock_extract_token.assert_called_with(
-            mocker.ANY, 2048, True, None
+            mocker.ANY, 2048, True, None,
+            add_role_tags=False, separator='\n'
         )
         mock_formatted_token.assert_called_with(
             mocker.ANY, 2048,
@@ -1026,7 +1109,8 @@ class TestEstimatedTokenLimitVariables:
 
         assert variables['chat_user_prompt_estimated_token_limit'] == "raw_token_default"
         assert variables['templated_user_prompt_estimated_token_limit'] == "templated_token_default"
-        mock_extract_token.assert_called_with(mocker.ANY, 2048, True, None)
+        mock_extract_token.assert_called_with(mocker.ANY, 2048, True, None,
+                                             add_role_tags=False, separator='\n')
 
     def test_token_limit_variable_usable_in_standard_format(self, mocker, mock_context):
         """Tests that the token-limit variable can be used with standard str.format()."""
@@ -1104,7 +1188,8 @@ class TestMinMessagesMaxTokensVariables:
 
         # Verify extract was called with min_messages=10, max_tokens=5000
         mock_extract_combo.assert_called_with(
-            mocker.ANY, 10, 5000, True, None
+            mocker.ANY, 10, 5000, True, None,
+            add_role_tags=False, separator='\n'
         )
         mock_formatted_combo.assert_called_with(
             mocker.ANY, 10, 5000,
@@ -1152,7 +1237,8 @@ class TestMinMessagesMaxTokensVariables:
 
         # Verify extract was called with defaults: min_messages=5, max_tokens=2048
         mock_extract_combo.assert_called_with(
-            mocker.ANY, 5, 2048, True, None
+            mocker.ANY, 5, 2048, True, None,
+            add_role_tags=False, separator='\n'
         )
         mock_formatted_combo.assert_called_with(
             mocker.ANY, 5, 2048,
@@ -1196,7 +1282,8 @@ class TestMinMessagesMaxTokensVariables:
 
         assert variables['chat_user_prompt_min_n_max_tokens'] == "raw_combo_none"
         assert variables['templated_user_prompt_min_n_max_tokens'] == "templated_combo_none"
-        mock_extract_combo.assert_called_with(mocker.ANY, 5, 2048, True, None)
+        mock_extract_combo.assert_called_with(mocker.ANY, 5, 2048, True, None,
+                                             add_role_tags=False, separator='\n')
 
     def test_combo_variable_usable_in_standard_format(self, mocker, mock_context):
         """Tests that the combo variable can be used with standard str.format()."""
@@ -1382,9 +1469,12 @@ class TestConfigEdgeCases:
         manager.generate_variables(mock_context)
 
         # Should use defaults: n=5, tokens=2048, min=5/max=2048
-        mock_n.assert_called_with(mocker.ANY, 5, True, None)
-        mock_token.assert_called_with(mocker.ANY, 2048, True, None)
-        mock_combo.assert_called_with(mocker.ANY, 5, 2048, True, None)
+        mock_n.assert_called_with(mocker.ANY, 5, True, None,
+                                  add_role_tags=False, separator='\n')
+        mock_token.assert_called_with(mocker.ANY, 2048, True, None,
+                                      add_role_tags=False, separator='\n')
+        mock_combo.assert_called_with(mocker.ANY, 5, 2048, True, None,
+                                      add_role_tags=False, separator='\n')
 
     def test_partial_combo_config_only_min_messages(self, mocker, mock_context):
         """Tests that providing only minMessagesInVariable uses default for maxEstimatedTokensInVariable."""
@@ -1393,7 +1483,8 @@ class TestConfigEdgeCases:
 
         manager.generate_variables(mock_context)
 
-        mock_combo.assert_called_with(mocker.ANY, 10, 2048, True, None)
+        mock_combo.assert_called_with(mocker.ANY, 10, 2048, True, None,
+                                      add_role_tags=False, separator='\n')
 
     def test_partial_combo_config_only_max_tokens(self, mocker, mock_context):
         """Tests that providing only maxEstimatedTokensInVariable uses default for minMessagesInVariable."""
@@ -1402,7 +1493,8 @@ class TestConfigEdgeCases:
 
         manager.generate_variables(mock_context)
 
-        mock_combo.assert_called_with(mocker.ANY, 5, 4096, True, None)
+        mock_combo.assert_called_with(mocker.ANY, 5, 4096, True, None,
+                                      add_role_tags=False, separator='\n')
 
     def test_apply_variables_jinja2_passes_prompt_kwarg(self, mocker, mock_context):
         """Tests that apply_variables passes prompt= to generate_variables in the Jinja2 path."""
@@ -1446,4 +1538,1164 @@ class TestConfigEdgeCases:
         manager.generate_variables(mock_context)
 
         assert mock_context.messages == original_messages
+
+
+class TestAddUserAssistantTagsNodeLevel:
+    """Tests for the node-level addUserAssistantTags config property."""
+
+    def _setup_mocks(self, mocker, mock_context):
+        """Helper to set up common mocks for generate_variables tests."""
+        manager = WorkflowVariableManager()
+        mocker.patch.object(manager, 'generate_conversation_turn_variables', return_value={})
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.format_system_prompts', return_value={})
+
+        mock_n = mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_n_turns_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_n_turns_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_by_estimated_token_limit_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_by_estimated_token_limit_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_with_min_messages_and_token_limit_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_with_min_messages_and_token_limit_as_string',
+            return_value=""
+        )
+        return manager, mock_n
+
+    def test_add_user_assistant_tags_true(self, mocker, mock_context):
+        """Tests that addUserAssistantTags=True passes add_role_tags=True to extract functions."""
+        mock_context.config = {'addUserAssistantTags': True}
+        manager, mock_n = self._setup_mocks(mocker, mock_context)
+
+        manager.generate_variables(mock_context)
+
+        # Verify that generate_conversation_turn_variables was called with add_role_tags=True
+        manager.generate_conversation_turn_variables.assert_called_once_with(
+            originalMessages=mock_context.messages,
+            llm_handler=mock_context.llm_handler,
+            remove_all_system_override=None,
+            add_role_tags=True,
+            separator='\n'
+        )
+        # The configurable variable should also get add_role_tags=True
+        mock_n.assert_called_with(mocker.ANY, 5, True, None,
+                                  add_role_tags=True, separator='\n')
+
+    def test_add_user_assistant_tags_false(self, mocker, mock_context):
+        """Tests that addUserAssistantTags=False passes add_role_tags=False."""
+        mock_context.config = {'addUserAssistantTags': False}
+        manager, mock_n = self._setup_mocks(mocker, mock_context)
+
+        manager.generate_variables(mock_context)
+
+        manager.generate_conversation_turn_variables.assert_called_once_with(
+            originalMessages=mock_context.messages,
+            llm_handler=mock_context.llm_handler,
+            remove_all_system_override=None,
+            add_role_tags=False,
+            separator='\n'
+        )
+
+    def test_add_user_assistant_tags_missing_defaults_false(self, mocker, mock_context):
+        """Tests that missing addUserAssistantTags defaults to False."""
+        mock_context.config = {'jinja2': False}
+        manager, _ = self._setup_mocks(mocker, mock_context)
+
+        manager.generate_variables(mock_context)
+
+        manager.generate_conversation_turn_variables.assert_called_once_with(
+            originalMessages=mock_context.messages,
+            llm_handler=mock_context.llm_handler,
+            remove_all_system_override=None,
+            add_role_tags=False,
+            separator='\n'
+        )
+
+    def test_add_user_assistant_tags_none_config(self, mocker, mock_context):
+        """Tests that None config defaults add_role_tags to False."""
+        mock_context.config = None
+        manager, _ = self._setup_mocks(mocker, mock_context)
+
+        manager.generate_variables(mock_context)
+
+        manager.generate_conversation_turn_variables.assert_called_once_with(
+            originalMessages=mock_context.messages,
+            llm_handler=mock_context.llm_handler,
+            remove_all_system_override=None,
+            add_role_tags=False,
+            separator='\n'
+        )
+
+
+class TestConversationSeparationConfig:
+    """Tests for the user-level separateConversationInVariables and conversationSeparationDelimiter settings."""
+
+    def _setup_mocks(self, mocker, mock_context):
+        """Helper to set up common mocks."""
+        manager = WorkflowVariableManager()
+        mocker.patch.object(manager, 'generate_conversation_turn_variables', return_value={})
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.format_system_prompts', return_value={})
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_n_turns_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_n_turns_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_by_estimated_token_limit_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_by_estimated_token_limit_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_with_min_messages_and_token_limit_as_string',
+            return_value=""
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_with_min_messages_and_token_limit_as_string',
+            return_value=""
+        )
+        return manager
+
+    def test_separator_used_when_separate_conversation_true(self, mocker, mock_context):
+        """Tests that the custom delimiter is used when separateConversationInVariables is True."""
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_separate_conversation_in_variables',
+            return_value=True
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_conversation_separation_delimiter',
+            return_value='\n*** END MESSAGE ***\n'
+        )
+        mock_context.config = {'jinja2': False}
+        manager = self._setup_mocks(mocker, mock_context)
+
+        manager.generate_variables(mock_context)
+
+        manager.generate_conversation_turn_variables.assert_called_once_with(
+            originalMessages=mock_context.messages,
+            llm_handler=mock_context.llm_handler,
+            remove_all_system_override=None,
+            add_role_tags=False,
+            separator='\n*** END MESSAGE ***\n'
+        )
+
+    def test_default_separator_when_separate_conversation_false(self, mocker, mock_context):
+        """Tests that the default newline separator is used when separateConversationInVariables is False."""
+        # autouse fixture already patches these to False / '\n'
+        mock_context.config = {'jinja2': False}
+        manager = self._setup_mocks(mocker, mock_context)
+
+        manager.generate_variables(mock_context)
+
+        manager.generate_conversation_turn_variables.assert_called_once_with(
+            originalMessages=mock_context.messages,
+            llm_handler=mock_context.llm_handler,
+            remove_all_system_override=None,
+            add_role_tags=False,
+            separator='\n'
+        )
+
+    def test_combined_role_tags_and_custom_separator(self, mocker, mock_context):
+        """Tests addUserAssistantTags=True combined with a custom separator."""
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_separate_conversation_in_variables',
+            return_value=True
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_conversation_separation_delimiter',
+            return_value='\n\n'
+        )
+        mock_context.config = {'addUserAssistantTags': True}
+        manager = self._setup_mocks(mocker, mock_context)
+
+        manager.generate_variables(mock_context)
+
+        manager.generate_conversation_turn_variables.assert_called_once_with(
+            originalMessages=mock_context.messages,
+            llm_handler=mock_context.llm_handler,
+            remove_all_system_override=None,
+            add_role_tags=True,
+            separator='\n\n'
+        )
+
+
+# --- TESTS FOR SENTINEL TOKEN RESTORATION ---
+
+class TestSentinelTokenRestoration:
+    """Tests that apply_variables restores __WILMER_L_CURLY__ and __WILMER_R_CURLY__
+    sentinel tokens back to real curly braces in all code paths.
+
+    The gateway replaces { and } with sentinel tokens to protect them from str.format().
+    After variable substitution is complete, apply_variables must restore them so that
+    downstream consumers (SaveCustomFile, LLM prompts, etc.) see real braces.
+    """
+
+    def test_standard_format_restores_sentinels_in_variable_values(self, mocker, mock_context):
+        """Tests that sentinel tokens inside variable values are restored to real braces."""
+        manager = WorkflowVariableManager()
+        mocker.patch.object(manager, 'generate_variables', return_value={
+            'chat_user_prompt_last_one': (
+                'Here is some JSON: __WILMER_L_CURLY__"key": "value"__WILMER_R_CURLY__'
+            )
+        })
+        mock_context.config = {'jinja2': False}
+        prompt = "{chat_user_prompt_last_one}"
+
+        result = manager.apply_variables(prompt, mock_context)
+
+        assert result == 'Here is some JSON: {"key": "value"}'
+        assert '__WILMER_L_CURLY__' not in result
+        assert '__WILMER_R_CURLY__' not in result
+
+    def test_standard_format_restores_sentinels_in_static_text(self, mocker, mock_context):
+        """Tests that sentinel tokens in the prompt template itself are restored."""
+        manager = WorkflowVariableManager()
+        mocker.patch.object(manager, 'generate_variables', return_value={
+            'name': 'Wilmer'
+        })
+        mock_context.config = {'jinja2': False}
+        prompt = "Hello {name}, here is a brace: __WILMER_L_CURLY____WILMER_R_CURLY__"
+
+        result = manager.apply_variables(prompt, mock_context)
+
+        assert result == "Hello Wilmer, here is a brace: {}"
+
+    def test_jinja2_path_restores_sentinels(self, mocker, mock_context):
+        """Tests that sentinel tokens are restored when using the Jinja2 path."""
+        manager = WorkflowVariableManager()
+        mocker.patch.object(manager, 'generate_variables', return_value={
+            'content': 'JSON: __WILMER_L_CURLY__"a": 1__WILMER_R_CURLY__'
+        })
+        mock_context.config = {'jinja2': True}
+        mock_context.messages = []
+        prompt = "Data: {{ content }}"
+
+        result = manager.apply_variables(prompt, mock_context)
+
+        assert result == 'Data: JSON: {"a": 1}'
+        assert '__WILMER_L_CURLY__' not in result
+
+    def test_keyerror_fallback_restores_sentinels(self, mocker, mock_context):
+        """Tests that sentinel tokens are restored even when str.format() hits a KeyError."""
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.logger.warning')
+        manager = WorkflowVariableManager()
+        mocker.patch.object(manager, 'generate_variables', return_value={
+            'name': 'Wilmer'
+        })
+        mock_context.config = {'jinja2': False}
+        # {undefined_key} will cause a KeyError; the fallback returns the original prompt
+        prompt = "Hello {name}, __WILMER_L_CURLY__data__WILMER_R_CURLY__ and {undefined_key}"
+
+        result = manager.apply_variables(prompt, mock_context)
+
+        # The KeyError fallback returns the original prompt with sentinels restored
+        assert '__WILMER_L_CURLY__' not in result
+        assert '__WILMER_R_CURLY__' not in result
+        assert '{data}' in result
+
+    def test_nested_variable_with_sentinels(self, mocker, mock_context):
+        """Tests sentinel restoration when the second format pass resolves nested variables
+        that contain sentinel tokens."""
+        manager = WorkflowVariableManager()
+        mocker.patch.object(manager, 'generate_variables', return_value={
+            'my_template': 'func(__WILMER_L_CURLY____WILMER_R_CURLY__) called with {name}',
+            'name': 'test'
+        })
+        mock_context.config = {'jinja2': False}
+        prompt = "{my_template}"
+
+        result = manager.apply_variables(prompt, mock_context)
+
+        assert result == "func({}) called with test"
+
+    def test_real_world_savecustomfile_scenario(self, mocker, mock_context):
+        """Tests the exact bug scenario: chat_user_prompt_last_one contains a JSON/code
+        payload where all curly braces were replaced with sentinel tokens by the gateway."""
+        manager = WorkflowVariableManager()
+
+        # Simulate what the gateway does to a message containing JSON
+        sanitized_content = (
+            '__WILMER_L_CURLY__\n'
+            '  "nodes": [\n'
+            '    __WILMER_L_CURLY__\n'
+            '      "title": "Respond",\n'
+            '      "type": "Standard"\n'
+            '    __WILMER_R_CURLY__\n'
+            '  ]\n'
+            '__WILMER_R_CURLY__'
+        )
+        mocker.patch.object(manager, 'generate_variables', return_value={
+            'chat_user_prompt_last_one': sanitized_content
+        })
+        mock_context.config = {'jinja2': False}
+        prompt = "{chat_user_prompt_last_one}"
+
+        result = manager.apply_variables(prompt, mock_context)
+
+        expected = (
+            '{\n'
+            '  "nodes": [\n'
+            '    {\n'
+            '      "title": "Respond",\n'
+            '      "type": "Standard"\n'
+            '    }\n'
+            '  ]\n'
+            '}'
+        )
+        assert result == expected
+
+    def test_no_sentinels_returns_unchanged(self, mocker, mock_context):
+        """Tests that strings without sentinel tokens pass through unmodified."""
+        manager = WorkflowVariableManager()
+        mocker.patch.object(manager, 'generate_variables', return_value={
+            'name': 'Wilmer'
+        })
+        mock_context.config = {'jinja2': False}
+        prompt = "Hello {name}, no sentinels here."
+
+        result = manager.apply_variables(prompt, mock_context)
+
+        assert result == "Hello Wilmer, no sentinels here."
+
+    def test_double_restore_is_idempotent(self, mocker, mock_context):
+        """Tests that restoring sentinels on a string that already has real braces is safe.
+        This matters because the LLM path calls return_brackets again in
+        base_chat_completions_handler.py."""
+        manager = WorkflowVariableManager()
+        mocker.patch.object(manager, 'generate_variables', return_value={
+            'data': 'already has {real} braces and __WILMER_L_CURLY__sentinel__WILMER_R_CURLY__'
+        })
+        mock_context.config = {'jinja2': False}
+        prompt = "{data}"
+
+        result = manager.apply_variables(prompt, mock_context)
+
+        assert result == "already has {real} braces and {sentinel}"
+
+
+class TestIncludeToolCallsInConversation:
+    """Tests for the includeToolCallsInConversation node property."""
+
+    @staticmethod
+    def _apply_template_mocks(mocker):
+        """Applies standard mocks for template-loading functions that would hit disk."""
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_chat_template_name',
+            return_value="chat"
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.format_system_prompts',
+            return_value={}
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_n_turns_as_string',
+            return_value="templated"
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_by_estimated_token_limit_as_string',
+            return_value="templated"
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_with_min_messages_and_token_limit_as_string',
+            return_value="templated"
+        )
+
+    def test_tool_calls_included_when_enabled(self, mock_context, mocker):
+        """When includeToolCallsInConversation is true, tool call text appears in conversation variables."""
+        self._apply_template_mocks(mocker)
+        mock_context.config = {"jinja2": False, "includeToolCallsInConversation": True}
+        mock_context.messages = [
+            {"role": "user", "content": "Run ls"},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"function": {"name": "bash", "arguments": '{"command": "ls -la"}'}}
+            ]},
+            {"role": "tool", "content": "file1.txt\nfile2.txt"},
+            {"role": "user", "content": "Thanks"}
+        ]
+        manager = WorkflowVariableManager()
+        variables = manager.generate_variables(mock_context)
+        assert "Thanks" in variables.get("chat_user_prompt_last_one", "")
+        last_four = variables.get("chat_user_prompt_last_four", "")
+        assert "[Tool Call: bash] ls -la" in last_four
+
+    def test_tool_calls_excluded_by_default(self, mock_context, mocker):
+        """When includeToolCallsInConversation is not set, tool call messages remain empty."""
+        self._apply_template_mocks(mocker)
+        mock_context.config = {"jinja2": False}
+        mock_context.messages = [
+            {"role": "user", "content": "Run ls"},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"function": {"name": "bash", "arguments": '{"command": "ls -la"}'}}
+            ]},
+            {"role": "user", "content": "Thanks"}
+        ]
+        manager = WorkflowVariableManager()
+        variables = manager.generate_variables(mock_context)
+        last_three = variables.get("chat_user_prompt_last_three", "")
+        assert "[Tool Call:" not in last_three
+
+    def test_tool_calls_excluded_when_false(self, mock_context, mocker):
+        """Explicitly setting includeToolCallsInConversation to false leaves tool calls out."""
+        self._apply_template_mocks(mocker)
+        mock_context.config = {"jinja2": False, "includeToolCallsInConversation": False}
+        mock_context.messages = [
+            {"role": "user", "content": "Run ls"},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"function": {"name": "bash", "arguments": '{"command": "ls -la"}'}}
+            ]},
+            {"role": "user", "content": "Thanks"}
+        ]
+        manager = WorkflowVariableManager()
+        variables = manager.generate_variables(mock_context)
+        last_three = variables.get("chat_user_prompt_last_three", "")
+        assert "[Tool Call:" not in last_three
+
+    def test_tool_calls_appended_to_existing_content(self, mock_context, mocker):
+        """When an assistant message has both content and tool_calls, both are present."""
+        self._apply_template_mocks(mocker)
+        mock_context.config = {"jinja2": False, "includeToolCallsInConversation": True}
+        mock_context.messages = [
+            {"role": "user", "content": "Check something"},
+            {"role": "assistant", "content": "Sure, checking now.", "tool_calls": [
+                {"function": {"name": "bash", "arguments": '{"command": "git status"}'}}
+            ]}
+        ]
+        manager = WorkflowVariableManager()
+        variables = manager.generate_variables(mock_context)
+        last_two = variables.get("chat_user_prompt_last_two", "")
+        assert "Sure, checking now." in last_two
+        assert "[Tool Call: bash] git status" in last_two
+
+    def test_original_messages_not_mutated(self, mock_context, mocker):
+        """Enabling tool call inclusion must not mutate context.messages."""
+        self._apply_template_mocks(mocker)
+        original_messages = [
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"function": {"name": "bash", "arguments": '{"command": "pwd"}'}}
+            ]},
+            {"role": "user", "content": "Done"}
+        ]
+        mock_context.config = {"jinja2": False, "includeToolCallsInConversation": True}
+        mock_context.messages = original_messages
+        manager = WorkflowVariableManager()
+        manager.generate_variables(mock_context)
+        assert original_messages[0]["content"] == ""
+
+    def test_configurable_variables_also_enriched(self, mock_context, mocker):
+        """The min_n_max_tokens and other configurable variables also receive tool call enrichment."""
+        self._apply_template_mocks(mocker)
+        mock_context.config = {
+            "jinja2": False,
+            "includeToolCallsInConversation": True,
+            "minMessagesInVariable": 2,
+            "maxEstimatedTokensInVariable": 10000
+        }
+        mock_context.messages = [
+            {"role": "user", "content": "Do it"},
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"function": {"name": "write", "arguments": '{"filePath": "/tmp/out.txt"}'}}
+            ]},
+            {"role": "user", "content": "OK"}
+        ]
+        manager = WorkflowVariableManager()
+        variables = manager.generate_variables(mock_context, prompt="{chat_user_prompt_min_n_max_tokens}")
+        combo_var = variables.get("chat_user_prompt_min_n_max_tokens", "")
+        assert "[Tool Call: write] /tmp/out.txt" in combo_var
+
+
+# ---------------------------------------------------------------------------
+# Comprehensive bracket-escaping scenario tests
+# ---------------------------------------------------------------------------
+# These tests are written from the perspective of "how should the system
+# behave" rather than "what does the code do".  They cover the full
+# lifecycle: gateway escaping, variable generation, variable substitution,
+# conversation variables with and without tool calls, agent outputs from
+# file-save/load round trips, the Jinja2 path, and apply_early_variables.
+# ---------------------------------------------------------------------------
+
+class TestBracketEscaping_AgentOutputs:
+    """Agent outputs may contain arbitrary text including JSON, code, and tool
+    call data.  The variable system must substitute them into prompts without
+    crashing and with the original braces intact in the final output."""
+
+    @staticmethod
+    def _make_variables(manager, mock_context, agent_outputs, agent_inputs=None):
+        """Helper: call generate_variables with messages=None to isolate agent output escaping."""
+        mock_context.agent_outputs = agent_outputs
+        mock_context.agent_inputs = agent_inputs
+        mock_context.messages = None
+        return manager.generate_variables(mock_context)
+
+    def test_simple_json_object(self, mocker, mock_context):
+        """A plain JSON object in an agent output should not break formatting."""
+        manager = WorkflowVariableManager()
+        variables = self._make_variables(manager, mock_context, {
+            "agent1Output": '{"status": "ok", "count": 42}'
+        })
+        mocker.patch.object(manager, 'generate_variables', return_value=variables)
+        mock_context.config = {"jinja2": False}
+
+        result = manager.apply_variables("Response: {agent1Output}", mock_context)
+        assert result == 'Response: {"status": "ok", "count": 42}'
+
+    def test_nested_json(self, mocker, mock_context):
+        """Deeply nested JSON with arrays should survive substitution."""
+        original = '{"data": {"items": [{"id": 1}, {"id": 2}], "meta": {"page": 1}}}'
+        manager = WorkflowVariableManager()
+        variables = self._make_variables(manager, mock_context, {"agent1Output": original})
+        mocker.patch.object(manager, 'generate_variables', return_value=variables)
+        mock_context.config = {"jinja2": False}
+
+        result = manager.apply_variables("{agent1Output}", mock_context)
+        assert result == original
+
+    def test_tool_call_response_json(self, mocker, mock_context):
+        """The exact JSON structure from a tool call response should survive."""
+        tool_json = '{"function": {"name": "bash", "arguments": "{\\"command\\": \\"ls -la\\"}"}}'
+        manager = WorkflowVariableManager()
+        variables = self._make_variables(manager, mock_context, {"agent1Output": tool_json})
+        mocker.patch.object(manager, 'generate_variables', return_value=variables)
+        mock_context.config = {"jinja2": False}
+
+        result = manager.apply_variables("Tool result: {agent1Output}", mock_context)
+        assert tool_json in result
+
+    def test_python_code_with_braces(self, mocker, mock_context):
+        """Python code containing dict/set literals should not break formatting."""
+        code = 'data = {"key": value}\nfor item in items:\n    result = {item: process(item)}'
+        manager = WorkflowVariableManager()
+        variables = self._make_variables(manager, mock_context, {"agent1Output": code})
+        mocker.patch.object(manager, 'generate_variables', return_value=variables)
+        mock_context.config = {"jinja2": False}
+
+        result = manager.apply_variables("{agent1Output}", mock_context)
+        assert result == code
+
+    def test_empty_braces_in_output(self, mocker, mock_context):
+        """Empty brace pairs (common in code) should survive."""
+        manager = WorkflowVariableManager()
+        variables = self._make_variables(manager, mock_context, {
+            "agent1Output": "result = {}"
+        })
+        mocker.patch.object(manager, 'generate_variables', return_value=variables)
+        mock_context.config = {"jinja2": False}
+
+        result = manager.apply_variables("{agent1Output}", mock_context)
+        assert result == "result = {}"
+
+    def test_single_open_brace(self, mocker, mock_context):
+        """An unmatched open brace should not cause a ValueError."""
+        manager = WorkflowVariableManager()
+        variables = self._make_variables(manager, mock_context, {
+            "agent1Output": "incomplete { brace"
+        })
+        mocker.patch.object(manager, 'generate_variables', return_value=variables)
+        mock_context.config = {"jinja2": False}
+
+        result = manager.apply_variables("{agent1Output}", mock_context)
+        assert result == "incomplete { brace"
+
+    def test_single_close_brace(self, mocker, mock_context):
+        """An unmatched close brace should not cause a ValueError."""
+        manager = WorkflowVariableManager()
+        variables = self._make_variables(manager, mock_context, {
+            "agent1Output": "incomplete } brace"
+        })
+        mocker.patch.object(manager, 'generate_variables', return_value=variables)
+        mock_context.config = {"jinja2": False}
+
+        result = manager.apply_variables("{agent1Output}", mock_context)
+        assert result == "incomplete } brace"
+
+    def test_multiple_outputs_mixed(self, mocker, mock_context):
+        """Multiple agent outputs, some with braces and some without, should all resolve."""
+        manager = WorkflowVariableManager()
+        variables = self._make_variables(manager, mock_context, {
+            "agent1Output": '{"json": true}',
+            "agent2Output": "plain text no braces",
+            "agent3Output": 'code: if x { return y; }'
+        })
+        mocker.patch.object(manager, 'generate_variables', return_value=variables)
+        mock_context.config = {"jinja2": False}
+
+        result = manager.apply_variables(
+            "A: {agent1Output} | B: {agent2Output} | C: {agent3Output}", mock_context
+        )
+        assert '{"json": true}' in result
+        assert "plain text no braces" in result
+        assert "code: if x { return y; }" in result
+
+    def test_output_that_looks_like_variable_reference(self, mocker, mock_context):
+        """An agent output containing text like '{agent2Output}' should be treated as
+        literal text, not as a variable reference on the second format pass."""
+        manager = WorkflowVariableManager()
+        variables = self._make_variables(manager, mock_context, {
+            "agent1Output": "See {agent2Output} for details",
+            "agent2Output": "SHOULD NOT APPEAR"
+        })
+        mocker.patch.object(manager, 'generate_variables', return_value=variables)
+        mock_context.config = {"jinja2": False}
+
+        result = manager.apply_variables("{agent1Output}", mock_context)
+        # The braces in the value are literal, not a reference to agent2Output
+        assert result == "See {agent2Output} for details"
+        assert "SHOULD NOT APPEAR" not in result
+
+    def test_output_with_empty_string(self, mocker, mock_context):
+        """An empty string output should resolve to empty, not crash."""
+        manager = WorkflowVariableManager()
+        variables = self._make_variables(manager, mock_context, {"agent1Output": ""})
+        mocker.patch.object(manager, 'generate_variables', return_value=variables)
+        mock_context.config = {"jinja2": False}
+
+        result = manager.apply_variables("Before:{agent1Output}:After", mock_context)
+        assert result == "Before::After"
+
+    def test_output_with_only_braces(self, mocker, mock_context):
+        """Output that is nothing but braces should survive."""
+        manager = WorkflowVariableManager()
+        variables = self._make_variables(manager, mock_context, {"agent1Output": "{{{}}}"})
+        mocker.patch.object(manager, 'generate_variables', return_value=variables)
+        mock_context.config = {"jinja2": False}
+
+        result = manager.apply_variables("{agent1Output}", mock_context)
+        assert result == "{{{}}}"
+
+    def test_non_string_output_passes_through(self, mock_context):
+        """Non-string outputs (e.g., int) should not be escaped, just passed through."""
+        manager = WorkflowVariableManager()
+        mock_context.agent_outputs = {"agent1Output": 42}
+        mock_context.agent_inputs = None
+        mock_context.messages = None
+        variables = manager.generate_variables(mock_context)
+        assert variables["agent1Output"] == 42
+
+
+class TestBracketEscaping_AgentInputs:
+    """Agent inputs from parent workflows may pass structured data. The same
+    escaping guarantees apply."""
+
+    def test_json_input_from_parent(self, mocker, mock_context):
+        """JSON passed as a scoped input should survive substitution."""
+        payload = '{"endpoint": "fast", "options": {"stream": true}}'
+        manager = WorkflowVariableManager()
+        mock_context.agent_outputs = {}
+        mock_context.agent_inputs = {"agent1Input": payload}
+        mock_context.messages = None
+        variables = manager.generate_variables(mock_context)
+
+        mocker.patch.object(manager, 'generate_variables', return_value=variables)
+        mock_context.config = {"jinja2": False}
+        result = manager.apply_variables("Config: {agent1Input}", mock_context)
+        assert result == f"Config: {payload}"
+
+    def test_plain_text_input_unchanged(self, mocker, mock_context):
+        """Plain text inputs without braces are unaffected by escaping."""
+        manager = WorkflowVariableManager()
+        mock_context.agent_outputs = {}
+        mock_context.agent_inputs = {"agent1Input": "MyEndpoint"}
+        mock_context.messages = None
+        variables = manager.generate_variables(mock_context)
+
+        mocker.patch.object(manager, 'generate_variables', return_value=variables)
+        mock_context.config = {"jinja2": False}
+        result = manager.apply_variables("{agent1Input}", mock_context)
+        assert result == "MyEndpoint"
+
+    def test_input_and_output_both_have_braces(self, mocker, mock_context):
+        """Both inputs and outputs containing braces should resolve independently."""
+        manager = WorkflowVariableManager()
+        mock_context.agent_outputs = {"agent1Output": '{"from": "output"}'}
+        mock_context.agent_inputs = {"agent1Input": '{"from": "input"}'}
+        mock_context.messages = None
+        variables = manager.generate_variables(mock_context)
+
+        mocker.patch.object(manager, 'generate_variables', return_value=variables)
+        mock_context.config = {"jinja2": False}
+        result = manager.apply_variables(
+            "Output={agent1Output} Input={agent1Input}", mock_context
+        )
+        assert '{"from": "output"}' in result
+        assert '{"from": "input"}' in result
+
+
+class TestBracketEscaping_Jinja2Path:
+    """The Jinja2 rendering path should handle sentinel tokens the same way
+    as the str.format() path."""
+
+    def test_json_in_agent_output_via_jinja2(self, mocker, mock_context):
+        """JSON braces in an agent output should appear correctly after Jinja2 rendering."""
+        json_val = '{"result": [1, 2, 3]}'
+        escaped = json_val.replace("{", "__WILMER_L_CURLY__").replace("}", "__WILMER_R_CURLY__")
+        manager = WorkflowVariableManager()
+        mocker.patch.object(manager, 'generate_variables', return_value={
+            "agent1Output": escaped
+        })
+        mock_context.config = {"jinja2": True}
+        mock_context.messages = []
+
+        result = manager.apply_variables("Data: {{ agent1Output }}", mock_context)
+        assert result == f"Data: {json_val}"
+
+    def test_jinja2_loop_with_escaped_content(self, mocker, mock_context):
+        """A Jinja2 loop rendering messages whose content contains sentinel tokens
+        should produce output with real braces."""
+        manager = WorkflowVariableManager()
+        mocker.patch.object(manager, 'generate_variables', return_value={})
+        mock_context.config = {"jinja2": True}
+        mock_context.messages = [
+            {"role": "user", "content": "Show __WILMER_L_CURLY__data__WILMER_R_CURLY__"}
+        ]
+
+        prompt = "{% for m in messages %}{{ m.content }}{% endfor %}"
+        result = manager.apply_variables(prompt, mock_context)
+        assert result == "Show {data}"
+
+    def test_jinja2_conditional_with_braces_in_value(self, mocker, mock_context):
+        """Jinja2 conditionals should work even when variable values contain braces."""
+        escaped = "__WILMER_L_CURLY__ok__WILMER_R_CURLY__"
+        manager = WorkflowVariableManager()
+        mocker.patch.object(manager, 'generate_variables', return_value={
+            "status": escaped
+        })
+        mock_context.config = {"jinja2": True}
+        mock_context.messages = []
+
+        prompt = "{% if status %}Status: {{ status }}{% endif %}"
+        result = manager.apply_variables(prompt, mock_context)
+        assert result == "Status: {ok}"
+
+
+class TestBracketEscaping_ConversationVariables:
+    """Conversation variables are built from message content. The gateway escapes
+    user message braces at ingestion. When tool calls are enriched, the injected
+    text must also be safe for str.format()."""
+
+    @staticmethod
+    def _apply_template_mocks(mocker):
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_chat_template_name',
+            return_value="chat"
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.format_system_prompts',
+            return_value={}
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_n_turns_as_string',
+            return_value="templated"
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_by_estimated_token_limit_as_string',
+            return_value="templated"
+        )
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_with_min_messages_and_token_limit_as_string',
+            return_value="templated"
+        )
+
+    def test_gateway_escaped_message_flows_through(self, mocker, mock_context):
+        """A user message whose braces were gateway-escaped should appear with real
+        braces in the final prompt output."""
+        self._apply_template_mocks(mocker)
+        manager = WorkflowVariableManager()
+        # Simulate what the gateway does: { → __WILMER_L_CURLY__
+        mock_context.messages = [
+            {"role": "user", "content": "Here is JSON: __WILMER_L_CURLY__\"a\": 1__WILMER_R_CURLY__"}
+        ]
+        mock_context.config = {"jinja2": False}
+
+        variables = manager.generate_variables(mock_context)
+        last_one = variables["chat_user_prompt_last_one"]
+
+        # The variable value should still have sentinels (not yet restored)
+        assert "__WILMER_L_CURLY__" in last_one
+
+        # Full apply_variables should restore them
+        mocker.patch.object(manager, 'generate_variables', return_value=variables)
+        result = manager.apply_variables("{chat_user_prompt_last_one}", mock_context)
+        assert '"a": 1' in result
+        assert "{" in result  # Real braces restored
+
+    def test_conversation_without_tool_calls_no_braces(self, mocker, mock_context):
+        """A normal conversation without tool calls or JSON should pass through cleanly."""
+        self._apply_template_mocks(mocker)
+        manager = WorkflowVariableManager()
+        mock_context.messages = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there!"},
+            {"role": "user", "content": "How are you?"}
+        ]
+        mock_context.config = {"jinja2": False}
+
+        variables = manager.generate_variables(mock_context)
+        mocker.patch.object(manager, 'generate_variables', return_value=variables)
+        result = manager.apply_variables("Chat: {chat_user_prompt_last_three}", mock_context)
+        assert "Hello" in result
+        assert "Hi there!" in result
+        assert "How are you?" in result
+
+    def test_tool_call_with_json_args_in_conversation(self, mocker, mock_context):
+        """When includeToolCallsInConversation is enabled and a tool call has JSON
+        arguments that fall back to raw display, the braces should not break formatting."""
+        self._apply_template_mocks(mocker)
+        manager = WorkflowVariableManager()
+        mock_context.config = {"jinja2": False, "includeToolCallsInConversation": True}
+        # This tool call has no string-valued args, so _summarize_tool_arguments
+        # falls back to the raw JSON string which contains braces.
+        mock_context.messages = [
+            {"role": "user", "content": "Process data"},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"function": {"name": "transform", "arguments": '{"nested": {"deep": true}}'}}
+            ]},
+            {"role": "user", "content": "Done"}
+        ]
+
+        variables = manager.generate_variables(mock_context)
+        last_three = variables["chat_user_prompt_last_three"]
+        # The tool call text should be present (sentinel-escaped internally)
+        assert "[Tool Call: transform]" in last_three
+
+        # Full apply_variables round-trip should not crash
+        mocker.patch.object(manager, 'generate_variables', return_value=variables)
+        result = manager.apply_variables("Conversation:\n{chat_user_prompt_last_three}", mock_context)
+        assert "Conversation:" in result
+        assert "[Tool Call: transform]" in result
+
+    def test_tool_call_with_string_args_no_braces_in_summary(self, mocker, mock_context):
+        """When tool call args have a string field, the summary uses that field and
+        typically has no braces. This should work as before."""
+        self._apply_template_mocks(mocker)
+        manager = WorkflowVariableManager()
+        mock_context.config = {"jinja2": False, "includeToolCallsInConversation": True}
+        mock_context.messages = [
+            {"role": "user", "content": "List files"},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"function": {"name": "bash", "arguments": '{"command": "ls -la"}'}}
+            ]},
+            {"role": "user", "content": "Thanks"}
+        ]
+
+        variables = manager.generate_variables(mock_context)
+        mocker.patch.object(manager, 'generate_variables', return_value=variables)
+        result = manager.apply_variables("{chat_user_prompt_last_three}", mock_context)
+        assert "[Tool Call: bash] ls -la" in result
+
+    def test_multiple_tool_calls_mixed_arg_types(self, mocker, mock_context):
+        """Multiple tool calls in one message: some with string args (no braces in summary),
+        some with only non-string args (raw JSON in summary with braces)."""
+        self._apply_template_mocks(mocker)
+        manager = WorkflowVariableManager()
+        mock_context.config = {"jinja2": False, "includeToolCallsInConversation": True}
+        mock_context.messages = [
+            {"role": "user", "content": "Do both"},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"function": {"name": "bash", "arguments": '{"command": "pwd"}'}},
+                {"function": {"name": "config", "arguments": '{"retries": 3, "timeout": 30}'}}
+            ]},
+            {"role": "user", "content": "OK"}
+        ]
+
+        variables = manager.generate_variables(mock_context)
+        mocker.patch.object(manager, 'generate_variables', return_value=variables)
+        result = manager.apply_variables("{chat_user_prompt_last_three}", mock_context)
+        assert "[Tool Call: bash] pwd" in result
+        assert "[Tool Call: config]" in result
+
+    def test_tool_role_messages_dont_break_formatting(self, mocker, mock_context):
+        """Tool-role messages (function results) may contain JSON. The gateway
+        escapes their content, so they should be safe in conversation variables."""
+        self._apply_template_mocks(mocker)
+        manager = WorkflowVariableManager()
+        mock_context.config = {"jinja2": False}
+        mock_context.messages = [
+            {"role": "user", "content": "Run it"},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"function": {"name": "api", "arguments": '{"url": "/data"}'}}
+            ]},
+            {"role": "tool", "content": "__WILMER_L_CURLY__\"result\": \"success\"__WILMER_R_CURLY__"},
+            {"role": "user", "content": "Great"}
+        ]
+
+        variables = manager.generate_variables(mock_context)
+        mocker.patch.object(manager, 'generate_variables', return_value=variables)
+        # Should not crash
+        result = manager.apply_variables("{chat_user_prompt_last_four}", mock_context)
+        assert "Great" in result
+
+
+class TestBracketEscaping_FileRoundTrip:
+    """Simulates the SaveCustomFile → GetCustomFile cycle. SaveCustomFile calls
+    apply_variables (which restores braces) then writes to disk. GetCustomFile
+    reads the file and returns the raw content (with real braces). That content
+    becomes an agent output and must be re-escaped for the next node."""
+
+    def test_save_then_load_cycle(self, mocker, mock_context):
+        """Content with braces should survive a save→load→reuse cycle."""
+        manager = WorkflowVariableManager()
+        json_content = '{"saved": {"nested": true}}'
+
+        # Step 1: Node 1 produces the JSON as agent1Output.
+        # generate_variables escapes it.
+        mock_context.agent_outputs = {"agent1Output": json_content}
+        mock_context.agent_inputs = None
+        mock_context.messages = None
+        mock_context.config = {"jinja2": False}
+
+        # apply_variables calls the real generate_variables (which escapes),
+        # then restores braces in the final output.
+        saved_content = manager.apply_variables("{agent1Output}", mock_context)
+        assert saved_content == json_content  # Real braces, as written to file
+
+        # Step 2: GetCustomFile reads the file (real braces). This becomes agent2Output.
+        # The next node's generate_variables must re-escape it.
+        mock_context.agent_outputs = {"agent2Output": saved_content}
+        variables_step2 = manager.generate_variables(mock_context)
+        assert "__WILMER_L_CURLY__" in variables_step2["agent2Output"]
+
+        # Step 3: Next node uses agent2Output — should get the original JSON back.
+        final_result = manager.apply_variables("Loaded: {agent2Output}", mock_context)
+        assert final_result == f"Loaded: {json_content}"
+
+    def test_concatenator_output_reused(self, mocker, mock_context):
+        """StringConcatenator calls apply_variables (restoring braces) and its return
+        value becomes an agent output. The next node must handle the real braces."""
+        manager = WorkflowVariableManager()
+        json_part = '{"key": "value"}'
+        mock_context.agent_inputs = None
+        mock_context.messages = None
+        mock_context.config = {"jinja2": False}
+
+        # Step 1: StringConcatenator resolves parts via apply_variables.
+        mock_context.agent_outputs = {
+            "agent1Output": json_part,
+            "agent2Output": "plain text"
+        }
+        part1 = manager.apply_variables("{agent1Output}", mock_context)
+        part2 = manager.apply_variables("{agent2Output}", mock_context)
+        concatenated = part1 + " | " + part2
+        assert concatenated == '{"key": "value"} | plain text'
+
+        # Step 2: Concatenated result becomes agent3Output for the next node.
+        mock_context.agent_outputs = {"agent3Output": concatenated}
+        final = manager.apply_variables("Final: {agent3Output}", mock_context)
+        assert final == f"Final: {concatenated}"
+
+
+class TestBracketEscaping_ApplyEarlyVariables:
+    """apply_early_variables is used for endpointName and preset fields. It
+    should handle braces in agent inputs consistently."""
+
+    def test_agent_input_with_braces_resolves(self):
+        """An agent input containing braces should resolve and restore correctly."""
+        manager = WorkflowVariableManager()
+        result = manager.apply_early_variables(
+            "{agent1Input}",
+            agent_inputs={"agent1Input": '{"endpoint": "fast"}'}
+        )
+        assert result == '{"endpoint": "fast"}'
+
+    def test_plain_agent_input_unchanged(self):
+        """A plain string agent input works as before."""
+        manager = WorkflowVariableManager()
+        result = manager.apply_early_variables(
+            "{agent1Input}",
+            agent_inputs={"agent1Input": "MyEndpoint"}
+        )
+        assert result == "MyEndpoint"
+
+    def test_workflow_config_nested_variable_still_resolves(self):
+        """Workflow config values with nested variable references must NOT be escaped,
+        because they need the second format pass to resolve {Discussion_Id} etc."""
+        manager = WorkflowVariableManager()
+        result = manager.apply_early_variables(
+            "{my_endpoint}",
+            workflow_config={"my_endpoint": "data-service", "nodes": []}
+        )
+        assert result == "data-service"
+
+    def test_mixed_config_and_input_with_braces(self):
+        """Workflow config and agent input both present; input has braces."""
+        manager = WorkflowVariableManager()
+        result = manager.apply_early_variables(
+            "{base}/{agent1Input}",
+            agent_inputs={"agent1Input": '{"v": 2}'},
+            workflow_config={"base": "https://api.local"}
+        )
+        assert result == 'https://api.local/{"v": 2}'
+
+    def test_no_sentinels_leak_into_result(self):
+        """The final result should never contain sentinel tokens."""
+        manager = WorkflowVariableManager()
+        result = manager.apply_early_variables(
+            "{agent1Input}",
+            agent_inputs={"agent1Input": '{"a": {"b": {"c": 1}}}'}
+        )
+        assert "__WILMER_L_CURLY__" not in result
+        assert "__WILMER_R_CURLY__" not in result
+        assert '{"a": {"b": {"c": 1}}}' == result
+
+    def test_partial_substitution_with_braces_in_input(self, mocker):
+        """When one variable is missing, partial substitution should still escape
+        the available variable's braces correctly."""
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.logger.warning')
+        manager = WorkflowVariableManager()
+        result = manager.apply_early_variables(
+            "{agent1Input}/{missing}",
+            agent_inputs={"agent1Input": '{"ok": true}'}
+        )
+        # The available input should be substituted with braces restored;
+        # the missing variable should stay as a placeholder.
+        assert '{"ok": true}' in result
+        assert "{missing}" in result
+
+
+class TestBracketEscaping_NoDoubleMangle:
+    """Strings that have already been sentinel-escaped by the gateway should
+    not be mangled when they flow through agent outputs or inputs."""
+
+    def test_already_escaped_content_in_agent_output(self, mocker, mock_context):
+        """If an agent output somehow already contains sentinel tokens (e.g., a node
+        that returned raw gateway-escaped content), they should be restored exactly
+        once, not double-processed."""
+        manager = WorkflowVariableManager()
+        # This value already has sentinels — perhaps from a node that read message
+        # content without restoring it first.
+        sentinel_content = "data: __WILMER_L_CURLY__x__WILMER_R_CURLY__"
+
+        mock_context.agent_outputs = {"agent1Output": sentinel_content}
+        mock_context.agent_inputs = None
+        mock_context.messages = None
+        variables = manager.generate_variables(mock_context)
+
+        mocker.patch.object(manager, 'generate_variables', return_value=variables)
+        mock_context.config = {"jinja2": False}
+        result = manager.apply_variables("{agent1Output}", mock_context)
+
+        # The sentinels should be restored to real braces
+        assert result == "data: {x}"
+        assert "__WILMER_L_CURLY__" not in result
+
+    def test_real_braces_in_output_dont_become_sentinel_in_result(self, mocker, mock_context):
+        """The final output of apply_variables should always have real braces,
+        never sentinel tokens, regardless of how many escaping cycles occurred."""
+        manager = WorkflowVariableManager()
+        mock_context.agent_outputs = {"agent1Output": '{"a": 1}'}
+        mock_context.agent_inputs = None
+        mock_context.messages = None
+        variables = manager.generate_variables(mock_context)
+
+        mocker.patch.object(manager, 'generate_variables', return_value=variables)
+        mock_context.config = {"jinja2": False}
+        result = manager.apply_variables("{agent1Output}", mock_context)
+
+        assert "__WILMER_L_CURLY__" not in result
+        assert "__WILMER_R_CURLY__" not in result
+        assert result == '{"a": 1}'
+
+
+class TestBracketEscaping_EdgeCases:
+    """Edge cases that could trip up the escaping mechanism."""
+
+    def test_prompt_with_no_variables_and_agent_output_has_braces(self, mocker, mock_context):
+        """If the prompt has no variable references, agent output braces are irrelevant
+        and the prompt should be returned as-is with sentinels restored."""
+        manager = WorkflowVariableManager()
+        mocker.patch.object(manager, 'generate_variables', return_value={
+            "agent1Output": '{"ignored": true}'
+        })
+        mock_context.config = {"jinja2": False}
+
+        result = manager.apply_variables("Static prompt, no variables.", mock_context)
+        assert result == "Static prompt, no variables."
+
+    def test_prompt_template_itself_has_sentinels(self, mocker, mock_context):
+        """If the prompt template (from gateway-escaped content) contains sentinels,
+        they should be restored in the output."""
+        manager = WorkflowVariableManager()
+        mocker.patch.object(manager, 'generate_variables', return_value={
+            "name": "Wilmer"
+        })
+        mock_context.config = {"jinja2": False}
+
+        prompt = "Hello {name}, code: __WILMER_L_CURLY____WILMER_R_CURLY__"
+        result = manager.apply_variables(prompt, mock_context)
+        assert result == "Hello Wilmer, code: {}"
+
+    def test_very_large_json_in_agent_output(self, mocker, mock_context):
+        """A large JSON blob should not cause performance issues or crashes."""
+        manager = WorkflowVariableManager()
+        # Build a moderately large JSON-like string
+        large_json = '{"items": [' + ', '.join(
+            f'{{"id": {i}, "data": {{"nested": true}}}}'
+            for i in range(100)
+        ) + ']}'
+
+        mock_context.agent_outputs = {"agent1Output": large_json}
+        mock_context.agent_inputs = None
+        mock_context.messages = None
+        variables = manager.generate_variables(mock_context)
+
+        mocker.patch.object(manager, 'generate_variables', return_value=variables)
+        mock_context.config = {"jinja2": False}
+        result = manager.apply_variables("{agent1Output}", mock_context)
+        assert result == large_json
+
+    def test_workflow_config_variable_with_nested_reference_still_resolves(self, mocker, mock_context):
+        """Workflow config values intentionally support nested variable references.
+        A config value like 'path/{Discussion_Id}/file' must have {Discussion_Id}
+        resolved on the second format pass — it must NOT be sentinel-escaped."""
+        manager = WorkflowVariableManager()
+        mocker.patch.object(manager, 'generate_variables', return_value={
+            "my_path": "data/{Discussion_Id}/output.txt",
+            "Discussion_Id": "conv-123"
+        })
+        mock_context.config = {"jinja2": False}
+
+        result = manager.apply_variables("{my_path}", mock_context)
+        assert result == "data/conv-123/output.txt"
+
+    def test_agent_output_containing_format_spec_syntax(self, mocker, mock_context):
+        """Output containing Python format spec syntax (e.g., {:.2f}) must not crash."""
+        manager = WorkflowVariableManager()
+        mock_context.agent_outputs = {"agent1Output": "Value: {:.2f}"}
+        mock_context.agent_inputs = None
+        mock_context.messages = None
+        variables = manager.generate_variables(mock_context)
+
+        mocker.patch.object(manager, 'generate_variables', return_value=variables)
+        mock_context.config = {"jinja2": False}
+        result = manager.apply_variables("{agent1Output}", mock_context)
+        assert result == "Value: {:.2f}"
+
+    def test_agent_output_containing_numbered_format_placeholders(self, mocker, mock_context):
+        """Output containing {0}, {1} style placeholders must not crash."""
+        manager = WorkflowVariableManager()
+        mock_context.agent_outputs = {"agent1Output": "args: {0} and {1}"}
+        mock_context.agent_inputs = None
+        mock_context.messages = None
+        variables = manager.generate_variables(mock_context)
+
+        mocker.patch.object(manager, 'generate_variables', return_value=variables)
+        mock_context.config = {"jinja2": False}
+        result = manager.apply_variables("{agent1Output}", mock_context)
+        assert result == "args: {0} and {1}"
 

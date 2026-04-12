@@ -285,7 +285,9 @@ def test_handle_custom_workflow_calls_manager(mocker, sub_workflow_handler, mock
         first_node_prompt_override="resolved_prompt",
         scoped_inputs=["resolved_input_1"],
         workflow_user_folder_override="test_user",
-        api_key=None
+        api_key=None,
+        tools=None,
+        tool_choice=None,
     )
 
 
@@ -641,7 +643,9 @@ def test_full_custom_workflow_flow_streaming(sub_workflow_handler, mock_workflow
         first_node_prompt_override="Prompt: output1",
         scoped_inputs=["output1", "output2"],
         workflow_user_folder_override="user123",
-        api_key=None
+        api_key=None,
+        tools=None,
+        tool_choice=None,
     )
 
 
@@ -697,7 +701,9 @@ def test_full_conditional_workflow_flow_non_streaming(sub_workflow_handler, mock
         first_node_prompt_override="Resolved Database Prompt",
         scoped_inputs=["db_data"],
         workflow_user_folder_override=None,
-        api_key=None
+        api_key=None,
+        tools=None,
+        tool_choice=None,
     )
 
 

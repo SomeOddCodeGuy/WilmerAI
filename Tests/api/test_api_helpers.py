@@ -22,8 +22,13 @@ def test_build_response_json_dispatcher(mocker, monkeypatch, api_type, expected_
 
     result = api_helpers.build_response_json("test_token", "stop")
 
-    # Ollama methods now accept request_id as third parameter (defaults to None)
-    if api_type in ("ollamagenerate", "ollamaapichat"):
+    # Ollama methods accept request_id as third parameter (defaults to None)
+    # Chat-capable methods (ollamaapichat, openaichatcompletion) also receive tool_calls=None
+    if api_type == "ollamaapichat":
+        mock_method.assert_called_once_with("test_token", "stop", None, tool_calls=None)
+    elif api_type == "openaichatcompletion":
+        mock_method.assert_called_once_with("test_token", "stop", tool_calls=None)
+    elif api_type == "ollamagenerate":
         mock_method.assert_called_once_with("test_token", "stop", None)
     else:
         mock_method.assert_called_once_with("test_token", "stop")
@@ -369,3 +374,77 @@ class TestRequireIdentifiedUser:
         assert 'bob' in error
         assert 'jill' in error
         assert 'mack' in error
+
+
+class TestBuildResponseJsonToolCalls:
+    """Tests that build_response_json passes tool_calls through to the correct builder methods."""
+
+    def test_build_response_json_openai_chat_with_tool_calls(self, mocker):
+        """OpenAI chat completion builder receives tool_calls when provided."""
+        mock_response_builder = mocker.patch('Middleware.api.api_helpers.response_builder')
+        from Middleware.common import instance_global_variables
+        instance_global_variables.set_api_type("openaichatcompletion")
+
+        tool_calls = [{"id": "call_1", "type": "function", "function": {"name": "test", "arguments": "{}"}}]
+        mock_response_builder.build_openai_chat_completion_chunk.return_value = {"choices": []}
+
+        api_helpers.build_response_json("", "tool_calls", tool_calls=tool_calls)
+
+        mock_response_builder.build_openai_chat_completion_chunk.assert_called_once_with(
+            "", "tool_calls", tool_calls=tool_calls
+        )
+
+    def test_build_response_json_ollama_chat_with_tool_calls(self, mocker):
+        """Ollama chat builder receives tool_calls when provided."""
+        mock_response_builder = mocker.patch('Middleware.api.api_helpers.response_builder')
+        from Middleware.common import instance_global_variables
+        instance_global_variables.set_api_type("ollamaapichat")
+
+        tool_calls = [{"id": "call_2", "type": "function", "function": {"name": "search", "arguments": '{"q":"x"}'}}]
+        mock_response_builder.build_ollama_chat_chunk.return_value = {"message": {}}
+
+        api_helpers.build_response_json("", "tool_calls", tool_calls=tool_calls)
+
+        mock_response_builder.build_ollama_chat_chunk.assert_called_once_with(
+            "", "tool_calls", None, tool_calls=tool_calls
+        )
+
+    def test_build_response_json_openai_chat_without_tool_calls(self, mocker):
+        """OpenAI chat completion builder receives tool_calls=None when not provided."""
+        mock_response_builder = mocker.patch('Middleware.api.api_helpers.response_builder')
+        from Middleware.common import instance_global_variables
+        instance_global_variables.set_api_type("openaichatcompletion")
+
+        mock_response_builder.build_openai_chat_completion_chunk.return_value = {"choices": []}
+
+        api_helpers.build_response_json("hello", "stop")
+
+        mock_response_builder.build_openai_chat_completion_chunk.assert_called_once_with(
+            "hello", "stop", tool_calls=None
+        )
+
+    def test_build_response_json_openai_completion_ignores_tool_calls(self, mocker):
+        """OpenAI legacy completion builder does not receive tool_calls (completions endpoint does not support them)."""
+        mock_response_builder = mocker.patch('Middleware.api.api_helpers.response_builder')
+        from Middleware.common import instance_global_variables
+        instance_global_variables.set_api_type("openaicompletion")
+
+        tool_calls = [{"id": "call_3", "type": "function", "function": {"name": "noop", "arguments": "{}"}}]
+        mock_response_builder.build_openai_completion_chunk.return_value = {"choices": []}
+
+        api_helpers.build_response_json("token", "stop", tool_calls=tool_calls)
+
+        mock_response_builder.build_openai_completion_chunk.assert_called_once_with("token", "stop")
+
+    def test_build_response_json_ollama_generate_ignores_tool_calls(self, mocker):
+        """Ollama generate builder does not receive tool_calls (generate endpoint does not support them)."""
+        mock_response_builder = mocker.patch('Middleware.api.api_helpers.response_builder')
+        from Middleware.common import instance_global_variables
+        instance_global_variables.set_api_type("ollamagenerate")
+
+        tool_calls = [{"id": "call_4", "type": "function", "function": {"name": "noop", "arguments": "{}"}}]
+        mock_response_builder.build_ollama_generate_chunk.return_value = {"response": ""}
+
+        api_helpers.build_response_json("token", "stop", tool_calls=tool_calls)
+
+        mock_response_builder.build_ollama_generate_chunk.assert_called_once_with("token", "stop", None)

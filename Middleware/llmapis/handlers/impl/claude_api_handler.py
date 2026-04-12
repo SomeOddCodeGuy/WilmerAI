@@ -22,37 +22,6 @@ class ClaudeApiHandler(BaseChatCompletionsHandler):
     for Claude, including streaming and non-streaming responses.
     """
 
-    def __init__(self, base_url: str, api_key: str, gen_input: Dict[str, Any], model_name: str,
-                 headers: Dict[str, str], stream: bool, api_type_config, endpoint_config,
-                 max_tokens, dont_include_model: bool = False):
-        """
-        Initializes the Claude API handler with Claude-specific headers.
-
-        Claude API requires different headers than OpenAI:
-        - x-api-key instead of Authorization: Bearer
-        - anthropic-version header is required
-        """
-        # Override headers with Claude-specific format
-        claude_headers = {
-            "Content-Type": "application/json",
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01"
-        }
-
-        # Call parent constructor with Claude-specific headers
-        super().__init__(
-            base_url=base_url,
-            api_key=api_key,
-            gen_input=gen_input,
-            model_name=model_name,
-            headers=claude_headers,
-            stream=stream,
-            api_type_config=api_type_config,
-            endpoint_config=endpoint_config,
-            max_tokens=max_tokens,
-            dont_include_model=dont_include_model
-        )
-
     @property
     def _iterate_by_lines(self) -> bool:
         """
@@ -70,15 +39,16 @@ class ClaudeApiHandler(BaseChatCompletionsHandler):
     @property
     def _required_event_name(self) -> Optional[str]:
         """
-        Specifies the SSE event name to filter for during streaming.
+        Returns None so all SSE event types pass through to _process_stream_data.
 
-        Claude API sends multiple event types during streaming. We're interested
-        in the 'content_block_delta' events which contain the actual text tokens.
+        Claude sends tool call data across multiple event types (content_block_start,
+        content_block_delta, message_delta), so we cannot filter to a single event.
+        All filtering is handled inside _process_stream_data instead.
 
         Returns:
-            Optional[str]: The event name 'content_block_delta' to filter for.
+            Optional[str]: None to disable event filtering.
         """
-        return "content_block_delta"
+        return None
 
     def _get_api_endpoint_url(self) -> str:
         """
@@ -89,64 +59,187 @@ class ClaudeApiHandler(BaseChatCompletionsHandler):
         """
         return f"{self.base_url.rstrip('/')}/v1/messages"
 
+    def __init__(self, base_url: str, api_key: str, gen_input: Dict[str, Any], model_name: str,
+                 headers: Dict[str, str], stream: bool, api_type_config, endpoint_config,
+                 max_tokens, dont_include_model: bool = False):
+        super().__init__(
+            base_url=base_url, api_key=api_key, gen_input=gen_input, model_name=model_name,
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01"
+            },
+            stream=stream, api_type_config=api_type_config, endpoint_config=endpoint_config,
+            max_tokens=max_tokens, dont_include_model=dont_include_model
+        )
+        self._tool_call_index = 0
+        self._active_tool_call_id = None
+
     def _process_stream_data(self, data_str: str) -> Optional[Dict[str, Any]]:
         """
         Parses a single JSON data chunk from a Claude API stream.
 
-        This method is called for each 'data: ' line in the SSE stream that matches
-        the 'content_block_delta' event. It loads the JSON string and extracts the
-        text token from the delta structure.
+        Handles all Claude SSE event types: content_block_start, content_block_delta,
+        content_block_stop, and message_delta. Text deltas produce tokens; tool_use
+        blocks are converted to OpenAI-format tool_calls.
 
         Args:
             data_str (str): A string containing a single JSON object from the stream.
 
         Returns:
-            Optional[Dict[str, Any]]: A dictionary with 'token' and 'finish_reason'
-            keys, or None if the chunk is empty or cannot be parsed.
+            Optional[Dict[str, Any]]: A dictionary with 'token', 'finish_reason',
+            and optionally 'tool_calls' keys, or None if the event should be skipped.
         """
         try:
             if not data_str:
                 return None
 
             chunk_data = json.loads(data_str)
+            chunk_type = chunk_data.get("type", "")
 
-            # Claude streaming sends different event types
-            # content_block_delta events contain the actual text
-            delta = chunk_data.get("delta", {})
-            token = delta.get("text", "")
+            if chunk_type == "content_block_start":
+                block = chunk_data.get("content_block", {})
+                if block.get("type") == "tool_use":
+                    self._active_tool_call_id = block.get("id")
+                    return {
+                        'token': '',
+                        'finish_reason': None,
+                        'tool_calls': [{
+                            'index': self._tool_call_index,
+                            'id': self._active_tool_call_id,
+                            'type': 'function',
+                            'function': {
+                                'name': block.get("name", ""),
+                                'arguments': ''
+                            }
+                        }]
+                    }
+                return None
 
-            # Claude doesn't send finish_reason in delta events
-            # The stream ends with a message_stop event
-            return {'token': token, 'finish_reason': None}
+            if chunk_type == "content_block_delta":
+                delta = chunk_data.get("delta", {})
+                delta_type = delta.get("type", "")
+                if delta_type == "text_delta":
+                    return {'token': delta.get("text", ""), 'finish_reason': None}
+                if delta_type == "input_json_delta":
+                    return {
+                        'token': '',
+                        'finish_reason': None,
+                        'tool_calls': [{
+                            'index': self._tool_call_index,
+                            'function': {'arguments': delta.get("partial_json", "")}
+                        }]
+                    }
+                return None
+
+            if chunk_type == "content_block_stop":
+                if self._active_tool_call_id:
+                    self._tool_call_index += 1
+                    self._active_tool_call_id = None
+                return None
+
+            if chunk_type == "message_delta":
+                stop_reason = chunk_data.get("delta", {}).get("stop_reason")
+                if stop_reason:
+                    finish = "tool_calls" if stop_reason == "tool_use" else stop_reason
+                    return {'token': '', 'finish_reason': finish}
+                return None
+
+            return None
         except (json.JSONDecodeError, KeyError):
             logger.warning(f"Could not parse Claude stream data string: {data_str}")
             return None
 
+    @staticmethod
+    def _convert_tools_to_claude_format(openai_tools: List[Dict]) -> List[Dict]:
+        """
+        Converts tool definitions from OpenAI format to Claude format.
+
+        OpenAI format:
+            {"type": "function", "function": {"name": "...", "description": "...", "parameters": {...}}}
+        Claude format:
+            {"name": "...", "description": "...", "input_schema": {...}}
+
+        Args:
+            openai_tools (List[Dict]): Tool definitions in OpenAI format.
+
+        Returns:
+            List[Dict]: Tool definitions in Claude format.
+        """
+        claude_tools = []
+        for tool in openai_tools:
+            func = tool.get("function", {})
+            claude_tool = {
+                "name": func.get("name", ""),
+                "description": func.get("description", ""),
+            }
+            params = func.get("parameters")
+            if params:
+                claude_tool["input_schema"] = params
+            claude_tools.append(claude_tool)
+        return claude_tools
+
+    @staticmethod
+    def _convert_tool_choice_to_claude_format(openai_tool_choice):
+        """
+        Converts a tool_choice value from OpenAI format to Claude format.
+
+        OpenAI: "auto", "none", "required", or {"type":"function","function":{"name":"..."}}
+        Claude: {"type":"auto"}, {"type":"any"}, or {"type":"tool","name":"..."}
+
+        Args:
+            openai_tool_choice (Union[str, Dict, None]): Tool choice in OpenAI format.
+
+        Returns:
+            Optional[Dict]: Tool choice in Claude format, or None if no conversion applies.
+        """
+        if openai_tool_choice is None:
+            return None
+        if isinstance(openai_tool_choice, str):
+            mapping = {
+                "auto": {"type": "auto"},
+                "none": None,  # Claude has no "none"; omit tool_choice and tools instead
+                "required": {"type": "any"},
+            }
+            return mapping.get(openai_tool_choice)
+        if isinstance(openai_tool_choice, dict):
+            func = openai_tool_choice.get("function", {})
+            name = func.get("name")
+            if name:
+                return {"type": "tool", "name": name}
+        return None
+
     def _prepare_payload(self, conversation: Optional[List[Dict[str, str]]], system_prompt: Optional[str],
-                         prompt: Optional[str]) -> Dict:
+                         prompt: Optional[str], *, tools: Optional[list] = None,
+                         tool_choice=None) -> Dict:
         """
         Prepares the payload for Claude API with proper system message handling.
 
         Claude requires system messages to be sent as a separate 'system' parameter,
         not in the messages array. This method extracts system messages and formats
-        them correctly. It also filters out unsupported parameters.
+        them correctly. It also filters out unsupported parameters. Tool definitions
+        are converted from OpenAI format to Claude's native format.
 
         Args:
             conversation: The conversation history
             system_prompt: The system prompt
             prompt: The user prompt
+            tools: Tool definitions in OpenAI format (converted to Claude format).
+            tool_choice: Tool selection policy in OpenAI format (converted to Claude format).
 
         Returns:
             Dict: The properly formatted payload for Claude API
         """
         # First get the standard payload from the parent
-        payload = super()._prepare_payload(conversation, system_prompt, prompt)
+        payload = super()._prepare_payload(conversation, system_prompt, prompt,
+                                           tools=None, tool_choice=None)
 
         # Claude API supported parameters (as of 2025)
         # Ref: https://docs.anthropic.com/en/api/messages
         SUPPORTED_PARAMS = {
             'model', 'messages', 'max_tokens', 'system', 'temperature',
-            'top_p', 'top_k', 'stream', 'stop_sequences', 'metadata', 'thinking'
+            'top_p', 'top_k', 'stream', 'stop_sequences', 'metadata', 'thinking',
+            'tools', 'tool_choice'
         }
 
         # Filter out unsupported parameters
@@ -189,6 +282,12 @@ class ClaudeApiHandler(BaseChatCompletionsHandler):
                              "Claude prefill content ends with whitespace, which may cause API errors. "
                              "Trimming whitespace from: '%s'", prefill_content)
                 non_system_messages[-1]['content'] = prefill_content.rstrip()
+
+        if tools:
+            payload['tools'] = self._convert_tools_to_claude_format(tools)
+            claude_tool_choice = self._convert_tool_choice_to_claude_format(tool_choice)
+            if claude_tool_choice is not None:
+                payload['tool_choice'] = claude_tool_choice
 
         return payload
 
@@ -323,23 +422,20 @@ class ClaudeApiHandler(BaseChatCompletionsHandler):
         logger.warning(f"Skipping unrecognized image source for Claude: {content[:100]}...")
         return None
 
-    def _parse_non_stream_response(self, response_json: Dict) -> str:
+    def _parse_non_stream_response(self, response_json: Dict):
         """
-        Extracts the generated text from a non-streaming Claude API response.
-
-        This method navigates the JSON structure of a complete Claude response
-        to find and return the main message content.
+        Extracts the generated text (and tool calls, if any) from a non-streaming
+        Claude API response. Tool_use content blocks are converted to OpenAI format.
 
         Args:
             response_json (Dict): The parsed JSON dictionary from the API response.
 
         Returns:
-            str: The extracted text content from the content blocks,
-            or an empty string if not found.
+            Union[str, Dict[str, Any]]: Plain text string for text-only responses,
+            or a dict with 'content', 'tool_calls', and 'finish_reason' keys when
+            tool calls are present.
         """
         try:
-            # Claude returns content as an array of content blocks
-            # Each block has a "type" and "text" field
             content_blocks = response_json.get('content')
             if content_blocks is None:
                 raise KeyError("Missing 'content' key in response")
@@ -347,13 +443,31 @@ class ClaudeApiHandler(BaseChatCompletionsHandler):
             if not content_blocks:
                 return ""
 
-            # Concatenate all text blocks
             text_parts = []
+            tool_calls = []
             for block in content_blocks:
                 if block.get('type') == 'text':
                     text_parts.append(block.get('text', ''))
+                elif block.get('type') == 'tool_use':
+                    tool_calls.append({
+                        'id': block.get('id', ''),
+                        'type': 'function',
+                        'function': {
+                            'name': block.get('name', ''),
+                            'arguments': json.dumps(block.get('input', {}))
+                        }
+                    })
 
-            return ''.join(text_parts)
+            content = ''.join(text_parts)
+            if tool_calls:
+                stop_reason = response_json.get('stop_reason', 'tool_use')
+                finish = "tool_calls" if stop_reason == "tool_use" else stop_reason
+                return {
+                    'content': content,
+                    'tool_calls': tool_calls,
+                    'finish_reason': finish
+                }
+            return content
         except (KeyError, TypeError):
             logger.error(f"Could not find content in Claude response: {response_json}")
             return ""

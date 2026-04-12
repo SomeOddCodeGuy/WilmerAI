@@ -17,8 +17,8 @@ Here is the complete JSON structure for a `SaveCustomFile` node.
 {
   "title": "A descriptive name for this node (Optional)",
   "type": "SaveCustomFile",
-  "filepath": "C:\\Path\\To\\Your\\File.txt",
-  "content": "The content to save. This can include variables like {agent1Output} or {lastUserMessage}."
+  "filepath": "D:\\Path\\To\\Your\\File.txt",
+  "content": "The content to save. This can include variables like {agent1Output} or {chat_user_prompt_last_one}."
 }
 ```
 
@@ -58,7 +58,7 @@ Each field is explained in detail below.
     * **Required**: Yes
     * **Description**: The string content to be written to the file. This field is processed by the
       `$WorkflowVariableManager$`, so you can embed variables from previous nodes (e.g., `{agent1Output}`,
-      `{agent2Input}`) or the conversation history (e.g., `{lastUserMessage}`).
+      `{agent2Input}`) or the conversation history (e.g., `{chat_user_prompt_last_one}`).
 
 -----
 
@@ -160,7 +160,7 @@ It's crucial to understand how the node behaves in specific situations:
   manager before the file is saved. This means you can use any available workflow variable in both fields.
 * **File System Errors**: If the file cannot be written due to permissions issues or other I/O errors, the node will
   return an error message string, for example:
-  `"Error saving file: [Errno 13] Permission denied: 'C:\Windows\system.log'"`.
+  `"Error saving file: [Errno 13] Permission denied: 'D:\Windows\system.log'"`.
 * **Missing `filepath`**: If the `filepath` field is missing from the configuration, the node will return the string:
   `"No filepath specified"`.
 * **Missing `content`**: If the `content` field is missing from the configuration, the node will return the string:

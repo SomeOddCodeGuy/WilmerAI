@@ -72,6 +72,7 @@ class TestHandleRouter:
         ("StringConcatenator", "handle_string_concatenator"),
         ("JsonExtractor", "handle_json_extractor"),
         ("TagTextExtractor", "handle_tag_text_extractor"),
+        ("DelimitedChunker", "handle_delimited_chunker"),
     ])
     def test_handle_routes_to_correct_method(self, mocker, specialized_handler, base_context, node_type,
                                              method_to_mock):
@@ -1604,3 +1605,308 @@ class TestJsonExtractorEdgeCases:
         result = specialized_handler.handle_json_extractor(base_context)
 
         assert result == "test"
+
+
+class TestHandleDelimitedChunker:
+    """Tests the 'DelimitedChunker' node logic."""
+
+    def test_head_mode_returns_first_n_chunks(self, specialized_handler, base_context, mock_variable_service):
+        """Should return the first N chunks when mode is 'head'."""
+        base_context.config = {
+            "content": "a,b,c,d,e",
+            "delimiter": ",",
+            "mode": "head",
+            "count": 3
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_delimited_chunker(base_context)
+
+        assert result == "a,b,c"
+
+    def test_tail_mode_returns_last_n_chunks(self, specialized_handler, base_context, mock_variable_service):
+        """Should return the last N chunks when mode is 'tail'."""
+        base_context.config = {
+            "content": "a,b,c,d,e",
+            "delimiter": ",",
+            "mode": "tail",
+            "count": 2
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_delimited_chunker(base_context)
+
+        assert result == "d,e"
+
+    def test_count_equals_chunks_returns_full_content(self, specialized_handler, base_context, mock_variable_service):
+        """Should return the full content when count equals the number of chunks."""
+        base_context.config = {
+            "content": "a,b,c",
+            "delimiter": ",",
+            "mode": "head",
+            "count": 3
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_delimited_chunker(base_context)
+
+        assert result == "a,b,c"
+
+    def test_count_exceeds_chunks_returns_full_content(self, specialized_handler, base_context, mock_variable_service):
+        """Should return the full content unchanged when count exceeds the number of chunks."""
+        base_context.config = {
+            "content": "a,b,c",
+            "delimiter": ",",
+            "mode": "tail",
+            "count": 10
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_delimited_chunker(base_context)
+
+        assert result == "a,b,c"
+
+    def test_empty_content_returns_empty_string(self, specialized_handler, base_context, mock_variable_service):
+        """Should return an empty string when content is empty."""
+        base_context.config = {
+            "content": "",
+            "delimiter": ",",
+            "mode": "head",
+            "count": 3
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_delimited_chunker(base_context)
+
+        assert result == ""
+
+    def test_delimiter_not_found_returns_full_content(self, specialized_handler, base_context, mock_variable_service):
+        """Should return the full content when the delimiter is not present (one chunk)."""
+        base_context.config = {
+            "content": "no delimiters here",
+            "delimiter": ",",
+            "mode": "head",
+            "count": 1
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_delimited_chunker(base_context)
+
+        assert result == "no delimiters here"
+
+    def test_missing_content_returns_error(self, specialized_handler, base_context):
+        """Should return an error message when 'content' is missing."""
+        base_context.config = {
+            "delimiter": ",",
+            "mode": "head",
+            "count": 3
+        }
+
+        result = specialized_handler.handle_delimited_chunker(base_context)
+
+        assert result == "No content specified"
+
+    def test_missing_delimiter_returns_error(self, specialized_handler, base_context):
+        """Should return an error message when 'delimiter' is missing."""
+        base_context.config = {
+            "content": "a,b,c",
+            "mode": "head",
+            "count": 3
+        }
+
+        result = specialized_handler.handle_delimited_chunker(base_context)
+
+        assert result == "No delimiter specified"
+
+    def test_missing_mode_returns_error(self, specialized_handler, base_context):
+        """Should return an error message when 'mode' is missing."""
+        base_context.config = {
+            "content": "a,b,c",
+            "delimiter": ",",
+            "count": 3
+        }
+
+        result = specialized_handler.handle_delimited_chunker(base_context)
+
+        assert result == "No mode specified"
+
+    def test_missing_count_returns_error(self, specialized_handler, base_context):
+        """Should return an error message when 'count' is missing."""
+        base_context.config = {
+            "content": "a,b,c",
+            "delimiter": ",",
+            "mode": "head"
+        }
+
+        result = specialized_handler.handle_delimited_chunker(base_context)
+
+        assert result == "No count specified"
+
+    def test_invalid_mode_returns_error(self, specialized_handler, base_context, mock_variable_service):
+        """Should return an error message when mode is not 'head' or 'tail'."""
+        base_context.config = {
+            "content": "a,b,c",
+            "delimiter": ",",
+            "mode": "middle",
+            "count": 2
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_delimited_chunker(base_context)
+
+        assert result == "Invalid mode: must be 'head' or 'tail', got 'middle'"
+
+    def test_count_zero_returns_error(self, specialized_handler, base_context):
+        """Should return an error message when count is zero."""
+        base_context.config = {
+            "content": "a,b,c",
+            "delimiter": ",",
+            "mode": "head",
+            "count": 0
+        }
+
+        result = specialized_handler.handle_delimited_chunker(base_context)
+
+        assert result == "Invalid count: must be >= 1, got 0"
+
+    def test_count_negative_returns_error(self, specialized_handler, base_context):
+        """Should return an error message when count is negative."""
+        base_context.config = {
+            "content": "a,b,c",
+            "delimiter": ",",
+            "mode": "head",
+            "count": -2
+        }
+
+        result = specialized_handler.handle_delimited_chunker(base_context)
+
+        assert result == "Invalid count: must be >= 1, got -2"
+
+    def test_count_not_integer_returns_error(self, specialized_handler, base_context):
+        """Should return an error message when count is a float."""
+        base_context.config = {
+            "content": "a,b,c",
+            "delimiter": ",",
+            "mode": "head",
+            "count": 2.5
+        }
+
+        result = specialized_handler.handle_delimited_chunker(base_context)
+
+        assert result == "Invalid count: must be an integer, got float"
+
+    def test_count_string_returns_error(self, specialized_handler, base_context):
+        """Should return an error message when count is a string."""
+        base_context.config = {
+            "content": "a,b,c",
+            "delimiter": ",",
+            "mode": "head",
+            "count": "3"
+        }
+
+        result = specialized_handler.handle_delimited_chunker(base_context)
+
+        assert result == "Invalid count: must be an integer, got str"
+
+    def test_count_boolean_returns_error(self, specialized_handler, base_context):
+        """Should return an error message when count is a boolean (subclass of int)."""
+        base_context.config = {
+            "content": "a,b,c",
+            "delimiter": ",",
+            "mode": "head",
+            "count": True
+        }
+
+        result = specialized_handler.handle_delimited_chunker(base_context)
+
+        assert result == "Invalid count: must be an integer, got bool"
+
+    def test_multichar_delimiter(self, specialized_handler, base_context, mock_variable_service):
+        """Should correctly split and rejoin with a multi-character delimiter."""
+        base_context.config = {
+            "content": "chunk1---chunk2---chunk3---chunk4",
+            "delimiter": "---",
+            "mode": "head",
+            "count": 2
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_delimited_chunker(base_context)
+
+        assert result == "chunk1---chunk2"
+
+    def test_newline_delimiter(self, specialized_handler, base_context, mock_variable_service):
+        """Should work with newline as the delimiter."""
+        base_context.config = {
+            "content": "line1\nline2\nline3\nline4",
+            "delimiter": "\n",
+            "mode": "tail",
+            "count": 2
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_delimited_chunker(base_context)
+
+        assert result == "line3\nline4"
+
+    def test_variable_substitution_in_content(self, specialized_handler, base_context, mock_variable_service):
+        """Should resolve variables in the content field."""
+        base_context.config = {
+            "content": "{agent1Output}",
+            "delimiter": ",",
+            "mode": "head",
+            "count": 2
+        }
+        base_context.agent_outputs = {"agent1Output": "x,y,z"}
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t.format(
+            **(c.agent_inputs or {}), **(c.agent_outputs or {})
+        )
+
+        result = specialized_handler.handle_delimited_chunker(base_context)
+
+        assert result == "x,y"
+
+    def test_variable_substitution_in_delimiter(self, specialized_handler, base_context, mock_variable_service):
+        """Should resolve variables in the delimiter field."""
+        base_context.config = {
+            "content": "a||b||c||d",
+            "delimiter": "{agent1Output}",
+            "mode": "tail",
+            "count": 2
+        }
+        base_context.agent_outputs = {"agent1Output": "||"}
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t.format(
+            **(c.agent_inputs or {}), **(c.agent_outputs or {})
+        )
+
+        result = specialized_handler.handle_delimited_chunker(base_context)
+
+        assert result == "c||d"
+
+    def test_head_count_one(self, specialized_handler, base_context, mock_variable_service):
+        """Should return only the first chunk when count is 1."""
+        base_context.config = {
+            "content": "first,second,third",
+            "delimiter": ",",
+            "mode": "head",
+            "count": 1
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_delimited_chunker(base_context)
+
+        assert result == "first"
+
+    def test_tail_count_one(self, specialized_handler, base_context, mock_variable_service):
+        """Should return only the last chunk when count is 1."""
+        base_context.config = {
+            "content": "first,second,third",
+            "delimiter": ",",
+            "mode": "tail",
+            "count": 1
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_delimited_chunker(base_context)
+
+        assert result == "third"

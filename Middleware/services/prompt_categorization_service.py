@@ -17,7 +17,8 @@ class PromptCategorizationService:
 
     @staticmethod
     def conversational_method(messages: List[Dict[str, str]], request_id: str, discussion_id: str = None,
-                              stream: bool = False, api_key: str = None) -> Union[
+                              stream: bool = False, api_key: str = None,
+                              tools: list = None, tool_choice=None) -> Union[
         Generator[str, None, None], str, None]:
         """
         Runs the default conversational workflow.
@@ -28,6 +29,8 @@ class PromptCategorizationService:
             discussion_id (str): The identifier for the conversation.
             stream (bool): Flag indicating if the output should be streamed.
             api_key (str): The API key from the request, if present.
+            tools (list): Tool definitions from the incoming request.
+            tool_choice: Tool selection policy from the incoming request.
 
         Returns:
             Union[Generator[str, None, None], str, None]: The result of the workflow execution.
@@ -38,7 +41,9 @@ class PromptCategorizationService:
             discussion_id=discussion_id,
             messages=messages,
             is_streaming=stream,
-            api_key=api_key
+            api_key=api_key,
+            tools=tools,
+            tool_choice=tool_choice
         )
 
     @staticmethod
@@ -83,7 +88,8 @@ class PromptCategorizationService:
             raise
 
     def get_prompt_category(self, messages: List[Dict[str, str]], request_id: str, discussion_id: str = None,
-                            stream: bool = False, api_key: str = None) -> \
+                            stream: bool = False, api_key: str = None,
+                            tools: list = None, tool_choice=None) -> \
             Union[Generator[str, None, None], str, None]:
         """
         Gets the prompt category and executes the corresponding workflow.
@@ -93,6 +99,9 @@ class PromptCategorizationService:
             request_id (str): The unique identifier for the request.
             discussion_id (str): The identifier for the conversation.
             stream (bool): Flag indicating if the output should be streamed.
+            api_key (str): The API key from the request, if present.
+            tools (list): Tool definitions from the incoming request.
+            tool_choice: Tool selection policy from the incoming request.
 
         Returns:
             Union[Generator[str, None, None], str, None]: The result of the routed workflow execution.
@@ -105,10 +114,12 @@ class PromptCategorizationService:
             workflow_name = self.categories[category]['workflow']
             workflow = WorkflowManager(workflow_config_name=workflow_name)
             return workflow.run_workflow(messages=messages, request_id=request_id, discussionId=discussion_id,
-                                         stream=stream, api_key=api_key)
+                                         stream=stream, api_key=api_key,
+                                         tools=tools, tool_choice=tool_choice)
         else:
             logger.debug("Default response initiated")
-            return self.conversational_method(messages, request_id, discussion_id, stream, api_key=api_key)
+            return self.conversational_method(messages, request_id, discussion_id, stream, api_key=api_key,
+                                              tools=tools, tool_choice=tool_choice)
 
     def _initialize_categories(self) -> Dict[str, Union[str, List[str]]]:
         """
@@ -141,9 +152,12 @@ class PromptCategorizationService:
         Returns:
             Union[str, None]: The matched category key, or None if no match is found.
         """
+        punctuation_table = str.maketrans('', '', string.punctuation)
         for word in processed_input.split():
+            normalized_word = word.translate(punctuation_table).upper()
             for key in self.categories.keys():
-                if key.upper() in word.upper():
+                normalized_key = key.translate(punctuation_table).upper()
+                if normalized_key in normalized_word:
                     return key
         return None
 

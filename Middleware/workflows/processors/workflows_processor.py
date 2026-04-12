@@ -49,10 +49,32 @@ class WorkflowProcessor:
                  first_node_system_prompt_override: Optional[str],
                  first_node_prompt_override: Optional[str],
                  scoped_inputs: Optional[List[str]] = None,
-                 api_key: Optional[str] = None
+                 api_key: Optional[str] = None,
+                 tools: Optional[List[Dict]] = None,
+                 tool_choice: Optional[Any] = None
                  ):
         """
         Initializes the WorkflowProcessor instance.
+
+        Args:
+            node_handlers (Dict[str, Any]): Map of node type names to their handler instances.
+            llm_handler_service (LlmHandlerService): Service for loading LLM handler configurations.
+            workflow_variable_service (WorkflowVariableManager): Service for resolving workflow variables.
+            workflow_config_name (str): The name of the workflow configuration file.
+            workflow_file_config (Dict[str, Any]): The top-level workflow file configuration (may contain workflow-level settings).
+            configs (List[Dict]): The list of node configuration dictionaries to execute.
+            request_id (str): A unique identifier for the incoming request.
+            workflow_id (str): A unique identifier for this workflow execution.
+            discussion_id (str): The identifier for the conversation thread.
+            messages (List[Dict]): The conversation history in the internal message format.
+            stream (bool): If True, the responding node streams its output.
+            non_responder_flag (Optional[bool]): If True, the workflow runs without generating a final response.
+            first_node_system_prompt_override (Optional[str]): Override for the first node's system prompt.
+            first_node_prompt_override (Optional[str]): Override for the first node's main prompt.
+            scoped_inputs (Optional[List[str]]): Inputs passed from a parent workflow, mapped to agent#Input variables.
+            api_key (Optional[str]): The API key from the request, used for encryption context.
+            tools (Optional[List[Dict]]): Tool definitions from the incoming request.
+            tool_choice (Optional[Any]): Tool selection policy from the incoming request.
         """
         self.node_handlers = node_handlers
         self.llm_handler_service = llm_handler_service
@@ -74,6 +96,8 @@ class WorkflowProcessor:
         self.api_key = api_key
         self.encryption_key = get_encryption_key_if_available(api_key) if api_key else None
         self.api_key_hash = get_api_key_hash_if_available(api_key) if api_key else None
+        self.tools = tools
+        self.tool_choice = tool_choice
 
         self.agent_inputs = {}
         if scoped_inputs:
@@ -358,7 +382,7 @@ class WorkflowProcessor:
                             log_prompt_content(logger, "Output from the LLM", result)
                     else:
                         result = result_gen
-                        if not self.stream and generation_prompt:
+                        if not self.stream and isinstance(result, str) and generation_prompt:
                             result = self._reconstruct_non_streaming(result, generation_prompt)
                         yield result
 
@@ -419,10 +443,99 @@ class WorkflowProcessor:
                 f"Unlocking locks for InstanceID: '{instance_global_variables.INSTANCE_ID}' and workflow ID: '{self.workflow_id}'")
             self.locking_service.delete_node_locks(instance_global_variables.INSTANCE_ID, self.workflow_id)
 
+    # All node config fields that must be integers when consumed downstream.
+    # Maps field name -> default value (None means no default; leave absent).
+    _INT_CONFIG_FIELDS = {
+        "maxResponseSizeInTokens": 400,
+        "maxContextTokenSize": 4096,
+        "minMessagesInVariable": 5,
+        "maxEstimatedTokensInVariable": 2048,
+        "nMessagesToIncludeInVariable": 5,
+        "estimatedTokensToIncludeInVariable": 2048,
+        "lastMessagesToSendInsteadOfPrompt": 5,
+        "limit": 5,
+        "maxTurnsToPull": None,
+        "maxSummaryChunksFromFile": None,
+        "lookbackStart": 0,
+        "minMemoriesPerSummary": 3,
+        "loopIfMemoriesExceed": 3,
+        "visionScanMessageLimit": 20,
+        "num_results": 10,
+        "top_n_articles": 3,
+        "chunksPerMemory": 3,
+        "lookbackStartTurn": 0,
+        "vectorMemoryMaxResponseSizeInTokens": 1024,
+        "vectorMemoryChunkEstimatedTokenSize": 1000,
+        "vectorMemoryMaxMessagesBetweenChunks": 5,
+        "chunkEstimatedTokenSize": 1000,
+        "maxMessagesBetweenChunks": 5,
+        "memoryCondensationBuffer": 0,
+        "offlineWikiApiPort": None,
+        "maxImagesToSend": 0,
+    }
+    _FLOAT_CONFIG_FIELDS = {
+        "percentile": 0.5,
+    }
+
+    def _resolve_numeric_config_fields(self, config: Dict):
+        """Resolve variable references and coerce types for all known numeric config fields.
+
+        Mutates *config* in place so that downstream code reading from
+        ``context.config`` receives properly typed values even when the
+        original JSON contained a scoped-variable reference like
+        ``"{agent7Input}"`` that resolved to a string.
+
+        Args:
+            config (Dict): The node configuration dictionary to resolve and coerce in place.
+        """
+        for field_name, default in self._INT_CONFIG_FIELDS.items():
+            raw = config.get(field_name)
+            if raw is None or isinstance(raw, int):
+                continue
+            if isinstance(raw, str):
+                if '{' in raw or '{{' in raw:
+                    raw = self.workflow_variable_service.apply_early_variables(
+                        raw, agent_inputs=self.agent_inputs,
+                        workflow_config=self.workflow_file_config
+                    )
+                try:
+                    config[field_name] = int(raw)
+                except (ValueError, TypeError):
+                    if default is not None:
+                        logger.warning("Config field '%s' resolved to non-integer value: '%s'. "
+                                       "Using default %d.", field_name, raw, default)
+                        config[field_name] = default
+                    else:
+                        logger.error("Config field '%s' resolved to non-integer value: '%s' "
+                                     "and no default is available.", field_name, raw)
+            elif isinstance(raw, float):
+                config[field_name] = int(raw)
+
+        for field_name, default in self._FLOAT_CONFIG_FIELDS.items():
+            raw = config.get(field_name)
+            if raw is None or isinstance(raw, (int, float)):
+                continue
+            if isinstance(raw, str):
+                if '{' in raw or '{{' in raw:
+                    raw = self.workflow_variable_service.apply_early_variables(
+                        raw, agent_inputs=self.agent_inputs,
+                        workflow_config=self.workflow_file_config
+                    )
+                try:
+                    config[field_name] = float(raw)
+                except (ValueError, TypeError):
+                    logger.warning("Config field '%s' resolved to non-float value: '%s'. "
+                                   "Using default %s.", field_name, raw, default)
+                    config[field_name] = default
+
     def _process_section(self, config: Dict, agent_outputs: Dict, is_responding_node: bool):
         """
         Processes a single node of the workflow.
         """
+        # Resolve all numeric config fields upfront so downstream code gets
+        # properly typed values even when scoped variables are used.
+        self._resolve_numeric_config_fields(config)
+
         is_streaming_for_node = self.stream and is_responding_node
         endpoint_config = {}
 
@@ -458,22 +571,8 @@ class WorkflowProcessor:
             else:
                 preset = preset_template
 
-            # Apply variable substitution for maxResponseSizeInTokens if it's a string with variables
-            max_response_tokens_raw = config.get("maxResponseSizeInTokens", 400)
-            if isinstance(max_response_tokens_raw, str) and ('{' in max_response_tokens_raw or '{{' in max_response_tokens_raw):
-                max_response_tokens_str = self.workflow_variable_service.apply_early_variables(
-                    max_response_tokens_raw,
-                    agent_inputs=self.agent_inputs,
-                    workflow_config=self.workflow_file_config
-                )
-                try:
-                    max_response_tokens = int(max_response_tokens_str)
-                    logger.debug(f"Resolved maxResponseSizeInTokens from '{max_response_tokens_raw}' to {max_response_tokens}")
-                except ValueError:
-                    logger.error(f"maxResponseSizeInTokens resolved to non-integer value: '{max_response_tokens_str}'. Using default 400.")
-                    max_response_tokens = 400
-            else:
-                max_response_tokens = int(max_response_tokens_raw) if max_response_tokens_raw else 400
+            # maxResponseSizeInTokens is already resolved by _resolve_numeric_config_fields
+            max_response_tokens = config.get("maxResponseSizeInTokens", 400)
 
             endpoint_config = get_endpoint_config(endpoint_name)
             add_user_prompt = config.get('addUserTurnTemplate', False)
@@ -527,7 +626,9 @@ class WorkflowProcessor:
             node_handlers=self.node_handlers,
             api_key=self.api_key,
             encryption_key=self.encryption_key,
-            api_key_hash=self.api_key_hash
+            api_key_hash=self.api_key_hash,
+            tools=self.tools,
+            tool_choice=self.tool_choice,
         )
 
         node_type = context.config.get("type", "Standard")

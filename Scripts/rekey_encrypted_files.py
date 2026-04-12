@@ -42,7 +42,14 @@ from Middleware.utilities.encryption_utils import (
 
 
 def find_discussion_directory(user_config_path: str) -> str:
-    """Reads the user config to determine the discussion directory."""
+    """Reads the user config to determine the discussion directory.
+
+    Args:
+        user_config_path (str): Path to the user's JSON configuration file.
+
+    Returns:
+        str: The resolved discussion directory path.
+    """
     with open(user_config_path) as f:
         config = json.load(f)
 
@@ -54,7 +61,14 @@ def find_discussion_directory(user_config_path: str) -> str:
 
 
 def find_user_config_path(username: str) -> str:
-    """Locates the user config JSON file."""
+    """Locates the user config JSON file.
+
+    Args:
+        username (str): The WilmerAI username (matches the config filename).
+
+    Returns:
+        str: The absolute path to the user's configuration file. Exits if not found.
+    """
     config_path = os.path.join(
         project_root, "Public", "Configs", "Users", f"{username.lower()}.json"
     )
@@ -131,7 +145,14 @@ def process_file(filepath: str, old_key: bytes, new_key: bytes = None) -> bool:
 
 
 def collect_json_files(directory: str) -> list:
-    """Recursively collects all .json files under a directory."""
+    """Recursively collects all .json files under a directory.
+
+    Args:
+        directory (str): Root directory to search.
+
+    Returns:
+        list: Absolute paths to all .json files found (excluding the rekey journal).
+    """
     json_files = []
     for root, dirs, files in os.walk(directory):
         for filename in files:
@@ -141,7 +162,14 @@ def collect_json_files(directory: str) -> list:
 
 
 def _load_journal(journal_path: str) -> dict:
-    """Loads the rekey journal, or returns an empty state if none exists."""
+    """Loads the rekey journal, or returns an empty state if none exists.
+
+    Args:
+        journal_path (str): Path to the journal file.
+
+    Returns:
+        dict: The journal state with a 'completed' list of processed file paths.
+    """
     if os.path.exists(journal_path):
         with open(journal_path) as f:
             return json.load(f)
@@ -149,7 +177,12 @@ def _load_journal(journal_path: str) -> dict:
 
 
 def _save_journal(journal_path: str, journal: dict) -> None:
-    """Atomically writes the rekey journal so progress survives crashes."""
+    """Atomically writes the rekey journal so progress survives crashes.
+
+    Args:
+        journal_path (str): Path to the journal file.
+        journal (dict): The journal state to persist.
+    """
     tmp_fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(journal_path), suffix='.tmp')
     try:
         os.write(tmp_fd, json.dumps(journal, indent=2).encode('utf-8'))
@@ -169,7 +202,11 @@ def _save_journal(journal_path: str, journal: dict) -> None:
 
 
 def _remove_journal(journal_path: str) -> None:
-    """Removes the journal file after a successful rekey."""
+    """Removes the journal file after a successful rekey.
+
+    Args:
+        journal_path (str): Path to the journal file to remove.
+    """
     try:
         os.unlink(journal_path)
     except OSError:
@@ -177,6 +214,7 @@ def _remove_journal(journal_path: str) -> None:
 
 
 def main():
+    """Entry point for the rekey/decrypt CLI tool. Parses arguments and orchestrates the process."""
     parser = argparse.ArgumentParser(
         description="Re-key or decrypt WilmerAI encrypted discussion files."
     )
