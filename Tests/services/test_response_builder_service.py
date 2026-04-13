@@ -387,7 +387,7 @@ def test_build_openai_chat_completion_response_with_tool_calls(service):
     response = service.build_openai_chat_completion_response("", tool_calls=tool_calls)
     message = response["choices"][0]["message"]
     assert message["tool_calls"] == tool_calls
-    assert message["content"] is None
+    assert message["content"] == ""
     assert response["choices"][0]["finish_reason"] == "tool_calls"
 
 

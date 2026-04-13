@@ -443,13 +443,13 @@ def redact_sensitive_data(data, redaction_text='***REDACTED***'):
         returns the original value unchanged.
 
     Example:
-        >>> config = {'apiKey': 'secret123', 'endpoint': 'https://api.example.com'}
+        >>> config = {'apiKey': 'secret123', 'endpoint': 'https://api.example.local'}
         >>> redact_sensitive_data(config)
-        {'apiKey': '***REDACTED***', 'endpoint': 'https://api.example.com'}
+        {'apiKey': '***REDACTED***', 'endpoint': 'https://api.example.local'}
     """
     # List of sensitive key patterns (case-insensitive)
     sensitive_keys = {
-        'apikey', 'api_key', 'apikey',
+        'apikey', 'api_key',
         'password', 'passwd', 'pwd',
         'token', 'access_token', 'refresh_token', 'auth_token', 'bearer_token',
         'secret', 'client_secret', 'api_secret',

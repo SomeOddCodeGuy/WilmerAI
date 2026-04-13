@@ -325,32 +325,31 @@ class GenerateAPI(MethodView):
         request_id = str(uuid.uuid4())
         g.current_request_id = request_id
 
-        instance_global_variables.set_api_type("ollamagenerate")
-        api_key = api_helpers.extract_api_key()
-
-        logger.debug(f"GenerateAPI request received (ID: {request_id})")
-
-        # Use force=True and silent=True for robustness
-        data: Dict[str, Any] = request.get_json(force=True, silent=True)
-        if data is None:
-            logger.error("Failed to parse JSON in GenerateAPI")
-            return jsonify({"error": "Invalid JSON data"}), 400
-
-        sensitive_log_lazy(logger, logging.DEBUG,
-                           "GenerateAPI request data (ID: %s): %s",
-                           lambda: request_id,
-                           lambda: json.dumps(_sanitize_log_data(data)))
-
-        model: str = data.get("model")
-        if not model:
-            return jsonify({"error": "The 'model' field is required."}), 400
-
-        # Set workflow override from model field if applicable.
-        # This must happen before reading per-user config values like
-        # encryptUsingApiKey, because it determines which user's config to load.
-        api_helpers.set_workflow_override(model)
-
         try:
+            instance_global_variables.set_api_type("ollamagenerate")
+            api_key = api_helpers.extract_api_key()
+
+            logger.debug(f"GenerateAPI request received (ID: {request_id})")
+
+            # Use force=True and silent=True for robustness
+            data: Dict[str, Any] = request.get_json(force=True, silent=True)
+            if data is None:
+                logger.error("Failed to parse JSON in GenerateAPI")
+                return jsonify({"error": "Invalid JSON data"}), 400
+
+            sensitive_log_lazy(logger, logging.DEBUG,
+                               "GenerateAPI request data (ID: %s): %s",
+                               lambda: request_id,
+                               lambda: json.dumps(_sanitize_log_data(data)))
+
+            model: str = data.get("model")
+            if not model:
+                return jsonify({"error": "The 'model' field is required."}), 400
+
+            # Set workflow override from model field if applicable.
+            # This must happen before reading per-user config values like
+            # encryptUsingApiKey, because it determines which user's config to load.
+            api_helpers.set_workflow_override(model)
             rejection = api_helpers.require_identified_user()
             if rejection:
                 return jsonify({"error": rejection}), 400
@@ -421,32 +420,31 @@ class ApiChatAPI(MethodView):
         request_id = str(uuid.uuid4())
         g.current_request_id = request_id
 
-        instance_global_variables.set_api_type("ollamaapichat")
-        api_key = api_helpers.extract_api_key()
-
         try:
-            # Use force=True to ensure content-type is ignored if necessary
-            request_data: Dict[str, Any] = request.get_json(force=True)
-        except Exception as e:
-            logger.error(f"Failed to parse JSON: {e}")
-            return jsonify({"error": "Invalid JSON data"}), 400
+            instance_global_variables.set_api_type("ollamaapichat")
+            api_key = api_helpers.extract_api_key()
 
-        logger.info(f"ApiChatAPI request received (ID: {request_id})")
-        sensitive_log_lazy(logger, logging.INFO,
-                           "ApiChatAPI request data (ID: %s): %s",
-                           lambda: request_id,
-                           lambda: json.dumps(_sanitize_log_data(request_data)))
+            try:
+                # Use force=True to ensure content-type is ignored if necessary
+                request_data: Dict[str, Any] = request.get_json(force=True)
+            except Exception as e:
+                logger.error(f"Failed to parse JSON: {e}")
+                return jsonify({"error": "Invalid JSON data"}), 400
 
-        if 'model' not in request_data or 'messages' not in request_data:
-            return jsonify({"error": "Both 'model' and 'messages' fields are required."}), 400
+            logger.info(f"ApiChatAPI request received (ID: {request_id})")
+            sensitive_log_lazy(logger, logging.INFO,
+                               "ApiChatAPI request data (ID: %s): %s",
+                               lambda: request_id,
+                               lambda: json.dumps(_sanitize_log_data(request_data)))
 
-        # Set workflow override from model field if applicable.
-        # This must happen before reading per-user config values like
-        # addUserAssistant, because it determines which user's config to load.
-        model_from_request = request_data.get("model")
-        api_helpers.set_workflow_override(model_from_request)
+            if 'model' not in request_data or 'messages' not in request_data:
+                return jsonify({"error": "Both 'model' and 'messages' fields are required."}), 400
 
-        try:
+            # Set workflow override from model field if applicable.
+            # This must happen before reading per-user config values like
+            # addUserAssistant, because it determines which user's config to load.
+            model_from_request = request_data.get("model")
+            api_helpers.set_workflow_override(model_from_request)
             rejection = api_helpers.require_identified_user()
             if rejection:
                 return jsonify({"error": rejection}), 400

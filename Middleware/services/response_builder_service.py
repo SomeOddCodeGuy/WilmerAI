@@ -155,7 +155,7 @@ class ResponseBuilderService:
             message["tool_calls"] = tool_calls
             finish_reason = "tool_calls"
             if not full_text:
-                message["content"] = None
+                message["content"] = ""
         return {
             "id": f"chatcmpl-{current_time}",
             "object": "chat.completion",

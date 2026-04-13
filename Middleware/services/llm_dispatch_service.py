@@ -180,6 +180,9 @@ class LLMDispatchService:
 
         workflow_variable_service = context.workflow_variable_service
 
+        if context.messages is None:
+            raise ValueError("ExecutionContext.messages must not be None when dispatching to LLM")
+
         message_copy = deepcopy(context.messages)
 
         # 1. Get and apply variables to base prompts from the node config

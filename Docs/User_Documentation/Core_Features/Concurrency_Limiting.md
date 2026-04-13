@@ -70,9 +70,16 @@ When a request is rejected because the concurrency limit is reached and the time
 
 ## Scope
 
-The concurrency limit applies to **all** endpoints exposed by WilmerAI. Every incoming request, regardless of path,
-counts toward the limit. If a future health-check endpoint or other lightweight endpoint is added, it would also be
-subject to the concurrency limit.
+The concurrency limit applies to **POST** endpoints only -- the ones that dispatch requests to LLM backends. Lightweight
+endpoints that return metadata or perform administrative actions are exempt and will never be blocked by the semaphore:
+
+- **GET** endpoints (`/v1/models`, `/models`, `/api/tags`, `/api/version`) -- these return model lists and version info
+  and are used by front-ends to populate UI elements. They are always available regardless of how many LLM requests are
+  in flight.
+- **DELETE** endpoints (`/api/generate`, `/api/chat`) -- these handle request cancellation and are always available.
+
+This means a front-end can always query available models or cancel a running request, even while a long-running LLM
+call is occupying all concurrency slots.
 
 -----
 
