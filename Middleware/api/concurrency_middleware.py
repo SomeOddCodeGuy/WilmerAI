@@ -69,7 +69,7 @@ class ConcurrencyLimitMiddleware:
         (request cancellation) are lightweight metadata operations that
         should never be blocked behind the semaphore.
         """
-        return environ.get("REQUEST_METHOD", "GET") == "POST"
+        return environ.get("REQUEST_METHOD", "POST") == "POST"
 
     def __call__(self, environ, start_response):
         if not self._requires_concurrency_limit(environ):
