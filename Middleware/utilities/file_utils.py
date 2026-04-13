@@ -134,7 +134,13 @@ def ensure_json_file_exists(
 
     # If the file exists, load and return it.
     if resolved_path and resolved_path.exists():
-        return _read_json_file(resolved_path, encryption_key)
+        data = _read_json_file(resolved_path, encryption_key)
+        if not isinstance(data, list):
+            raise TypeError(
+                f"Expected a JSON list in '{filepath}', got {type(data).__name__}. "
+                f"The file may be corrupted."
+            )
+        return data
 
     # If the file does not exist, create it.
     # Use the original filepath string to create the new file.

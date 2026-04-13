@@ -169,19 +169,19 @@ def add_memory_to_vector_db(discussion_id: str, memory_text: str, metadata_json_
         return
 
     try:
+        # 1. Parse metadata first to fail fast before any database writes
+        metadata = json.loads(metadata_json_str)
+
         cursor = conn.cursor()
         # Store the timestamp as an ISO 8601 string in UTC
         date_added = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
-        # 1. Insert into the main memories table
+        # 2. Insert into the main memories table
         cursor.execute(
             'INSERT INTO memories (discussion_id, memory_text, date_added, metadata_json) VALUES (?, ?, ?, ?)',
             (discussion_id, memory_text, date_added, metadata_json_str)
         )
         memory_id = cursor.lastrowid
-
-        # 2. Parse metadata (this might raise JSONDecodeError)
-        metadata = json.loads(metadata_json_str)
 
         def format_for_fts(data):
             """Helper to format metadata fields (especially lists) for FTS indexing."""
@@ -196,7 +196,7 @@ def add_memory_to_vector_db(discussion_id: str, memory_text: str, metadata_json_
         entities = format_for_fts(metadata.get('entities', []))
         key_phrases = format_for_fts(metadata.get('key_phrases', []))
 
-        # 3. Insert into the FTS table
+        # 3. Insert into the FTS index
         cursor.execute(
             '''
             INSERT INTO memories_fts (rowid, title, summary, entities, key_phrases, memory_text_unweighted) 
@@ -211,9 +211,6 @@ def add_memory_to_vector_db(discussion_id: str, memory_text: str, metadata_json_
 
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse metadata JSON: {e}. Content: {metadata_json_str}")
-        # Explicitly rollback if JSON parsing fails after the first insert succeeded
-        if conn:
-            conn.rollback()
     except Exception as e:
         logger.error(f"Failed to add memory to vector DB for '{discussion_id}': {e}", exc_info=True)
         # Explicitly rollback on other exceptions

@@ -316,28 +316,27 @@ class CompletionsAPI(MethodView):
         request_id = str(uuid.uuid4())
         g.current_request_id = request_id
 
-        instance_global_variables.set_api_type("openaicompletion")
-        api_key = api_helpers.extract_api_key()
-
-        logger.info(f"CompletionsAPI request received (ID: {request_id})")
-
-        data: Dict[str, Any] = request.get_json(force=True, silent=True)
-        if data is None:
-            logger.error("Failed to parse JSON in CompletionsAPI")
-            return jsonify({"error": "Invalid JSON data"}), 400
-
-        sensitive_log_lazy(logger, logging.DEBUG,
-                           "CompletionsAPI request data (ID: %s): %s",
-                           lambda: request_id,
-                           lambda: json.dumps(_sanitize_log_data(data)))
-
-        # Set workflow override from model field if applicable.
-        # This must happen before reading per-user config values like
-        # encryptUsingApiKey, because it determines which user's config to load.
-        model_name = data.get("model")
-        api_helpers.set_workflow_override(model_name)
-
         try:
+            instance_global_variables.set_api_type("openaicompletion")
+            api_key = api_helpers.extract_api_key()
+
+            logger.info(f"CompletionsAPI request received (ID: {request_id})")
+
+            data: Dict[str, Any] = request.get_json(force=True, silent=True)
+            if data is None:
+                logger.error("Failed to parse JSON in CompletionsAPI")
+                return jsonify({"error": "Invalid JSON data"}), 400
+
+            sensitive_log_lazy(logger, logging.DEBUG,
+                               "CompletionsAPI request data (ID: %s): %s",
+                               lambda: request_id,
+                               lambda: json.dumps(_sanitize_log_data(data)))
+
+            # Set workflow override from model field if applicable.
+            # This must happen before reading per-user config values like
+            # encryptUsingApiKey, because it determines which user's config to load.
+            model_name = data.get("model")
+            api_helpers.set_workflow_override(model_name)
             rejection = api_helpers.require_identified_user()
             if rejection:
                 return jsonify({"error": rejection}), 400
@@ -385,28 +384,27 @@ class ChatCompletionsAPI(MethodView):
         request_id = str(uuid.uuid4())
         g.current_request_id = request_id
 
-        instance_global_variables.set_api_type("openaichatcompletion")
-        api_key = api_helpers.extract_api_key()
-
-        request_data: Dict[str, Any] = request.get_json(force=True, silent=True)
-        if request_data is None:
-            logger.error("Failed to parse JSON in ChatCompletionsAPI")
-            return jsonify({"error": "Invalid JSON data"}), 400
-
-        logger.info(f"ChatCompletionsAPI request received (ID: {request_id})")
-        sensitive_log_lazy(logger, logging.INFO,
-                           "ChatCompletionsAPI request data (ID: %s): %s",
-                           lambda: request_id,
-                           lambda: json.dumps(_sanitize_log_data(request_data)))
-        logger.info(f"ChatCompletionsAPI.post() called - stream={request_data.get('stream', False)}")
-
-        # Set workflow override from model field if applicable.
-        # This must happen before reading per-user config values like
-        # addUserAssistant, because it determines which user's config to load.
-        model_name = request_data.get("model")
-        api_helpers.set_workflow_override(model_name)
-
         try:
+            instance_global_variables.set_api_type("openaichatcompletion")
+            api_key = api_helpers.extract_api_key()
+
+            request_data: Dict[str, Any] = request.get_json(force=True, silent=True)
+            if request_data is None:
+                logger.error("Failed to parse JSON in ChatCompletionsAPI")
+                return jsonify({"error": "Invalid JSON data"}), 400
+
+            logger.info(f"ChatCompletionsAPI request received (ID: {request_id})")
+            sensitive_log_lazy(logger, logging.INFO,
+                               "ChatCompletionsAPI request data (ID: %s): %s",
+                               lambda: request_id,
+                               lambda: json.dumps(_sanitize_log_data(request_data)))
+            logger.info(f"ChatCompletionsAPI.post() called - stream={request_data.get('stream', False)}")
+
+            # Set workflow override from model field if applicable.
+            # This must happen before reading per-user config values like
+            # addUserAssistant, because it determines which user's config to load.
+            model_name = request_data.get("model")
+            api_helpers.set_workflow_override(model_name)
             rejection = api_helpers.require_identified_user()
             if rejection:
                 return jsonify({"error": rejection}), 400

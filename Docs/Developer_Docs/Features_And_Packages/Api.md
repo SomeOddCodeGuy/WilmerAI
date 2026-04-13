@@ -518,21 +518,26 @@ Key design points:
 
 The `__call__` method implements the WSGI interface and follows this sequence:
 
-1. **Acquire with timeout**: Calls `semaphore.acquire(timeout=self._acquire_timeout)`. If the semaphore cannot
-   be acquired within the timeout window, the request is rejected immediately.
+1. **Method check**: Calls `_requires_concurrency_limit(environ)` to check `REQUEST_METHOD`. Only `POST`
+   requests are subject to the semaphore. Non-POST requests (GET for model lists/version, DELETE for
+   cancellation) are passed directly to the inner app without acquiring. This prevents lightweight metadata
+   endpoints from being blocked behind long-running LLM calls.
 
-2. **503 on timeout**: When acquire fails, the middleware calls `start_response("503 Service Unavailable", ...)`
+2. **Acquire with timeout**: For POST requests, calls `semaphore.acquire(timeout=self._acquire_timeout)`. If the
+   semaphore cannot be acquired within the timeout window, the request is rejected immediately.
+
+3. **503 on timeout**: When acquire fails, the middleware calls `start_response("503 Service Unavailable", ...)`
    and returns a pre-encoded JSON body with an error message. The semaphore is never held in this path, so there
    is nothing to release.
 
-3. **Call the inner app**: If acquired, the middleware calls `self._app(environ, start_response)` to get the
+4. **Call the inner app**: If acquired, the middleware calls `self._app(environ, start_response)` to get the
    response iterable from Flask.
 
-4. **Exception handling**: If the inner app raises during the call (before returning a response), the middleware
+5. **Exception handling**: If the inner app raises during the call (before returning a response), the middleware
    releases the semaphore immediately and re-raises the exception. This prevents a leaked semaphore slot from
    permanently reducing capacity.
 
-5. **Wrap the response**: On success, the response iterable is wrapped in `_SemaphoreReleasingIterator`, which
+6. **Wrap the response**: On success, the response iterable is wrapped in `_SemaphoreReleasingIterator`, which
    takes ownership of releasing the semaphore when the response is fully consumed.
 
 ### Application Point
@@ -565,13 +570,14 @@ This ensures it sits between the WSGI server (Eventlet) and Flask's routing laye
   seconds (15 minutes). This generous default accounts for long-running LLM inference on local hardware.
   Users with slower hardware or very large models may want to increase this further.
 
-### Future Consideration: Path Exemptions
+### Method-Based Exemptions
 
-Currently the middleware applies to every request that reaches the WSGI layer. If lightweight endpoints are added
-in the future (e.g., `/health`, `/ready`, or `/metrics`), they would be unnecessarily blocked behind the
-semaphore. The middleware should be extended with an `exclude_paths` set that bypasses the semaphore for matching
-request paths. The implementation would check `environ.get("PATH_INFO", "")` against the exclusion set before
-attempting to acquire, and call the inner app directly for exempted paths.
+The middleware exempts non-POST requests from the semaphore. This works because all LLM-dispatching endpoints
+use POST, while metadata endpoints (model lists, version) use GET and cancellation endpoints use DELETE. The
+check is done via `_requires_concurrency_limit()`, a static method that reads `REQUEST_METHOD` from the WSGI
+environ. This approach avoids maintaining a path allowlist -- if a new POST endpoint is added that does not
+call an LLM, it would need to be handled (e.g., by switching to a path-based check or adding it to an
+exemption set).
 
 ### Key Files
 

@@ -27,13 +27,13 @@ def _make_streaming_app(chunks):
     return app
 
 
-def _call_middleware(middleware):
+def _call_middleware(middleware, method="POST"):
     """Calls the middleware with a dummy environ and captures the response."""
     captured = {}
     def start_response(status, headers):
         captured["status"] = status
         captured["headers"] = headers
-    body = middleware({}, start_response)
+    body = middleware({"REQUEST_METHOD": method}, start_response)
     return captured, body
 
 
@@ -270,3 +270,48 @@ def test_no_middleware_when_semaphore_is_none(mocker):
 
     # wsgi_app should be unchanged
     assert mock_app.wsgi_app is original_wsgi_app
+
+
+def test_get_request_bypasses_semaphore():
+    """GET requests (model lists, version) should pass through without acquiring the semaphore."""
+    sem = threading.BoundedSemaphore(1)
+    sem.acquire()  # exhaust the semaphore
+
+    app = _make_simple_app([b"models response"])
+    mw = ConcurrencyLimitMiddleware(app, sem, acquire_timeout=0.1)
+
+    # A POST would block and 503, but a GET should pass straight through
+    captured, body = _call_middleware(mw, method="GET")
+    assert captured["status"] == "200 OK"
+    assert list(body) == [b"models response"]
+
+    sem.release()  # cleanup
+
+
+def test_delete_request_bypasses_semaphore():
+    """DELETE requests (cancellation) should pass through without acquiring the semaphore."""
+    sem = threading.BoundedSemaphore(1)
+    sem.acquire()  # exhaust the semaphore
+
+    app = _make_simple_app([b"cancelled"])
+    mw = ConcurrencyLimitMiddleware(app, sem, acquire_timeout=0.1)
+
+    captured, body = _call_middleware(mw, method="DELETE")
+    assert captured["status"] == "200 OK"
+    assert list(body) == [b"cancelled"]
+
+    sem.release()  # cleanup
+
+
+def test_post_request_still_acquires_semaphore():
+    """POST requests must still go through the semaphore."""
+    sem = threading.BoundedSemaphore(1)
+    sem.acquire()  # exhaust the semaphore
+
+    app = _make_simple_app([b"should not reach"])
+    mw = ConcurrencyLimitMiddleware(app, sem, acquire_timeout=0.1)
+
+    captured, body = _call_middleware(mw, method="POST")
+    assert captured["status"] == "503 Service Unavailable"
+
+    sem.release()  # cleanup

@@ -7,7 +7,6 @@ import uuid
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 
-from Middleware.api import api_helpers
 from Middleware.common import instance_global_variables
 from Middleware.utilities import config_utils
 
@@ -29,7 +28,8 @@ class ResponseBuilderService:
         Returns:
             str: The name of the model currently being used.
         """
-        # This keeps the dependency on api_helpers local to the service
+        # Lazy import to break circular dependency with api_helpers
+        from Middleware.api import api_helpers
         return api_helpers.get_model_name()
 
     # --- OpenAI Compatible Responses ---
