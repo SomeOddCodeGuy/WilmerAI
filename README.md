@@ -9,10 +9,16 @@
 > This project and any expressed views, methodologies, etc., found within are the result of contributions by the
 > maintainer and any contributors in their free time and on their personal hardware, and should not reflect upon
 > any of their employers.
->
-> [The maintainer of this project, SomeOddCodeGuy, is not doing any Contract, Freelance, or Collaboration
-> work.](https://github.com/SomeOddCodeGuy#disclaimer)
 
+---
+
+## Social Media Note
+
+> This project currently does not have a dedicated social media presence. If you see channels on sites like 
+tiktok with the same name: there is no affiliation.  I guess someone out there named Wilmer also enjoys AI.
+
+> Additionally: [the maintainer of this project, SomeOddCodeGuy, is not doing any Contract, Freelance, or Collaboration
+> work.](https://github.com/SomeOddCodeGuy#disclaimer)
 ---
 
 ## What is WilmerAI?
