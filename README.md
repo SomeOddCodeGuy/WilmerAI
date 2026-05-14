@@ -14,8 +14,8 @@
 
 ## Social Media Note
 
-> This project currently does not have a dedicated social media presence. If you see channels on sites like 
-tiktok with the same name: there is no affiliation.  I guess someone out there named Wilmer also enjoys AI.
+> This project currently does not have a dedicated social media presence. If you see channels on sites like
+> tiktok with the same name: there is no affiliation.  I guess someone out there named Wilmer also enjoys AI.
 
 > Additionally: [the maintainer of this project, SomeOddCodeGuy, is not doing any Contract, Freelance, or Collaboration
 > work.](https://github.com/SomeOddCodeGuy#disclaimer)
