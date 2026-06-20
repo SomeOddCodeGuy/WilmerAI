@@ -10,6 +10,7 @@ from typing import Dict, Generator, List, Optional, Union, Any
 from Middleware.llmapis.handlers.base.base_llm_api_handler import LlmApiHandler
 from Middleware.llmapis.handlers.impl.claude_api_handler import ClaudeApiHandler
 from Middleware.llmapis.handlers.impl.koboldcpp_api_handler import KoboldCppApiHandler
+from Middleware.llmapis.handlers.impl.litellm_api_handler import LiteLLMApiHandler
 from Middleware.llmapis.handlers.impl.ollama_chat_api_handler import OllamaChatHandler
 from Middleware.llmapis.handlers.impl.ollama_generate_api_handler import OllamaGenerateApiHandler
 from Middleware.llmapis.handlers.impl.openai_api_handler import OpenAiApiHandler
@@ -117,6 +118,8 @@ class LlmApiService:
             return OllamaChatHandler(**common_args)
         elif self.llm_type == "ollamaApiGenerate":
             return OllamaGenerateApiHandler(**common_args)
+        elif self.llm_type == "litellmChatCompletion":
+            return LiteLLMApiHandler(**common_args, dont_include_model=self.dont_include_model)
         else:
             raise ValueError(f"Unsupported LLM type: {self.llm_type}")
 
