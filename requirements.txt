@@ -7,3 +7,4 @@ Pillow==12.2.0
 eventlet==0.40.4
 waitress==3.0.2
 cryptography==46.0.7
+litellm>=1.80.0,<1.87.0
