@@ -25,7 +25,7 @@ The client application is not aware of the backend processing, which allows it t
    chain of actions -- like using a local model to extract keywords, searching a database, and then sending the results to
    a cloud model like GPT-4o for the final answer.
 3. **Standard Response:** WilmerAI takes the final generated text and formats it into an Ollama-compliant JSON response.
-4. **Seamless Display:** Your UI receives the formatted response and displays it to the user, unaware of the multi-LLM
+4. **Display:** Your UI receives the formatted response and displays it to the user, unaware of the multi-LLM
    workflow that just occurred.
 
 -----

@@ -4,5 +4,18 @@
   "presetType": "OpenAiCompatibleApis",
   "truncateLengthPropertyName": "",
   "maxNewTokensPropertyName": "max_tokens",
-  "streamPropertyName": "stream"
+  "streamPropertyName": "stream",
+  "supportsChatTemplateKwargs": false,
+  "thinking": {
+    "mode": "unsupported"
+  },
+  "samplerFieldMap": {
+    "temperature": "temperature",
+    "top_p": "top_p",
+    "presence_penalty": "presence_penalty",
+    "frequency_penalty": "frequency_penalty",
+    "seed": "seed",
+    "stop": "stop",
+    "logit_bias": "logit_bias"
+  }
 }

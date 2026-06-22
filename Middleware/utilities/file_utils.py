@@ -10,6 +10,26 @@ from typing import Dict, List, Tuple, Union, Optional
 logger = logging.getLogger(__name__)
 
 
+def _to_path(path_str: str) -> Path:
+    """
+    Builds a Path from a string, expanding a leading ``~`` to the user's home.
+
+    Centralizes path construction so every file the module reads or writes honors
+    ``~``/``~user`` prefixes consistently. ``os.path.expanduser`` is used rather
+    than ``Path.expanduser`` because it returns the string unchanged when no home
+    directory can be resolved instead of raising ``RuntimeError``, preserving the
+    prior literal behavior in home-less environments. A path without a leading
+    ``~`` is returned untouched, so absolute and relative paths are unaffected.
+
+    Args:
+        path_str (str): The raw file path, which may begin with ``~``.
+
+    Returns:
+        Path: The path with any leading ``~`` expanded to the home directory.
+    """
+    return Path(os.path.expanduser(path_str))
+
+
 def _resolve_case_insensitive_path(path_str: str) -> Optional[Path]:
     """
     Resolves the correct casing of a file path in a case-insensitive manner.
@@ -24,7 +44,7 @@ def _resolve_case_insensitive_path(path_str: str) -> Optional[Path]:
     Returns:
         Optional[Path]: The resolved file path if found, otherwise None.
     """
-    file_path = Path(path_str)
+    file_path = _to_path(path_str)
     if file_path.exists():
         return file_path
     parent_dir = file_path.parent
@@ -145,7 +165,7 @@ def ensure_json_file_exists(
     # If the file does not exist, create it.
     # Use the original filepath string to create the new file.
     # Ensure parent directory exists.
-    target_path = Path(filepath)
+    target_path = _to_path(filepath)
     target_path.parent.mkdir(parents=True, exist_ok=True)
 
     data_to_write = initial_data if initial_data is not None else []
@@ -209,7 +229,7 @@ def write_chunks_with_hashes(
     )
     new_data = [{'text_block': tb, 'hash': hc} for tb, hc in chunks_with_hashes]
     combined_data = new_data if overwrite else existing_data + new_data
-    target = file_path or Path(filepath)
+    target = file_path or _to_path(filepath)
     _write_json_file(target, combined_data, encryption_key)
 
 
@@ -305,7 +325,7 @@ def save_timestamp_file(
     Returns:
         None
     """
-    file_path = _resolve_case_insensitive_path(filepath) or Path(filepath)
+    file_path = _resolve_case_insensitive_path(filepath) or _to_path(filepath)
     file_path.parent.mkdir(parents=True, exist_ok=True)
     _write_json_file(file_path, timestamps, encryption_key)
 
@@ -313,7 +333,10 @@ def save_timestamp_file(
 def load_custom_file(
         filepath: str,
         delimiter: Optional[str] = None,
-        custom_delimiter: Optional[str] = None
+        custom_delimiter: Optional[str] = None,
+        head_count: Optional[int] = None,
+        tail_count: Optional[int] = None,
+        chunk_delimiter: str = "\n"
 ) -> str:
     """
     Loads a text file and optionally replaces a delimiter.
@@ -328,6 +351,14 @@ def load_custom_file(
             Defaults to None.
         custom_delimiter (Optional[str]): The replacement string.
             Defaults to None.
+        head_count (Optional[int]): If set, keep only the first N chunks of
+            the file (chunks split on ``chunk_delimiter``). Opt-in; defaults
+            to None (whole file).
+        tail_count (Optional[int]): If set, keep only the last N chunks of the
+            file (chunks split on ``chunk_delimiter``). Opt-in; defaults to
+            None (whole file). Mutually exclusive with head_count.
+        chunk_delimiter (str): The separator that defines a "chunk" for
+            head_count/tail_count. Defaults to "\n" (i.e. lines).
 
     Returns:
         str: The content of the file with replacements, or a default
@@ -339,6 +370,19 @@ def load_custom_file(
             content = f.read()
         if not content:
             return "No additional information added"
+        if head_count is not None or tail_count is not None:
+            separator = chunk_delimiter if chunk_delimiter else "\n"
+            parts = content.split(separator)
+            if tail_count is not None:
+                # Only a positive count keeps chunks; 0 yields none and a negative
+                # (nonsensical) count is clamped to none too. The explicit guard also
+                # avoids parts[-0:] returning the whole list (since -0 == 0).
+                parts = parts[-tail_count:] if tail_count > 0 else []
+            else:
+                # Symmetric with tail_count: 0 or a negative count yields no chunks
+                # rather than parts[:negative] dropping from the end.
+                parts = parts[:head_count] if head_count > 0 else []
+            content = separator.join(parts)
         if delimiter and custom_delimiter:
             content = content.replace(delimiter, custom_delimiter)
         return content
@@ -380,7 +424,7 @@ def write_condensation_tracker(filepath: str, data: Dict, encryption_key: Option
         data (Dict): The tracker data to write (e.g. {"lastCondensationHash": "..."}).
         encryption_key (Optional[bytes]): Fernet key for transparent encryption.
     """
-    file_path = _resolve_case_insensitive_path(filepath) or Path(filepath)
+    file_path = _resolve_case_insensitive_path(filepath) or _to_path(filepath)
     file_path.parent.mkdir(parents=True, exist_ok=True)
     _write_json_file(file_path, data, encryption_key)
 
@@ -419,12 +463,12 @@ def write_vision_responses(filepath: str, data: Dict, encryption_key: Optional[b
         data (Dict): The cache data to write (e.g. {"message_hash": "response_text"}).
         encryption_key (Optional[bytes]): Fernet key for transparent encryption.
     """
-    file_path = _resolve_case_insensitive_path(filepath) or Path(filepath)
+    file_path = _resolve_case_insensitive_path(filepath) or _to_path(filepath)
     file_path.parent.mkdir(parents=True, exist_ok=True)
     _write_json_file(file_path, data, encryption_key)
 
 
-def save_custom_file(filepath: str, content: str) -> None:
+def save_custom_file(filepath: str, content: str, mode: str = "overwrite") -> None:
     """
     Saves content to a text file using atomic write, creating parent directories
     if they don't exist.
@@ -435,12 +479,21 @@ def save_custom_file(filepath: str, content: str) -> None:
     Args:
         filepath (str): The path where the file will be saved.
         content (str): The string content to write to the file.
+        mode (str): "overwrite" (default) replaces the file. "append" adds
+            content to the end of the existing file (read-modify-write so the
+            write stays atomic); a missing file is created.
 
     Raises:
         IOError: If there is an issue writing to the file.
     """
-    file_path = Path(filepath)
+    file_path = _to_path(filepath)
     file_path.parent.mkdir(parents=True, exist_ok=True)
+    if mode == "append" and file_path.exists():
+        # Read-modify-write so the atomic replace below is preserved. Let a read
+        # failure propagate rather than swallowing it: silently writing only the new
+        # content would overwrite (not append to) the existing file and lose its prior
+        # contents -- the opposite of what "append" promises.
+        content = file_path.read_text(encoding='utf-8') + content
     content_bytes = content.encode('utf-8')
     tmp_fd = None
     tmp_path = None

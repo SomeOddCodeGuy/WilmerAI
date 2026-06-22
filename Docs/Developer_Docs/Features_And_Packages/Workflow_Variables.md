@@ -1,7 +1,7 @@
 ### **Developer Guide: Workflow Variables**
 
 This document provides a comprehensive guide to using dynamic variables within the WilmerAI workflow system. It details
-the available built-in variables, the powerful Jinja2 templating engine, and the simple process for adding custom
+the available built-in variables, the Jinja2 templating engine, and the simple process for adding custom
 variables directly from a workflow's JSON configuration.
 
 The system is powered by the **`$WorkflowVariableManager$`**, a service that leverages the central *
@@ -172,7 +172,7 @@ storage patterns.
 
 ## 2\. How to Use Variables
 
-There are two ways to use variables in your prompts: standard formatting and the more powerful Jinja2 templating.
+There are two ways to use variables in your prompts: standard formatting and the more flexible Jinja2 templating.
 
 ### Standard Formatting
 

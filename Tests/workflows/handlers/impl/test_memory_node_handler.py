@@ -94,7 +94,7 @@ class TestHandleMethod:
 
         mock_wvs.apply_variables.assert_called_once_with("search for {agent1Output}", base_context)
         mock_mem_service.search_vector_memories.assert_called_once_with(
-            "test-disc-789", "search for keywords", 10
+            "test-disc-789", "search for keywords", 10, api_key_hash=base_context.api_key_hash
         )
         assert result == "Found memories."
 

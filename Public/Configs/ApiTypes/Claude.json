@@ -4,5 +4,15 @@
   "presetType": "ClaudeMessages",
   "truncateLengthPropertyName": "",
   "maxNewTokensPropertyName": "max_tokens",
-  "streamPropertyName": "stream"
+  "streamPropertyName": "stream",
+  "supportsChatTemplateKwargs": false,
+  "thinking": {
+    "mode": "unsupported"
+  },
+  "samplerFieldMap": {
+    "temperature": "temperature",
+    "top_p": "top_p",
+    "top_k": "top_k",
+    "stop": "stop_sequences"
+  }
 }

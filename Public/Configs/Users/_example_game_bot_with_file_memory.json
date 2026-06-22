@@ -1,5 +1,9 @@
 {
   "port": 5072,
+  "clampPromptToContextWindow": true,
+  "userWideWorkflowVariables": {
+    "gameTempDir": "/data/user_temp"
+  },
   "stream": true,
   "customWorkflowOverride": true,
   "customWorkflow": "Game_Workflow",

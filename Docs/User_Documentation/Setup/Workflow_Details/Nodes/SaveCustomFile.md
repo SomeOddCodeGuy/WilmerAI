@@ -60,6 +60,15 @@ Each field is explained in detail below.
       `$WorkflowVariableManager$`, so you can embed variables from previous nodes (e.g., `{agent1Output}`,
       `{agent2Input}`) or the conversation history (e.g., `{chat_user_prompt_last_one}`).
 
+* #### **`mode`**
+
+    * **Type**: `String`
+    * **Required**: No
+    * **Description**: Either `"overwrite"` (default) or `"append"`. `"overwrite"` replaces the file's contents.
+      `"append"` adds `content` to the end of the existing file (creating it if missing). Append is the clean way to
+      build up an append-only log without first reading the file back into the workflow, and the write stays atomic.
+    * **Default Behavior**: `"overwrite"`.
+
 -----
 
 ### Example
@@ -166,6 +175,9 @@ It's crucial to understand how the node behaves in specific situations:
 * **Missing `content`**: If the `content` field is missing from the configuration, the node will return the string:
   `"No content specified"`. Note that an empty string (`"content": ""`) is valid and will result in an empty file being
   created.
+* **Append Mode**: With `"mode": "append"`, `content` is added to the end of the existing file rather than replacing it;
+  a missing file is created. Any value other than `"overwrite"`/`"append"` returns
+  `"SaveCustomFile: 'mode' must be 'overwrite' or 'append', got '<value>'"`.
 * **Empty Discussion_Id**: If `{Discussion_Id}` is used but no discussion ID is present in the context, it will be
   replaced with an empty string, which may result in an invalid filepath.
 * **Directory Creation**: If the parent directories in the filepath do not exist, the node will attempt to create them

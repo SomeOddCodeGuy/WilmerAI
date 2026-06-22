@@ -18,7 +18,8 @@ class MemoryService:
     and retrieving conversational memory and summaries.
     """
 
-    def search_vector_memories(self, discussion_id: str, keywords: str, limit: int = 5) -> str:
+    def search_vector_memories(self, discussion_id: str, keywords: str, limit: int = 5,
+                                api_key_hash: Optional[str] = None) -> str:
         """
         Searches for memories in the vector database using keywords.
 
@@ -26,6 +27,9 @@ class MemoryService:
             discussion_id (str): The ID of the conversation.
             keywords (str): A string of space-separated keywords for the search.
             limit (int): The maximum number of memories to return.
+            api_key_hash (Optional[str]): Pre-computed hash for per-user
+                directory isolation. Forwarded to the vector DB so the
+                correct per-user discussion folder is used.
 
         Returns:
             str: A string containing the formatted search results, or a message if none were found.
@@ -36,7 +40,9 @@ class MemoryService:
         sensitive_log(logger, logging.INFO, "Searching vector memories for discussion '%s' with keywords: '%s'",
                      discussion_id, keywords)
 
-        found_memories = vector_db_utils.search_memories_by_keyword(discussion_id, keywords, limit)
+        found_memories = vector_db_utils.search_memories_by_keyword(
+            discussion_id, keywords, limit, api_key_hash=api_key_hash
+        )
 
         if not found_memories:
             return "No relevant memories found in the vector database for the given keywords."

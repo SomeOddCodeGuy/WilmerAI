@@ -1,6 +1,6 @@
 ### **Logic & Control Flow: The Conditional Node**
 
-The **`Conditional`** node is a powerful control flow utility that evaluates a complex logical expression. Its purpose
+The **`Conditional`** node is a control flow utility that evaluates a complex logical expression. Its purpose
 is to return the string `"TRUE"` or `"FALSE"` based on the outcome. This node is a fundamental building block for
 creating dynamic workflows, as its output can be used by a `ConditionalCustomWorkflow` node to decide whether or not to
 execute a subsequent sub-workflow.
@@ -55,7 +55,7 @@ to enclose them in quotes** (e.g., `"completed"`).
 
 -----
 
-#### **Important: Critical Usage Note: Comparing Booleans vs. Strings**
+#### **Critical Usage Note: Comparing Booleans vs. Strings**
 
 The node's type inference engine makes a critical distinction between a boolean `TRUE` and a string `'TRUE'`. **This is
 especially important when checking the output of a previous `Conditional` node.**

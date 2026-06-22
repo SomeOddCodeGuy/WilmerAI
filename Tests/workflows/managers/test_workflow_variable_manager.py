@@ -48,6 +48,74 @@ def _mock_conversation_format_config(mocker):
         return_value='\n'
     )
 
+
+@pytest.fixture(autouse=True)
+def _hermetic_user_config(mocker):
+    """Isolate from the real user config file. The token-based conversation variables
+    resolve clampPromptToContextWindow (node -> endpoint -> user) via the shared
+    config_utils.is_context_clamp_enabled, whose user level calls get_user_config();
+    default it to an empty dict (clamp OFF) so tests do not depend on machine state."""
+    mocker.patch('Middleware.utilities.config_utils.get_user_config', return_value={})
+    # workflow_variable_manager imports get_user_config by name (for the 'userWideWorkflowVariables'
+    # shared-variable feature), so patch that local reference too.
+    mocker.patch('Middleware.workflows.managers.workflow_variable_manager.get_user_config', return_value={})
+
+
+# --- userWideWorkflowVariables: user-config shared variables (single source of truth) ---
+
+def test_workflow_variables_from_user_config_resolve(mocker, mock_context):
+    """A 'userWideWorkflowVariables' dict in the user config is exposed as {placeholders}
+    available to every workflow (the single knob for shared state-file paths)."""
+    mocker.patch(
+        'Middleware.workflows.managers.workflow_variable_manager.get_user_config',
+        return_value={"userWideWorkflowVariables": {"opencodePlansDir": "/data/plans"}},
+    )
+    mock_context.messages = []  # skip conversation-variable generation (no template files in tests)
+    manager = WorkflowVariableManager()
+    assert manager.apply_variables("dir is {opencodePlansDir}", mock_context) == "dir is /data/plans"
+
+
+def test_workflow_variables_are_lowest_precedence(mocker, mock_context):
+    """A userWideWorkflowVariables key can never shadow a built-in or a workflow-config key.
+    mock_context.workflow_config defines custom_var and the context has a discussion_id;
+    both must win over the user-config values of the same name."""
+    mocker.patch(
+        'Middleware.workflows.managers.workflow_variable_manager.get_user_config',
+        return_value={"userWideWorkflowVariables": {"custom_var": "FROM_USER", "Discussion_Id": "HACKED"}},
+    )
+    mock_context.messages = []
+    manager = WorkflowVariableManager()
+    result = manager.apply_variables("{custom_var}|{Discussion_Id}", mock_context)
+    assert result == "custom_value|test_discussion_123"
+
+
+def test_workflow_variables_absent_or_malformed_is_noop(mocker, mock_context):
+    """No 'userWideWorkflowVariables' key (or a non-dict one) simply adds nothing, no error."""
+    mocker.patch(
+        'Middleware.workflows.managers.workflow_variable_manager.get_user_config',
+        return_value={"port": 5070, "userWideWorkflowVariables": "not-a-dict"},
+    )
+    mock_context.messages = []
+    manager = WorkflowVariableManager()
+    assert manager.apply_variables("hello {custom_var}", mock_context) == "hello custom_value"
+
+
+def test_workflow_variables_nested_path_resolves(mocker, mock_context):
+    """The real OpenCode wiring: a workflow-level path key whose value references
+    {opencodePlansDir} resolves via the second substitution pass."""
+    mocker.patch(
+        'Middleware.workflows.managers.workflow_variable_manager.get_user_config',
+        return_value={"userWideWorkflowVariables": {"opencodePlansDir": "/data/plans"}},
+    )
+    mock_context.messages = []
+    mock_context.workflow_config = {
+        "scratchpad_file": "{opencodePlansDir}/current_scratchpad.txt",
+        "nodes": [],
+    }
+    manager = WorkflowVariableManager()
+    result = manager.apply_variables("{scratchpad_file}", mock_context)
+    assert result == "/data/plans/current_scratchpad.txt"
+
 @patch('Middleware.workflows.managers.workflow_variable_manager.TimestampService')
 @patch('Middleware.workflows.managers.workflow_variable_manager.MemoryService')
 def test_init_and_set_categories(MockMemoryService, MockTimestampService):
@@ -1189,12 +1257,12 @@ class TestMinMessagesMaxTokensVariables:
         # Verify extract was called with min_messages=10, max_tokens=5000
         mock_extract_combo.assert_called_with(
             mocker.ANY, 10, 5000, True, None,
-            add_role_tags=False, separator='\n'
+            add_role_tags=False, separator='\n', budget_overrides_min=False
         )
         mock_formatted_combo.assert_called_with(
             mocker.ANY, 10, 5000,
             template_file_name="test_template.json",
-            isChatCompletion=True
+            isChatCompletion=True, budget_overrides_min=False
         )
 
     def test_combo_variable_defaults(self, mocker, mock_context):
@@ -1238,12 +1306,12 @@ class TestMinMessagesMaxTokensVariables:
         # Verify extract was called with defaults: min_messages=5, max_tokens=2048
         mock_extract_combo.assert_called_with(
             mocker.ANY, 5, 2048, True, None,
-            add_role_tags=False, separator='\n'
+            add_role_tags=False, separator='\n', budget_overrides_min=False
         )
         mock_formatted_combo.assert_called_with(
             mocker.ANY, 5, 2048,
             template_file_name="test_template.json",
-            isChatCompletion=True
+            isChatCompletion=True, budget_overrides_min=False
         )
 
     def test_combo_variable_with_none_config(self, mocker, mock_context):
@@ -1283,7 +1351,8 @@ class TestMinMessagesMaxTokensVariables:
         assert variables['chat_user_prompt_min_n_max_tokens'] == "raw_combo_none"
         assert variables['templated_user_prompt_min_n_max_tokens'] == "templated_combo_none"
         mock_extract_combo.assert_called_with(mocker.ANY, 5, 2048, True, None,
-                                             add_role_tags=False, separator='\n')
+                                             add_role_tags=False, separator='\n',
+                                             budget_overrides_min=False)
 
     def test_combo_variable_usable_in_standard_format(self, mocker, mock_context):
         """Tests that the combo variable can be used with standard str.format()."""
@@ -1474,7 +1543,8 @@ class TestConfigEdgeCases:
         mock_token.assert_called_with(mocker.ANY, 2048, True, None,
                                       add_role_tags=False, separator='\n')
         mock_combo.assert_called_with(mocker.ANY, 5, 2048, True, None,
-                                      add_role_tags=False, separator='\n')
+                                      add_role_tags=False, separator='\n',
+                                      budget_overrides_min=False)
 
     def test_partial_combo_config_only_min_messages(self, mocker, mock_context):
         """Tests that providing only minMessagesInVariable uses default for maxEstimatedTokensInVariable."""
@@ -1484,7 +1554,8 @@ class TestConfigEdgeCases:
         manager.generate_variables(mock_context)
 
         mock_combo.assert_called_with(mocker.ANY, 10, 2048, True, None,
-                                      add_role_tags=False, separator='\n')
+                                      add_role_tags=False, separator='\n',
+                                      budget_overrides_min=False)
 
     def test_partial_combo_config_only_max_tokens(self, mocker, mock_context):
         """Tests that providing only maxEstimatedTokensInVariable uses default for minMessagesInVariable."""
@@ -1494,7 +1565,8 @@ class TestConfigEdgeCases:
         manager.generate_variables(mock_context)
 
         mock_combo.assert_called_with(mocker.ANY, 5, 4096, True, None,
-                                      add_role_tags=False, separator='\n')
+                                      add_role_tags=False, separator='\n',
+                                      budget_overrides_min=False)
 
     def test_apply_variables_jinja2_passes_prompt_kwarg(self, mocker, mock_context):
         """Tests that apply_variables passes prompt= to generate_variables in the Jinja2 path."""
@@ -1588,7 +1660,8 @@ class TestAddUserAssistantTagsNodeLevel:
             llm_handler=mock_context.llm_handler,
             remove_all_system_override=None,
             add_role_tags=True,
-            separator='\n'
+            separator='\n',
+            token_limit=None
         )
         # The configurable variable should also get add_role_tags=True
         mock_n.assert_called_with(mocker.ANY, 5, True, None,
@@ -1606,7 +1679,8 @@ class TestAddUserAssistantTagsNodeLevel:
             llm_handler=mock_context.llm_handler,
             remove_all_system_override=None,
             add_role_tags=False,
-            separator='\n'
+            separator='\n',
+            token_limit=None
         )
 
     def test_add_user_assistant_tags_missing_defaults_false(self, mocker, mock_context):
@@ -1621,7 +1695,8 @@ class TestAddUserAssistantTagsNodeLevel:
             llm_handler=mock_context.llm_handler,
             remove_all_system_override=None,
             add_role_tags=False,
-            separator='\n'
+            separator='\n',
+            token_limit=None
         )
 
     def test_add_user_assistant_tags_none_config(self, mocker, mock_context):
@@ -1636,7 +1711,8 @@ class TestAddUserAssistantTagsNodeLevel:
             llm_handler=mock_context.llm_handler,
             remove_all_system_override=None,
             add_role_tags=False,
-            separator='\n'
+            separator='\n',
+            token_limit=None
         )
 
 
@@ -1694,7 +1770,8 @@ class TestConversationSeparationConfig:
             llm_handler=mock_context.llm_handler,
             remove_all_system_override=None,
             add_role_tags=False,
-            separator='\n*** END MESSAGE ***\n'
+            separator='\n*** END MESSAGE ***\n',
+            token_limit=None
         )
 
     def test_default_separator_when_separate_conversation_false(self, mocker, mock_context):
@@ -1710,7 +1787,8 @@ class TestConversationSeparationConfig:
             llm_handler=mock_context.llm_handler,
             remove_all_system_override=None,
             add_role_tags=False,
-            separator='\n'
+            separator='\n',
+            token_limit=None
         )
 
     def test_combined_role_tags_and_custom_separator(self, mocker, mock_context):
@@ -1733,7 +1811,8 @@ class TestConversationSeparationConfig:
             llm_handler=mock_context.llm_handler,
             remove_all_system_override=None,
             add_role_tags=True,
-            separator='\n\n'
+            separator='\n\n',
+            token_limit=None
         )
 
 
@@ -2698,4 +2777,481 @@ class TestBracketEscaping_EdgeCases:
         mock_context.config = {"jinja2": False}
         result = manager.apply_variables("{agent1Output}", mock_context)
         assert result == "args: {0} and {1}"
+
+
+class TestEstimationLevelScalingOfVariables:
+    """The endpoint estimation level scales the TOKEN budgets of the token-based
+    conversation variables (estimatedTokensToIncludeInVariable,
+    maxEstimatedTokensInVariable), but never the message COUNTS, and only when the
+    clamp is on. Conservative / clamp-off => no change (handoff Q1 + 7.1)."""
+
+    def _stub_selectors(self, mocker, manager):
+        """Stub every conversation selector so the test can inspect the budget
+        argument passed to the estimated-token-limit selector in isolation."""
+        mocker.patch.object(manager, 'generate_conversation_turn_variables', return_value={})
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.format_system_prompts',
+                     return_value={})
+        for name in ('extract_last_n_turns_as_string', 'get_formatted_last_n_turns_as_string',
+                     'get_formatted_last_turns_by_estimated_token_limit_as_string',
+                     'extract_last_turns_with_min_messages_and_token_limit_as_string',
+                     'get_formatted_last_turns_with_min_messages_and_token_limit_as_string'):
+            mocker.patch(f'Middleware.workflows.managers.workflow_variable_manager.{name}',
+                         return_value="")
+        return mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_by_estimated_token_limit_as_string',
+            return_value="")
+
+    def _endpoint(self, level):
+        return {"maxContextTokenSize": 32768, "wilmerContextEstimationLevel": level}
+
+    def test_aggressive_level_scales_estimated_token_budget(self, mocker, mock_context):
+        """Clamp on + aggressive (1.5): 4000 -> 6000 forwarded to the selector."""
+        manager = WorkflowVariableManager()
+        mock_context.config = {'jinja2': False, 'estimatedTokensToIncludeInVariable': 4000,
+                               'clampPromptToContextWindow': True}
+        mock_context.llm_handler.llm.endpoint_file = self._endpoint('aggressive')
+        mock_extract = self._stub_selectors(mocker, manager)
+        manager.generate_variables(mock_context)
+        mock_extract.assert_called_with(mocker.ANY, 6000, True, None, add_role_tags=False, separator='\n')
+
+    def test_clamp_off_leaves_token_budget_raw(self, mocker, mock_context):
+        """Clamp off (no flag): a non-conservative endpoint level is inert; 4000 stays 4000."""
+        manager = WorkflowVariableManager()
+        mock_context.config = {'jinja2': False, 'estimatedTokensToIncludeInVariable': 4000}
+        mock_context.llm_handler.llm.endpoint_file = self._endpoint('aggressive')
+        mock_extract = self._stub_selectors(mocker, manager)
+        manager.generate_variables(mock_context)
+        mock_extract.assert_called_with(mocker.ANY, 4000, True, None, add_role_tags=False, separator='\n')
+
+    def test_conservative_level_leaves_token_budget_raw(self, mocker, mock_context):
+        """Clamp on + conservative (1.0): no change (the default is a true no-op)."""
+        manager = WorkflowVariableManager()
+        mock_context.config = {'jinja2': False, 'estimatedTokensToIncludeInVariable': 4000,
+                               'clampPromptToContextWindow': True}
+        mock_context.llm_handler.llm.endpoint_file = self._endpoint('conservative')
+        mock_extract = self._stub_selectors(mocker, manager)
+        manager.generate_variables(mock_context)
+        mock_extract.assert_called_with(mocker.ANY, 4000, True, None, add_role_tags=False, separator='\n')
+
+    def test_min_n_max_scales_tokens_not_count(self, mocker, mock_context):
+        """xaggressive (1.85) scales maxEstimatedTokensInVariable (4000 -> 7400) but
+        leaves minMessagesInVariable (a message count) untouched."""
+        manager = WorkflowVariableManager()
+        mock_context.config = {'jinja2': False, 'minMessagesInVariable': 6,
+                               'maxEstimatedTokensInVariable': 4000,
+                               'clampPromptToContextWindow': True}
+        mock_context.llm_handler.llm.endpoint_file = self._endpoint('xaggressive')
+        self._stub_selectors(mocker, manager)
+        mock_combo = mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_with_min_messages_and_token_limit_as_string',
+            return_value="")
+        manager.generate_variables(mock_context)
+        mock_combo.assert_called_with(mocker.ANY, 6, 7400, True, None, add_role_tags=False, separator='\n',
+                                      budget_overrides_min=True)
+
+    def test_n_messages_count_is_never_scaled(self, mocker, mock_context):
+        """nMessagesToIncludeInVariable is a pure message count: the level must NOT
+        touch it even with the clamp on and an aggressive level."""
+        manager = WorkflowVariableManager()
+        mock_context.config = {'jinja2': False, 'nMessagesToIncludeInVariable': 7,
+                               'clampPromptToContextWindow': True}
+        mock_context.llm_handler.llm.endpoint_file = self._endpoint('xaggressive')
+        self._stub_selectors(mocker, manager)
+        mock_n = mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_n_turns_as_string',
+            return_value="")
+        manager.generate_variables(mock_context)
+        # Count 7 forwarded unscaled (4th positional arg is the count).
+        assert mock_n.call_args[0][1] == 7
+
+
+class TestFloorYieldsToBudgetWhenClamping:
+    """budget_overrides_min: with the clamp ON, the minMessagesInVariable floor for
+    the min_n_max conversation variable yields to the window budget, so an
+    authored-prompt node (categorizer/planner) whose floor of whole messages would
+    exceed the window cannot build an over-window prompt. With the clamp OFF the
+    floor stays a hard minimum (the flag is False). Regression guard for the
+    re-opened context-overflow crash on those nodes."""
+
+    def _stub_other_selectors(self, mocker, manager):
+        """Stub every other selector and return the two min_n_max mocks to inspect."""
+        mocker.patch.object(manager, 'generate_conversation_turn_variables', return_value={})
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.format_system_prompts',
+                     return_value={})
+        for name in ('extract_last_n_turns_as_string', 'get_formatted_last_n_turns_as_string',
+                     'extract_last_turns_by_estimated_token_limit_as_string',
+                     'get_formatted_last_turns_by_estimated_token_limit_as_string'):
+            mocker.patch(f'Middleware.workflows.managers.workflow_variable_manager.{name}', return_value="")
+        mock_combo = mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_with_min_messages_and_token_limit_as_string',
+            return_value="")
+        mock_formatted = mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_turns_with_min_messages_and_token_limit_as_string',
+            return_value="")
+        return mock_combo, mock_formatted
+
+    def test_clamp_on_forwards_budget_overrides_min_true(self, mocker, mock_context):
+        """Clamp on => both min_n_max selectors receive budget_overrides_min=True."""
+        manager = WorkflowVariableManager()
+        mock_context.config = {'jinja2': False, 'minMessagesInVariable': 10,
+                               'maxEstimatedTokensInVariable': 4000,
+                               'clampPromptToContextWindow': True}
+        mock_context.llm_handler.llm.endpoint_file = {"maxContextTokenSize": 32768}
+        mock_context.llm_handler.llm.max_tokens = 1000
+        mock_combo, mock_formatted = self._stub_other_selectors(mocker, manager)
+        manager.generate_variables(mock_context)
+        assert mock_combo.call_args.kwargs['budget_overrides_min'] is True
+        assert mock_formatted.call_args.kwargs['budget_overrides_min'] is True
+
+    def test_clamp_off_forwards_budget_overrides_min_false(self, mocker, mock_context):
+        """Clamp off (no flag) => the floor stays hard; selectors receive False."""
+        manager = WorkflowVariableManager()
+        mock_context.config = {'jinja2': False, 'minMessagesInVariable': 10,
+                               'maxEstimatedTokensInVariable': 4000}
+        mock_context.llm_handler.llm.endpoint_file = {"maxContextTokenSize": 32768}
+        mock_context.llm_handler.llm.max_tokens = 1000
+        mock_combo, mock_formatted = self._stub_other_selectors(mocker, manager)
+        manager.generate_variables(mock_context)
+        assert mock_combo.call_args.kwargs['budget_overrides_min'] is False
+        assert mock_formatted.call_args.kwargs['budget_overrides_min'] is False
+
+
+class TestCountVariableTokenAwareness:
+    """Invariant J: the COUNT variables (chat_user_prompt_last_*, *_n_messages) become
+    token-aware when the clamp is on (drop oldest WHOLE messages to fit the endpoint
+    window budget OR the count, whichever is hit first), and select exactly N when the
+    clamp is off / conservative. The conversation is trimmed; the authored prompt never."""
+
+    def _chat_handler(self):
+        handler = MagicMock()
+        handler.prompt_template_file_name = "test_template.json"
+        handler.takes_message_collection = True
+        return handler
+
+    def test_turn_variables_bounded_by_token_limit(self, mocker):
+        """With a budget, every last-N slice draws from the budget-bounded conversation,
+        so last_twenty and last_five collapse to the few newest messages that fit."""
+        handler = self._chat_handler()
+        messages = [{"role": "user", "content": f"m{i}"} for i in range(20)]
+        mocker.patch('Middleware.utilities.prompt_extraction_utils.rough_estimate_token_length',
+                     return_value=100)
+        # Avoid the real template-file load for the templated_ variables.
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_n_turns_as_string',
+                     return_value="")
+        result = WorkflowVariableManager.generate_conversation_turn_variables(
+            messages, handler, remove_all_system_override=None, token_limit=250)
+        # 100/msg, budget 250 => newest 2 survive; last_twenty == last_five == those 2.
+        assert result['chat_user_prompt_last_twenty'] == "m18\nm19"
+        assert result['chat_user_prompt_last_five'] == "m18\nm19"
+        assert result['chat_user_prompt_last_one'] == "m19"
+
+    def test_turn_variables_none_limit_keeps_exactly_n(self, mocker):
+        """No budget (clamp off / conservative) => exactly the last N, byte-for-byte."""
+        handler = self._chat_handler()
+        messages = [{"role": "user", "content": f"m{i}"} for i in range(20)]
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_n_turns_as_string',
+                     return_value="")
+        result = WorkflowVariableManager.generate_conversation_turn_variables(
+            messages, handler, remove_all_system_override=None, token_limit=None)
+        assert result['chat_user_prompt_last_five'] == "m15\nm16\nm17\nm18\nm19"
+        assert result['chat_user_prompt_last_twenty'].count("\n") == 19  # all 20 present
+
+    def test_end_to_end_clamp_bounds_embedded_count_variable(self, mocker, mock_context):
+        """The categorizer/planner overflow case, done right: a {chat_user_prompt_last_twenty}
+        embedded in an authored prompt is bounded to the endpoint window at build time,
+        so the conversation (not the authored prompt) is what gives way."""
+        manager = WorkflowVariableManager()
+        mock_context.messages = [{"role": "user", "content": f"m{i}"} for i in range(20)]
+        mock_context.config = {'jinja2': False, 'clampPromptToContextWindow': True}
+        mock_context.llm_handler.llm.endpoint_file = {"maxContextTokenSize": 1000}
+        mock_context.llm_handler.llm.max_tokens = 100
+        mock_context.llm_handler.takes_message_collection = True
+        mock_context.llm_handler.prompt_template_file_name = "test_template.json"
+        mocker.patch('Middleware.utilities.prompt_extraction_utils.rough_estimate_token_length',
+                     return_value=100)
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_n_turns_as_string',
+                     return_value="")
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.format_system_prompts',
+                     return_value={})
+        variables = manager.generate_variables(mock_context, prompt="{chat_user_prompt_last_twenty}")
+        # budget = (1000-100)*1.0 - 512 = 388; 100/msg => newest 3 (m17,m18,m19) survive.
+        assert variables['chat_user_prompt_last_twenty'] == "m17\nm18\nm19"
+
+    def test_end_to_end_clamp_off_keeps_full_last_twenty(self, mocker, mock_context):
+        """Same setup, clamp OFF: the count variable is the full last-20 (no bounding)."""
+        manager = WorkflowVariableManager()
+        mock_context.messages = [{"role": "user", "content": f"m{i}"} for i in range(20)]
+        mock_context.config = {'jinja2': False}  # clamp absent => off
+        mock_context.llm_handler.llm.endpoint_file = {"maxContextTokenSize": 1000}
+        mock_context.llm_handler.llm.max_tokens = 100
+        mock_context.llm_handler.takes_message_collection = True
+        mock_context.llm_handler.prompt_template_file_name = "test_template.json"
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_n_turns_as_string',
+                     return_value="")
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.format_system_prompts',
+                     return_value={})
+        variables = manager.generate_variables(mock_context, prompt="{chat_user_prompt_last_twenty}")
+        assert variables['chat_user_prompt_last_twenty'].count("\n") == 19  # all 20
+
+    def test_end_to_end_clamp_bounds_n_messages_variable(self, mocker, mock_context):
+        """The configurable {chat_user_prompt_n_messages} is bounded the same way."""
+        manager = WorkflowVariableManager()
+        mock_context.messages = [{"role": "user", "content": f"m{i}"} for i in range(20)]
+        mock_context.config = {'jinja2': False, 'nMessagesToIncludeInVariable': 15,
+                               'clampPromptToContextWindow': True}
+        mock_context.llm_handler.llm.endpoint_file = {"maxContextTokenSize": 1000}
+        mock_context.llm_handler.llm.max_tokens = 100
+        mock_context.llm_handler.takes_message_collection = True
+        mock_context.llm_handler.prompt_template_file_name = "test_template.json"
+        mocker.patch('Middleware.utilities.prompt_extraction_utils.rough_estimate_token_length',
+                     return_value=100)
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_n_turns_as_string',
+                     return_value="")
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.format_system_prompts',
+                     return_value={})
+        variables = manager.generate_variables(mock_context, prompt="{chat_user_prompt_n_messages}")
+        # N=15 requested, but budget 388 (3 msgs) bounds it: token limit hit before count.
+        assert variables['chat_user_prompt_n_messages'] == "m17\nm18\nm19"
+
+
+class TestTokenVariableWindowCap:
+    """Adversarial tests: the token-budget variables (estimatedTokensToIncludeInVariable,
+    maxEstimatedTokensInVariable) are capped at the node's window budget when the clamp
+    is on -- scaled THEN capped, gated on the clamp, never touching counts, the window
+    value, or the authored prompt. budget = (window - response)*level - headroom(512).
+    These exist to catch a regression before a user does."""
+
+    # window 65536, response 20000, conservative => (65536-20000) - 512 = 45024
+    BUDGET = 45024
+
+    def _run(self, mocker, mock_context, *, config, window=65536, n_predict=20000, level=None, clamp=True):
+        """Stub every selector and return (estimated_token_selector, min_n_max_selector)
+        so a test can read the exact token budget each was handed."""
+        manager = WorkflowVariableManager()
+        cfg = {'jinja2': False}
+        cfg.update(config)
+        if clamp:
+            cfg['clampPromptToContextWindow'] = True
+        mock_context.config = cfg
+        ep = {"maxContextTokenSize": window}
+        if level is not None:
+            ep["wilmerContextEstimationLevel"] = level
+        mock_context.llm_handler.llm.endpoint_file = ep
+        mock_context.llm_handler.llm.max_tokens = n_predict
+        mocker.patch.object(manager, 'generate_conversation_turn_variables', return_value={})
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.format_system_prompts',
+                     return_value={})
+        for name in ('extract_last_n_turns_as_string', 'get_formatted_last_n_turns_as_string',
+                     'get_formatted_last_turns_by_estimated_token_limit_as_string',
+                     'get_formatted_last_turns_with_min_messages_and_token_limit_as_string'):
+            mocker.patch(f'Middleware.workflows.managers.workflow_variable_manager.{name}', return_value="")
+        est = mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_by_estimated_token_limit_as_string',
+            return_value="")
+        combo = mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_with_min_messages_and_token_limit_as_string',
+            return_value="")
+        manager.generate_variables(mock_context)
+        return est, combo
+
+    # --- the headline case the user asked about ---
+    def test_huge_estimated_ceiling_capped_to_window(self, mocker, mock_context):
+        est, _ = self._run(mocker, mock_context, config={'estimatedTokensToIncludeInVariable': 100000})
+        assert est.call_args[0][1] == self.BUDGET
+
+    def test_huge_max_estimated_ceiling_capped_to_window(self, mocker, mock_context):
+        _, combo = self._run(mocker, mock_context,
+                             config={'maxEstimatedTokensInVariable': 100000, 'minMessagesInVariable': 5})
+        assert combo.call_args[0][2] == self.BUDGET  # max_tokens capped
+        assert combo.call_args[0][1] == 5            # min_messages untouched
+
+    # --- boundary probing (off-by-one around the cap) ---
+    def test_ceiling_below_window_is_not_inflated(self, mocker, mock_context):
+        est, _ = self._run(mocker, mock_context, config={'estimatedTokensToIncludeInVariable': 5000})
+        assert est.call_args[0][1] == 5000  # cap must never RAISE a smaller ceiling
+
+    def test_ceiling_exactly_at_budget_unchanged(self, mocker, mock_context):
+        est, _ = self._run(mocker, mock_context, config={'estimatedTokensToIncludeInVariable': self.BUDGET})
+        assert est.call_args[0][1] == self.BUDGET
+
+    def test_ceiling_one_over_budget_is_capped(self, mocker, mock_context):
+        est, _ = self._run(mocker, mock_context, config={'estimatedTokensToIncludeInVariable': self.BUDGET + 1})
+        assert est.call_args[0][1] == self.BUDGET
+
+    def test_ceiling_one_under_budget_unchanged(self, mocker, mock_context):
+        est, _ = self._run(mocker, mock_context, config={'estimatedTokensToIncludeInVariable': self.BUDGET - 1})
+        assert est.call_args[0][1] == self.BUDGET - 1
+
+    def test_zero_ceiling_stays_zero(self, mocker, mock_context):
+        est, _ = self._run(mocker, mock_context, config={'estimatedTokensToIncludeInVariable': 0})
+        assert est.call_args[0][1] == 0
+
+    # --- scaled THEN capped: the order matters ---
+    def test_conservative_clamp_on_still_caps(self, mocker, mock_context):
+        # The exact behavior the user expected: conservative + clamp on STILL caps 100k -> 45024.
+        est, _ = self._run(mocker, mock_context,
+                          config={'estimatedTokensToIncludeInVariable': 100000}, level='conservative')
+        assert est.call_args[0][1] == self.BUDGET
+
+    def test_aggressive_raises_the_cap(self, mocker, mock_context):
+        # budget = int((65536-20000)*1.5) - 512; ceiling 100000*1.5=150000 -> min = budget.
+        est, _ = self._run(mocker, mock_context,
+                          config={'estimatedTokensToIncludeInVariable': 100000}, level='aggressive')
+        assert est.call_args[0][1] == int((65536 - 20000) * 1.5) - 512
+
+    def test_xaggressive_raises_the_cap_further(self, mocker, mock_context):
+        est, _ = self._run(mocker, mock_context,
+                          config={'estimatedTokensToIncludeInVariable': 100000}, level='xaggressive')
+        assert est.call_args[0][1] == int((65536 - 20000) * 1.85) - 512
+        # ...and strictly more than aggressive lets through.
+        assert int((65536 - 20000) * 1.85) - 512 > int((65536 - 20000) * 1.5) - 512
+
+    # --- gating: clamp off => NO cap, level inert ---
+    def test_clamp_off_uses_raw_ceiling_even_huge(self, mocker, mock_context):
+        est, _ = self._run(mocker, mock_context, config={'estimatedTokensToIncludeInVariable': 100000},
+                          level='aggressive', clamp=False)
+        assert est.call_args[0][1] == 100000  # neither scaled nor capped
+
+    def test_clamp_off_small_ceiling_unchanged(self, mocker, mock_context):
+        est, _ = self._run(mocker, mock_context, config={'estimatedTokensToIncludeInVariable': 1234},
+                          clamp=False)
+        assert est.call_args[0][1] == 1234
+
+    # --- the cap tracks the response budget (Q3 basis) ---
+    def test_larger_response_budget_tightens_cap(self, mocker, mock_context):
+        est, _ = self._run(mocker, mock_context, config={'estimatedTokensToIncludeInVariable': 100000},
+                          window=65536, n_predict=40000)
+        assert est.call_args[0][1] == (65536 - 40000) - 512  # 25024
+
+    # --- counts are sacred (never scaled, never capped) ---
+    def test_absurd_min_messages_passes_through_untouched(self, mocker, mock_context):
+        _, combo = self._run(mocker, mock_context,
+                             config={'maxEstimatedTokensInVariable': 100000, 'minMessagesInVariable': 9999})
+        assert combo.call_args[0][1] == 9999       # count untouched
+        assert combo.call_args[0][2] == self.BUDGET  # token budget capped
+
+    # --- the window value itself is never mutated ---
+    def test_window_value_not_mutated(self, mocker, mock_context):
+        self._run(mocker, mock_context, config={'estimatedTokensToIncludeInVariable': 100000}, level='aggressive')
+        assert mock_context.llm_handler.llm.endpoint_file['maxContextTokenSize'] == 65536
+
+    # --- misconfig: response > window => negative budget, passed through (selector keeps 1, no crash) ---
+    def test_negative_budget_passed_through(self, mocker, mock_context):
+        est, _ = self._run(mocker, mock_context, config={'estimatedTokensToIncludeInVariable': 100000},
+                          window=1000, n_predict=2000)
+        assert est.call_args[0][1] == (1000 - 2000) - 512  # -1512
+
+    # --- mocked endpoint (no real window) disables the cap entirely ---
+    def test_no_window_no_cap(self, mocker, mock_context):
+        # endpoint_file left as a Mock (not a dict) -> budget None -> raw ceiling.
+        manager = WorkflowVariableManager()
+        mock_context.config = {'jinja2': False, 'estimatedTokensToIncludeInVariable': 100000,
+                               'clampPromptToContextWindow': True}
+        mocker.patch.object(manager, 'generate_conversation_turn_variables', return_value={})
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.format_system_prompts',
+                     return_value={})
+        for name in ('extract_last_n_turns_as_string', 'get_formatted_last_n_turns_as_string',
+                     'get_formatted_last_turns_by_estimated_token_limit_as_string',
+                     'extract_last_turns_with_min_messages_and_token_limit_as_string',
+                     'get_formatted_last_turns_with_min_messages_and_token_limit_as_string'):
+            mocker.patch(f'Middleware.workflows.managers.workflow_variable_manager.{name}', return_value="")
+        est = mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.extract_last_turns_by_estimated_token_limit_as_string',
+            return_value="")
+        manager.generate_variables(mock_context)
+        assert est.call_args[0][1] == 100000  # clamp on but window unknown -> no cap
+
+    # --- end-to-end with the REAL selectors + real messages ---
+    def _e2e(self, mocker, mock_context, *, config, prompt, window, n_predict,
+             level=None, clamp=True, per_msg=100, n=30):
+        manager = WorkflowVariableManager()
+        cfg = {'jinja2': False}
+        cfg.update(config)
+        if clamp:
+            cfg['clampPromptToContextWindow'] = True
+        mock_context.config = cfg
+        ep = {"maxContextTokenSize": window}
+        if level is not None:
+            ep["wilmerContextEstimationLevel"] = level
+        mock_context.llm_handler.llm.endpoint_file = ep
+        mock_context.llm_handler.llm.max_tokens = n_predict
+        mock_context.llm_handler.takes_message_collection = True
+        mock_context.llm_handler.prompt_template_file_name = "test_template.json"
+        mock_context.messages = [{"role": "user", "content": f"m{i}"} for i in range(n)]
+        mocker.patch('Middleware.utilities.prompt_extraction_utils.rough_estimate_token_length',
+                     return_value=per_msg)
+        for name in ('get_formatted_last_n_turns_as_string',
+                     'get_formatted_last_turns_by_estimated_token_limit_as_string',
+                     'get_formatted_last_turns_with_min_messages_and_token_limit_as_string'):
+            mocker.patch(f'Middleware.workflows.managers.workflow_variable_manager.{name}', return_value="")
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.format_system_prompts',
+                     return_value={})
+        return manager.generate_variables(mock_context, prompt=prompt)
+
+    def test_e2e_min_n_max_capped_to_window(self, mocker, mock_context):
+        # window 1000, response 100 -> budget 388; ceiling 100000 capped to 388; min 1.
+        # 30 msgs @100: m29(100), m28(200), m27(300), m26 ->400>388 stop => newest 3 WHOLE.
+        v = self._e2e(mocker, mock_context, prompt="{chat_user_prompt_min_n_max_tokens}",
+                      config={'maxEstimatedTokensInVariable': 100000, 'minMessagesInVariable': 1},
+                      window=1000, n_predict=100)
+        assert v['chat_user_prompt_min_n_max_tokens'] == "m27\nm28\nm29"
+
+    def test_e2e_estimated_token_limit_capped_to_window(self, mocker, mock_context):
+        v = self._e2e(mocker, mock_context, prompt="{chat_user_prompt_estimated_token_limit}",
+                      config={'estimatedTokensToIncludeInVariable': 100000},
+                      window=1000, n_predict=100)
+        assert v['chat_user_prompt_estimated_token_limit'] == "m27\nm28\nm29"
+
+    def test_e2e_clamp_off_uses_full_ceiling(self, mocker, mock_context):
+        # Clamp off: 100000 ceiling, 30 msgs @100 = 3000 tokens < 100000 -> ALL 30 survive.
+        v = self._e2e(mocker, mock_context, prompt="{chat_user_prompt_min_n_max_tokens}",
+                      config={'maxEstimatedTokensInVariable': 100000, 'minMessagesInVariable': 1},
+                      window=1000, n_predict=100, clamp=False)
+        assert v['chat_user_prompt_min_n_max_tokens'].count("\n") == 29  # all 30
+
+    def test_e2e_min_messages_floor_yields_to_window_when_clamping(self, mocker, mock_context):
+        # The fix: with the clamp ON, minMessagesInVariable=8 YIELDS to the window
+        # budget instead of overflowing it. budget 388; 8*100=800 would overflow, so
+        # only the newest messages that fit are kept (m27,m28,m29 = 300 <= 388). Whole
+        # messages are dropped, conversation content is never truncated. (Pre-fix the
+        # floor was honored whole and the authored prompt 400'd at the backend -- the
+        # re-opened categorizer/planner context-overflow crash.)
+        v = self._e2e(mocker, mock_context, prompt="{chat_user_prompt_min_n_max_tokens}",
+                      config={'maxEstimatedTokensInVariable': 100000, 'minMessagesInVariable': 8},
+                      window=1000, n_predict=100)
+        assert v['chat_user_prompt_min_n_max_tokens'].split("\n") == [f"m{i}" for i in range(27, 30)]
+
+    def test_e2e_min_messages_floor_hard_when_clamp_off(self, mocker, mock_context):
+        # Clamp OFF: the floor is a HARD minimum (historical behavior preserved). The
+        # 300 ceiling fits only 3 by tokens, but min 8 overrides it -> 8 kept whole.
+        v = self._e2e(mocker, mock_context, prompt="{chat_user_prompt_min_n_max_tokens}",
+                      config={'maxEstimatedTokensInVariable': 300, 'minMessagesInVariable': 8},
+                      window=1000, n_predict=100, clamp=False)
+        assert v['chat_user_prompt_min_n_max_tokens'].split("\n") == [f"m{i}" for i in range(22, 30)]
+
+    def test_e2e_apply_variables_keeps_instructions_bounds_conversation(self, mocker, mock_context):
+        # The whole point, under adversarial pressure: the authored instruction text is
+        # byte-for-byte intact; only the embedded conversation variable shrinks to fit.
+        manager = WorkflowVariableManager()
+        mock_context.config = {'jinja2': False, 'maxEstimatedTokensInVariable': 100000,
+                               'minMessagesInVariable': 1, 'clampPromptToContextWindow': True}
+        mock_context.llm_handler.llm.endpoint_file = {"maxContextTokenSize": 1000}
+        mock_context.llm_handler.llm.max_tokens = 100
+        mock_context.llm_handler.takes_message_collection = True
+        mock_context.llm_handler.prompt_template_file_name = "test_template.json"
+        mock_context.messages = [{"role": "user", "content": f"m{i}"} for i in range(30)]
+        mocker.patch('Middleware.utilities.prompt_extraction_utils.rough_estimate_token_length',
+                     return_value=100)
+        for name in ('get_formatted_last_n_turns_as_string',
+                     'get_formatted_last_turns_by_estimated_token_limit_as_string',
+                     'get_formatted_last_turns_with_min_messages_and_token_limit_as_string'):
+            mocker.patch(f'Middleware.workflows.managers.workflow_variable_manager.{name}', return_value="")
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.format_system_prompts',
+                     return_value={})
+        template = "SAFETY RULES STAY. <c>{chat_user_prompt_min_n_max_tokens}</c> END."
+        rendered = manager.apply_variables(template, mock_context)
+        assert rendered.startswith("SAFETY RULES STAY. <c>")
+        assert rendered.endswith("</c> END.")
+        assert "m27" in rendered and "m29" in rendered   # bounded conversation present
+        assert "m26" not in rendered                      # older messages dropped to fit
 

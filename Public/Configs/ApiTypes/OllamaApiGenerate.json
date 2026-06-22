@@ -4,5 +4,27 @@
   "presetType": "OllamaApiGenerate",
   "truncateLengthPropertyName": "num_ctx",
   "maxNewTokensPropertyName": "num_predict",
-  "streamPropertyName": "stream"
+  "streamPropertyName": "stream",
+  "supportsChatTemplateKwargs": false,
+  "thinking": {
+    "location": "top",
+    "field": "think",
+    "mode": "bool"
+  },
+  "samplerFieldMap": {
+    "temperature": "temperature",
+    "top_k": "top_k",
+    "top_p": "top_p",
+    "min_p": "min_p",
+    "typical_p": "typical_p",
+    "repeat_last_n": "repeat_last_n",
+    "repeat_penalty": "repeat_penalty",
+    "presence_penalty": "presence_penalty",
+    "frequency_penalty": "frequency_penalty",
+    "mirostat": "mirostat",
+    "mirostat_tau": "mirostat_tau",
+    "mirostat_eta": "mirostat_eta",
+    "seed": "seed",
+    "stop": "stop"
+  }
 }

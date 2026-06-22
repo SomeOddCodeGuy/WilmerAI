@@ -42,7 +42,13 @@ def mock_config_utils(mocker):
 
 @pytest.fixture
 def mock_os_utils(mocker):
-    """Mocks os-level functions to prevent any real filesystem access."""
+    """Mocks os-level functions to prevent any real filesystem access.
+
+    By default, the target database file is reported as existing (so
+    _get_db_path returns the target path directly and legacy stickiness is
+    skipped). Tests that exercise the legacy-path branch patch os.path.exists
+    themselves.
+    """
     mocker.patch('os.path.exists', return_value=True)
     mocker.patch('os.makedirs')
     mocker.patch('os.path.dirname', return_value=FAKE_DB_PATH)
@@ -94,8 +100,52 @@ class TestLockingService:
         """Tests that the service creates the database directory if it doesn't exist."""
         mocker.patch('os.path.exists', return_value=False)
         mock_makedirs = mocker.patch('os.makedirs')
+        mocker.patch('os.path.dirname', return_value=FAKE_DB_PATH)
         LockingService()
         mock_makedirs.assert_called_once_with(FAKE_DB_PATH)
+
+    def test_legacy_db_path_stickiness(self, mock_config_utils, mock_sqlite3, mocker):
+        """If a legacy database exists at cwd but not at the target path, the legacy path is used."""
+        target_path = os.path.join(FAKE_DB_PATH, f'WilmerDb.{FAKE_USERNAME}.sqlite')
+        legacy_path = f'WilmerDb.{FAKE_USERNAME}.sqlite'
+
+        def exists(path):
+            return path == legacy_path
+
+        mocker.patch('os.path.exists', side_effect=exists)
+        mocker.patch('os.makedirs')
+        mocker.patch('os.path.dirname', return_value='')
+        service = LockingService()
+        assert service.db_path == legacy_path
+        assert service.db_path != target_path
+
+    def test_project_root_legacy_db_path_stickiness(self, mock_config_utils, mock_sqlite3, mocker):
+        """If the old lock DB lives at the project root (a non-project-root launch),
+        it is found via the project-root legacy candidate instead of being orphaned."""
+        fake_project_root = "/mock/project/root"
+        mocker.patch(
+            'Middleware.services.locking_service.config_utils.get_project_root_directory_path',
+            return_value=fake_project_root,
+        )
+        project_root_legacy = os.path.join(fake_project_root, f'WilmerDb.{FAKE_USERNAME}.sqlite')
+
+        def exists(path):
+            return path == project_root_legacy
+
+        mocker.patch('os.path.exists', side_effect=exists)
+        mocker.patch('os.makedirs')
+        mocker.patch('os.path.dirname', return_value=fake_project_root)
+        service = LockingService()
+        assert service.db_path == project_root_legacy
+
+    def test_new_db_path_preferred_when_both_exist(self, mock_config_utils, mock_sqlite3, mocker):
+        """If both paths exist, the target path is used (legacy only kicks in when target is missing)."""
+        target_path = os.path.join(FAKE_DB_PATH, f'WilmerDb.{FAKE_USERNAME}.sqlite')
+        mocker.patch('os.path.exists', return_value=True)
+        mocker.patch('os.makedirs')
+        mocker.patch('os.path.dirname', return_value=FAKE_DB_PATH)
+        service = LockingService()
+        assert service.db_path == target_path
 
     def test_get_db_connection_failure(self, locking_service, mock_sqlite3, caplog):
         """Tests that a database connection failure is logged gracefully."""

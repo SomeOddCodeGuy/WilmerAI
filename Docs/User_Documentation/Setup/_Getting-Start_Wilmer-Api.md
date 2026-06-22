@@ -31,7 +31,7 @@ expect you to write your own config files from scratch.
 
 ### Step 2: Install the Program
 
-First, make sure you have Python installed.
+First, make sure you have Python installed. WilmerAI requires **Python 3.11 or newer**.
 
 You have two options for installation:
 
@@ -85,12 +85,47 @@ of the main WilmerAI directory.**
 
 1. **Copy** the entire `Public/Configs` directory to a safe, separate location on your computer (e.g.,
    `C:\MyWilmerConfigs\` or `/Users/YourName/Documents/WilmerConfigs/`).
-2. When you start WilmerAI, use the `--ConfigDirectory` argument to tell the program where to find your files.
+2. When you start WilmerAI, use the `--PublicDirectory` argument to tell the program where to find your files.
 
 For example:
-`bash run_macos.sh --ConfigDirectory "/Users/YourName/Documents/WilmerConfigs/" --User "MyUser"`
+`bash run_macos.sh --PublicDirectory "/Users/YourName/Documents/WilmerPublic/" --User "MyUser"`
 
 This way, your personal configurations are completely separate from the application code, making updates much easier.
+
+The recommended layout for a separated install looks like this:
+
+```
+/Users/YourName/Documents/WilmerPublic/
+    Configs/           <- your copy of Public/Configs
+    DiscussionIds/     <- created on first use
+    SqlLiteDBs/        <- created on first use
+    logs/              <- created on first use when file logging is on
+```
+
+When `--PublicDirectory` is set, all runtime data that WilmerAI creates during execution lands in sibling subfolders
+under that directory by default, so a shared install never leaks per-user data back into the application folder.
+Critically, runtime data lives *alongside* `Configs/`, never inside it:
+
+| Data | Default location when `--PublicDirectory` is set |
+|---|---|
+| Configs | `{PublicDirectory}/Configs/` (override with `--ConfigDirectory` for backwards compat) |
+| Log files | `{PublicDirectory}/logs/` (override with `--LoggingDirectory`) |
+| Workflow lock SQLite DBs | `{PublicDirectory}/SqlLiteDBs/` (override with `--UserLevelSqlLiteDirectory` or the `sqlLiteDirectory` user config setting) |
+| Per-discussion files (memories, summaries, vector DBs) | `{PublicDirectory}/DiscussionIds/` (override with `--DiscussionDirectory` or the `discussionDirectory` user config setting) |
+
+When **no** flag is set, every default above resolves to a subfolder under `{install_dir}/Public/` — where
+`{install_dir}` is the directory containing `server.py`. The defaults are pinned to the install location (derived from
+the Python source files), so they never depend on the current working directory. If you run WilmerAI from an unusual
+cwd (e.g. as a systemd service, or by launching the script from your home directory), logs and runtime data still
+land inside the install tree rather than quietly appearing in `~/logs/` or `/logs/`.
+
+`--ConfigDirectory` is still supported for backwards compatibility and continues to point specifically at a
+`Public/Configs/` folder, but it no longer governs where runtime data lands. If you want the consolidated shared-install
+behavior, prefer `--PublicDirectory`.
+
+If data already exists at pre-refactor locations (e.g. `Public/DiscussionIds/` or a lock database in the project root),
+WilmerAI keeps reading and writing to that existing location -- no automatic migration is performed. Move the files
+manually if you want them under the new location.
 
 > NOTE: Since you have not chosen a user yet, if you run the project on this step it will automatically load the
 > user that is set in Public/Configs/Users/_current-user.json. You can just press ctrl + c stop the program and
@@ -105,24 +140,38 @@ specify which user you want to run in Step 5.
 
 #### Users
 
-* **\_example\_simple\_router\_no\_memory**: This is a simple user that has routing to WIKI, CODING and GENERAL
-  categories, each going to a special workflow. Best used with direct and productive front ends like Open WebUI.
+* **`_simple_router_no_memory`**: A simple user that uses prompt routing to send each request to a category-specific
+  workflow. It ships with two categories, `WIKI` and `GENERAL`. Best used with direct and productive front ends like
+  Open WebUI. The `WIKI` route requires the Offline Wikipedia API.
+
+
+* **`chat-ui`** (and three variants): The out-of-the-box default user (`_current-user.json` points to it). Rather than
+  tying one user to one workflow, `chat-ui` is built around the **shared workflows** system: it points at the `_shared`
+  workflow folder, which contains several ready-to-use workflows (`general`, `fast`, `general-reasoning`,
+  `fast-reasoning`, and `task`). Front ends like Open WebUI query the `/v1/models` endpoint and let you pick any of
+  them from the model dropdown, so one user replaces the handful of single-purpose users you would otherwise need. See
+  "Shared Workflows" below for more details.
+
+  There are four flavors that differ only in which shared workflow folder they load:
+
+    * **`chat-ui`** (`_shared`): the standard workflows. Images are passed directly on the workflow nodes, so a vision
+      model can consume them as needed.
+    * **`chat-ui-cot`** (`_shared_manual_cot`): the same workflows, but the reasoning roles enforce a **manual
+      chain-of-thought** step. Use this for models whose native reasoning is broken or absent, where you want the
+      workflow to drive the reasoning instead.
+    * **`chat-ui-discussionid`** (`_shared_discussionid`): expects a `discussionId` on the request. Image handling
+      differs here: a dedicated vision node describes the image in fine detail, and Wilmer stores that description and
+      re-injects it at the correct position in the conversation for as long as that turn stays inside the model's
+      context window. This lets non-vision models "see" an earlier image and avoids re-encoding it every turn.
+    * **`chat-ui-cot-discussionid`** (`_shared_manual_cot_discussionid`): combines the manual chain-of-thought and the
+      discussionId vision behavior.
+
+
+* **`_wikipedia_quick_workflow`**: A single-pass wikipedia search against the Offline Wikipedia API.
   Requires the Offline Wikipedia API
 
 
-* **\_example\_general\_workflow**: This is a simple user that runs a single general purpose workflow. Simple, to the
-  point. Best used with direct and productive front ends like Open WebUI. Requires the Offline Wikipedia API.
-
-  This user has **shared workflows enabled**, meaning it can load workflows from the `_shared` folder. Front-end
-  applications like Open WebUI can query the `/v1/models` endpoint to see available workflows and select them from
-  the model dropdown. See "Shared Workflows" below for more details.
-
-
-* **\_example\_wikipedia\_quick\_workflow**: This is a wikipedia search against the Offline Wikipedia API.
-  Requires the Offline Wikipedia API
-
-
-* **\_example\_wikipedia\_multi\_step\_workflow**: This is a wikipedia search against the Offline Wikipedia API, but
+* **`_wikipedia_multi_step_workflow`**: A wikipedia search against the Offline Wikipedia API, but
   instead of just 1 pass it does a total of 4, attempting to build up extra info for the report. Still very
   experimental; not sure how I feel about the results yet. Requires the Offline Wikipedia API
 
@@ -142,16 +191,19 @@ specify which user you want to run in Step 5.
 
 #### The Workflows (OPTIONAL INFO)
 
-Most example users make use of [nested workflows](../Core_Features/Nested_Workflows.md), where the workflow for the
-example user is only a single node, which is pointing to another workflow found in the `_common` folder within
-Workflows. You can swap out the workflow that is called.
+The `chat-ui` users make use of [nested workflows](../Core_Features/Nested_Workflows.md): each shared workflow under
+`_shared` is a single node that points to a reusable workflow in the `_common` folder within Workflows. For example,
+`_shared/general/_DefaultWorkflow.json` is one `CustomWorkflow` node that calls `General` from `_common`. You can swap
+out the workflow that is called.
 
-For example, if an example user calls `General_With_Vision`, you could swap it to `Coding_With_Vision` or `Task` by
-simply changing the `workflowName` in the user's `_DefaultWorkflow.json`. Common workflows in `_common` include:
+For example, you could change that node's `workflowName` from `General` to `Task` (or any other entry in `_common`) by
+editing the `_DefaultWorkflow.json` for that shared workflow. Common workflows in `_common` include:
 
-* `General_With_Vision` - General conversation with optional image support
-* `Coding_With_Vision` - Coding assistance with optional image support
+* `General` - General conversation
+* `General_CoT` - General conversation with an enforced manual chain-of-thought step
+* `General_With_Vision_DiscussionId` - General conversation that uses a discussionId vision node to describe and persist images
 * `Task` - Task-oriented workflow
+* `Direct_Model` - Sends the conversation straight to a single model with no extra steps
 
 That is not necessary for setting up the example users, and is optional. For the sake of a quick start, the user should
 not need to modify the workflow folder at all.
@@ -160,14 +212,17 @@ not need to modify the workflow folder at all.
 
 ### Step 5: Configure Your LLM Endpoints
 
-This is the most important step. All the example users share a single configuration folder for their LLM connections.
+This is the most important step. Each example user points at its own endpoint collection under
+`Public/Configs/Endpoints/`, selected by the user's `endpointConfigsSubDirectory` setting. The four `chat-ui` users use
+the `_shared*` collections; the other users have their own.
 
 > **Tip:** If you prefer a guided experience, run `python setup_wizard_web.py` instead of manually editing these files.
 > The setup wizard will configure all your endpoints interactively.
 
-1. Navigate to the **`Public/Configs/Endpoints/_example_users/`** directory (or the equivalent location you chose in the
-   Pro-Tip step).
-2. Inside, you will find several JSON files (e.g., `Coding-Endpoint.json`, `General-Endpoint.json`). You must **edit
+1. Navigate to the endpoint collection for the user you picked, e.g. **`Public/Configs/Endpoints/_shared/`** for the
+   `chat-ui` user (or the equivalent location you chose in the Pro-Tip step). The collection name matches the user's
+   `endpointConfigsSubDirectory` setting.
+2. Inside, you will find several JSON files (e.g., `General-Endpoint.json`, `Worker-Endpoint.json`). You must **edit
    these files** to point to your LLM backends.
 
 Here are the key fields to update in each endpoint file:
@@ -181,32 +236,33 @@ Here are the key fields to update in each endpoint file:
 
 For a full explanation of every field, refer to the Endpoint documentation.
 
-* `_example_simple_router_no_memory`: Uses Endpoints `General-Endpoint`, `General-Rag-Fast-Endpoint`,
-  `Coding-Endpoint`, `Worker-Endpoint`
-* `_example_general_workflow`: Uses Endpoints `General-Endpoint`, `General-Fast-Endpoint`, `Worker-Endpoint`
-* `_example_wikipedia_quick_workflow`: Uses Endpoints `General-Rag-Fast-Endpoint`, `Worker-Endpoint`
-* `_example_wikipedia_multi_step_workflow`: Uses Endpoints `General-Rag-Fast-Endpoint`, `Worker-Endpoint`
-* `_example_assistant_with_vector_memory`: Uses Endpoints `Memory-Generation-Endpoint`, `Thinker-Endpoint`,
-  `Worker-Endpoint`, `Responder-Endpoint`
-* `_example_game_bot_with_file_memory`: Uses Endpoints `Memory-Generation-Endpoint`, `Responder-Endpoint`,
-  `Thinker-Endpoint`, `Worker-Endpoint`
+* `chat-ui` / `chat-ui-discussionid`: Collection `_shared` (or `_shared_discussionid`). Endpoints `General-Endpoint`,
+  `General-Reasoning-Endpoint`, `Fast-Endpoint`, `Fast-Reasoning-Endpoint`, `Worker-Endpoint` (the `_discussionid`
+  collection also includes `Vision-Endpoint`).
+* `chat-ui-cot` / `chat-ui-cot-discussionid`: Collection `_shared_manual_cot` (or `_shared_manual_cot_discussionid`).
+  Endpoints `General-Endpoint`, `Fast-Endpoint`, `Worker-Endpoint` (the `_discussionid` collection also includes
+  `Vision-Endpoint`). The manual chain-of-thought workflows drive the reasoning themselves, so these collections do not
+  ship the `*-Reasoning-Endpoint` models.
+* `_simple_router_no_memory`: Collection `_simple_router_no_memory`. Endpoints `General-Endpoint`,
+  `General-Reasoning-Endpoint`, `Rag-Fast-Endpoint`, `Fast-Endpoint`, `Fast-Reasoning-Endpoint`,
+  `Worker-Endpoint`
+* `_wikipedia_quick_workflow` and `_wikipedia_multi_step_workflow`: Collection `_example_wikipedia`. Endpoints
+  `Rag-Fast-Endpoint`, `Vision-Endpoint`
+* `_example_assistant_with_vector_memory` and `_example_game_bot_with_file_memory`: Collection `_example_users`.
+  Endpoints `Memory-Generation-Endpoint`, `Thinker-Endpoint`, `Responder-Endpoint`, `Worker-Endpoint`, `Vision-Endpoint`
 
 #### Endpoints
 
-The endpoints for the example users can be found in `Public/Configs/Endpoints/_example_users`
+The endpoint roles used across the collections are described below. Not every collection contains every role; each user
+only ships the endpoints its workflows actually reference.
 
-* `Coding-Endpoint`: Your best coding model. This is the main problem solver and coder
-* `Coding-Fast-Endpoint`: A fast and light coding model. This generally gets tasked with quick iterations, double
-  checking, etc.
 * `General-Endpoint`: Your best generalist model.
-* `General-Fast-Endpoint`: A fast and light generalist model. This gets tasked with quick iterations, double checking,
-  etc.
-* `General-Rag-Endpoint`: Your model that has the best context understanding. This gets used for heavy RAG tasks,
-  meaning large amounts of text with a high expectation of it to use that text properly.
-* `General-Rag-Fast-Endpoint`: A fast and light RAG model. Whatever the smallest and fastest model you have that handles
+* `General-Reasoning-Endpoint`: A generalist model used where the workflow wants a reasoning/thinking pass.
+* `Fast-Endpoint`: A fast and light generalist model. This gets tasked with quick iterations, double checking, etc.
+* `Fast-Reasoning-Endpoint`: A fast and light reasoning model, used for quick thinking passes.
+* `Rag-Fast-Endpoint`: A fast and light RAG model. Whatever the smallest and fastest model you have that handles
   its context window well, as it will be given large amounts of text and expected to use that text properly.
-* `Vision-Endpoint`: Your vision model. Used with the workflows that have a Image Processing node at the start. None of
-  the example users do by default, but you can swap the workflows easily to include them
+* `Vision-Endpoint`: Your vision model. Used by the workflows (and the `_discussionid` vision node) that process images.
 * `Memory-Generation-Endpoint`: Model that has the best contextual understanding but also does RAG well. If its writing
   a memory, it needs to really 'get' what it's reading and what was happening/being said.
 * `Responder-Endpoint`: Your best talker. Some example users use this to give the final response to the user, after
@@ -238,7 +294,7 @@ However, a few users require minor edits:
 
 <!-- end list -->
 
-* **For `_example_wikipedia_...` users:**
+* **For `_wikipedia_...` users:**
   You *must* have the [OfflineWikipediaTextApi](https://github.com/SomeOddCodeGuy/OfflineWikipediaTextApi) service
   running. Open the user file and update these fields:
 
@@ -256,7 +312,7 @@ However, a few users require minor edits:
 
 ### Shared Workflows (Open WebUI Integration)
 
-The `_example_general_workflow` user comes pre-configured with **shared workflows** enabled. This feature allows
+The `chat-ui` user comes pre-configured with **shared workflows** enabled. This feature allows
 front-end applications like Open WebUI to select different workflows directly from the model dropdown.
 
 #### How It Works
@@ -269,11 +325,11 @@ between different workflows without changing configuration files.
 
 The `_shared` folder includes several ready-to-use workflows for Open WebUI:
 
-* `openwebui-general` - General conversation workflow
-* `openwebui-general-fast` - Faster general conversation (fewer processing steps)
-* `openwebui-general-reasoning` - General conversation with enhanced reasoning
-* `openwebui-coding` - Coding-focused workflow
-* `openwebui-task` - Task-oriented workflow
+* `general` - General conversation workflow
+* `fast` - Faster general conversation (fewer/lighter processing steps)
+* `general-reasoning` - General conversation with a reasoning pass
+* `fast-reasoning` - Faster conversation with a lighter reasoning pass
+* `task` - Task-oriented workflow
 
 #### Enabling Shared Workflows for Other Users
 
@@ -292,7 +348,7 @@ To enable shared workflows for any user, add these settings to their user JSON f
 
 1. Connect your front-end (e.g., Open WebUI) to WilmerAI
 2. Query the models list (your front-end does this automatically)
-3. Select a workflow from the model dropdown (e.g., `chris:openwebui-coding`)
+3. Select a workflow from the model dropdown (e.g., `chat-ui:general`)
 4. Your requests will now use the selected workflow
 
 -----
@@ -305,20 +361,20 @@ Now you're ready to run the application. Use the script for your operating syste
 **Example for macOS/Linux:**
 
 ```bash
-bash run_macos.sh --User "_example_general_workflow"
+bash run_macos.sh --User "chat-ui"
 ```
 
 **Example for Windows:**
 
 ```bat
-run_windows.bat --User "_example_general_workflow"
+run_windows.bat --User "chat-ui"
 ```
 
 By default, WilmerAI only listens on `127.0.0.1` (localhost). If you need to connect from another machine on the
 network, add `--listen`:
 
 ```bash
-bash run_macos.sh --User "_example_general_workflow" --listen
+bash run_macos.sh --User "chat-ui" --listen
 ```
 
 > **UPDATE:** WilmerAI previously defaulted to listening on `0.0.0.0` (all network interfaces). It now defaults
@@ -362,11 +418,11 @@ By default, WilmerAI serializes requests (`--concurrency 1`), processing one at 
 parallel requests and you want to allow them, set `--concurrency 0`:
 
 ```bash
-bash run_macos.sh --User "_example_general_workflow" --concurrency 0
+bash run_macos.sh --User "chat-ui" --concurrency 0
 ```
 
 ```bat
-run_windows.bat --User "_example_general_workflow" --concurrency 0
+run_windows.bat --User "chat-ui" --concurrency 0
 ```
 
 For full details on concurrency limiting, see [Concurrency Limiting](../Core_Features/Concurrency_Limiting.md).
@@ -383,7 +439,8 @@ If you need help editing your endpoint files, add these documents.
 
 * [`Endpoint.md`](Configuration_Files/Endpoint.md)
 * [`ApiType.md`](Configuration_Files/ApiType.md)
-* An existing endpoint for the example user, which can be found in Public/Configs/Endpoints/_example_users
+* An existing endpoint for the user you picked, found in the endpoint collection under `Public/Configs/Endpoints/`
+  that matches the user's `endpointConfigsSubDirectory` (e.g. `_shared` for the `chat-ui` user)
 
 **2. If Using a Text Completion API (e.g., KoboldCpp):**
 These models often require special prompt formatting. If you're using one, also include this file.

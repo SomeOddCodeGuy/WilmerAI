@@ -5,6 +5,8 @@ import os
 import logging
 import sys
 
+from Middleware.utilities.config_utils import get_project_root_directory_path
+
 # Base exception for errors occurring within dynamically loaded modules
 class DynamicModuleError(Exception):
     """Base class for exceptions raised by dynamically loaded workflow modules."""
@@ -15,6 +17,36 @@ class DynamicModuleError(Exception):
 
 logger = logging.getLogger(__name__)
 
+
+def _resolve_module_path(module_path):
+    """
+    Resolves the on-disk location of a dynamic module path.
+
+    A relative path is honored as-is when it resolves against the current
+    working directory — the original behavior, so an existing setup that
+    launches Wilmer from a directory where the path already resolves keeps
+    working unchanged. Only when that fails is the path retried relative to
+    the project root, which makes the repo-relative paths used by shipped
+    workflow configs (e.g. ``Public/workflow_python_scripts/_isevendays_mcp_scripts/ensure_system_prompt.py``) work
+    no matter which directory Wilmer was launched from.
+
+    Args:
+        module_path (str): Absolute or relative path from the node config.
+
+    Returns:
+        str: The resolved path, or the original path unchanged when nothing
+            matched (the caller's existence check then raises with the path
+            the workflow author wrote).
+    """
+    if os.path.isabs(module_path) or os.path.isfile(module_path):
+        return module_path
+    root_candidate = os.path.join(get_project_root_directory_path(), module_path)
+    if os.path.isfile(root_candidate):
+        logger.debug(f"Resolved relative module_path '{module_path}' against the project root: '{root_candidate}'")
+        return root_candidate
+    return module_path
+
+
 def run_dynamic_module(module_path, *args, **kwargs):
     """
     Dynamically loads and runs a module from a given file path.
@@ -24,7 +56,10 @@ def run_dynamic_module(module_path, *args, **kwargs):
     with the provided arguments.
 
     Args:
-        module_path (str): The file path to the module to load.
+        module_path (str): The file path to the module to load. May be
+            absolute, or relative — a relative path that does not exist
+            against the current working directory is retried relative to
+            the project root (see ``_resolve_module_path``).
         *args: Variable length argument list to pass to the 'Invoke' function.
         **kwargs: Arbitrary keyword arguments to pass to the 'Invoke' function.
 
@@ -36,14 +71,28 @@ def run_dynamic_module(module_path, *args, **kwargs):
         AttributeError: If the module does not have an 'Invoke' function.
         TypeError: If 'Invoke' is not callable.
     """
+    module_path = _resolve_module_path(module_path)
     if not os.path.isfile(module_path):
         raise FileNotFoundError(f"No file found at {module_path}")
 
-    # Ensure the project root is in sys.path for the dynamic module
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+    # Ensure the project root is on sys.path so a dynamic module can import sibling
+    # project packages (e.g. `Public.workflow_python_scripts._isevendays_mcp_scripts.*`, `Middleware.*`). Use the canonical
+    # resolver rather than counting "..": this file lives three levels below the repo
+    # root (Middleware/workflows/tools/), so a two-level climb would wrongly add the
+    # Middleware/ package directory instead of its parent.
+    project_root = get_project_root_directory_path()
     if project_root not in sys.path:
         sys.path.insert(0, project_root)
         logger.debug(f"Added project root {project_root} to sys.path for dynamic module execution")
+
+    # Backward compat: before this loader put the repo root on sys.path it instead added
+    # the Middleware/ directory, so older user scripts may import Middleware sub-packages
+    # by short name (e.g. `import utilities.config_utils`). Keep those working alongside
+    # the canonical `import Middleware.x` form by also exposing Middleware/.
+    middleware_dir = os.path.join(project_root, "Middleware")
+    if os.path.isdir(middleware_dir) and middleware_dir not in sys.path:
+        sys.path.insert(0, middleware_dir)
+        logger.debug(f"Added {middleware_dir} to sys.path for legacy short-name imports")
 
     spec = importlib.util.spec_from_file_location("dynamic_module", module_path)
     module = importlib.util.module_from_spec(spec)

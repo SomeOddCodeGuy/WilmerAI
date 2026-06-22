@@ -1,12 +1,14 @@
 ### **Feature Guide: Concurrency Limiting**
 
-WilmerAI supports optional concurrency limiting via two command-line flags: `--concurrency` and `--concurrency-timeout`.
-These flags cap the number of requests WilmerAI will process simultaneously. Requests that exceed the limit wait in a
-queue until a slot opens or the timeout expires.
+WilmerAI supports optional concurrency limiting via three command-line flags: `--concurrency`,
+`--concurrency-timeout`, and `--concurrency-level`. The first two cap the number of in-flight units and how long a
+caller will wait for a slot. The third selects *where* the gate is enforced: at the WSGI front door
+(`wilmer`, default) or around the outbound LLM API call inside the workflow (`endpoint`).
 
-By default, concurrency is limited to 1 (serialized). This prevents resource contention on backend LLMs, which is the
-common case for most WilmerAI deployments. To allow parallel requests, set `--concurrency 0` (no limit) or a higher
-value.
+By default, concurrency is limited to 1 (serialized) and enforced at the request boundary. This prevents resource
+contention on backend LLMs, which is the common case for most WilmerAI deployments. To allow parallel requests,
+set `--concurrency 0` (no limit) or a higher value. To allow requests to overlap while still serializing the actual
+LLM calls, set `--concurrency-level endpoint`.
 
 -----
 
@@ -31,13 +33,57 @@ Sets the maximum number of seconds a queued request will wait for a concurrency 
 - The high default is intentional. WilmerAI proxies LLM inference calls that can take several minutes to complete,
   especially on local hardware running quantized models. A short timeout would cause unnecessary rejections during
   normal operation.
-- If a request waits for the full timeout duration without acquiring a slot, it is rejected with an HTTP 503 response.
+- If a request waits for the full timeout duration without acquiring a slot, it is rejected with an HTTP 503 response
+  in `wilmer` mode, or the workflow node receives a `TimeoutError` in `endpoint` mode (which surfaces as a 500 unless
+  the node has its own handling).
+- Applies to whichever level the gate is currently enforced at (`--concurrency-level`).
+
+### `--concurrency-level LEVEL`
+
+Selects where the concurrency gate is enforced.
+
+- **Default**: `wilmer`
+- **Choices**: `wilmer`, `endpoint`
+- `wilmer` (default): the semaphore is acquired at the WSGI middleware before a request reaches the workflow engine.
+  Only `--concurrency` requests run at a time; any further requests wait in the queue and either acquire a slot or
+  get rejected with a 503 after `--concurrency-timeout` seconds. This is the historical behaviour.
+- `endpoint`: the request-level gate is lifted entirely. Many requests can be in flight at once, doing whatever
+  non-LLM work their workflows require (file IO, HTTP calls to other services, memory lookups, etc.). The semaphore
+  is instead acquired only around the *outbound LLM API call* inside `LlmApiService.get_response_from_llm`. The
+  same `--concurrency` value still controls how many LLM calls can run simultaneously -- with `--concurrency 1`
+  (the default), one LLM call at a time, but as many concurrent workflows as you like otherwise.
+
+### When to use `endpoint` mode
+
+The single problem `endpoint` mode solves: **reentrant requests deadlocking against the request-level gate**.
+
+A concrete example: imagine one Wilmer instance hosts both a chatbot user and a second user whose workflow calls out
+to a service that loops back into Wilmer, both pointing at the same physical Mac. With `--concurrency 1` in default
+(`wilmer`) mode:
+
+1. The chatbot user issues request A. A acquires the gate and enters the workflow.
+2. Inside its workflow, A calls out via HTTP to a separate helper service.
+3. The helper service does its work and, to answer A, calls back into the same Wilmer instance as request B.
+4. B blocks at the gate because A is still holding it.
+5. A is blocked waiting for the helper service's HTTP response.
+6. The helper service is blocked waiting for B. Deadlock.
+
+Switch to `--concurrency-level endpoint` and the same scenario plays out cleanly:
+
+1. A enters; the gate is *not* held because the workflow has not made an outbound LLM call yet.
+2. A calls the helper service; the helper service calls back as B.
+3. B enters; both A and B sit in their respective workflows.
+4. Whichever workflow next reaches an outbound LLM call acquires the gate, makes the call, releases.
+5. The two requests interleave their LLM calls; neither can deadlock the other.
+
+If your Wilmer instances never make outbound calls that loop back into themselves, you do not need this mode. If they
+do (reentrant integrations that call back into Wilmer), `endpoint` mode is the safe choice.
 
 -----
 
 ## Availability
 
-Both flags are accepted by all WilmerAI entry points:
+These flags are accepted by all WilmerAI entry points:
 
 - `server.py` (Flask development server)
 - `run_eventlet.py` (Eventlet production server)
@@ -51,7 +97,8 @@ The launcher scripts forward these flags to the underlying Python entry point.
 
 ## Rejected Request Response
 
-When a request is rejected because the concurrency limit is reached and the timeout has elapsed, WilmerAI returns:
+When `--concurrency-level wilmer` (the default) is in effect and a request is rejected because the limit is reached
+and the timeout has elapsed, WilmerAI returns:
 
 - **HTTP status**: `503 Service Unavailable`
 - **Response body**:
@@ -65,6 +112,10 @@ When a request is rejected because the concurrency limit is reached and the time
   }
 }
 ```
+
+When `--concurrency-level endpoint` is in effect, requests are never rejected at the gate -- they simply wait inside
+the workflow for an LLM-call slot. If an LLM call times out waiting for its slot, the workflow node raises a
+`TimeoutError`. Without specific handling, this surfaces to the client as a generic 500.
 
 -----
 
@@ -169,3 +220,12 @@ python3 run_eventlet.py --User myuser --concurrency 4
 ```bash
 python3 server.py --User myuser --concurrency 0
 ```
+
+**Allow many concurrent requests but serialize the actual LLM calls (fixes reentrant deadlocks):**
+
+```bash
+python3 run_eventlet.py --User myuser --concurrency 1 --concurrency-level endpoint
+```
+
+This is the recommended setup for any Wilmer instance whose workflows make outbound calls to services that may, in
+turn, call back into the same Wilmer instance.

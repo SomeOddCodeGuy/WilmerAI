@@ -6,7 +6,7 @@
 
 This guide outlines a modular, multi-pass approach to building a Wikipedia research workflow in WilmerAI. The core
 strategy is to break down the complex task of "researching a topic" into a series of smaller, distinct steps, each
-handled by a specialized LLM agent or utility node. This creates a resilient and powerful system that iteratively
+handled by a specialized LLM agent or utility node. This creates a resilient system that iteratively
 refines its search, synthesizes information, and provides well-supported answers.
 
 This guide can help not just for writing wiki workflows, but generally understanding Wilmer prompting strategies

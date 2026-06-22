@@ -38,17 +38,43 @@ class LockingService:
         """
         Determines the full path for the user-specific database file.
 
-        The path is constructed using a custom path from the user config, if
-        available, otherwise, it defaults to the current directory.
+        Resolves the target directory via
+        :func:`config_utils.get_custom_dblite_filepath` (which applies the
+        CLI flag > user config > ``{get_root_public_directory()}/SqlLiteDBs``
+        hierarchy), then applies legacy-path stickiness: if the database
+        does not yet exist at the target location but a pre-refactor database
+        file exists, that legacy file is used instead so no automatic
+        migration is performed. The old code created the lock DB as a
+        working-directory-relative ``WilmerDb.<user>.sqlite``, so two legacy
+        locations are probed -- the cwd-relative path and the project-root
+        path -- because an install launched from a directory other than the
+        project root left its old file under whichever directory it was
+        launched from.
 
         Returns:
             str: The full file path for the SQLite database.
         """
-        custom_path = config_utils.get_custom_dblite_filepath()
         db_filename = f'WilmerDb.{self.username}.sqlite'
-        if custom_path:
-            return os.path.join(custom_path, db_filename)
-        return db_filename
+        target_dir = config_utils.get_custom_dblite_filepath()
+        target_path = os.path.join(target_dir, db_filename) if target_dir else db_filename
+
+        if os.path.exists(target_path):
+            return target_path
+
+        cwd_legacy_path = db_filename
+        project_root_legacy_path = os.path.join(
+            config_utils.get_project_root_directory_path(), db_filename
+        )
+        for legacy_path in (cwd_legacy_path, project_root_legacy_path):
+            if os.path.exists(legacy_path):
+                logger.info(
+                    "Using legacy lock database at '%s'. Move the file to '%s' to migrate.",
+                    os.path.abspath(legacy_path),
+                    os.path.abspath(target_path),
+                )
+                return legacy_path
+
+        return target_path
 
     def _get_db_connection(self) -> Optional[sqlite3.Connection]:
         """

@@ -3,7 +3,7 @@
 ### Overview
 
 The **`StaticResponse`** node is a simple utility node that returns a hardcoded string defined directly within the
-workflow. It is incredibly versatile, serving as a powerful tool for debugging, providing static instructions, or
+workflow. It is versatile, serving as a tool for debugging, providing static instructions, or
 delivering canned responses without the need for an LLM call.
 
 A key feature of this node is its ability to act as a **responder**. When configured to return to the user, it can even

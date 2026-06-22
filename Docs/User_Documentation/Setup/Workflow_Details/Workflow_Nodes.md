@@ -25,6 +25,7 @@ response.
 | **`systemPrompt`**                          | String  | Yes      | N/A        | The system prompt or initial instruction set for the LLM. Supports variable substitution.                                             |
 | **`prompt`**                                | String  | Yes      | N/A        | The main user-facing prompt. If this is empty, the node will use `lastMessagesToSendInsteadOfPrompt`. Supports variable substitution. |
 | **`lastMessagesToSendInsteadOfPrompt`**     | Integer | No       | `5`        | If `prompt` is empty, this specifies how many recent conversational turns to use as the prompt.                                       |
+| **`lastMessagesToSendInsteadOfPromptMaxTokenSize`** | Integer | No | N/A | Optional token ceiling applied on top of `lastMessagesToSendInsteadOfPrompt` (only used when `prompt` is empty). The selected recent turns are trimmed, newest-first, to fit this estimated-token budget -- useful when individual turns are large (e.g. agentic tool results). When `clampPromptToContextWindow` is on for the node, this value is scaled by the endpoint's `wilmerContextEstimationLevel`. If omitted, only the message count bounds the window. (The context-window clamp, when enabled, largely subsumes this cap.) |
 | **`maxResponseSizeInTokens`**               | Integer/String | No       | `400`      | Overrides the maximum number of tokens the LLM can generate for this node. **Supports LIMITED variables like endpointName.**         |
 | **`maxContextTokenSize`**                   | Integer | No       | `4096`     | Overrides the maximum context window size (in tokens) for this node.                                                                  |
 | **`nMessagesToIncludeInVariable`**           | Integer | No       | `5`        | Controls how many messages are included in the `{chat_user_prompt_n_messages}` and `{templated_user_prompt_n_messages}` variables.    |
@@ -42,6 +43,7 @@ response.
 | **`acceptImages`**                          | Boolean | No       | `false`    | If `true`, images attached to conversation messages are preserved and sent to the LLM backend. The endpoint must support vision/multimodal input. When `false`, images are stripped. If `true` but no images are present, the node behaves as a normal text request. |
 | **`maxImagesToSend`**                       | Integer | No       | `0`        | Only relevant when `acceptImages` is `true`. Limits the number of images sent to the backend, keeping the most recent. `0` means no limit. **Supports LIMITED variables like endpointName.** |
 | **`allowTools`**                            | Boolean | No       | `false`    | If `true`, tool definitions from the frontend request are forwarded to the LLM when this node executes. Tool call responses from the LLM are passed back to the frontend. Should typically only be enabled on the responding node. See [Tool Call Passthrough](Workflow_Features.md#tool-call-passthrough). |
+| **`lowercaseToolCallFunctionNames`**        | Boolean | No       | `false`    | If `true`, tool call function names in LLM responses are lowercased before being sent to the frontend. Fixes local models that produce capitalized names (e.g., `Glob` instead of `glob`). Works for both streaming and non-streaming. See [Lowercasing Tool Call Function Names](Workflow_Features.md#lowercasing-tool-call-function-names). |
 | **`mergeConsecutiveAssistantMessages`**     | Boolean | No       | `false`    | If `true`, consecutive assistant messages are merged into one before sending to the LLM. Only applies when `prompt` is empty. Tool-call sequences (assistant -> tool -> assistant) are not affected. See [Consecutive Assistant Message Normalization](Workflow_Features.md#consecutive-assistant-message-normalization). |
 | **`mergeConsecutiveAssistantMessagesDelimiter`** | String | No   | `"\n"`     | Delimiter for joined content when merging consecutive assistant messages. |
 | **`insertUserTurnBetweenAssistantMessages`** | Boolean | No      | `false`    | If `true`, a synthetic user message is inserted between consecutive assistant messages. Alternative to merging. See [Consecutive Assistant Message Normalization](Workflow_Features.md#consecutive-assistant-message-normalization). |
@@ -164,7 +166,7 @@ condition.
 
 ### **In-Workflow Routing: The `ConditionalCustomWorkflow` Node**
 
-The **`ConditionalCustomWorkflow` Node** provides powerful branching logic. It dynamically selects and executes a
+The **`ConditionalCustomWorkflow` Node** provides branching logic. It dynamically selects and executes a
 sub-workflow based on the value of a conditional variable (e.g., the output from a `Conditional` node). It also supports
 a default content fallback, preventing the need for an extra workflow file for a simple default response.
 
@@ -188,8 +190,7 @@ a default content fallback, preventing the need for an extra workflow file for a
   variables.
 * **You cannot set a variable as a workflow name.** Configuration keys like workflow names inside `conditionalWorkflows`
   and `routeOverrides` must be static, hardcoded strings.
-* **Matching Logic:** The match for `conditionalWorkflows` is **case-insensitive**. However, the match for
-  `routeOverrides` keys is **case-sensitive** and expects the key to be **Capitalized**.
+* **Matching Logic:** The match for both `conditionalWorkflows` and `routeOverrides` keys is **case-insensitive**.
 
 #### **Full Syntax Example**
 
@@ -506,6 +507,8 @@ inject large blocks of static text (like instructions or reference material) wit
 | **`filepath`**              | String | Yes      | N/A     | The full path to the text file to load. Supports variables including `{Discussion_Id}` and `{YYYY_MM_DD}`. |
 | **`delimiter`**             | String | No       | `\n`    | An optional string to search for and replace within the file's content.                               |
 | **`customReturnDelimiter`** | String | No       | `\n`    | An optional string that will replace every instance of the `delimiter`.                               |
+| **`headCount`** / **`tailCount`** | Integer | No | (none) | Optional, opt-in limiting. Return only the first N (`headCount`) or last N (`tailCount`) chunks, where chunks are split on `chunkDelimiter` (a newline by default). Set at most one; setting both returns an error. Applied before delimiter replacement. |
+| **`chunkDelimiter`**        | String | No       | `\n`    | The separator that defines a "chunk" for `headCount`/`tailCount`. Defaults to a single newline (line-based). No effect unless `headCount` or `tailCount` is set. |
 
 #### **Limitations and Key Usage Notes**
 
@@ -556,6 +559,7 @@ during a workflow, such as an LLM's analysis, a conversation summary, or a repor
 | **`title`**    | String | No       | `""`    | An optional, human-readable name for the node.                                                          |
 | **`filepath`** | String | Yes      | N/A     | The full path where the file will be saved. Supports variables including `{Discussion_Id}` and `{YYYY_MM_DD}`. |
 | **`content`**  | String | Yes      | N/A     | The string content to be written to the file. Supports variables.                                       |
+| **`mode`**     | String | No       | `overwrite` | Either `"overwrite"` (default, replaces the file) or `"append"` (adds `content` to the end, creating the file if missing). The write is atomic. |
 
 #### **Limitations and Key Usage Notes**
 
@@ -687,7 +691,7 @@ string value.
 |:------------------|:-------|:---------|:--------|:----------------------------------------------------------------------------------------------|
 | **`type`**        | String | Yes      | N/A     | Must be `"PythonModule"`.                                                                     |
 | **`title`**       | String | No       | `""`    | A descriptive name for the node.                                                              |
-| **`module_path`** | String | Yes      | N/A     | The full, absolute file path to the Python (`.py`) script.                                    |
+| **`module_path`** | String | Yes      | N/A     | The file path to the Python (`.py`) script. Absolute, or relative (resolved against the cwd first, then the WilmerAI install root). |
 | **`args`**        | Array  | No       | `[]`    | A list of positional arguments to pass to the `Invoke` function. Values support variables.    |
 | **`kwargs`**      | Object | No       | `{}`    | A dictionary of keyword arguments to pass to the `Invoke` function. Values support variables. |
 
@@ -804,6 +808,212 @@ Returns a specified number of the most relevant full articles.
   "top_n_articles": 3
 }
 ```
+
+-----
+
+### **External Tools: The `WebFetch` Node**
+
+The **`WebFetch`** node issues an HTTP request to a user-configured URL using the `requests` library and returns the
+response. It is intended for pulling data from arbitrary HTTP/HTTPS endpoints inside a workflow (for example, hitting an
+internal API and feeding the response into a later LLM node). All string fields support variable substitution.
+
+#### **Properties**
+
+| Property           | Type    | Required | Default  | Description                                                                                                            |
+|:-------------------|:--------|:---------|:---------|:-----------------------------------------------------------------------------------------------------------------------|
+| **`type`**         | String  | Yes      | N/A      | Must be `"WebFetch"`.                                                                                                  |
+| **`title`**        | String  | No       | `""`     | A human-readable name for the node.                                                                                    |
+| **`url`**          | String  | Yes      | N/A      | The target URL. Supports variable substitution.                                                                        |
+| **`method`**       | String  | No       | `"GET"`  | HTTP method. Common values: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`. Case-insensitive.                                 |
+| **`headers`**      | Object  | No       | `{}`     | A JSON object of request headers. Values support variable substitution. Header keys are sent as written.               |
+| **`body`**         | String  | No       | None     | A raw request body string. Supports variable substitution.                                                             |
+| **`timeout`**      | Integer | No       | `30`     | Request timeout in seconds.                                                                                            |
+| **`outputFormat`** | String  | No       | `"text"` | One of `"text"` (response body as a string), `"json"` (response body re-serialized as JSON), `"full"` (status/headers/body wrapped in a JSON object), `"html-stripped"` (HTML run through a stdlib-only stripper that removes script/style/head/noscript/iframe content and returns the remaining visible text). |
+| **`onError`**      | String  | No       | `"raise"`| `"raise"` aborts the workflow on connection failure or HTTP 4xx/5xx. `"return"` causes the node to emit an error payload (shape matches `outputFormat`) so the workflow can branch on it. |
+| **`proxy`**        | String  | No       | None     | Optional proxy URL routed through both `http` and `https` traffic. Any scheme `requests` supports works: `socks5://`, `socks5h://`, `socks4://`, `http://`, `https://`. Supports variable substitution. An empty string is treated as "no proxy". |
+| **`caBundle`**     | String  | No       | None     | Opt-in. Path to a CA bundle (PEM) used to verify the server's TLS certificate; verification stays ON. Use for HTTPS endpoints behind a private/internal CA (e.g. `mkcert`). Default verification uses the bundled `certifi` roots, NOT the OS keychain. Supports variable substitution; empty string = not set; a non-existent path raises `ValueError`. |
+| **`verify`**       | Boolean | No       | `true`   | Opt-in. `true` (default) verifies against the default `certifi` store. `false` disables TLS verification entirely (logs a warning; vulnerable to MITM — prefer `caBundle`). An explicit `false` takes precedence over `caBundle`. |
+| **`allowRedirects`** | Boolean | No     | `true`   | Whether HTTP 3xx redirects are followed. Set `false` to stop a remote redirect from bouncing the request to another host. |
+| **`maxResponseBytes`** | Integer | No   | `10485760` | Body-size cap in bytes (10 MiB). The body is streamed and the read aborts past the cap. Set `0` to disable the cap. |
+
+#### **Limitations and Key Usage Notes**
+
+* **`outputFormat: "text"` does not strip HTML.** It returns whatever the server sent, byte-for-byte (decoded via the
+  response encoding). For a clean text extraction from HTML, use `outputFormat: "html-stripped"`, which runs the body
+  through a stdlib-only stripper (removing script/style/head/noscript/iframe content), or run the response through a
+  `PythonModule` node for custom extraction.
+* **Privacy / SSRF.** This node makes outbound HTTP calls to the URLs you configure. Wilmer never adds anything to the
+  request beyond what you put in the node config. There is no host/IP allowlist, so treat any `url` built from
+  conversation-derived variables as untrusted input — see the [WebFetch node doc](Nodes/WebFetch.md) for the SSRF
+  warning and the `allowRedirects` control.
+* **TLS.** HTTPS is supported transparently via the `requests` library's certificate verification (always on).
+
+#### **Full Syntax Example**
+
+```json
+{
+  "title": "Fetch user record",
+  "agentName": "UserRecord",
+  "type": "WebFetch",
+  "url": "https://api.example.com/users/{userId}",
+  "method": "GET",
+  "headers": {
+    "Authorization": "Bearer {apiToken}",
+    "Accept": "application/json"
+  },
+  "timeout": 15,
+  "outputFormat": "json"
+}
+```
+
+For detailed documentation including the full error-handling matrix, see [WebFetch Node](Nodes/WebFetch.md).
+
+-----
+
+### **External Tools: The `CurlCommand` Node**
+
+The **`CurlCommand`** node invokes the system `curl` binary via `subprocess.Popen` with `shell=False`, streaming its
+output so the response body can be bounded in-process. Arguments are
+supplied as a JSON list (no shell parsing), and each element is variable-substituted before being passed to curl. Use
+this node when you specifically need the `curl` binary itself — for example, to use a curl-only flag or to mirror a
+shell command exactly. For most HTTP/HTTPS use cases, prefer the [WebFetch Node](#external-tools-the-webfetch-node).
+
+#### **Properties**
+
+| Property           | Type       | Required | Default    | Description                                                                                                            |
+|:-------------------|:-----------|:---------|:-----------|:-----------------------------------------------------------------------------------------------------------------------|
+| **`type`**         | String     | Yes      | N/A        | Must be `"CurlCommand"`.                                                                                               |
+| **`title`**        | String     | No       | `""`       | A human-readable name for the node.                                                                                    |
+| **`args`**         | List       | Yes      | N/A        | A list of strings passed to curl as separate arguments. Each element supports variable substitution.                   |
+| **`timeout`**      | Integer    | No       | `30`       | Maximum time in seconds curl is allowed to run.                                                                        |
+| **`outputFormat`** | String     | No       | `"stdout"` | One of `"stdout"` (curl's stdout), `"stdout+stderr"` (concatenated), `"full"` (JSON envelope with stdout/stderr/returncode). |
+| **`onError`**      | String     | No       | `"raise"`  | `"raise"` aborts the workflow on non-zero exit or timeout. `"return"` causes the node to emit an error payload (shape matches `outputFormat`). |
+| **`proxy`**        | String     | No       | None       | Optional proxy URL. Translated to `-x <url>` and prepended to `args` before curl is invoked. Any scheme curl supports works (`socks5://`, `socks5h://`, `socks4://`, `http://`, `https://`). Supports variable substitution. An empty string is treated as "no proxy". |
+| **`maxResponseBytes`** | Integer | No     | `10485760` | Body-size cap (10 MiB), enforced two ways: curl's `--max-filesize` is injected for advertised-length responses (unless the author supplied one), and stdout is read incrementally with curl killed the instant the body exceeds the cap (bounds chunked/unknown-length responses too). Set `0` to disable both. |
+| **`blockOptionInjection`** | Boolean | No | `false`   | When `true`, rejects an `args` element that resolves (via variable substitution) to a leading-`-` value (a curl option) or a leading-`@` value (an `@file` data read, e.g. `-d @/etc/passwd`) unless its template literally started with that character. Blocks curl-option and local-file-read injection from untrusted variables; prefer `--data-raw` for variable-fed bodies. |
+| **`allowSchemeInjection`** | Boolean | No | `false`   | The scheme-injection guard is ON by default: an `args` element whose resolved value introduces a non-`http`/`https` scheme via variable substitution (`file://`, `ftp://`, `dict://`, ...) is rejected; author-literal schemes are allowed. Set `true` to permit substituted schemes. |
+
+#### **Limitations and Key Usage Notes**
+
+* **No shell.** The command is executed with `shell=False`. Shell metacharacters (pipes, redirections, glob expansion)
+  do not work. If you need a shell pipeline, wrap it in a small shell script and invoke that script via a `PythonModule`
+  node, or use multiple `CurlCommand` nodes chained together.
+* **System binary required.** If `curl` is not on the host's PATH, the node raises `FileNotFoundError` at execution
+  time.
+* **Privacy.** This node makes outbound HTTP/HTTPS calls only to the URLs you configure in the `args` list.
+* **`shell=False` blocks shell injection, not curl's own options.** curl can read/write local files via `file://`,
+  `-d @file`, and `-o`; a substituted value starting with `-` becomes a curl flag, and one starting with `@` in a data
+  slot becomes a local-file read. `blockOptionInjection` (opt-in) blocks substituted `-` and `@` values; use
+  `--data-raw` for variable-fed bodies. See the
+  [CurlCommand node doc](Nodes/CurlCommand.md) for the full security notes and the `blockOptionInjection` control.
+
+#### **Full Syntax Example**
+
+```json
+{
+  "title": "POST to internal API",
+  "agentName": "ApiResponse",
+  "type": "CurlCommand",
+  "args": [
+    "-sS", "-X", "POST",
+    "-H", "Authorization: Bearer {apiToken}",
+    "-H", "Content-Type: application/json",
+    "-d", "{requestBody}",
+    "https://api.example.com/items"
+  ],
+  "timeout": 20,
+  "outputFormat": "full"
+}
+```
+
+For detailed documentation including the full error-handling matrix and tips on choosing between this node and
+`WebFetch`, see [CurlCommand Node](Nodes/CurlCommand.md).
+
+-----
+
+### **External Tools: The `MCPToolCall` Node**
+
+The **`MCPToolCall`** node invokes a single tool on a named Model Context Protocol (MCP) server, with the tool name
+and arguments fixed by the workflow author. The LLM is not in the loop — this is a deterministic, workflow-driven
+tool call, well-suited for "fetch this specific piece of data" or "perform this specific action" steps.
+
+Servers are declared once in `Public/Configs/MCPServers/<name>.json` and referenced by name from the node. All three
+MCP transports are supported: `stdio` (spawns a subprocess), `sse` (Server-Sent Events over HTTP), and
+`streamable_http`.
+
+#### **Properties**
+
+| Property           | Type    | Required | Default   | Description                                                                                                            |
+|:-------------------|:--------|:---------|:----------|:-----------------------------------------------------------------------------------------------------------------------|
+| **`type`**         | String  | Yes      | N/A       | Must be `"MCPToolCall"`.                                                                                               |
+| **`title`**        | String  | No       | `""`      | A human-readable name for the node.                                                                                    |
+| **`server`**       | String  | Yes      | N/A       | The name of an MCP server config in `Public/Configs/MCPServers/`. Supports variable substitution.                      |
+| **`tool`**         | String  | Yes      | N/A       | The MCP tool to invoke on that server. Supports variable substitution.                                                 |
+| **`arguments`**    | Object  | No       | `{}`      | A JSON object of tool arguments. String values support variable substitution; numbers, booleans, lists, and nested objects pass through. |
+| **`timeout`**      | Number  | No       | `30`      | Per-call timeout in seconds.                                                                                           |
+| **`onError`**      | String  | No       | `"raise"` | `"raise"` aborts the workflow when the MCP call fails. `"return"` causes the node to return the error message so the workflow can branch on it. |
+
+#### **Server Registry**
+
+Each MCP server config under `Public/Configs/MCPServers/` describes one transport. Examples ship under
+`MCPServers/_examples/`:
+
+* **stdio** (subprocess):
+  ```json
+  {
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed/directory"],
+    "env": {"NODE_ENV": "production"},
+    "cwd": null
+  }
+  ```
+* **sse**:
+  ```json
+  {
+    "transport": "sse",
+    "url": "http://localhost:8888/sse",
+    "headers": {"Authorization": "Bearer YOUR_TOKEN_HERE"}
+  }
+  ```
+* **streamable_http**:
+  ```json
+  {
+    "transport": "streamable_http",
+    "url": "http://localhost:8888/mcp",
+    "headers": {}
+  }
+  ```
+
+#### **Limitations and Key Usage Notes**
+
+* **One tool per node.** This node is deliberately not an agentic loop. To compose multiple MCP calls or to let an
+  LLM choose which tool to call, use multiple nodes (one `MCPToolCall` each).
+* **No connection pooling in v1.** Each invocation opens a fresh transport. This is simpler and safer; persistent
+  connections may be added later.
+* **stdio spawns a subprocess.** The `command` and `args` you configure run on the Wilmer host with the privileges of
+  the Wilmer process. Treat them like any other PythonModule-style integration.
+* **Privacy.** Outbound traffic is limited to whatever transport you configure — local subprocess (stdio), or the URL
+  you wrote down (sse / streamable_http).
+
+#### **Full Syntax Example**
+
+```json
+{
+  "title": "Read user notes from MCP filesystem",
+  "agentName": "UserNotes",
+  "type": "MCPToolCall",
+  "server": "filesystem",
+  "tool": "read_file",
+  "arguments": {
+    "path": "/data/notes/{userId}.txt"
+  },
+  "timeout": 15
+}
+```
+
+For detailed documentation including the full error-handling matrix and per-transport configuration reference, see
+[MCPToolCall Node](Nodes/MCPToolCall.md).
 
 -----
 

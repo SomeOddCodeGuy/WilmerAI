@@ -15,11 +15,12 @@ Prompt Routing is controlled by two configuration components: a **routing config
 categories, and a **categorization workflow** that chooses one of those categories based on the user's prompt. The
 system uses these two components together to route each incoming message.
 
-The following example configuration for a user profile is defined in `assistant-multi-model.json`:
+The two settings that turn routing on live in the user profile. For a complete, shipping example, see the
+`_simple_router_no_memory` user:
 
 ```json
-  "routingConfig": "assistantMultiModelCategoriesConfig",
-"categorizationWorkflow": "CustomCategorizationWorkflow",
+  "routingConfig": "_exampleCustomCategoriesConfig",
+  "categorizationWorkflow": "CustomCategorizationWorkflow",
 ```
 
 ### 1\. The Routing Configuration File
@@ -27,7 +28,8 @@ The following example configuration for a user profile is defined in `assistant-
 The first component is the routing configuration, specified in the `routingConfig` file. This file is a map that
 connects category names to their descriptions and the workflow that should handle them.
 
-Consider the example file, `assistantMultiModelCategoriesConfig.json`:
+Consider an illustrative routing config with three categories (the shipping `_exampleCustomCategoriesConfig` keeps it
+simpler, with just `WIKI` and `GENERAL`):
 
 ```json
 {
@@ -68,14 +70,14 @@ Here is the example `CustomCategorizationWorkflow.json`:
     "agentName": "Conversation Analyzer Agent One",
     "systemPrompt": "When given an ongoing conversation, review the most recent messages and expertly outline exactly what the most recent speaker is asking for or saying...",
     "prompt": "Please consider the below messages:\n[\n{chat_user_prompt_last_ten}\n]\n...please analyze and report the exact context of the last speaker's messages...",
-    "endpointName": "Assistant-Multi-Model-Categorizer-Endpoint"
+    "endpointName": "Worker-Endpoint"
   },
   {
     "title": "Determining category of prompt",
     "agentName": "Categorization Agent Two",
     "systemPrompt": "When given a message and a series of categories to choose from, always respond with only a single word: the expected category...",
     "prompt": "A user is currently in an online conversation, and has sent a new message. The intent and context of the message has been described below:\n[\n{agent1Output}\n]\nPlease categorize the user's message into one of the following categories: {category_colon_descriptions}. Return only one word for the response.\n\nPlease respond with one of the following: {categoriesSeparatedByOr}.",
-    "endpointName": "Assistant-Multi-Model-Categorizer-Endpoint"
+    "endpointName": "Worker-Endpoint"
   }
 ]
 ```
@@ -134,6 +136,29 @@ descriptions.
 
 * **`{category_descriptions}`**
   Provides the raw list of category descriptions.
+
+-----
+
+## Archived Example: A Multi-Character Group Chat
+
+Routing does not have to choose between *task types* -- it can also choose between *speakers*. WilmerAI used to ship a
+`group-chat-example` user that let several models talk as different characters in a single conversation: the routing
+config mapped each character name to that character's own workflow, and the categorization step picked who should
+respond next.
+
+That user is no longer wired up to run out of the box, but it has been kept under each config type's `_archived/`
+folder as a reference for building this style of setup:
+
+* `Public/Configs/Users/_archived/group-chat-example.json`
+* `Public/Configs/Routing/_archived/groupChatExampleCategoriesConfig.json` -- one category per character (CHATGPT,
+  Claire, DataFinder, Eve, LePi, Lex, MrDramaLlama, MusicalMinstral), each pointing at that character's workflow.
+* `Public/Configs/Workflows/_archived/group-chat-example/` -- the per-character workflows plus the
+  `CustomCategorizationWorkflow` that selects the speaker.
+
+To turn it back into a running user you would supply your own Endpoints and Presets, but the routing, categorization,
+and workflow wiring are a complete worked example of using prompt routing to drive a group chat. When running this
+style of conversation, the `useGroupChatTimestampLogic` node setting is also relevant (see the conversational node
+documentation).
 
 -----
 

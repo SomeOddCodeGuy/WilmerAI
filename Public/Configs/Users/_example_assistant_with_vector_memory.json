@@ -1,5 +1,9 @@
 {
   "port": 5071,
+  "clampPromptToContextWindow": true,
+  "userWideWorkflowVariables": {
+    "personaDir": "D:\\temp"
+  },
   "stream": true,
   "customWorkflowOverride": true,
   "customWorkflow": "CustomWorkflow-VectorMemory-Simple",

@@ -1,3 +1,6 @@
+import pytest
+
+
 def test_get_models(client, mocker):
     """Tests the /v1/models endpoint."""
     mock_builder = mocker.patch('Middleware.api.handlers.impl.openai_api_handler.response_builder')
@@ -326,6 +329,142 @@ def test_chat_completions_streaming_excludes_multiple_ghost_chunks(client, mocke
     assert b'ghost1' not in response.data
     assert b'ghost2' not in response.data
     assert b'ghost3' not in response.data
+
+
+def test_chat_completions_streaming_runs_post_return_nodes_after_done(client, mocker):
+    """Post-returnToUser nodes must run to completion after [DONE].
+
+    The fix keeps the backend generator being driven past the [DONE] sentinel so
+    non-responding post-return nodes execute, even though their output is not
+    delivered to the client. This asserts the backend is fully drained (the side
+    effect fires), not merely that post-[DONE] ghost chunks are excluded.
+    """
+    mocker.patch('Middleware.api.handlers.impl.openai_api_handler.get_is_chat_complete_add_user_assistant',
+                 return_value=False)
+    mocker.patch('Middleware.api.handlers.impl.openai_api_handler.get_is_chat_complete_add_missing_assistant',
+                 return_value=False)
+
+    executed = []
+
+    def stream_generator():
+        yield 'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n'
+        yield 'data: [DONE]\n\n'
+        # Simulates a post-returnToUser non-responding node running after the
+        # client stream has already terminated.
+        executed.append("post_return_node_ran")
+        yield 'data: {"choices":[{"delta":{"content":"ghost"}}]}\n\n'
+
+    mock_handle_prompt = mocker.patch('Middleware.api.handlers.impl.openai_api_handler.handle_user_prompt')
+    mock_handle_prompt.return_value = stream_generator()
+
+    payload = {"messages": [{"role": "user", "content": "Hello"}], "stream": True}
+    response = client.post('/chat/completions', json=payload)
+
+    assert response.status_code == 200
+    body = response.data
+    assert b'[DONE]' in body
+    assert b'ghost' not in body
+    # The backend was driven past [DONE]: the post-return node executed.
+    assert executed == ["post_return_node_ran"]
+
+
+def test_completions_streaming_runs_post_return_nodes_after_done(client, mocker):
+    """The /v1/completions fallback path also drives post-return nodes past [DONE]."""
+    executed = []
+
+    def stream_generator():
+        yield 'data: {"choices":[{"text":"Hi"}]}\n\n'
+        yield 'data: [DONE]\n\n'
+        executed.append("post_return_node_ran")
+        yield 'data: {"choices":[{"text":"ghost"}]}\n\n'
+
+    mock_handle_prompt = mocker.patch('Middleware.api.handlers.impl.openai_api_handler.handle_user_prompt')
+    mock_handle_prompt.return_value = stream_generator()
+
+    payload = {"prompt": "Hello", "stream": True}
+    response = client.post('/v1/completions', json=payload)
+
+    assert response.status_code == 200
+    body = response.data
+    assert b'[DONE]' in body
+    assert b'ghost' not in body
+    assert executed == ["post_return_node_ran"]
+
+
+def test_eventlet_path_runs_post_return_nodes_to_completion(app, mocker):
+    """Direct test of the Eventlet streaming path (ISS-035 + ISS-026).
+
+    The Flask test harness never monkey-patches eventlet, so `_stream_with_eventlet_optimized`
+    is otherwise unexercised. We call it directly and let the hub run.
+
+    The generator sleeps between the [DONE] terminator and a post-return chunk so the
+    client-facing generator returns (running its `finally`) *first*. With the ISS-026 fix the
+    generator does not send `stop_signal` on natural completion, so the reader keeps draining
+    and the post-return node runs to completion. Under the old behavior the `finally` would have
+    signaled stop, the reader would `break` on the next chunk, and the post-return node would
+    never execute (`executed` would stay empty) — so this test distinguishes the fix.
+    """
+    eventlet = pytest.importorskip("eventlet")
+    from Middleware.api.handlers.impl import openai_api_handler as h
+
+    executed = []
+
+    def stream_generator():
+        yield 'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n'
+        yield 'data: [DONE]\n\n'
+        # Let the client-facing generator return (and run its finally) before the reader
+        # resumes, so this exercises the stop_signal-on-natural-completion path.
+        eventlet.sleep(0.1)
+        # A post-returnToUser node that yields a chunk after the stream terminated; the reader
+        # must not be cut off here.
+        yield 'data: {"choices":[{"delta":{"content":"post"}}]}\n\n'
+        executed.append("post_return_ran")
+
+    mocker.patch.object(h, 'handle_user_prompt', return_value=stream_generator())
+
+    with app.test_request_context('/v1/chat/completions'):
+        response = h._stream_with_eventlet_optimized('req-evt', [{"role": "user", "content": "hi"}], True)
+        client_chunks = list(response.response)
+
+    # Give the background reader greenlet time to drain the generator and run the post-return node.
+    for _ in range(200):
+        if executed:
+            break
+        eventlet.sleep(0.01)
+
+    joined = b"".join(c if isinstance(c, bytes) else c.encode("utf-8") for c in client_chunks)
+    assert b'[DONE]' in joined
+    # The post-terminator chunk was not delivered to the client...
+    assert b'"post"' not in joined
+    # ...but the post-return node still executed to completion in the background greenlet.
+    assert executed == ["post_return_ran"]
+
+
+def test_post_done_exception_is_swallowed_in_fallback(client, mocker):
+    """A post-[DONE] node failure must not propagate out of the WSGI generator.
+
+    The client already received a visually-complete stream; re-raising would corrupt
+    connection teardown. The fallback path logs and swallows it instead.
+    """
+    mocker.patch('Middleware.api.handlers.impl.openai_api_handler.get_is_chat_complete_add_user_assistant',
+                 return_value=False)
+    mocker.patch('Middleware.api.handlers.impl.openai_api_handler.get_is_chat_complete_add_missing_assistant',
+                 return_value=False)
+
+    def stream_generator():
+        yield 'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n'
+        yield 'data: [DONE]\n\n'
+        raise RuntimeError("post-return node blew up")
+
+    mock_handle_prompt = mocker.patch('Middleware.api.handlers.impl.openai_api_handler.handle_user_prompt')
+    mock_handle_prompt.return_value = stream_generator()
+
+    payload = {"messages": [{"role": "user", "content": "Hello"}], "stream": True}
+    response = client.post('/chat/completions', json=payload)
+
+    # The response completes cleanly (no exception escapes) and the client saw [DONE].
+    assert response.status_code == 200
+    assert b'[DONE]' in response.data
 
 
 def test_chat_completions_streaming_handles_bytes_input(client, mocker):

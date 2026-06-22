@@ -49,7 +49,7 @@ complete its execution and allow the workflow to proceed to the next node.
 
 ### Data Flow: The Two Ways to Access Image Descriptions
 
-The `ImageProcessor` provides two powerful mechanisms for passing the aggregated text descriptions to the rest of the
+The `ImageProcessor` provides two mechanisms for passing the aggregated text descriptions to the rest of the
 workflow.
 
 1. **Direct Output (`{agent#Output}`)**: The node **always** returns the aggregated string of descriptions as its
@@ -57,10 +57,10 @@ workflow.
    subsequent nodes via the `{agent1Output}` variable. This method is ideal for workflows that require precise,
    controlled injection of the image content into a later prompt.
 
-2. **Message Injection (`addAsUserMessage: true`)**: This is the most common and powerful method. When
+2. **Message Injection (`addAsUserMessage: true`)**: This is the most common method. When
    `addAsUserMessage` is set to `true`, the node performs an additional action: it creates a **single new user message**
    containing the *entire aggregated string* of descriptions and inserts it directly into the conversation history (just
-   before the user's last message). This makes the descriptions a seamless part of the chat log, easily accessible to
+   before the user's last message). This makes the descriptions part of the chat log, easily accessible to
    any subsequent node that processes the conversation history (e.g., using `lastMessagesToSendInsteadOfPrompt`).
 
 -----
@@ -79,7 +79,7 @@ code.
 | **`preset`**           | String  | Yes     | The name of the generation preset (defining temperature, tokens, etc.) to be used by the vision LLM endpoint. **Supports LIMITED variables like endpointName.**                                                                                                                            |
 | **`addAsUserMessage`** | Boolean | No      | **Default: `false`**. If `true`, the node injects the aggregated image description into the conversation history as a new user message. If `false` (or omitted), the description is only available via `{agent#Output}`. **When caching is enabled**, injected messages are placed directly after each image-bearing message instead of a single message near the end. |
 | **`message`**          | String  | No      | **Only used if `addAsUserMessage` is `true`**. A template string for the message that gets injected. It **must** contain the special `[IMAGE_BLOCK]` placeholder. If this property is omitted, a default system message is used instead. This field supports standard workflow variables. |
-| **`saveVisionResponsesToDiscussionId`** | Boolean | No | **Default: `false`**. If `true` and a `discussion_id` is available, the node caches vision LLM responses to a per-discussion file (`{discussion_id}_vision_responses.json`). On subsequent runs, images that have already been described are served from the cache without calling the vision LLM again. This also changes the `addAsUserMessage` behavior to per-message injection. See the "Vision Response Caching" section below. |
+| **`saveVisionResponsesToDiscussionId`** | Boolean | No | **Default: `false`**. If `true` and a `discussion_id` is available, the node caches vision LLM responses to a per-discussion file (`vision_responses.json`, stored in the discussion's folder). On subsequent runs, images that have already been described are served from the cache without calling the vision LLM again. This also changes the `addAsUserMessage` behavior to per-message injection. See the "Vision Response Caching" section below. |
 | **`nMessagesToIncludeInVariable`** | Integer | No | **Default: `5`**. Controls how many messages are included in the `{chat_user_prompt_n_messages}` and `{templated_user_prompt_n_messages}` variables. Set this to any integer to pull a custom number of conversation turns into these variables. |
 | **`estimatedTokensToIncludeInVariable`** | Integer | No | **Default: `2048`**. Controls the estimated token budget for the `{chat_user_prompt_estimated_token_limit}` and `{templated_user_prompt_estimated_token_limit}` variables. Messages are included from most recent backwards until the budget is reached. At least one message is always included. |
 | **`minMessagesInVariable`** | Integer | No | **Default: `5`**. Used together with `maxEstimatedTokensInVariable`. Sets the minimum number of messages always included in the `{chat_user_prompt_min_n_max_tokens}` and `{templated_user_prompt_min_n_max_tokens}` variables, regardless of their token count. After this minimum is met, older messages continue to be added up to the token budget. |
@@ -155,7 +155,7 @@ Caching is not needed when:
 
 ### Workflow Strategy and Annotated Example
 
-The most robust and effective strategy is to place the `ImageProcessor` as the **very first node** in a workflow. This
+The recommended strategy is to place the `ImageProcessor` as the **very first node** in a workflow. This
 ensures that any visual information is immediately converted to text and made available to all subsequent text-based
 nodes. Using the message injection method (`addAsUserMessage: true`) is highly recommended as it simplifies the logic
 for the final responding node.

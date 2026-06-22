@@ -4,7 +4,7 @@ This document provides a comprehensive overview of the WilmerAI unit testing sui
 quality, prevent regressions, and make development more predictable. All new code should be accompanied by corresponding
 unit tests.
 
-Our testing suite is built on the **pytest** framework, a powerful and popular choice in the Python ecosystem. We use it
+Our testing suite is built on the **pytest** framework, a popular choice in the Python ecosystem. We use it
 alongside plugins for mocking (`pytest-mock`) and code coverage (`pytest-cov`).
 
 -----
@@ -20,9 +20,9 @@ The testing requirements are defined in `requirements-test.txt` in the project r
 **`requirements-test.txt`**
 
 ```
-pytest==9.0.1
+pytest==9.0.3
 pytest-mock==3.15.1
-pytest-cov==7.0.0
+pytest-cov==7.1.0
 ```
 
 To install them, run the following command from your project's root directory:
@@ -81,7 +81,9 @@ WilmerAI
 │   │   │       ├── test_llmapis_ollama_generate_api_handler.py
 │   │   │       ├── test_llmapis_openai_chat_handler.py
 │   │   │       └── test_llmapis_openai_completions_api_handler.py
-│   │   └── test_llm_api.py
+│   │   ├── test_llm_api.py
+│   │   ├── test_llm_api_concurrency_gate.py
+│   │   └── test_llm_api_failover.py
 │   ├── models/
 │   │   └── test_llm_handler.py
 │   ├── services/
@@ -100,6 +102,7 @@ WilmerAI
 │   │   ├── test_datetime_utils.py
 │   │   ├── test_file_utils.py
 │   │   ├── test_hashing_utils.py
+│   │   ├── test_network_security_utils.py
 │   │   ├── test_prompt_extraction_utils.py
 │   │   ├── test_prompt_manipulation_utils.py
 │   │   ├── test_prompt_template_utils.py
@@ -112,12 +115,15 @@ WilmerAI
 │   ├── workflows/
 │   │   ├── handlers/
 │   │   │   └── impl/
-│   │   │       ├── test_memory_node_handler.py
 │   │   │       ├── test_context_compactor_handler.py
+│   │   │       ├── test_curl_command_handler.py
+│   │   │       ├── test_mcp_tool_call_handler.py
+│   │   │       ├── test_memory_node_handler.py
 │   │   │       ├── test_specialized_node_handler.py
 │   │   │       ├── test_standard_node_handler.py
 │   │   │       ├── test_sub_workflow_node_handler.py
-│   │   │       └── test_tool_node_handler.py
+│   │   │       ├── test_tool_node_handler.py
+│   │   │       └── test_web_fetch_handler.py
 │   │   ├── managers/
 │   │   │   ├── test_workflow_manager.py
 │   │   │   └── test_workflow_variable_manager.py
@@ -128,6 +134,8 @@ WilmerAI
 │   │   │   └── test_response_handler.py
 │   │   └── tools/
 │   │       ├── test_dynamic_module_loader.py
+│   │       ├── test_mcp_client_tool.py
+│   │       ├── test_mcp_client_tool_list_tools.py
 │   │       ├── test_offline_wikipedia_api_tool.py
 │   │       └── test_slow_but_quality_rag_tool.py
 │   ├── test_server_logging.py
@@ -223,7 +231,23 @@ Here is a summary of what each test file is responsible for.
       exceptions, mid-iteration exceptions, early `close()` without double-release, close delegation to the
       underlying iterable, concurrency=2 blocking a third request, 503 on acquire timeout, and the no-middleware
       path when the semaphore is None. Synchronization uses `threading.Event` and `threading.Semaphore` instead
-      of `time.sleep()` for deterministic assertions.
+      of `time.sleep()` for deterministic assertions. Also covers the `--concurrency-level` short-circuit:
+      `endpoint` mode causes the middleware to pass through without touching the semaphore, while `wilmer` mode
+      preserves the original acquire/503 behaviour.
+
+* **`test_llm_api_concurrency_gate.py`**
+
+    * **Purpose**: To test the `endpoint`-mode concurrency gate that lives inside `LlmApiService.get_response_from_llm`.
+    * **Strategy**: Uses real `threading.BoundedSemaphore` instances and (for the cross-request test) real threads
+      with `threading.Event` synchronization. A fixture patches `CONCURRENCY_LEVEL`, `CONCURRENCY_LIMIT`,
+      `CONCURRENCY_TIMEOUT`, and `_request_semaphore` per test and restores them on teardown so tests cannot
+      leak global state. Covers: `wilmer` mode is a no-op at the LLM-call layer (non-streaming and streaming);
+      `endpoint` mode holds the gate during a non-streaming handler call and releases on success or exception;
+      timeouts at `--concurrency 1` raise `TimeoutError` without invoking the handler; non-streaming failover
+      releases the gate *before* delegating to the backup; streaming holds the gate from the first iteration
+      through generator exhaustion or `close()`; streaming failover before the first token also releases before
+      delegating; and two concurrent requests against the same gate serialize at the LLM call rather than at
+      the request boundary.
 
 ### **`tests/llmapis/`**
 
@@ -274,6 +298,15 @@ Here is a summary of what each test file is responsible for.
     * **Strategy**: Verifies the correct URL and payload generation, including logic for optionally omitting the `model`
       key. It tests the parsing logic for both streaming and non-streaming responses from this older API format.
 
+* **`test_llm_api_failover.py`**
+
+    * **Purpose**: To test per-endpoint failover via `backupEndpointName` inside the LLM call path.
+    * **Strategy**: Mocks endpoint config loading and the underlying request to drive failure, then asserts the
+      request is retried against the named backup. Covers failover on any backend exception (including
+      `requests.exceptions.Timeout`), failover-cycle detection (`A` -> `B` -> `A` and self-reference) raising a clear
+      error, the at-most-once-per-distinct-endpoint guarantee, and that streaming failover is only attempted before
+      the first token is emitted.
+
 ### **`tests/models/`**
 
 * **`test_llm_handler.py`**
@@ -306,6 +339,17 @@ Here is a summary of what each test file is responsible for.
       correct schema and data.
     * **Strategy**: Straightforward tests that call the service's `build_*` methods with sample data and assert that the
       output dictionaries match the expected API format.
+
+* **`test_mcp_client_tool.py`**
+
+    * **Purpose**: To test `MCPClient.call_tool` and the async transport dispatch in `mcp_client_tool`.
+    * **Strategy**: Fully mocks the `mcp` SDK (transports, `ClientSession`) with async context managers, so no real
+      subprocess or network is used. Covers transport validation/dispatch (stdio/sse/streamable_http), config loading
+      by server name, result flattening (structured vs. text content), error wrapping into `MCPToolCallError`, the
+      `asyncio.wait_for` timeout bound on a hung handshake, and rejection of path separators (and a `:` drive-letter
+      prefix) in the server name. The transport-dispatch tests bare-`import mcp` (no `importorskip`), so they require
+      the pinned `mcp` package (`mcp==1.27.2`, a hard dependency in `requirements.txt`) to be installed — absent it they
+      error rather than skip.
 
 ### **`tests/utilities/`**
 
@@ -341,6 +385,27 @@ Here is a summary of what each test file is responsible for.
     * **Strategy**: Tests `_calculate_boundaries` with various token budgets, `_should_compact` with different state
       combinations (first run, boundary shift, hash changes), and the full `handle` method with mocked settings and
       LLM calls.
+
+* **`test_web_fetch_handler.py`**
+
+    * **Purpose**: To test the `WebFetch` node's HTTP request handling and output formatting.
+    * **Strategy**: Mocks `requests.request` (no real network) and asserts method/header/body/proxy handling, variable
+      substitution, the four output formats including the stdlib HTML stripper, `onError` raise/return branches,
+      timeout validation/coercion, pinned `verify=True`, the non-JSON-200 `json` branch, and streaming pass-through.
+
+* **`test_curl_command_handler.py`**
+
+    * **Purpose**: To test the `CurlCommand` node's subprocess invocation and output formatting.
+    * **Strategy**: Mocks `subprocess.Popen` (no real curl/process) and asserts `shell=False` list-argv construction,
+      per-arg variable substitution, proxy (`-x`) prepending, the three output formats, `onError`/timeout/non-zero-exit
+      branches, timeout validation/coercion, the missing-binary `FileNotFoundError`, and streaming pass-through.
+
+* **`test_mcp_tool_call_handler.py`**
+
+    * **Purpose**: To test the `MCPToolCall` node's config validation and delegation to `call_mcp_tool`.
+    * **Strategy**: Mocks `call_mcp_tool` (no real MCP/subprocess) and asserts required-field and enum validation,
+      timeout validation, nested-argument variable substitution, the `onError` raise/return branches, and streaming
+      pass-through.
 
 -----
 

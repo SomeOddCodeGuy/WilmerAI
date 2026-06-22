@@ -4,5 +4,33 @@
   "presetType": "Text-Generation-WebUI",
   "truncateLengthPropertyName": "truncation_length",
   "maxNewTokensPropertyName": "max_tokens",
-  "streamPropertyName": "stream"
+  "streamPropertyName": "stream",
+  "supportsChatTemplateKwargs": false,
+  "thinking": {
+    "mode": "unsupported"
+  },
+  "samplerFieldMap": {
+    "temperature": "temperature",
+    "top_p": "top_p",
+    "top_k": "top_k",
+    "min_p": "min_p",
+    "typical_p": "typical_p",
+    "top_n_sigma": "top_n_sigma",
+    "repeat_penalty": "repetition_penalty",
+    "repeat_last_n": "repetition_penalty_range",
+    "presence_penalty": "presence_penalty",
+    "frequency_penalty": "frequency_penalty",
+    "dry_multiplier": "dry_multiplier",
+    "dry_base": "dry_base",
+    "dry_allowed_length": "dry_allowed_length",
+    "dry_sequence_breakers": "dry_sequence_breakers",
+    "xtc_probability": "xtc_probability",
+    "xtc_threshold": "xtc_threshold",
+    "mirostat": "mirostat_mode",
+    "mirostat_tau": "mirostat_tau",
+    "mirostat_eta": "mirostat_eta",
+    "seed": "seed",
+    "stop": "stop",
+    "grammar": "grammar_string"
+  }
 }

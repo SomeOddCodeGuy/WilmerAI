@@ -1,0 +1,16 @@
+{
+  "top_a": 0,
+  "tfs": 1,
+  "smoothing_factor": 0,
+  "rep_pen_slope": 1,
+  "sampler_order": [
+    6,
+    0,
+    1,
+    3,
+    4,
+    2,
+    5
+  ],
+  "images": []
+}

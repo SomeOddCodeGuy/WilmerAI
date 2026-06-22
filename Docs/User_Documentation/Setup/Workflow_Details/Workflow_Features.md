@@ -15,7 +15,7 @@ The most fundamental capability of WilmerAI is its ability to interact with Larg
 achieved through the **`Standard` node**, which assembles context, sends a request to a configured LLM endpoint, and
 processes the response.
 
-A key aspect of this feature is the powerful templating engine that allows for the creation of dynamic, context-aware
+A key aspect of this feature is the templating engine that allows for the creation of dynamic, context-aware
 prompts. While simple variable substitution (`{my_variable}`) is supported by default, you can enable a full **Jinja2
 templating engine** on a per-node basis by adding `"jinja2": true`. This unlocks advanced logic like loops and
 conditionals directly within your prompt strings, which is especially useful for formatting the `{messages}` variable (
@@ -64,7 +64,7 @@ For more complex evaluations, the **`Conditional` node** can be used first to ev
 
 ## Stateful Conversation Memory
 
-WilmerAI features a sophisticated, three-part memory system to provide long-term, stateful context for conversations.
+WilmerAI features a three-part memory system to provide long-term, stateful context for conversations.
 This system is designed for performance by separating the slow process of writing memories from the fast process of
 reading them.
 
@@ -107,7 +107,7 @@ ago...").
 The workflow engine can be extended with custom tools and integrations to external services. This allows you to add
 capabilities that are not native to the WilmerAI system.
 
-Two primary methods for this are:
+The primary methods for this are:
 
 1. **Custom Python Scripts**: The **`PythonModule` node** allows you to execute an arbitrary local Python script and use
    its string output as the result of the node. This is the most flexible way to add custom logic or connect to other
@@ -148,7 +148,7 @@ the number of images sent with `maxImagesToSend` (keeping the most recent; `0` m
 The **`ImageProcessor` node** takes any images from the user's latest turn, sends them to a configured vision-capable
 LLM, and generates a detailed text description. The aggregated text description is then made available as the node's
 output (`{agent#Output}`). This allows a subsequent, text-only `Standard` node to use the description as context,
-effectively giving the entire workflow "sight."
+making image content available to the rest of the workflow as text.
 
 * **Key Nodes**: `Standard` (with `acceptImages`), `ImageProcessor`
 * **Detailed Documentation**: `A Comprehensive Guide to WilmerAI Workflow Nodes`
@@ -230,6 +230,25 @@ Tool calling is controlled by the `allowTools` boolean property on workflow node
 Only enable `allowTools` on nodes where tool calling makes sense. In practice, this means the final responding node -- the node whose output is sent back to the user. Enabling it on non-responding nodes (internal "thinking" steps, summarizers, categorizers, etc.) is not useful, because those nodes are not communicating with the frontend and tool call responses would have nowhere to go.
 
 If a workflow has multiple `Standard` nodes, only the responding node should have `allowTools` set to `true`. If no tools are present in the frontend request, the flag has no effect and the node behaves normally.
+
+### Lowercasing Tool Call Function Names
+
+Some local models (Gemma, Qwen, and others) produce tool call function names with capitalized first letters (e.g., `Glob` instead of `glob`, `Grep` instead of `grep`). This breaks agentic frontends like OpenCode that expect exact lowercase matches against their tool definitions. Setting `lowercaseToolCallFunctionNames` to `true` on the responding node causes WilmerAI to lowercase all tool call function names before relaying them to the frontend. This works for both streaming and non-streaming responses.
+
+This is off by default because some frontends (e.g., Claude Code) expect the original casing. Only enable it when proxying local models that produce incorrectly cased tool names.
+
+```json
+{
+  "title": "Respond to User",
+  "type": "Standard",
+  "endpointName": "Local-Model-Endpoint",
+  "systemPrompt": "You are a helpful assistant.",
+  "prompt": "",
+  "allowTools": true,
+  "lowercaseToolCallFunctionNames": true,
+  "returnToUser": true
+}
+```
 
 ### Related: Tool Call Visibility in Conversation Variables
 

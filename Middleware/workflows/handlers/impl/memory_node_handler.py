@@ -70,7 +70,9 @@ class MemoryNodeHandler(BaseHandler):
             keywords_input = context.config.get("input", "")
             keywords = self.workflow_variable_service.apply_variables(keywords_input, context)
             limit = context.config.get("limit", 5)
-            return self.memory_service.search_vector_memories(context.discussion_id, keywords, limit)
+            return self.memory_service.search_vector_memories(
+                context.discussion_id, keywords, limit, api_key_hash=context.api_key_hash
+            )
 
         elif node_type == "ConversationMemory":
             if not context.discussion_id:

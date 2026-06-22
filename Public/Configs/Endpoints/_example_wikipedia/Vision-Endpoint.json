@@ -1,0 +1,39 @@
+{
+  "modelNameForDisplayOnly": "Image",
+  "endpoint": "http://127.0.0.1:5001",
+  "apiTypeConfigFileName": "LlamaCppServer",
+  "maxContextTokenSize": 65536,
+  "modelNameToSendToAPI": "",
+  "promptTemplate": "chatml",
+  "addGenerationPrompt": true,
+  "trimBeginningAndEndLineBreaks": true,
+  "dontIncludeModel": true,
+  "removeThinking": false,
+  "startThinkTag": "",
+  "endThinkTag": "",
+  "expectOnlyClosingThinkTag": false,
+  "presetSamplers": {
+    "temperature": 0.3,
+    "min_p": 0.01,
+    "top_k": 0,
+    "top_p": 1,
+    "typical_p": 1,
+    "dynatemp_range": 0,
+    "dynatemp_exponent": 1,
+    "mirostat": 0,
+    "mirostat_tau": 5.0,
+    "mirostat_eta": 0.1,
+    "repeat_penalty": 1.1,
+    "repeat_last_n": 1024,
+    "stop": [
+      "<|im_end|>",
+      "</s>",
+      "<|start_header_id|>",
+      "<|END_RESPONSE|>",
+      "User:",
+      "Human:",
+      "<|user|>"
+    ]
+  },
+  "appendPresetName": "Vision-Endpoint-extra"
+}

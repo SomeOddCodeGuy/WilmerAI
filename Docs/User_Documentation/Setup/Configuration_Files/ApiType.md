@@ -95,6 +95,43 @@ Each `ApiTypes` JSON file contains a single object with the following key-value 
 
 -----
 
+##### `samplerFieldMap`
+
+* **Description**: Maps Wilmer's **canonical** (llama.cpp-named) sampler keys to this backend's
+  **native** request-body field names. This is what powers endpoint-embedded `presetSamplers` blocks:
+  a user writes canonical names once, and this map renames them for the target backend. A canonical
+  key not present in this map is **not supported** by this API type and is dropped (with a warning)
+  when translating. The map is per-ApiType, so two API types that share a `type` (handler) can still
+  expose different sampler sets.
+* **Data Type**: `object` (canonical name → native name)
+* **Required**: No (omit it to disable canonical translation for this API type)
+* **Example**: `{ "temperature": "temperature", "repeat_penalty": "rep_pen", "stop": "stop_sequence" }`
+
+-----
+
+##### `supportsChatTemplateKwargs`
+
+* **Description**: Whether this backend accepts a `chat_template_kwargs` passthrough object. When
+  `false`, that object (and any `thinkingMode` that resolves into it) is dropped rather than sent, so
+  Wilmer never sends `chat_template_kwargs` to a backend that has no such field (e.g. Claude, OpenAI).
+* **Data Type**: `boolean`
+* **Required**: No (defaults to `false`)
+* **Example**: `true` (llama.cpp), `false` (most others)
+
+-----
+
+##### `thinking`
+
+* **Description**: Describes how the canonical `thinkingMode` value resolves for this backend.
+  `mode` is `"bool"` (off→`false`, otherwise `true`), `"effort"` (off→omitted; `low`/`medium`/`high`
+  pass through), or `"unsupported"` (dropped with a warning). For `bool`/`effort`, `location` is
+  `"top"` or `"chat_template_kwargs"` and `field` is the native key to emit.
+* **Data Type**: `object`
+* **Required**: No (defaults to unsupported)
+* **Example**: `{ "location": "chat_template_kwargs", "field": "enable_thinking", "mode": "bool" }`
+
+-----
+
 #### **Example `ApiTypes` File**
 
 Here is a fully-commented example for an Ollama Chat API (`/api/chat`).

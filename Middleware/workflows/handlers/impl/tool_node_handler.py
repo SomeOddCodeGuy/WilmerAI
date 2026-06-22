@@ -6,6 +6,10 @@ from typing import Any
 from Middleware.workflows.handlers.base.base_workflow_node_handler import BaseHandler
 from Middleware.workflows.models.execution_context import ExecutionContext
 from Middleware.workflows.tools.dynamic_module_loader import run_dynamic_module
+from Middleware.workflows.tools.offline_researcher_api_tool import (
+    NO_INFORMATION_FOUND_MESSAGE,
+    OfflineResearcherApiClient,
+)
 from Middleware.workflows.tools.offline_wikipedia_api_tool import OfflineWikiApiClient
 from Middleware.workflows.tools.slow_but_quality_rag_tool import SlowButQualityRAGTool
 
@@ -31,6 +35,7 @@ class ToolNodeHandler(BaseHandler):
         super().__init__(**kwargs)
         self.slow_but_quality_rag_service = SlowButQualityRAGTool()
         self.offline_wiki_api_client = OfflineWikiApiClient()
+        self.offline_researcher_api_client = OfflineResearcherApiClient()
 
     def handle(self, context: ExecutionContext) -> Any:
         """
@@ -53,6 +58,8 @@ class ToolNodeHandler(BaseHandler):
         if node_type in ["OfflineWikiApiFullArticle", "OfflineWikiApiBestFullArticle", "OfflineWikiApiTopNFullArticles",
                          "OfflineWikiApiPartialArticle"]:
             return self._handle_offline_wiki_node(context)
+        if node_type in ["OfflineResearcherApiQuickSearch", "OfflineResearcherApiDeepResearch"]:
+            return self._handle_offline_researcher_node(context)
         if node_type in ["ConversationalKeywordSearchPerformerTool", "MemoryKeywordSearchPerformerTool"]:
             return self._perform_keyword_search(context)
         if node_type == "SlowButQualityRAG":
@@ -216,3 +223,89 @@ class ToolNodeHandler(BaseHandler):
         except Exception as e:
             logger.error(f"Error accessing Wikipedia information: {e}")
             return f"I'm sorry, I couldn't find any Wikipedia information about '{variabled_prompt}'."
+
+    def _handle_offline_researcher_node(self, context: ExecutionContext) -> str:
+        """
+        Queries the offline researcher service for a synthesized answer.
+
+        The service is a black-box that returns one prose answer per query.
+        Quick mode targets a single productive iteration (30-60s typical);
+        deep mode runs an iterative loop that produces a structured markdown
+        report (often 1-3 minutes, can be longer). The node returns the
+        service's `answer` field on success, the canonical "no information
+        found" sentinel on a corpus miss, and a graceful fallback string on
+        any error.
+
+        Args:
+            context (ExecutionContext): The unified context object containing
+                the search prompt, node type, and optional overrides.
+
+        Returns:
+            str: The synthesized answer, optionally followed by a sources
+                section, or a fallback message on failure.
+
+        Raises:
+            ValueError: If 'promptToSearch' is missing from the node config.
+        """
+        config = context.config
+        if "promptToSearch" not in config:
+            raise ValueError("No 'promptToSearch' specified for OfflineResearcherApi node.")
+        prompt = config["promptToSearch"]
+        node_type = config.get("type")
+
+        variabled_prompt = self.workflow_variable_service.apply_variables(str(prompt), deepcopy(context))
+
+        if node_type == "OfflineResearcherApiDeepResearch":
+            mode = "deep"
+            default_timeout = 600
+        else:
+            mode = "quick"
+            default_timeout = 240
+
+        max_iterations = config.get("maxIterations")
+        timeout_seconds = config.get("timeoutSeconds", default_timeout)
+        include_sources = bool(config.get("includeSources", False))
+
+        try:
+            result = self.offline_researcher_api_client.search(
+                query=variabled_prompt,
+                mode=mode,
+                max_iterations=max_iterations,
+                timeout_seconds=timeout_seconds,
+            )
+        except Exception as e:
+            logger.error(f"Error calling offline researcher: {e}")
+            return f"I'm sorry, the offline researcher could not be reached for '{variabled_prompt}'."
+
+        status = result.get("status")
+        if status == "error":
+            reason = result.get("reason", "unknown")
+            logger.warning(f"Offline researcher reported error '{reason}' for query '{variabled_prompt}'")
+            return f"I'm sorry, the offline researcher returned an error ({reason}) for '{variabled_prompt}'."
+
+        if result.get("no_information_found"):
+            return NO_INFORMATION_FOUND_MESSAGE
+
+        answer = result.get("answer")
+        if not answer:
+            return NO_INFORMATION_FOUND_MESSAGE
+
+        if not include_sources:
+            return answer
+
+        sources = result.get("sources") or []
+        if not isinstance(sources, list) or not sources:
+            return answer
+
+        # Skip non-dict source entries defensively: a malformed service response
+        # should degrade to the answer alone, not raise out of the node.
+        formatted_sources = []
+        for src in sources:
+            if not isinstance(src, dict):
+                continue
+            book = src.get("book", "")
+            title = src.get("title", "")
+            formatted_sources.append(f"- {book} :: {title}")
+        if not formatted_sources:
+            return answer
+        return f"{answer}\n\nSources:\n" + "\n".join(formatted_sources)

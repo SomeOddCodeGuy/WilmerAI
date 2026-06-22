@@ -1,6 +1,8 @@
 import json
 import logging
 
+from Middleware.common import instance_global_variables
+
 logger = logging.getLogger(__name__)
 
 _503_BODY = json.dumps({
@@ -73,6 +75,13 @@ class ConcurrencyLimitMiddleware:
 
     def __call__(self, environ, start_response):
         if not self._requires_concurrency_limit(environ):
+            return self._app(environ, start_response)
+
+        # In 'endpoint' mode the gate is enforced inside LlmApiService around the
+        # outbound LLM call instead of at request ingress. The request-level gate
+        # is read at call time (not __init__) so the level can be toggled in tests
+        # and so a single middleware instance can serve either mode consistently.
+        if instance_global_variables.CONCURRENCY_LEVEL == "endpoint":
             return self._app(environ, start_response)
 
         acquired = self._semaphore.acquire(timeout=self._acquire_timeout)

@@ -4,5 +4,35 @@
   "presetType": "KoboldCpp",
   "truncateLengthPropertyName": "max_context_length",
   "maxNewTokensPropertyName": "max_length",
-  "streamPropertyName": "stream"
+  "streamPropertyName": "stream",
+  "supportsChatTemplateKwargs": false,
+  "thinking": {
+    "mode": "unsupported"
+  },
+  "samplerFieldMap": {
+    "temperature": "temperature",
+    "top_p": "top_p",
+    "top_k": "top_k",
+    "min_p": "min_p",
+    "typical_p": "typical",
+    "top_n_sigma": "nsigma",
+    "repeat_penalty": "rep_pen",
+    "repeat_last_n": "rep_pen_range",
+    "presence_penalty": "presence_penalty",
+    "frequency_penalty": "frequency_penalty",
+    "mirostat": "mirostat",
+    "mirostat_tau": "mirostat_tau",
+    "mirostat_eta": "mirostat_eta",
+    "dynatemp_range": "dynatemp_range",
+    "dynatemp_exponent": "dynatemp_exponent",
+    "dry_multiplier": "dry_multiplier",
+    "dry_base": "dry_base",
+    "dry_allowed_length": "dry_allowed_length",
+    "dry_penalty_last_n": "dry_penalty_last_n",
+    "dry_sequence_breakers": "dry_sequence_breakers",
+    "xtc_probability": "xtc_probability",
+    "xtc_threshold": "xtc_threshold",
+    "seed": "sampler_seed",
+    "stop": "stop_sequence"
+  }
 }

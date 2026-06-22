@@ -166,6 +166,16 @@ class TestExtractLastTurnsByEstimatedTokenLimit:
         """Tests that an empty message list returns an empty list."""
         assert extract_last_turns_by_estimated_token_limit([], 1000) == []
 
+    def test_none_content_does_not_crash(self):
+        """A message with content=None (common for tool-call assistant turns) is treated as
+        empty rather than crashing the token estimator (uses the real estimator, no mock)."""
+        messages = [
+            {'role': 'user', 'content': 'hello'},
+            {'role': 'assistant', 'content': None, 'tool_calls': [{'id': 't1'}]},
+        ]
+        result = extract_last_turns_by_estimated_token_limit(messages, 100000)
+        assert [m.get('content') for m in result] == ['hello', None]
+
     def test_messages_with_images_key_included(self, mocker):
         """Tests that messages with 'images' key are included normally."""
         mocker.patch(
@@ -558,6 +568,17 @@ class TestExtractLastTurnsWithMinMessagesAndTokenLimitAsString:
         """Tests that an empty message list returns an empty string."""
         assert extract_last_turns_with_min_messages_and_token_limit_as_string([], 5, 1000) == ""
 
+    def test_forwards_budget_overrides_min_to_selector(self, mocker):
+        """The string wrapper forwards budget_overrides_min to the underlying selector."""
+        mock_base = mocker.patch(
+            'Middleware.utilities.prompt_extraction_utils.extract_last_turns_with_min_messages_and_token_limit',
+            return_value=[{'role': 'user', 'content': 'A'}]
+        )
+        extract_last_turns_with_min_messages_and_token_limit_as_string(
+            [{'role': 'user', 'content': 'dummy'}], 5, 1000, budget_overrides_min=True
+        )
+        assert mock_base.call_args.kwargs['budget_overrides_min'] is True
+
 
 class TestTokenLimitEdgeCases:
     """Additional edge case tests for token-limited extraction functions."""
@@ -829,6 +850,99 @@ class TestComboExtractionEdgeCases:
         result = extract_last_turns_with_min_messages_and_token_limit(messages, 2, 1000)
         assert len(result) == 2
 
+    # --- budget_overrides_min: the count floor yields to the token budget ----------
+    # (used by the context-window clamp so a floored conversation variable on an
+    # authored-prompt node cannot build an over-window prompt the backend rejects)
+
+    def test_budget_overrides_min_drops_below_floor(self, mocker):
+        """With budget_overrides_min=True the floor yields to token_limit: only the
+        most-recent messages that fit are kept, fewer than min_messages."""
+        mocker.patch(
+            'Middleware.utilities.prompt_extraction_utils.rough_estimate_token_length',
+            side_effect=lambda text: {'msg1': 100, 'msg2': 100, 'msg3': 100}.get(text, 0)
+        )
+        messages = [
+            {'role': 'user', 'content': 'msg1'},
+            {'role': 'assistant', 'content': 'msg2'},
+            {'role': 'user', 'content': 'msg3'},
+        ]
+        # min=3, token_limit=150: a hard floor keeps all 3 (300 tok); yielding keeps
+        # only msg3 (100) -- msg2 would make 200 > 150, so it stops.
+        result = extract_last_turns_with_min_messages_and_token_limit(
+            messages, 3, 150, budget_overrides_min=True)
+        assert [m['content'] for m in result] == ['msg3']
+
+    def test_budget_overrides_min_keeps_partial_floor(self, mocker):
+        """The floor yields only as far as the budget requires: it keeps as many
+        recent whole messages as fit, not just one."""
+        mocker.patch(
+            'Middleware.utilities.prompt_extraction_utils.rough_estimate_token_length',
+            side_effect=lambda text: {'a': 100, 'b': 100, 'c': 100, 'd': 100}.get(text, 0)
+        )
+        messages = [
+            {'role': 'user', 'content': 'a'},
+            {'role': 'assistant', 'content': 'b'},
+            {'role': 'user', 'content': 'c'},
+            {'role': 'assistant', 'content': 'd'},
+        ]
+        # min=4, token_limit=250: d(100)+c(100)=200 fit; b would make 300 > 250, stop.
+        result = extract_last_turns_with_min_messages_and_token_limit(
+            messages, 4, 250, budget_overrides_min=True)
+        assert [m['content'] for m in result] == ['c', 'd']
+
+    def test_budget_overrides_min_always_keeps_most_recent(self, mocker):
+        """Even when the single most-recent message alone exceeds the budget, at
+        least that one message is returned (we can never send nothing)."""
+        mocker.patch(
+            'Middleware.utilities.prompt_extraction_utils.rough_estimate_token_length',
+            side_effect=lambda text: {'small': 10, 'huge': 5000}.get(text, 0)
+        )
+        messages = [
+            {'role': 'user', 'content': 'small'},
+            {'role': 'assistant', 'content': 'huge'},
+        ]
+        # min=2, token_limit=100: huge(5000) alone exceeds the budget but is still
+        # kept as the single floor message; small is dropped.
+        result = extract_last_turns_with_min_messages_and_token_limit(
+            messages, 2, 100, budget_overrides_min=True)
+        assert [m['content'] for m in result] == ['huge']
+
+    def test_budget_overrides_min_noop_when_floor_fits(self, mocker):
+        """When the floor already fits, the flag changes nothing -- the full floor
+        plus any phase-2 expansion is returned, exactly as the hard floor would."""
+        mocker.patch(
+            'Middleware.utilities.prompt_extraction_utils.rough_estimate_token_length',
+            return_value=10
+        )
+        messages = [
+            {'role': 'user', 'content': 'm1'},
+            {'role': 'assistant', 'content': 'm2'},
+            {'role': 'user', 'content': 'm3'},
+        ]
+        # min=2, token_limit=1000: floor fits and phase 2 expands to all 3.
+        result = extract_last_turns_with_min_messages_and_token_limit(
+            messages, 2, 1000, budget_overrides_min=True)
+        assert len(result) == 3
+
+    def test_budget_overrides_min_false_keeps_hard_floor(self, mocker):
+        """Regression guard: the default (False) preserves the historical hard floor
+        -- min_messages are returned even when they exceed the token limit."""
+        mocker.patch(
+            'Middleware.utilities.prompt_extraction_utils.rough_estimate_token_length',
+            side_effect=lambda text: {'msg1': 100, 'msg2': 100, 'msg3': 100}.get(text, 0)
+        )
+        messages = [
+            {'role': 'user', 'content': 'msg1'},
+            {'role': 'assistant', 'content': 'msg2'},
+            {'role': 'user', 'content': 'msg3'},
+        ]
+        # Same inputs as the drop-below-floor test; without the flag all 3 survive.
+        default_result = extract_last_turns_with_min_messages_and_token_limit(messages, 3, 150)
+        explicit_result = extract_last_turns_with_min_messages_and_token_limit(
+            messages, 3, 150, budget_overrides_min=False)
+        assert len(default_result) == 3
+        assert default_result == explicit_result
+
 
 class TestFormatMessagesToString:
     """Tests for the _format_messages_to_string helper function."""
@@ -870,13 +984,21 @@ class TestFormatMessagesToString:
         result = _format_messages_to_string(messages, add_role_tags=True, separator='\n\n')
         assert result == "User: Hello\n\nAssistant: Hi"
 
-    def test_unknown_role_gets_no_prefix(self):
-        """Tests that unknown roles do not get a prefix tag."""
+    def test_tool_role_gets_prefix(self):
+        """Tests that tool role messages get the 'Tool Result: ' prefix tag."""
         messages = [
             {'role': 'tool', 'content': 'Tool output'}
         ]
         result = _format_messages_to_string(messages, add_role_tags=True)
-        assert result == "Tool output"
+        assert result == "Tool Result: Tool output"
+
+    def test_unknown_role_gets_no_prefix(self):
+        """Tests that unknown roles do not get a prefix tag."""
+        messages = [
+            {'role': 'function', 'content': 'Function output'}
+        ]
+        result = _format_messages_to_string(messages, add_role_tags=True)
+        assert result == "Function output"
 
     def test_empty_messages(self):
         """Tests that empty message list returns empty string."""
@@ -1261,3 +1383,77 @@ class TestEnrichMessagesWithToolCalls:
         assert "config" in content
         assert "{" not in content
         assert "}" not in content
+
+    def test_tool_result_message_enriched_with_name(self):
+        """Tool result messages get a [Tool Result: name] prefix."""
+        messages = [
+            {"role": "tool", "content": "file contents here", "name": "read", "tool_call_id": "call_1"}
+        ]
+        result = enrich_messages_with_tool_calls(messages)
+        assert result[0]["content"] == "[Tool Result: read] file contents here"
+
+    def test_tool_result_message_without_name(self):
+        """Tool result messages without a name field use 'unknown_tool'."""
+        messages = [
+            {"role": "tool", "content": "some output", "tool_call_id": "call_1"}
+        ]
+        result = enrich_messages_with_tool_calls(messages)
+        assert result[0]["content"] == "[Tool Result: unknown_tool] some output"
+
+    def test_tool_result_message_braces_escaped(self):
+        """Curly braces in tool result content are sentinel-escaped."""
+        messages = [
+            {"role": "tool", "content": '{"key": "value"}', "name": "read", "tool_call_id": "call_1"}
+        ]
+        result = enrich_messages_with_tool_calls(messages)
+        content = result[0]["content"]
+        assert "[Tool Result: read]" in content
+        assert "{" not in content
+        assert "}" not in content
+        assert "__WILMER_L_CURLY__" in content
+
+    def test_tool_result_name_braces_escaped(self):
+        """Curly braces in the tool NAME (not just the content) are sentinel-escaped.
+
+        A brace-containing name would otherwise survive to the downstream
+        str.format() pass in apply_variables() and could raise. The existing
+        brace test only exercises the content, so this guards the separate
+        name-escaping line.
+        """
+        messages = [
+            {"role": "tool", "content": "ok", "name": "weird{name}", "tool_call_id": "call_1"}
+        ]
+        result = enrich_messages_with_tool_calls(messages)
+        content = result[0]["content"]
+        assert "weird__WILMER_L_CURLY__name__WILMER_R_CURLY__" in content
+        assert "{" not in content
+        assert "}" not in content
+
+    def test_tool_result_original_not_mutated(self):
+        """Original tool result message dicts are not modified."""
+        messages = [
+            {"role": "tool", "content": "output", "name": "bash", "tool_call_id": "call_1"}
+        ]
+        enrich_messages_with_tool_calls(messages)
+        assert messages[0]["content"] == "output"
+
+    def test_full_tool_call_sequence_enriched(self):
+        """A complete tool call sequence (assistant + tool results) is fully enriched."""
+        messages = [
+            {"role": "user", "content": "Find files"},
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"function": {"name": "glob", "arguments": '{"pattern": "*.py"}'}},
+                {"function": {"name": "glob", "arguments": '{"pattern": "*.js"}'}}
+            ]},
+            {"role": "tool", "content": "file1.py\nfile2.py", "name": "glob", "tool_call_id": "call_1"},
+            {"role": "tool", "content": "app.js", "name": "glob", "tool_call_id": "call_2"},
+            {"role": "assistant", "content": "Found the files."}
+        ]
+        result = enrich_messages_with_tool_calls(messages)
+        assert result[0] is messages[0]
+        assert "[Tool Call: glob]" in result[1]["content"]
+        assert "[Tool Result: glob]" in result[2]["content"]
+        assert "file1.py" in result[2]["content"]
+        assert "[Tool Result: glob]" in result[3]["content"]
+        assert "app.js" in result[3]["content"]
+        assert result[4] is messages[4]

@@ -3,10 +3,34 @@
 import json
 import logging
 import os
+from typing import Optional
 
 from Middleware.common import instance_global_variables
 
 logger = logging.getLogger(__name__)
+
+
+def _expand_user_path(path):
+    """
+    Expands a leading ``~`` in an operator-supplied path to the user's home.
+
+    Applied to the path-valued roots that come from outside the install (the CLI
+    directory flags and the path-valued user-config settings) so a ``~``/``~user``
+    prefix resolves to the home directory instead of a literal ``~`` folder under
+    the process working directory. Every other config path is derived from these
+    roots via ``os.path.join``, so expanding here covers the whole tree.
+    ``os.path.expanduser`` only rewrites a leading ``~`` and returns the string
+    unchanged when no home directory can be resolved, so absolute and relative
+    paths pass through untouched and home-less environments keep prior behavior.
+
+    Args:
+        path: The raw path string, or any falsy value.
+
+    Returns:
+        The path with a leading ``~`` expanded, or the input unchanged when it is
+        falsy or has no ``~`` prefix.
+    """
+    return os.path.expanduser(path) if path else path
 
 
 def get_project_root_directory_path():
@@ -145,24 +169,70 @@ def get_config_value(key):
     return main_config.get(key)
 
 
-def get_root_config_directory():
+def get_root_public_directory():
     """
-    Gets the root directory of the `Configs` folder.
+    Gets the root directory of the ``Public`` folder.
 
-    This function checks for a globally set configuration directory. If it
-    doesn't exist, it constructs the path to the `Public/Configs` directory
-    based on the project's root.
+    This is the parent directory that holds ``Configs`` (user/endpoint/workflow
+    config files) alongside runtime-data siblings such as ``DiscussionIds``,
+    ``SqlLiteDBs``, and ``logs``. Resolving it in one place lets every
+    runtime-data default derive from a single base path.
+
+    Resolution order:
+
+    1. ``--PublicDirectory`` CLI flag
+       (``instance_global_variables.PUBLIC_DIRECTORY``).
+    2. ``{project_root}/Public`` (the default for local/dev runs).
 
     Returns:
-        str: The absolute path to the root `Configs` directory.
+        str: The absolute path to the ``Public`` root directory.
     """
-    if (instance_global_variables.CONFIG_DIRECTORY is None):
-        project_dir = get_project_root_directory_path()
-        config_file = os.path.join(project_dir, 'Public', 'Configs')
-        return config_file
-    else:
-        config_file = os.path.join(instance_global_variables.CONFIG_DIRECTORY)
-        return config_file
+    if instance_global_variables.PUBLIC_DIRECTORY:
+        return _expand_user_path(instance_global_variables.PUBLIC_DIRECTORY)
+    return os.path.join(get_project_root_directory_path(), 'Public')
+
+
+def get_root_config_directory():
+    """
+    Gets the root directory of the ``Configs`` folder.
+
+    Resolution order:
+
+    1. ``--ConfigDirectory`` CLI flag
+       (``instance_global_variables.CONFIG_DIRECTORY``). Kept for
+       backwards compatibility; when set it wins regardless of
+       ``--PublicDirectory``.
+    2. ``{get_root_public_directory()}/Configs``.
+
+    Returns:
+        str: The absolute path to the root ``Configs`` directory.
+    """
+    if instance_global_variables.CONFIG_DIRECTORY:
+        return _expand_user_path(instance_global_variables.CONFIG_DIRECTORY)
+    return os.path.join(get_root_public_directory(), 'Configs')
+
+
+def _is_safe_flat_config_name(name) -> bool:
+    """True when ``name`` is a plain config-file base name with no path traversal.
+
+    Names that index a file inside Public/Configs (endpoint names, MCP server names,
+    etc.) must be a single path component. Reject path separators, a Windows drive
+    colon, and the current/parent directory so a crafted name cannot escape its
+    intended directory.
+
+    Args:
+        name (str): The candidate config base name; non-str values are rejected.
+
+    Returns:
+        bool: True if ``name`` is a safe single path component with no traversal.
+    """
+    return (
+        isinstance(name, str)
+        and name not in ("", ".", "..")
+        and "/" not in name
+        and "\\" not in name
+        and ":" not in name
+    )
 
 
 def get_config_path(sub_directory, file_name):
@@ -227,33 +297,145 @@ def get_config_with_subdirectory(directory, sub_directory, file_name, secondary_
     return config_file
 
 
+def _resolve_discussions_root():
+    """
+    Returns the target root directory for per-discussion data.
+
+    Resolution order:
+
+    1. ``--DiscussionDirectory`` CLI flag
+       (``instance_global_variables.DISCUSSION_DIRECTORY``).
+    2. ``discussionDirectory`` user config setting.
+    3. ``{get_root_public_directory()}/DiscussionIds``.
+
+    Discussion data is a sibling of ``Configs`` under the ``Public`` root,
+    not a child of ``Configs`` -- resolving from
+    :func:`get_root_public_directory` keeps configs and runtime data
+    separated even when a shared install overrides only
+    ``--PublicDirectory``.
+
+    The returned path is a *target* location. Callers are expected to apply
+    legacy-folder stickiness (see :func:`get_discussion_folder_path`) so that
+    pre-refactor installations keep writing to their original location until
+    the user migrates them manually.
+
+    Returns:
+        str: Absolute or relative path to the discussions root directory.
+    """
+    cli_override = instance_global_variables.DISCUSSION_DIRECTORY
+    if cli_override:
+        return _expand_user_path(cli_override)
+    config_override = get_config_value('discussionDirectory')
+    if config_override:
+        return _expand_user_path(config_override)
+    return os.path.join(str(get_root_public_directory()), 'DiscussionIds')
+
+
+def _legacy_discussions_root():
+    """
+    Returns the pre-refactor default root directory for per-discussion data.
+
+    Discussions created before the path-resolution refactor lived at
+    ``{project_root}/Public/DiscussionIds/``. Legacy-stickiness logic checks
+    this location so that existing data keeps being read and written in
+    place.
+
+    Returns:
+        str: The legacy discussions root directory.
+    """
+    return os.path.join(get_project_root_directory_path(), 'Public', 'DiscussionIds')
+
+
+def get_discussion_folder_path(discussion_id, api_key_hash=None):
+    """
+    Returns the folder where all files for a given discussion are stored.
+
+    Resolution applies the standard hierarchy (CLI flag, user config,
+    ``{get_root_public_directory()}/DiscussionIds/``). If the target folder
+    does not yet exist but the same discussion folder exists at the legacy
+    location (``{project_root}/Public/DiscussionIds/``), the legacy folder
+    is returned so that existing data continues to be used in place for the
+    lifespan of that discussion (no automatic migration).
+
+    The returned folder is created on disk if it does not already exist.
+
+    Args:
+        discussion_id (str): The ID of the discussion.
+        api_key_hash (str, optional): A 16-char hex hash of the API key for
+            per-user directory isolation.
+
+    Returns:
+        str: The path to the discussion folder.
+
+    Raises:
+        ValueError: If ``discussion_id`` is None.
+    """
+    if discussion_id is None:
+        raise ValueError("discussion_id is required for discussion folder path construction")
+
+    target_root = _resolve_discussions_root()
+    legacy_root = _legacy_discussions_root()
+
+    if api_key_hash:
+        target_folder = os.path.join(target_root, api_key_hash, discussion_id)
+        legacy_folder = os.path.join(legacy_root, api_key_hash, discussion_id)
+    else:
+        target_folder = os.path.join(target_root, discussion_id)
+        legacy_folder = os.path.join(legacy_root, discussion_id)
+
+    if os.path.abspath(target_folder) == os.path.abspath(legacy_folder):
+        try:
+            os.makedirs(target_folder, exist_ok=True)
+        except OSError:
+            logger.warning("Could not create discussion folder at %s", target_folder)
+        # When target == legacy there is no alternate location to fall back to,
+        # so the target path is returned even if creation failed; the caller's
+        # subsequent open() will surface a clearer, operation-specific error.
+        return target_folder
+
+    if not os.path.exists(target_folder) and os.path.exists(legacy_folder):
+        return legacy_folder
+
+    try:
+        os.makedirs(target_folder, exist_ok=True)
+        return target_folder
+    except OSError:
+        logger.warning(
+            "Could not create target discussion folder at '%s'; falling back to legacy location.",
+            target_folder,
+        )
+        os.makedirs(legacy_folder, exist_ok=True)
+        return legacy_folder
+
+
 def get_discussion_file_path(discussion_id, file_name, api_key_hash=None):
     """
-    Constructs the file path for a discussion-related file.
+    Constructs the file path for a discussion-related JSON file.
 
-    This function uses the discussion directory specified in the user config
-    to build a file path for a specific discussion ID and file name. If the
-    configured directory is empty, missing, or cannot be created on the
-    current platform, it falls back to ``Public/DiscussionIds/`` under the
-    project root.
+    The file lives inside the discussion folder returned by
+    :func:`get_discussion_folder_path`, which applies the standard path
+    resolution hierarchy (CLI flag, user config,
+    ``{get_root_public_directory()}/DiscussionIds/``) plus legacy-folder
+    stickiness for pre-refactor data.
 
     When ``api_key_hash`` is provided, files are stored under a per-user
     subdirectory::
 
-        {discussionDirectory}/{api_key_hash}/{discussion_id}/{file_name}.json
+        {discussions_root}/{api_key_hash}/{discussion_id}/{file_name}.json
 
     Without an API key hash, the layout is::
 
-        {discussionDirectory}/{discussion_id}/{file_name}.json
+        {discussions_root}/{discussion_id}/{file_name}.json
 
     For backwards compatibility, if the nested file does not exist but a
-    legacy flat file (``{discussionDirectory}/{discussion_id}_{file_name}.json``)
-    does, the legacy path is returned instead. New files are always created
-    in the nested structure.
+    legacy flat file
+    (``{discussions_root}/{discussion_id}_{file_name}.json``) does, the
+    legacy path is returned instead. New files are always created in the
+    nested structure.
 
     Args:
         discussion_id (str): The ID of the discussion.
-        file_name (str): The base name of the file (e.g., 'memories', 'chat_summary').
+        file_name (str): The base name of the file (e.g. 'memories', 'chat_summary').
         api_key_hash (str, optional): A 16-char hex hash of the API key for
             per-user directory isolation. Defaults to None.
 
@@ -261,36 +443,20 @@ def get_discussion_file_path(discussion_id, file_name, api_key_hash=None):
         str: The full path to the discussion file.
 
     Raises:
-        ValueError: If discussion_id is None.
+        ValueError: If ``discussion_id`` is None.
     """
     if discussion_id is None:
         raise ValueError("discussion_id is required for discussion file path construction")
-    directory = get_config_value('discussionDirectory')
-    if directory:
-        if api_key_hash:
-            discussion_dir = os.path.join(directory, api_key_hash, discussion_id)
-        else:
-            discussion_dir = os.path.join(directory, discussion_id)
-        try:
-            os.makedirs(discussion_dir, exist_ok=True)
-        except OSError:
-            logger.warning("Configured discussionDirectory '%s' could not be created, using default.", directory)
-            directory = None
 
-    if not directory:
-        directory = os.path.join(get_project_root_directory_path(), 'Public', 'DiscussionIds')
-        if api_key_hash:
-            discussion_dir = os.path.join(directory, api_key_hash, discussion_id)
-        else:
-            discussion_dir = os.path.join(directory, discussion_id)
-        os.makedirs(discussion_dir, exist_ok=True)
+    discussion_dir = get_discussion_folder_path(discussion_id, api_key_hash=api_key_hash)
 
     nested_path = os.path.join(discussion_dir, f'{file_name}.json')
     if not os.path.exists(nested_path) and not api_key_hash:
-        legacy_path = os.path.join(directory, f'{discussion_id}_{file_name}.json')
-        if os.path.exists(legacy_path):
-            logger.info("Using legacy discussion file: %s", legacy_path)
-            return legacy_path
+        parent = os.path.dirname(discussion_dir)
+        legacy_flat_path = os.path.join(parent, f'{discussion_id}_{file_name}.json')
+        if os.path.exists(legacy_flat_path):
+            logger.info("Using legacy discussion file: %s", legacy_flat_path)
+            return legacy_flat_path
 
     return nested_path
 
@@ -316,19 +482,38 @@ def get_discussion_timestamp_file_path(discussion_id, api_key_hash=None):
 
 def get_custom_dblite_filepath():
     """
-    Retrieves the custom directory path for SQLite databases.
+    Returns the target directory for per-user SQLite databases.
 
-    This function checks the user configuration for a custom SQLite directory.
-    If none is specified, it returns the project's root directory.
+    Resolution order:
+
+    1. ``--UserLevelSqlLiteDirectory`` CLI flag
+       (``instance_global_variables.USER_LEVEL_SQLITE_DIRECTORY``).
+    2. ``sqlLiteDirectory`` user config setting.
+    3. ``{get_root_public_directory()}/SqlLiteDBs``.
+
+    SQLite databases live alongside ``Configs`` and ``DiscussionIds`` under
+    the ``Public`` root, not inside ``Configs`` -- resolving from
+    :func:`get_root_public_directory` keeps configs and runtime data
+    separated.
+
+    This function only returns the *target* write directory. Callers
+    (see :class:`LockingService`) apply legacy-path stickiness separately:
+    if a database file already exists at either pre-refactor default
+    location -- the current working directory or the project root -- that
+    existing file keeps being used so no automatic migration is performed.
 
     Returns:
-        str: The absolute path to the directory for SQLite databases.
+        str: Path to the directory where SQLite databases should be created.
     """
-    directory = get_config_value('sqlLiteDirectory')
-    if (directory is None):
-        return get_project_root_directory_path()
-    else:
-        return str(os.path.join(directory))
+    cli_override = instance_global_variables.USER_LEVEL_SQLITE_DIRECTORY
+    if cli_override:
+        return _expand_user_path(cli_override)
+
+    config_override = get_config_value('sqlLiteDirectory')
+    if config_override:
+        return _expand_user_path(config_override)
+
+    return os.path.join(str(get_root_public_directory()), 'SqlLiteDBs')
 
 
 def get_application_port():
@@ -601,6 +786,208 @@ def get_endpoint_config(endpoint):
     return load_config(config)
 
 
+def try_get_endpoint_config(endpoint: str) -> Optional[dict]:
+    """
+    Loads an endpoint configuration if it exists, returning None when it does not.
+
+    Unlike get_endpoint_config (which lets load_config raise FileNotFoundError),
+    this probes whether a name refers to an endpoint at all. The preset-resolution
+    path uses it to check if a node's preset name is actually an endpoint carrying
+    an embedded presetSamplers block; a missing file is an expected, non-exceptional
+    outcome there (the name is simply not an endpoint), so it is reported as None.
+
+    Args:
+        endpoint (str): The name of the endpoint configuration to probe.
+
+    Returns:
+        Optional[dict]: The loaded endpoint configuration, or None if absent.
+    """
+    # A name with path separators is never a real endpoint; treat it as absent rather
+    # than letting it probe a file outside the Endpoints directory.
+    if not _is_safe_flat_config_name(endpoint):
+        return None
+    sub_directory = get_endpoint_subdirectory()
+    config_path = get_endpoint_config_path(sub_directory, endpoint)
+    if not os.path.exists(config_path):
+        return None
+    return load_config(config_path)
+
+
+# Per-endpoint estimation level (wilmerContextEstimationLevel). Wilmer's token
+# estimator (rough_estimate_token_length) is deliberately conservative; on
+# large-vocab models it can overestimate a prompt's real token count by ~1.85x.
+# Each level maps to a budget multiplier applied to the real (window - response)
+# portion of every endpoint-derived token budget, reclaiming context the
+# conservative estimate would otherwise waste. The multiplier is the minimum
+# estimate-to-real inflation at which the level stays safe: 'conservative' (1.0)
+# is safe for any model (the estimator never under-counts); higher levels assume
+# the model's tokenizer is at least that efficient and so are opt-in per endpoint.
+# This value only tunes Wilmer's internal budgeting; it is never sent to the
+# inference engine.
+ESTIMATION_LEVEL_KEY = "wilmerContextEstimationLevel"
+DEFAULT_ESTIMATION_LEVEL = "conservative"
+ESTIMATION_LEVEL_MULTIPLIERS = {
+    "conservative": 1.0,
+    "balanced": 1.25,
+    "aggressive": 1.5,
+    "xaggressive": 1.85,
+}
+
+
+def get_estimation_level_multiplier(endpoint_config) -> float:
+    """
+    Returns the budget multiplier for an endpoint's estimation level.
+
+    Reads ``wilmerContextEstimationLevel`` from the endpoint config and maps it
+    to the multiplier applied to that endpoint's real (window - response) token
+    budget everywhere Wilmer budgets tokens for it (the pre-send clamp, the
+    conversation-variable ceilings, and any other endpoint-derived budget).
+    Unknown, missing, or non-string values fall back to ``conservative`` (1.0,
+    no scaling). This value only tunes Wilmer's internal budgeting; it is never
+    sent to the inference engine.
+
+    Args:
+        endpoint_config (dict): The resolved endpoint configuration.
+
+    Returns:
+        float: The multiplier for the real (window - response) budget.
+    """
+    if not isinstance(endpoint_config, dict):
+        return ESTIMATION_LEVEL_MULTIPLIERS[DEFAULT_ESTIMATION_LEVEL]
+    level = endpoint_config.get(ESTIMATION_LEVEL_KEY)
+    if level is None:
+        return ESTIMATION_LEVEL_MULTIPLIERS[DEFAULT_ESTIMATION_LEVEL]
+    if not isinstance(level, str):
+        logger.warning(
+            "%s must be a string (one of %s); got %r. Using '%s'.",
+            ESTIMATION_LEVEL_KEY, sorted(ESTIMATION_LEVEL_MULTIPLIERS), level,
+            DEFAULT_ESTIMATION_LEVEL,
+        )
+        return ESTIMATION_LEVEL_MULTIPLIERS[DEFAULT_ESTIMATION_LEVEL]
+    multiplier = ESTIMATION_LEVEL_MULTIPLIERS.get(level.strip().lower())
+    if multiplier is None:
+        logger.warning(
+            "Unknown %s %r; expected one of %s. Using '%s'.",
+            ESTIMATION_LEVEL_KEY, level, sorted(ESTIMATION_LEVEL_MULTIPLIERS),
+            DEFAULT_ESTIMATION_LEVEL,
+        )
+        return ESTIMATION_LEVEL_MULTIPLIERS[DEFAULT_ESTIMATION_LEVEL]
+    return multiplier
+
+
+# Master switch for context-window awareness (clampPromptToContextWindow). When on
+# for a node, Wilmer bounds every feasible estimated budget to the node's endpoint
+# window and the endpoint estimation level (above) becomes active; when off, Wilmer
+# makes no window-based budgeting decisions and the level is inert. OFF by default so
+# upgrading never silently trims an existing config; shipped user configs opt in.
+# Resolved per node: node config > endpoint config > user config > default OFF. Lives
+# here (not in dispatch) so dispatch and the workflow variable manager resolve it
+# identically and cannot drift.
+CONTEXT_CLAMP_KEY = "clampPromptToContextWindow"
+DEFAULT_CONTEXT_CLAMP_ENABLED = False
+
+
+def _coerce_optional_bool(value):
+    """Coerce a config value to a bool, or None when the value is absent.
+
+    Accepts real JSON booleans (the expected form) and, defensively, common string
+    spellings. Returns None when the value is None so callers can fall through to the
+    next resolution level rather than treating absence as False.
+
+    Args:
+        value: The raw config value (bool, str, other, or None).
+
+    Returns:
+        Optional[bool]: The coerced boolean, or None when ``value`` is None.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes", "on")
+    return bool(value)
+
+
+def is_context_clamp_enabled(node_config, endpoint_config) -> bool:
+    """Resolve whether the context-window clamp is on for a node.
+
+    Precedence: node config -> endpoint config -> user config -> default (OFF). The
+    most specific setting wins, so an operator can force it off for a single node,
+    for every node on an endpoint, or globally for a user. The clamp is the master
+    switch for context-window awareness: with it off, Wilmer makes no window-based
+    budgeting decisions and the endpoint estimation level is inert.
+
+    Args:
+        node_config (dict): The node configuration.
+        endpoint_config (dict): The resolved endpoint configuration, or None when it
+            is unavailable (e.g. a mocked handler in tests).
+
+    Returns:
+        bool: True if the clamp should run for this node.
+    """
+    for config in (node_config, endpoint_config):
+        if isinstance(config, dict):
+            resolved = _coerce_optional_bool(config.get(CONTEXT_CLAMP_KEY))
+            if resolved is not None:
+                return resolved
+    try:
+        user_config = get_user_config()
+        if isinstance(user_config, dict):
+            resolved = _coerce_optional_bool(user_config.get(CONTEXT_CLAMP_KEY))
+            if resolved is not None:
+                return resolved
+    except Exception as e:
+        logger.debug(
+            "Context clamp: could not read user config for %s (%s); using default %s.",
+            CONTEXT_CLAMP_KEY, e, DEFAULT_CONTEXT_CLAMP_ENABLED,
+        )
+    return DEFAULT_CONTEXT_CLAMP_ENABLED
+
+
+# Tokens held back from every endpoint-window budget to cover chat-template framing
+# (BOS/EOS, the trailing generation prompt, role headers) and estimation slack not
+# captured by message content alone. Shared so the dispatch clamp and the variable
+# manager reserve the same headroom.
+CONTEXT_WINDOW_BUDGET_HEADROOM_TOKENS = 512
+
+
+def compute_endpoint_window_budget(endpoint_config, n_predict, headroom_tokens) -> Optional[int]:
+    """Compute the base conversation token budget for an endpoint window.
+
+    ``budget = (maxContextTokenSize - n_predict) * estimation_level - headroom``
+
+    This is the single source of truth for the window-derived budget, so the
+    pre-send dispatch clamp and the workflow variable manager cannot drift on the
+    basis. Dispatch subtracts the system prompt and tool schemas from this base;
+    the variable manager (which does not know them at build time) uses it as-is.
+    The estimation level is read from ``endpoint_config``; callers are responsible
+    for only invoking this when the context clamp is enabled (the level is inert
+    otherwise). The value is internal budgeting only; it is never sent to the engine.
+
+    Args:
+        endpoint_config (dict): The resolved endpoint configuration.
+        n_predict (int): The node's response budget (``maxResponseSizeInTokens`` ->
+            ``llm.max_tokens``). Non-numeric or negative values are treated as 0.
+        headroom_tokens (int): Tokens to reserve for framing/estimation slack.
+
+    Returns:
+        Optional[int]: The base budget, or None when the endpoint window is unknown
+        or invalid (in which case the caller leaves the conversation unbounded). The
+        value may be <= 0 for a misconfigured node whose response budget alone
+        approaches the window.
+    """
+    if not isinstance(endpoint_config, dict):
+        return None
+    window = endpoint_config.get("maxContextTokenSize")
+    if not isinstance(window, (int, float)) or isinstance(window, bool) or window <= 0:
+        return None
+    if not isinstance(n_predict, (int, float)) or isinstance(n_predict, bool) or n_predict < 0:
+        n_predict = 0
+    multiplier = get_estimation_level_multiplier(endpoint_config)
+    return int((int(window) - int(n_predict)) * multiplier) - int(headroom_tokens)
+
+
 def get_api_type_config(api_type):
     """
     Retrieves the API type configuration based on the API type name.
@@ -618,20 +1005,33 @@ def get_api_type_config(api_type):
     return load_config(api_type_file)
 
 
-def get_template_config_path(template_file_name):
+def load_mcp_server_config(server_name):
     """
-    Constructs the file path for a prompt template configuration file.
+    Loads the configuration for a named MCP server.
 
-    This function builds the full path to a prompt template configuration file
-    located within the 'Public/Configs/PromptTemplates' directory.
+    MCP server configs live in 'Public/Configs/MCPServers/' and define how
+    Wilmer should connect to a Model Context Protocol server: the transport
+    (stdio, sse, or streamable_http), the command/URL, and any auth headers.
 
     Args:
-        template_file_name (str): The base name of the prompt template configuration file.
+        server_name (str): The base name of the MCP server config file (without `.json`).
 
     Returns:
-        str: The full path to the prompt template configuration file.
+        dict: The loaded server configuration data.
+
+    Raises:
+        ValueError: If ``server_name`` contains path separators, a drive colon, or
+            is '.'/'..' (a defense-in-depth backstop against path traversal; the live
+            MCP caller validates names before reaching here).
+        FileNotFoundError: If no matching MCP server config file exists.
     """
-    return get_config_path('PromptTemplates', template_file_name)
+    if not _is_safe_flat_config_name(server_name):
+        raise ValueError(
+            f"Invalid MCP server name {server_name!r}: must be a plain file name without "
+            "path separators, a drive colon, or '.'/'..'."
+        )
+    server_file = get_config_path('MCPServers', server_name)
+    return load_config(server_file)
 
 
 def get_default_tool_prompt_path():
@@ -647,6 +1047,22 @@ def get_default_tool_prompt_path():
     config_dir = str(get_root_config_directory())
     config_file = os.path.join(config_dir, 'default_tool_prompt.txt')
     return config_file
+
+
+def get_template_config_path(template_file_name):
+    """
+    Constructs the file path for a prompt template configuration file.
+
+    This function builds the full path to a prompt template configuration file
+    located within the 'Public/Configs/PromptTemplates' directory.
+
+    Args:
+        template_file_name (str): The base name of the prompt template configuration file.
+
+    Returns:
+        str: The full path to the prompt template configuration file.
+    """
+    return get_config_path('PromptTemplates', template_file_name)
 
 
 def load_template_from_json(template_file_name):

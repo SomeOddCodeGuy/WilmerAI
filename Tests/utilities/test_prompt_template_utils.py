@@ -557,3 +557,98 @@ def test_get_formatted_combo_token_expansion_stops(mocker, mock_dependencies):
     # min=2: turn 4 (50) + turn 3 (50) = 100. Phase 2: turn 2 (50) = 150 > 120, stop.
     formatter_call_args = mock_formatter.call_args[0][0]
     assert len(formatter_call_args) == 2
+
+
+def test_get_formatted_combo_budget_overrides_min_drops_below_floor(mocker, mock_dependencies):
+    """With budget_overrides_min=True the min_messages floor yields to the token
+    budget: fewer than min_messages are kept when they do not fit."""
+    messages = [
+        {"role": "user", "content": "turn 1"},
+        {"role": "assistant", "content": "turn 2"},
+        {"role": "user", "content": "turn 3"},
+    ]
+    # Each 100 tokens, min=3, budget=150. A hard floor keeps all 3; yielding keeps
+    # only turn 3 (turn 2 would make 200 > 150).
+    mock_dependencies['estimate_tokens'].return_value = 100
+    mock_formatter = mocker.patch('Middleware.utilities.prompt_template_utils.format_messages_with_template')
+    mock_formatter.return_value = [{"content": "f3"}]
+    prompt_template_utils.get_formatted_last_turns_with_min_messages_and_token_limit_as_string(
+        messages, 3, 150, "template.json", False, budget_overrides_min=True
+    )
+    formatter_call_args = mock_formatter.call_args[0][0]
+    assert len(formatter_call_args) == 1
+    assert formatter_call_args[0]['content'] == 'turn 3'
+
+
+def test_get_formatted_combo_budget_overrides_min_keeps_most_recent(mocker, mock_dependencies):
+    """At least the most-recent message is kept even if it alone exceeds the budget."""
+    messages = [
+        {"role": "user", "content": "turn 1"},
+        {"role": "assistant", "content": "turn 2"},
+    ]
+    mock_dependencies['estimate_tokens'].return_value = 5000
+    mock_formatter = mocker.patch('Middleware.utilities.prompt_template_utils.format_messages_with_template')
+    mock_formatter.return_value = [{"content": "f2"}]
+    prompt_template_utils.get_formatted_last_turns_with_min_messages_and_token_limit_as_string(
+        messages, 2, 100, "template.json", False, budget_overrides_min=True
+    )
+    formatter_call_args = mock_formatter.call_args[0][0]
+    assert len(formatter_call_args) == 1
+    assert formatter_call_args[0]['content'] == 'turn 2'
+
+
+def test_get_formatted_combo_budget_overrides_min_false_keeps_hard_floor(mocker, mock_dependencies):
+    """Regression guard: the default (False) preserves the historical hard floor."""
+    messages = [
+        {"role": "user", "content": "turn 1"},
+        {"role": "assistant", "content": "turn 2"},
+        {"role": "user", "content": "turn 3"},
+    ]
+    mock_dependencies['estimate_tokens'].return_value = 100
+    mock_formatter = mocker.patch('Middleware.utilities.prompt_template_utils.format_messages_with_template')
+    mock_formatter.return_value = [{"content": "f1"}, {"content": "f2"}, {"content": "f3"}]
+    prompt_template_utils.get_formatted_last_turns_with_min_messages_and_token_limit_as_string(
+        messages, 3, 150, "template.json", False  # budget_overrides_min defaults to False
+    )
+    formatter_call_args = mock_formatter.call_args[0][0]
+    assert len(formatter_call_args) == 3
+
+
+## Regression: a tool-calling assistant message has content=None. The token estimate
+## must treat it as empty rather than crashing on None.split(). These deliberately use
+## the REAL rough_estimate_token_length (not the mocked one) so a regression back to
+## message.get("content", "") -> None would actually fail here -- the exact gap that the
+## None-safe fix in prompt_extraction_utils was not originally mirrored into here.
+
+def test_get_formatted_by_token_limit_handles_none_content(mocker):
+    """get_formatted_last_turns_by_estimated_token_limit_as_string must not crash on a
+    content=None message."""
+    messages = [
+        {"role": "user", "content": "do the thing"},
+        {"role": "assistant", "content": None, "tool_calls": [{"function": {"name": "ls"}}]},
+        {"role": "tool", "name": "ls", "content": "file1\nfile2"},
+    ]
+    mock_formatter = mocker.patch('Middleware.utilities.prompt_template_utils.format_messages_with_template')
+    mock_formatter.return_value = [{"content": "ok"}]
+
+    result = prompt_template_utils.get_formatted_last_turns_by_estimated_token_limit_as_string(
+        messages, 1000, "template.json", False
+    )
+    assert result == "ok"
+
+
+def test_get_formatted_combo_handles_none_content(mocker):
+    """get_formatted_last_turns_with_min_messages_and_token_limit_as_string must not crash
+    on a content=None message."""
+    messages = [
+        {"role": "user", "content": "do the thing"},
+        {"role": "assistant", "content": None, "tool_calls": [{"function": {"name": "ls"}}]},
+        {"role": "tool", "name": "ls", "content": "result"},
+    ]
+    mock_formatter = mocker.patch('Middleware.utilities.prompt_template_utils.format_messages_with_template')
+    mock_formatter.return_value = [{"content": "ok"}]
+
+    result = prompt_template_utils.get_formatted_last_turns_with_min_messages_and_token_limit_as_string(
+        messages, 2, 1000, "template.json", False
+    )
+    assert result == "ok"

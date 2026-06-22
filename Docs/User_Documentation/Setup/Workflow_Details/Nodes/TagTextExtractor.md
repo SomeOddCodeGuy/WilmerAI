@@ -29,6 +29,7 @@ in custom tags.
 | **`title`**           | String | No       | `""`    | A descriptive name for the node, used for logging and debugging.                                           |
 | **`tagToExtractFrom`** | String | Yes      | N/A     | The text string to search within. Supports variable substitution.                                          |
 | **`fieldToExtract`**    | String | Yes      | N/A     | The name of the tag to search for (without angle brackets). Supports variable substitution.                |
+| **`defaultText`**       | String | No       | `""`    | Optional fallback returned (with variable substitution applied) when the tag is absent, unclosed/mismatched, or contains only whitespace. If omitted, those cases return an empty string. Supports variable substitution. |
 
 -----
 
@@ -156,16 +157,22 @@ def hello_world():
 
 #### **Behavior and Edge Cases**
 
-* **Tag Not Found:** If the specified tag is not found in the text, the node returns an empty string.
+* **Default Fallback (`defaultText`):** If `defaultText` is configured, it is returned (with variable substitution
+  applied) in every case that would otherwise yield an empty string -- the tag is absent, unclosed/mismatched, or wraps
+  only whitespace. This keeps a downstream node from silently receiving an empty value. If `defaultText` is omitted, the
+  empty-string behavior described below applies.
+* **Tag Not Found:** If the specified tag is not found in the text, the node returns an empty string (or `defaultText`,
+  if configured).
 * **First Match Only:** If multiple instances of the same tag exist, only the first match is extracted.
 * **Case Sensitivity:** Tag matching is case-sensitive. `<Answer>` and `<answer>` are treated as different tags.
 * **Nested Tags:** The node uses non-greedy matching, so `<outer><inner>content</inner></outer>` with `fieldToExtract`
   set to `"outer"` will return `<inner>content</inner>`.
 * **Self-Closing Tags:** Self-closing tags (e.g., `<tag/>`) are not supported. The node requires both opening and
   closing tags.
-* **Empty Content:** If the tag exists but contains only whitespace, the node returns an empty string.
+* **Empty Content:** If the tag exists but contains only whitespace, the node returns an empty string (or `defaultText`,
+  if configured).
 * **Mismatched Tags:** If the opening and closing tags don't match (e.g., `<tag>content</other>`), the node returns an
-  empty string.
+  empty string (or `defaultText`, if configured).
 * **Special Characters in Tag Names:** Tag names with special regex characters (like `.` or `*`) are properly escaped.
   Tags with underscores (`_`), hyphens (`-`), and alphanumeric characters work correctly.
 * **Output Variable:** The extracted string is assigned to a variable based on the node's position in the workflow

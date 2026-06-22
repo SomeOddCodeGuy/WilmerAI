@@ -175,6 +175,23 @@ class TestSaveCustomFile:
 
         assert Path(filepath).read_text(encoding='utf-8') == content
 
+    def test_save_custom_file_append(self, tmp_path):
+        """Append mode should add content to the end of an existing file."""
+        filepath = str(tmp_path / "log.txt")
+
+        save_custom_file(filepath, "first")
+        save_custom_file(filepath, "second", mode="append")
+
+        assert Path(filepath).read_text(encoding='utf-8') == "firstsecond"
+
+    def test_save_custom_file_append_creates_missing_file(self, tmp_path):
+        """Append mode should create the file when it does not yet exist."""
+        filepath = str(tmp_path / "new.txt")
+
+        save_custom_file(filepath, "hello", mode="append")
+
+        assert Path(filepath).read_text(encoding='utf-8') == "hello"
+
     def test_save_custom_file_io_error(self, mocker):
         """
         Verifies that an IOError is raised if the temp file cannot be written.
@@ -309,6 +326,46 @@ class TestTimestampAndCustomFileFunctions:
         result = load_custom_file('/fake/empty.txt')
 
         assert result == "No additional information added"
+
+    def test_load_custom_file_tail_count(self, mocker):
+        mock_path = MagicMock(spec=Path)
+        mock_path.exists.return_value = True
+        mocker.patch('Middleware.utilities.file_utils._resolve_case_insensitive_path', return_value=mock_path)
+        mocker.patch.object(mock_path, 'open', mock_open(read_data="l1\nl2\nl3\nl4"))
+
+        result = load_custom_file('/fake/file.txt', tail_count=2)
+
+        assert result == "l3\nl4"
+
+    def test_load_custom_file_head_count(self, mocker):
+        mock_path = MagicMock(spec=Path)
+        mock_path.exists.return_value = True
+        mocker.patch('Middleware.utilities.file_utils._resolve_case_insensitive_path', return_value=mock_path)
+        mocker.patch.object(mock_path, 'open', mock_open(read_data="l1\nl2\nl3\nl4"))
+
+        result = load_custom_file('/fake/file.txt', head_count=2)
+
+        assert result == "l1\nl2"
+
+    def test_load_custom_file_tail_count_custom_chunk_delimiter(self, mocker):
+        mock_path = MagicMock(spec=Path)
+        mock_path.exists.return_value = True
+        mocker.patch('Middleware.utilities.file_utils._resolve_case_insensitive_path', return_value=mock_path)
+        mocker.patch.object(mock_path, 'open', mock_open(read_data="A\n\n---\n\nB\n\n---\n\nC"))
+
+        result = load_custom_file('/fake/file.txt', tail_count=2, chunk_delimiter="\n\n---\n\n")
+
+        assert result == "B\n\n---\n\nC"
+
+    def test_load_custom_file_tail_count_exceeds_length(self, mocker):
+        mock_path = MagicMock(spec=Path)
+        mock_path.exists.return_value = True
+        mocker.patch('Middleware.utilities.file_utils._resolve_case_insensitive_path', return_value=mock_path)
+        mocker.patch.object(mock_path, 'open', mock_open(read_data="l1\nl2"))
+
+        result = load_custom_file('/fake/file.txt', tail_count=10)
+
+        assert result == "l1\nl2"
 
 
 class TestPathConstructionFunctions:
