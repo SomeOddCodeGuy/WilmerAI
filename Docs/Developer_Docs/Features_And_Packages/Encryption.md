@@ -122,10 +122,17 @@ an optional `api_key_hash` parameter:
 ```python
 def get_discussion_file_path(discussion_id, file_name, api_key_hash=None):
     # Without api_key_hash:
-    #   {discussionDirectory}/{discussion_id}/{file_name}.json
+    #   {discussions_root}/{discussion_id}/{file_name}.json
     #
     # With api_key_hash:
-    #   {discussionDirectory}/{api_key_hash}/{discussion_id}/{file_name}.json
+    #   {discussions_root}/{api_key_hash}/{discussion_id}/{file_name}.json
+    #
+    # {discussions_root} is resolved via get_discussion_folder_path() in the
+    # following order: --DiscussionDirectory CLI flag > discussionDirectory
+    # user config > {get_root_public_directory()}/DiscussionIds/. The public
+    # root resolves to --PublicDirectory when set, else {project_root}/Public/.
+    # Legacy folder stickiness keeps existing discussions at their pre-refactor
+    # location ({project_root}/Public/DiscussionIds/).
 ```
 
 All derived path functions propagate this parameter:
@@ -402,7 +409,7 @@ Do not use `logger.info()` or `logger.debug()` directly for messages that could 
 
 ## 6\. Dependency: `cryptography` Library
 
-The `cryptography` library (`cryptography~=46.0` in `requirements.txt`) is the sole new
+The `cryptography` library (`cryptography~=48.0` in `requirements.txt`) is the sole new
 dependency. It is licensed under the Apache 2.0 / BSD 3-Clause dual license. License files are included in
 `ThirdParty-Licenses/cryptography/`.
 

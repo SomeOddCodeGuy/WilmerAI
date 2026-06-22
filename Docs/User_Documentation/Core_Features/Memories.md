@@ -1,6 +1,6 @@
 ### **Feature Guide: WilmerAI's Memory System**
 
-WilmerAI uses a sophisticated, multi-layered memory system for managing long-term conversational context. It is designed
+WilmerAI uses a multi-layered memory system for managing long-term conversational context. It is designed
 to provide both chronological recall and relevant information retrieval by allowing its different memory components to
 work in concert.
 
@@ -19,9 +19,9 @@ WilmerAI's memory consists of three components. Each is stored in a separate fil
   forms the backbone of the conversation's timeline.
 * **Rolling Chat Summary (`<id>_chat_summary.json`)**: This file contains a single, continuously updated summary of the
   entire conversation. It synthesizes the chunks from the Long-Term Memory File to provide a high-level overview.
-* **Searchable Vector Memory (`<id>_vector_memory.db`)**: A dedicated vector database for the discussion. When a memory
-  is created, it can be stored here as a vector embedding with structured metadata (**title, summary, entities, key
-  phrases**). This allows for efficient semantic searches to retrieve relevant information based on a query.
+* **Searchable Vector Memory (`<id>_vector_memory.db`)**: A dedicated full-text search database for the discussion. When
+  a memory is created, it can be stored here with structured metadata (**title, summary, entities, key phrases**) and
+  indexed for full-text keyword search (SQLite FTS5 with BM25 ranking) to retrieve relevant information based on a query.
 
 -----
 

@@ -1,9 +1,0 @@
-{
-  "nodes": [
-    {
-      "title": "F1. Deliver Final Response",
-      "type": "StaticResponse",
-      "content": "{agent2Input}"
-    }
-  ]
-}

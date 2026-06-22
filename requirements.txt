@@ -1,9 +1,11 @@
-requests==2.33.0
+requests==2.34.2
 urllib3==2.7.0
-scikit-learn==1.8.0
+scikit-learn==1.9.0
 Flask==3.1.3
 Jinja2==3.1.6
 Pillow==12.2.0
-eventlet==0.40.4
+eventlet==0.41.0
 waitress==3.0.2
 cryptography==48.0.1
+mcp==1.27.2
+PySocks==1.7.1

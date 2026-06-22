@@ -12,7 +12,9 @@ from Middleware.services.memory_service import MemoryService
 from Middleware.services.timestamp_service import TimestampService
 from Middleware.utilities.config_utils import (
     get_chat_template_name, get_separate_conversation_in_variables,
-    get_conversation_separation_delimiter
+    get_conversation_separation_delimiter, get_user_config,
+    get_estimation_level_multiplier, is_context_clamp_enabled,
+    compute_endpoint_window_budget, CONTEXT_WINDOW_BUDGET_HEADROOM_TOKENS
 )
 from Middleware.utilities.prompt_extraction_utils import (
     extract_last_n_turns, extract_last_n_turns_as_string,
@@ -209,6 +211,25 @@ class WorkflowVariableManager:
         variables = {}
         now = datetime.now()
 
+        # --- User-level shared workflow variables (single source of truth) ---
+        # A 'userWideWorkflowVariables' object in the user config exposes operator-defined values
+        # (e.g. a base directory for a workflow's on-disk state files) as {placeholders}
+        # available to EVERY workflow, so a path is set once in the user config instead of
+        # repeated in each workflow JSON. Added at the LOWEST precedence -- the date/time,
+        # workflow-config, conversation, and agent-output variables below all override it --
+        # so a custom key can only fill a name nothing else defines and can never shadow a
+        # built-in. Left unescaped (like the workflow-config values below) so a value may
+        # itself reference another placeholder (e.g. "{Discussion_Id}") via the second
+        # resolution pass in apply_variables.
+        try:
+            user_config = get_user_config()
+            shared_variables = user_config.get('userWideWorkflowVariables') if isinstance(user_config, dict) else None
+            if isinstance(shared_variables, dict):
+                for key, value in shared_variables.items():
+                    variables[str(key)] = value
+        except Exception as e:
+            logger.debug("Could not load 'userWideWorkflowVariables' from the user config: %s", e)
+
         # --- Date and time variables ---
         variables['todays_date_pretty'] = now.strftime('%B %d, %Y')
         variables['todays_date_iso'] = now.strftime('%Y-%m-%d')
@@ -257,14 +278,50 @@ class WorkflowVariableManager:
 
             display_messages = context.messages
             if include_tool_calls:
+                assistant_with_tc = sum(
+                    1 for m in context.messages
+                    if m.get("role") == "assistant" and m.get("tool_calls")
+                )
+                tool_result_count = sum(
+                    1 for m in context.messages if m.get("role") == "tool"
+                )
+                logger.info(
+                    "includeToolCallsInConversation enabled. "
+                    "Found %d assistant message(s) with tool_calls and %d tool-result message(s) "
+                    "out of %d total messages.",
+                    assistant_with_tc, tool_result_count, len(context.messages)
+                )
                 display_messages = enrich_messages_with_tool_calls(context.messages)
+
+            # Resolve the context-window clamp once for every conversation variable this
+            # node builds. clampPromptToContextWindow is the master switch: with it OFF
+            # the variables use their raw budgets / select exactly N (the endpoint
+            # estimation level is inert); with it ON the level scales the token budgets
+            # AND a per-node window budget caps EVERY conversation variable (count and
+            # token-based) so a long conversation cannot overflow the node's endpoint
+            # (with the clamp on, every estimated thing is bound to the window). Only
+            # the conversation is trimmed; the operator's authored prompt is never touched.
+            endpoint_config = getattr(getattr(context.llm_handler, "llm", None), "endpoint_file", None)
+            clamp_enabled = is_context_clamp_enabled(context.config, endpoint_config)
+            variable_token_multiplier = (
+                get_estimation_level_multiplier(endpoint_config) if clamp_enabled else 1.0)
+            # Per-node window budget that caps every conversation variable: (window -
+            # response) * level - headroom, shared with the dispatch clamp. None unless
+            # the clamp is on, so by default the variables are byte-for-byte unchanged.
+            variable_window_budget = (
+                compute_endpoint_window_budget(
+                    endpoint_config,
+                    getattr(getattr(context.llm_handler, "llm", None), "max_tokens", 0),
+                    CONTEXT_WINDOW_BUDGET_HEADROOM_TOKENS)
+                if clamp_enabled else None)
 
             prompt_configurations = self.generate_conversation_turn_variables(
                 originalMessages=display_messages,
                 llm_handler=context.llm_handler,
                 remove_all_system_override=remove_all_system_override,
                 add_role_tags=add_role_tags,
-                separator=separator
+                separator=separator,
+                token_limit=variable_window_budget
             )
             variables.update(prompt_configurations)
 
@@ -285,19 +342,29 @@ class WorkflowVariableManager:
                 n_messages = 5
                 if context.config and isinstance(context.config, dict):
                     n_messages = context.config.get('nMessagesToIncludeInVariable', 5)
+                # When the clamp supplies a window budget, bound the source conversation
+                # to it (dropping oldest whole messages) so this count variable cannot
+                # overflow the node's endpoint. Selecting last N from the bounded list is
+                # equivalent to selecting last N then trimming (both keep a newest
+                # suffix). None budget (clamp off / conservative) => exactly N, unchanged.
+                n_messages_source = messages_copy
+                if variable_window_budget is not None:
+                    n_messages_source = extract_last_turns_by_estimated_token_limit(
+                        messages_copy, variable_window_budget, include_sysmes, remove_all_system_override
+                    )
                 if prompt and ('chat_user_prompt_n_messages' in prompt
                                or 'templated_user_prompt_n_messages' in prompt):
                     n_messages_selected = extract_last_n_turns(
-                        messages_copy, n_messages, include_sysmes, remove_all_system_override
+                        n_messages_source, n_messages, include_sysmes, remove_all_system_override
                     )
                     logger.info("Including %d messages for variable `chat_user_prompt_n_messages`; N == %d",
                                 len(n_messages_selected), n_messages)
                 variables['chat_user_prompt_n_messages'] = extract_last_n_turns_as_string(
-                    messages_copy, n_messages, include_sysmes, remove_all_system_override,
+                    n_messages_source, n_messages, include_sysmes, remove_all_system_override,
                     add_role_tags=add_role_tags, separator=separator
                 )
                 variables['templated_user_prompt_n_messages'] = get_formatted_last_n_turns_as_string(
-                    messages_copy, n_messages,
+                    n_messages_source, n_messages,
                     template_file_name=context.llm_handler.prompt_template_file_name,
                     isChatCompletion=context.llm_handler.takes_message_collection
                 )
@@ -307,6 +374,14 @@ class WorkflowVariableManager:
                 estimated_tokens = 2048
                 if context.config and isinstance(context.config, dict):
                     estimated_tokens = context.config.get('estimatedTokensToIncludeInVariable', 2048)
+                # Scale the token budget by the endpoint level (1.0 unless the clamp
+                # is on with a non-conservative level), then cap it at the node's window
+                # budget so an operator ceiling larger than the endpoint can hold cannot
+                # overflow it. Trims the conversation only; with the clamp off / window
+                # unknown (budget None) the ceiling is used raw, unchanged.
+                estimated_tokens = int(estimated_tokens * variable_token_multiplier)
+                if variable_window_budget is not None:
+                    estimated_tokens = min(estimated_tokens, variable_window_budget)
                 if prompt and ('chat_user_prompt_estimated_token_limit' in prompt
                                or 'templated_user_prompt_estimated_token_limit' in prompt):
                     token_limit_selected = extract_last_turns_by_estimated_token_limit(
@@ -332,22 +407,40 @@ class WorkflowVariableManager:
                 if context.config and isinstance(context.config, dict):
                     min_messages = context.config.get('minMessagesInVariable', 5)
                     max_tokens = context.config.get('maxEstimatedTokensInVariable', 2048)
+                # Scale the token budget by the endpoint level, then cap it at the
+                # node's window budget (see the estimated-token variable). When the
+                # clamp is on, ALSO let the window budget win over the
+                # minMessagesInVariable count floor (budget_overrides_min): otherwise
+                # a floor of N whole messages whose tokens exceed the window builds an
+                # over-window variable that dispatch cannot truncate (authored prompts
+                # are never truncated) -> a hard backend context-overflow on the
+                # categorizer/planner. Yielding drops whole oldest messages below the
+                # floor (never content), always keeping the most-recent message, so the
+                # variable always fits. With the clamp off the floor is a hard minimum,
+                # unchanged.
+                max_tokens = int(max_tokens * variable_token_multiplier)
+                budget_overrides_min = variable_window_budget is not None
+                if variable_window_budget is not None:
+                    max_tokens = min(max_tokens, variable_window_budget)
                 if prompt and ('chat_user_prompt_min_n_max_tokens' in prompt
                                or 'templated_user_prompt_min_n_max_tokens' in prompt):
                     combo_selected = extract_last_turns_with_min_messages_and_token_limit(
-                        messages_copy, min_messages, max_tokens, include_sysmes, remove_all_system_override
+                        messages_copy, min_messages, max_tokens, include_sysmes, remove_all_system_override,
+                        budget_overrides_min=budget_overrides_min
                     )
                     logger.info("Including %d messages for variable `chat_user_prompt_min_n_max_tokens`; "
-                                "min messages == %d, max estimated tokens == %d",
-                                len(combo_selected), min_messages, max_tokens)
+                                "min messages == %d, max estimated tokens == %d, floor yields to budget == %s",
+                                len(combo_selected), min_messages, max_tokens, budget_overrides_min)
                 variables['chat_user_prompt_min_n_max_tokens'] = extract_last_turns_with_min_messages_and_token_limit_as_string(
                     messages_copy, min_messages, max_tokens, include_sysmes, remove_all_system_override,
-                    add_role_tags=add_role_tags, separator=separator
+                    add_role_tags=add_role_tags, separator=separator,
+                    budget_overrides_min=budget_overrides_min
                 )
                 variables['templated_user_prompt_min_n_max_tokens'] = get_formatted_last_turns_with_min_messages_and_token_limit_as_string(
                     messages_copy, min_messages, max_tokens,
                     template_file_name=context.llm_handler.prompt_template_file_name,
-                    isChatCompletion=context.llm_handler.takes_message_collection
+                    isChatCompletion=context.llm_handler.takes_message_collection,
+                    budget_overrides_min=budget_overrides_min
                 )
 
         # --- Inter-node variables ({agentXInput} and {agentXOutput}) ---
@@ -410,7 +503,7 @@ class WorkflowVariableManager:
     @staticmethod
     def generate_conversation_turn_variables(originalMessages: List[Dict[str, str]], llm_handler: Any,
                                              remove_all_system_override, add_role_tags: bool = False,
-                                             separator: str = '\n') -> Dict[str, str]:
+                                             separator: str = '\n', token_limit=None) -> Dict[str, str]:
         """
         Generates variables for different slices of the conversation history.
 
@@ -425,12 +518,22 @@ class WorkflowVariableManager:
                 to each message in the raw conversation variables. Defaults to ``False``.
             separator (str, optional): The string used to join messages in the raw
                 conversation variables. Defaults to ``'\\n'``.
+            token_limit (Optional[int], optional): When set (the context clamp is on),
+                the whole conversation is first bounded to this estimated-token budget
+                by dropping oldest whole messages, so even the last-twenty slice cannot
+                overflow the node's endpoint window. Selecting last N from the bounded
+                list is equivalent to selecting last N then trimming (both keep a newest
+                suffix). ``None`` (clamp off / conservative) leaves every slice at
+                exactly the last N messages, unchanged. Defaults to ``None``.
 
         Returns:
             Dict[str, str]: A dictionary of all generated conversation turn variables.
         """
         include_sysmes = llm_handler.takes_message_collection
         messages = deepcopy(originalMessages)
+        if token_limit is not None:
+            messages = extract_last_turns_by_estimated_token_limit(
+                messages, token_limit, include_sysmes, remove_all_system_override)
         return {
             "templated_user_prompt_last_twenty": get_formatted_last_n_turns_as_string(
                 messages, 20, template_file_name=llm_handler.prompt_template_file_name,

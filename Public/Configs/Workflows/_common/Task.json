@@ -11,7 +11,10 @@
     "addUserTurnTemplate": false,
     "addDiscussionIdTimestampsForLLM": false,
     "jinja2": false,
-    "minMessagesInVariable": 20,
-    "maxEstimatedTokensInVariable": 15000
+    "minMessagesInVariable": "{agent4Input}",
+    "maxEstimatedTokensInVariable": "{agent5Input}",
+    "acceptImages": true,
+    "maxImagesToSend": 5,
+    "allowTools": true
   }
 ]

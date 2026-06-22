@@ -315,3 +315,46 @@ def test_post_request_still_acquires_semaphore():
     assert captured["status"] == "503 Service Unavailable"
 
     sem.release()  # cleanup
+
+
+def test_endpoint_level_short_circuits_middleware(mocker):
+    """When CONCURRENCY_LEVEL == 'endpoint', the WSGI middleware passes through
+    without acquiring the semaphore. The gate is enforced inside LlmApiService
+    instead, allowing many requests to be in flight simultaneously.
+    """
+    mocker.patch(
+        "Middleware.common.instance_global_variables.CONCURRENCY_LEVEL",
+        "endpoint",
+    )
+    sem = threading.BoundedSemaphore(1)
+    sem.acquire()  # exhaust — would block in wilmer mode
+
+    app = _make_simple_app([b"passthrough"])
+    mw = ConcurrencyLimitMiddleware(app, sem, acquire_timeout=0.1)
+
+    captured, body = _call_middleware(mw, method="POST")
+    assert captured["status"] == "200 OK"
+    assert list(body) == [b"passthrough"]
+
+    # Semaphore was never touched by the middleware
+    assert not sem.acquire(blocking=False)
+    sem.release()
+
+
+def test_wilmer_level_default_still_acquires_semaphore(mocker):
+    """Explicit confirmation that the default CONCURRENCY_LEVEL ('wilmer')
+    preserves the request-level gate semantics."""
+    mocker.patch(
+        "Middleware.common.instance_global_variables.CONCURRENCY_LEVEL",
+        "wilmer",
+    )
+    sem = threading.BoundedSemaphore(1)
+    sem.acquire()  # exhaust
+
+    app = _make_simple_app([b"should not reach"])
+    mw = ConcurrencyLimitMiddleware(app, sem, acquire_timeout=0.1)
+
+    captured, body = _call_middleware(mw, method="POST")
+    assert captured["status"] == "503 Service Unavailable"
+
+    sem.release()

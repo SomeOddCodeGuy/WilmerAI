@@ -1,14 +1,14 @@
 ### **Developer Guide: WilmerAI Memory System**
 
 This guide provides a deep dive into the architecture and implementation of the conversational memory features within
-WilmerAI. It has been updated to reflect the powerful workflow-based memory generation system, the specifics of the
-vector search implementation, and the complete data schemas as verified by the current codebase.
+WilmerAI, covering the workflow-based memory generation system, the vector search implementation, and the complete data
+schemas.
 
 -----
 
 ## 1\. Core Concepts & Architecture
 
-WilmerAI's memory system is a sophisticated, multi-layered feature set implemented through specialized nodes within the
+WilmerAI's memory system is a multi-layered feature set implemented through specialized nodes within the
 workflow engine. This design allows for different types of memory operations -- creation, retrieval, and summarization -- to
 be strategically placed within workflows.
 
@@ -45,24 +45,34 @@ be strategically placed within workflows.
   `config_utils.py` and the I/O functions in `file_utils.py` accept optional `api_key_hash` and `encryption_key`
   parameters respectively to support this:
 
-    1. **Memory File (`<id>_memories.json`)**: Stores discrete, summarized chunks of the conversation for file-based
+    All four artefacts for a given `discussionId` live in a single folder returned by
+    `config_utils.get_discussion_folder_path(discussion_id, api_key_hash=...)`. Resolution order for that folder is CLI
+    `--DiscussionDirectory` > `discussionDirectory` user config > `{get_root_public_directory()}/DiscussionIds/`. The
+    public root resolves to `--PublicDirectory` when set, otherwise `{project_root}/Public/`. Discussion data lives as
+    a sibling of `Configs/` under `Public/`, never inside `Configs/`. For backwards compatibility, if a discussion's
+    folder already exists at the pre-refactor default (`{project_root}/Public/DiscussionIds/`), that legacy folder is
+    used in place for the lifespan of that discussion and no automatic migration is performed. The vector database
+    followed a separate legacy naming convention (`{project_root}/Public/{discussion_id}_vector_memory.db`) that is
+    also checked and stuck with when present.
+
+    1. **Memory File (`memories.json`)**: Stores discrete, summarized chunks of the conversation for file-based
        memory. Each chunk is saved with a hash of the last message it's based on, creating a traceable, append-only
        ledger.
-    2. **Chat Summary File (`<id>_chat_summary.json`)**: Stores a single, continuously updated "rolling summary" of the
+    2. **Chat Summary File (`chat_summary.json`)**: Stores a single, continuously updated "rolling summary" of the
        entire conversation. It's linked via a hash to the last memory chunk from the memory file that it incorporated.
-    3. **Vector Memory Database (`<id>_vector_memory.db`)**: A **discussion-specific SQLite database** created on-demand
-       for each `discussionId`. Note: SQLite databases are **not** encrypted by the per-user encryption feature. It
-       uses the FTS5 extension for powerful, weighted, full-text search across two main
-       tables:
-        * **`memories` table**: Stores the ground-truth data. For vector memories, the `memory_text` column holds the *
-          *LLM-generated summary**, not the raw conversation chunk. It also stores the full `metadata_json`.
+    3. **Vector Memory Database (`vector_memory.db`)**: A **discussion-specific SQLite database** created on-demand
+       for each `discussionId` and co-located with the other discussion files inside the discussion folder. Note:
+       SQLite databases are **not** encrypted by the per-user encryption feature. It uses the FTS5 extension for
+       weighted, full-text search across two main tables:
+        * **`memories` table**: Stores the ground-truth data. For vector memories, the `memory_text` column holds the
+          **LLM-generated summary**, not the raw conversation chunk. It also stores the full `metadata_json`.
         * **`memories_fts` table**: A virtual table that indexes the metadata for fast searching. The indexed columns
           are `title`, `summary`, `entities`, `key_phrases`, and the original `memory_text`. Search relevance is
           determined by the **`bm25`** ranking function.
         * **Recency Scoring**: The database connection is initialized with a custom SQL function, `recency_score`, which
           can calculate a time-decay boost for memories. While the default search query uses only `bm25` ranking, this
           function is available for developers to implement time-sensitive search ranking logic.
-    4. **Vector Memory Tracker (`vector_memory_tracker` table)**: Located inside the `<id>_vector_memory.db`, this table
+    4. **Vector Memory Tracker (`vector_memory_hash_log` table)**: Located inside `vector_memory.db`, this table
        stores the hash of the last message processed for vector memory creation. This crucial feature prevents the
        system from re-processing the same conversation history on subsequent runs.
 
@@ -74,8 +84,8 @@ Understanding the creator/retriever pattern clarifies the role of each node type
 
 #### **Memory Creation & Persistence (Write)**
 
-These nodes perform the "heavy lifting" of creating and saving memories. They are powered by **`SlowButQualityRAGTool`
-**.
+These nodes perform the "heavy lifting" of creating and saving memories. They are powered by
+**`SlowButQualityRAGTool`**.
 
 * **`QualityMemory`**: This is the primary **memory creator** node. It's designed to be run periodically in a workflow
   to keep persistent memory up-to-date.
@@ -83,10 +93,10 @@ These nodes perform the "heavy lifting" of creating and saving memories. They ar
         1. The node triggers `SlowButQualityRAGTool.handle_discussion_id_flow`.
         2. The tool checks if new memories are needed by comparing the current conversation history against the last
            processed point.
-        3. **(Correction Start)** It checks the `useVectorForQualityMemory` flag from the config to determine its
+        3. It checks the `useVectorForQualityMemory` flag from the config to determine its
            behavior: if `true`, it generates **vector memories**; if `false`, it generates **file-based memories**. This
            flag controls the behavior of the `QualityMemory` node specifically. Other nodes (like `RecentMemory`) can
-           trigger the creation of file-based memories independently of this flag's value. **(Correction End)**
+           trigger the creation of file-based memories independently of this flag's value.
         4. For the chosen memory type, the tool generates memories using one of two methods, based on its configuration:
             * **A) Workflow-Based Generation (Recommended)**: If the config specifies a `fileMemoryWorkflowName` or
               `vectorMemoryWorkflowName`, the tool executes that sub-workflow.
@@ -115,7 +125,7 @@ These nodes perform fast, inexpensive "read" operations and are powered by **`Me
       database.
     * **Process Flow**: This node takes a string of keywords. The keywords **must be separated by semicolons (`;`)**.
       The `MemoryService` calls `vector_db_utils.search_memories_by_keyword`.
-    * **Keyword Handling**: Internally, this process is robust:
+    * **Keyword Handling**: Internally, this process handles several edge cases:
         * **Sanitization**: Each keyword is passed through the `_sanitize_fts5_term` function, which wraps it in double
           quotes (`"`) to handle multi-word phrases and prevent FTS5 syntax errors.
         * **Query Construction**: The sanitized terms are combined into a `MATCH` query using **`OR` logic**.

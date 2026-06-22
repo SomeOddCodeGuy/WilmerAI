@@ -1,6 +1,6 @@
 ## The `WorkflowLock` Node
 
-The `WorkflowLock` node is a powerful control mechanism used to prevent race conditions during long-running,
+The `WorkflowLock` node is a control mechanism used to prevent race conditions during long-running,
 asynchronous operations. Its primary purpose is to create a temporary, exclusive lock that halts subsequent workflow
 executions at a specific point, ensuring that a resource-intensive task isn't triggered multiple times concurrently.
 
@@ -18,7 +18,7 @@ Consider a workflow designed to do the following:
 2. **Respond to User:** Use the retrieved data and the user's latest message to generate a quick response. This node is
    marked as the **responder** (`"returnToUser": true`), so its output is sent to the client immediately.
 3. **Acquire Lock:** The `WorkflowLock` node executes. If no lock is active, it creates one.
-4. **Perform Slow Task:** A final node begins a long-running process, like using a powerful LLM to regenerate the entire
+4. **Perform Slow Task:** A final node begins a long-running process, like using a large LLM to regenerate the entire
    chat summary based on the new conversation.
 
 If the user sends another message while the "Slow Task" (Step 4) is still running, the new workflow execution will
@@ -80,5 +80,5 @@ Locks are designed to be temporary and are released automatically under several 
 * **Unique IDs:** Use clear and descriptive `workflowLockId`s to avoid accidental conflicts. You can intentionally reuse
   the same ID in different workflows if you want them to be mutually exclusive.
 * **Use Cases:** This node is most effective for non-critical background tasks that can be delayed or skipped without
-  impacting the core user experience. It is particularly powerful in multi-computer or multi-model setups, allowing a
+  impacting the core user experience. It is particularly useful in multi-computer or multi-model setups, allowing a
   fast "responder" model to remain available while a slower "worker" model is busy.

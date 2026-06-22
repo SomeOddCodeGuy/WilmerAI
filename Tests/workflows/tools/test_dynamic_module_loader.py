@@ -128,59 +128,128 @@ def Invoke(*args, **kwargs):
     assert "Something unexpected happened" in call_args[0]
 
 
-def test_run_dynamic_module_adds_project_root_to_sys_path(tmp_path):
+def test_run_dynamic_module_adds_project_root_to_sys_path(tmp_path, mocker):
     """
-    Tests that the project root directory is correctly added to sys.path
-    to allow dynamic modules to import other project files.
+    Tests that the loader puts the project root on sys.path so a dynamic module can
+    import sibling project packages (e.g. Public.workflow_python_scripts._isevendays_mcp_scripts.*). A unique fake root is
+    injected via the resolver so the assertion is not confounded by the real repo
+    root already being on sys.path under pytest (pythonpath=.).
     """
-    # Arrange: Create a minimal valid module.
+    # Arrange: Create a minimal valid module (absolute path, so path resolution is
+    # a no-op and the only call to the resolver is the sys.path insertion below).
     module_content = "def Invoke(): return 'ok'"
     module_path = tmp_path / "path_test_module.py"
     module_path.write_text(module_content)
 
-    # Determine the expected project root path relative to the loader's location.
-    import Middleware.workflows.tools.dynamic_module_loader as dml
-    expected_root = os.path.abspath(os.path.join(os.path.dirname(dml.__file__), '..', '..'))
+    fake_root = str(tmp_path / "fake_project_root")
+    mocker.patch(
+        "Middleware.workflows.tools.dynamic_module_loader.get_project_root_directory_path",
+        return_value=fake_root,
+    )
 
     # Ensure the path is not in sys.path before the test.
-    if expected_root in sys.path:
-        sys.path.remove(expected_root)
-    assert expected_root not in sys.path
+    if fake_root in sys.path:
+        sys.path.remove(fake_root)
+    assert fake_root not in sys.path
 
-    # Act: Run the dynamic module loader.
-    run_dynamic_module(str(module_path))
-
-    # Assert: The project root should now be in sys.path.
-    assert expected_root in sys.path
-
-    # Teardown: Clean up sys.path for test isolation.
-    if expected_root in sys.path:
-        sys.path.remove(expected_root)
+    # Act / Assert: running the loader adds the resolved project root to sys.path.
+    try:
+        run_dynamic_module(str(module_path))
+        assert fake_root in sys.path
+    finally:
+        if fake_root in sys.path:
+            sys.path.remove(fake_root)
 
 
-def test_run_dynamic_module_does_not_duplicate_sys_path(tmp_path):
+def test_run_dynamic_module_resolves_relative_path_against_project_root(tmp_path, mocker):
     """
-    Tests that the project root is not added to sys.path if it is already present.
+    Tests that a relative module_path that does not exist against the current
+    working directory is retried relative to the project root, so the
+    repo-relative paths in shipped workflow configs work regardless of the
+    directory Wilmer was launched from.
+    """
+    # Arrange: Place the module under a fake project root, with a relative
+    # path that cannot resolve against the test runner's cwd.
+    module_dir = tmp_path / "Public" / "modules"
+    module_dir.mkdir(parents=True)
+    (module_dir / "root_relative_module.py").write_text("def Invoke(): return 'from-root'")
+    mocker.patch(
+        "Middleware.workflows.tools.dynamic_module_loader.get_project_root_directory_path",
+        return_value=str(tmp_path),
+    )
+
+    # Act
+    result = run_dynamic_module(os.path.join("Public", "modules", "root_relative_module.py"))
+
+    # Assert
+    assert result == "from-root"
+
+
+def test_run_dynamic_module_cwd_relative_path_wins_over_project_root(tmp_path, mocker, monkeypatch):
+    """
+    Tests that a relative path which resolves against the current working
+    directory keeps being used as-is (the original behavior), even when a
+    same-named file also exists under the project root.
+    """
+    # Arrange: Same relative filename in both a cwd dir and a fake project root.
+    cwd_dir = tmp_path / "launch_dir"
+    cwd_dir.mkdir()
+    (cwd_dir / "dual_module.py").write_text("def Invoke(): return 'from-cwd'")
+    root_dir = tmp_path / "install_root"
+    root_dir.mkdir()
+    (root_dir / "dual_module.py").write_text("def Invoke(): return 'from-root'")
+    mocker.patch(
+        "Middleware.workflows.tools.dynamic_module_loader.get_project_root_directory_path",
+        return_value=str(root_dir),
+    )
+    monkeypatch.chdir(cwd_dir)
+
+    # Act
+    result = run_dynamic_module("dual_module.py")
+
+    # Assert
+    assert result == "from-cwd"
+
+
+def test_run_dynamic_module_relative_path_missing_everywhere_raises(tmp_path, mocker):
+    """
+    Tests that a relative path that resolves neither against the cwd nor the
+    project root still raises FileNotFoundError naming the path the workflow
+    author wrote.
+    """
+    mocker.patch(
+        "Middleware.workflows.tools.dynamic_module_loader.get_project_root_directory_path",
+        return_value=str(tmp_path),
+    )
+
+    with pytest.raises(FileNotFoundError, match="No file found at missing/nowhere.py"):
+        run_dynamic_module("missing/nowhere.py")
+
+
+def test_run_dynamic_module_does_not_duplicate_sys_path(tmp_path, mocker):
+    """
+    Tests that the project root is not added to sys.path again if already present.
     """
     # Arrange: Create a minimal valid module.
     module_content = "def Invoke(): return 'ok'"
     module_path = tmp_path / "path_test_module_2.py"
     module_path.write_text(module_content)
 
-    import Middleware.workflows.tools.dynamic_module_loader as dml
-    expected_root = os.path.abspath(os.path.join(os.path.dirname(dml.__file__), '..', '..'))
+    fake_root = str(tmp_path / "fake_project_root_2")
+    mocker.patch(
+        "Middleware.workflows.tools.dynamic_module_loader.get_project_root_directory_path",
+        return_value=fake_root,
+    )
 
     # Ensure the path is already in sys.path.
-    if expected_root not in sys.path:
-        sys.path.insert(0, expected_root)
+    if fake_root not in sys.path:
+        sys.path.insert(0, fake_root)
     original_path = list(sys.path)  # Make a copy for comparison.
 
-    # Act: Run the module loader.
-    run_dynamic_module(str(module_path))
-
-    # Assert: sys.path should not have been modified.
-    assert sys.path == original_path
-
-    # Teardown: Clean up sys.path.
-    if expected_root in sys.path and sys.path[0] == expected_root:
-        sys.path.pop(0)
+    # Act / Assert: an already-present root is not inserted a second time.
+    try:
+        run_dynamic_module(str(module_path))
+        assert sys.path == original_path
+    finally:
+        if fake_root in sys.path and sys.path[0] == fake_root:
+            sys.path.pop(0)

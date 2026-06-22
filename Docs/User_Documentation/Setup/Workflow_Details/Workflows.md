@@ -14,7 +14,7 @@ allowing for the creation of complex, multi-step agentic behaviors.
 
 Workflows are stored in `Public/Configs/Workflows/` and organized into subfolders:
 
-* **User Folders** (e.g., `Workflows/chris/`): The default location for a user's workflows. The folder name matches the
+* **User Folders** (e.g., `Workflows/example-user/`): The default location for a user's workflows. The folder name matches the
   username.
 * **`_shared/` Folder**: A special folder for shared workflows that can be selected via the API model field. Folders
   within `_shared/` (containing a `_DefaultWorkflow.json` file) are listed by the `/v1/models` and `/api/tags`
@@ -24,13 +24,17 @@ Workflows are stored in `Public/Configs/Workflows/` and organized into subfolder
 ```
 Public/Configs/Workflows/
 ├── _shared/
-│   ├── openwebui-coding/           # Listed by models endpoint as folder name
+│   ├── general/                    # Listed by models endpoint as folder name
 │   │   └── _DefaultWorkflow.json   # Workflow loaded when folder is selected
-│   ├── openwebui-general/
+│   ├── fast/
 │   │   └── _DefaultWorkflow.json
-│   └── openwebui-task/
+│   ├── general-reasoning/
+│   │   └── _DefaultWorkflow.json
+│   ├── fast-reasoning/
+│   │   └── _DefaultWorkflow.json
+│   └── task/
 │       └── _DefaultWorkflow.json
-├── chris/                          # Default user folder
+├── example-user/                   # A user's own workflow folder (optional)
 │   └── ...
 ```
 
@@ -326,3 +330,7 @@ to the backend LLM. Like `returnToUser`, this property only makes sense on the r
 `true`, the LLM may respond with tool calls instead of text content, and WilmerAI passes those tool calls back to the
 frontend. Enabling it on non-responding nodes has no useful effect because tool call responses from internal nodes have
 no path back to the frontend. If the frontend request does not include tool definitions, this flag has no effect.
+
+When using local models that produce capitalized tool call function names (e.g., `Glob` instead of `glob`), set
+`"lowercaseToolCallFunctionNames": true` on the same responding node to normalize the casing before it reaches the
+frontend. This is off by default because some frontends (e.g., Claude Code) require the original casing.

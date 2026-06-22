@@ -1,0 +1,18 @@
+{
+  "temperature": 0.8,
+  "top_k": 40,
+  "top_p": 0.9,
+  "min_p": 0.0,
+  "typical_p": 1.0,
+  "repeat_last_n": 64,
+  "repeat_penalty": 1.1,
+  "presence_penalty": 0.0,
+  "frequency_penalty": 0.0,
+  "mirostat": 0,
+  "mirostat_tau": 5.0,
+  "mirostat_eta": 0.1,
+  "stop": [
+    "<|END_RESPONSE|>"
+  ],
+  "think": false
+}

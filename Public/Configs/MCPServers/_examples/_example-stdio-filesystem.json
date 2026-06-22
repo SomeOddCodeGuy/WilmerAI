@@ -1,0 +1,9 @@
+{
+  "transport": "stdio",
+  "command": "npx",
+  "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed/directory"],
+  "env": {
+    "NODE_ENV": "production"
+  },
+  "cwd": null
+}

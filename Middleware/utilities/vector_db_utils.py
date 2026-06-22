@@ -7,25 +7,132 @@ import os
 import sqlite3
 from typing import List, Optional
 
+from Middleware.utilities import config_utils
+
 logger = logging.getLogger(__name__)
 
 # This prevents exceeding SQLite's expression depth limit (SQLITE_LIMIT_EXPR_DEPTH).
 MAX_KEYWORDS_FOR_SEARCH = 60
 
 
-def _get_db_path(discussion_id: str) -> str:
+def _legacy_vector_db_path(discussion_id: str) -> str:
     """
-    Generates the database file path for a specific discussion ID.
+    Returns the project-root pre-refactor path for the vector memory database.
+
+    Before vector DBs were co-located with other per-discussion files, the old
+    code created them via ``os.makedirs('Public')`` -- a *working-directory-
+    relative* ``Public/{discussion_id}_vector_memory.db``. For installs always
+    launched from the project root that resolves to
+    ``{project_root}/Public/{discussion_id}_vector_memory.db``, which this
+    function returns. Installs launched from another working directory have
+    their old file elsewhere; :func:`_legacy_vector_db_path_cwd` covers that
+    case. Legacy-stickiness logic keeps reading and writing to an existing
+    legacy file rather than orphaning it.
 
     Args:
         discussion_id (str): The unique identifier for the discussion.
 
     Returns:
+        str: The project-root legacy path for the discussion's vector memory database.
+    """
+    return os.path.join(
+        config_utils.get_project_root_directory_path(),
+        'Public',
+        f'{discussion_id}_vector_memory.db',
+    )
+
+
+def _legacy_vector_db_path_cwd(discussion_id: str) -> str:
+    """
+    Returns the working-directory-relative pre-refactor path for the vector DB.
+
+    The old code created the database with ``os.makedirs('Public')``, so the
+    file resolved against the process's current working directory at the time
+    it was first written. When an install was launched from a directory other
+    than the project root (e.g. a systemd unit or a launch from the home
+    directory -- the same scenario that motivated pinning the log directory),
+    the legacy file lives at ``{cwd}/Public/{discussion_id}_vector_memory.db``
+    rather than under the project root. Probing this candidate avoids silently
+    orphaning that data on non-project-root launches.
+
+    Args:
+        discussion_id (str): The unique identifier for the discussion.
+
+    Returns:
+        str: The cwd-relative legacy path for the discussion's vector memory database.
+    """
+    return os.path.join(
+        os.getcwd(),
+        'Public',
+        f'{discussion_id}_vector_memory.db',
+    )
+
+
+def _get_db_path(discussion_id: str, api_key_hash: Optional[str] = None) -> str:
+    """
+    Returns the SQLite database file path for a specific discussion's vector memory.
+
+    The database is now co-located with other per-discussion files inside
+    the discussion folder returned by
+    :func:`config_utils.get_discussion_folder_path`, at
+    ``{discussion_folder}/vector_memory.db``.
+
+    For backwards compatibility, if the database does not yet exist at the
+    new location but a pre-refactor legacy file is present, that legacy path
+    is returned and continues to be used for that discussion's lifespan. Two
+    legacy locations are probed because the old code wrote a
+    working-directory-relative ``Public/...`` file: first
+    ``{project_root}/Public/{discussion_id}_vector_memory.db`` and then the
+    cwd-relative ``{cwd}/Public/{discussion_id}_vector_memory.db`` (these
+    coincide only when the process was launched from the project root). No
+    automatic migration is performed; to migrate, a user can move the file
+    into the discussion folder manually.
+
+    Args:
+        discussion_id (str): The unique identifier for the discussion.
+        api_key_hash (str, optional): A 16-char hex hash of the API key for
+            per-user directory isolation. Passed through to
+            :func:`config_utils.get_discussion_folder_path`.
+
+    Returns:
         str: The full path to the discussion-specific SQLite database file.
     """
-    db_dir = 'Public'
-    os.makedirs(db_dir, exist_ok=True)
-    return os.path.join(db_dir, f'{discussion_id}_vector_memory.db')
+    discussion_folder = config_utils.get_discussion_folder_path(
+        discussion_id, api_key_hash=api_key_hash
+    )
+    new_path = os.path.join(discussion_folder, 'vector_memory.db')
+
+    if os.path.exists(new_path):
+        return new_path
+
+    # The pre-refactor legacy DBs lived in shared, non-isolated 'Public/...' locations
+    # that predate per-user directory isolation. Only fall back to them in single-user
+    # mode (api_key_hash is None). When per-user isolation is active, reusing a shared
+    # legacy file would bleed one user's vector memories into another's, so skip the
+    # legacy probes entirely and use the isolated new path.
+    if api_key_hash is None:
+        project_root_legacy = _legacy_vector_db_path(discussion_id)
+        if os.path.exists(project_root_legacy):
+            logger.info(
+                "Using legacy vector memory database at '%s'. Move the file to '%s' to migrate.",
+                project_root_legacy,
+                new_path,
+            )
+            return project_root_legacy
+
+        # The old code wrote a cwd-relative 'Public/...' file; on non-project-root
+        # launches this differs from the project-root candidate above. Probe it so
+        # an existing user's vector memories are not orphaned by a fresh empty DB.
+        cwd_legacy = _legacy_vector_db_path_cwd(discussion_id)
+        if os.path.abspath(cwd_legacy) != os.path.abspath(project_root_legacy) and os.path.exists(cwd_legacy):
+            logger.info(
+                "Using legacy vector memory database at '%s'. Move the file to '%s' to migrate.",
+                cwd_legacy,
+                new_path,
+            )
+            return cwd_legacy
+
+    return new_path
 
 
 def setup_database_functions(connection: sqlite3.Connection, decay_rate: float = 0.01, max_boost: float = 2.5):
@@ -75,18 +182,21 @@ def setup_database_functions(connection: sqlite3.Connection, decay_rate: float =
     connection.create_function("recency_score", 1, scorer_func, deterministic=False)
 
 
-def get_db_connection(discussion_id: str) -> Optional[sqlite3.Connection]:
+def get_db_connection(discussion_id: str, api_key_hash: Optional[str] = None) -> Optional[sqlite3.Connection]:
     """
     Establishes a connection to a discussion-specific SQLite database.
     Handles both standard file paths and SQLite URIs (e.g., for testing).
 
     Args:
         discussion_id (str): The unique identifier for the discussion.
+        api_key_hash (str, optional): A 16-char hex hash of the API key for
+            per-user directory isolation. Forwarded to the path resolver so
+            the database lands in the correct per-user discussion folder.
 
     Returns:
         Optional[sqlite3.Connection]: A database connection object if successful, otherwise None.
     """
-    db_path = _get_db_path(discussion_id)
+    db_path = _get_db_path(discussion_id, api_key_hash=api_key_hash)
     # Check if the path is a SQLite URI
     is_uri = db_path.startswith("file:")
 
@@ -101,14 +211,16 @@ def get_db_connection(discussion_id: str) -> Optional[sqlite3.Connection]:
         return None
 
 
-def initialize_vector_db(discussion_id: str):
+def initialize_vector_db(discussion_id: str, api_key_hash: Optional[str] = None):
     """
     Initializes the necessary tables for vector memory in a discussion's database.
 
     Args:
         discussion_id (str): The unique identifier for the discussion whose database needs initialization.
+        api_key_hash (str, optional): A 16-char hex hash of the API key for
+            per-user directory isolation.
     """
-    conn = get_db_connection(discussion_id)
+    conn = get_db_connection(discussion_id, api_key_hash=api_key_hash)
     if conn is None:
         logger.error(f"Failed to initialize vector DB for '{discussion_id}': Could not connect to database.")
         return
@@ -154,7 +266,8 @@ def initialize_vector_db(discussion_id: str):
             conn.close()
 
 
-def add_memory_to_vector_db(discussion_id: str, memory_text: str, metadata_json_str: str):
+def add_memory_to_vector_db(discussion_id: str, memory_text: str, metadata_json_str: str,
+                            api_key_hash: Optional[str] = None):
     """
     Adds a new memory and its FTS index entry to the database in a transaction.
 
@@ -162,8 +275,10 @@ def add_memory_to_vector_db(discussion_id: str, memory_text: str, metadata_json_
         discussion_id (str): The identifier for the discussion to add the memory to.
         memory_text (str): The core text of the memory (e.g., LLM summary).
         metadata_json_str (str): A JSON string containing metadata like title, summary, entities, etc.
+        api_key_hash (str, optional): A 16-char hex hash of the API key for
+            per-user directory isolation.
     """
-    conn = get_db_connection(discussion_id)
+    conn = get_db_connection(discussion_id, api_key_hash=api_key_hash)
     if conn is None:
         logger.error(f"Failed to add memory for '{discussion_id}': Could not connect to database.")
         return
@@ -243,7 +358,8 @@ def _sanitize_fts5_term(term: str) -> str:
     return f'"{sanitized_term}"'
 
 
-def search_memories_by_keyword(discussion_id: str, search_query: str, limit: int = 15) -> List[sqlite3.Row]:
+def search_memories_by_keyword(discussion_id: str, search_query: str, limit: int = 15,
+                                api_key_hash: Optional[str] = None) -> List[sqlite3.Row]:
     """
     Searches memories using the FTS index in the discussion-specific database.
 
@@ -254,11 +370,13 @@ def search_memories_by_keyword(discussion_id: str, search_query: str, limit: int
         discussion_id (str): The identifier for the discussion to search within.
         search_query (str): A string of keywords separated by semicolons.
         limit (int, optional): The maximum number of results to return. Defaults to 15.
+        api_key_hash (str, optional): A 16-char hex hash of the API key for
+            per-user directory isolation.
 
     Returns:
         List[sqlite3.Row]: A list of database rows matching the search query, ordered by relevance.
     """
-    conn = get_db_connection(discussion_id)
+    conn = get_db_connection(discussion_id, api_key_hash=api_key_hash)
     if conn is None:
         return []
 
@@ -306,18 +424,21 @@ def search_memories_by_keyword(discussion_id: str, search_query: str, limit: int
             conn.close()
 
 
-def get_vector_check_hash_history(discussion_id: str, limit: int = 10) -> List[str]:
+def get_vector_check_hash_history(discussion_id: str, limit: int = 10,
+                                   api_key_hash: Optional[str] = None) -> List[str]:
     """
     Retrieves a list of the most recent message hashes from the log.
 
     Args:
         discussion_id (str): The identifier for the discussion.
         limit (int): The maximum number of recent hashes to retrieve.
+        api_key_hash (str, optional): A 16-char hex hash of the API key for
+            per-user directory isolation.
 
     Returns:
         List[str]: A list of message hashes, ordered from most recent to oldest.
     """
-    conn = get_db_connection(discussion_id)
+    conn = get_db_connection(discussion_id, api_key_hash=api_key_hash)
     if conn is None:
         return []
 
@@ -342,15 +463,18 @@ def get_vector_check_hash_history(discussion_id: str, limit: int = 10) -> List[s
             conn.close()
 
 
-def add_vector_check_hash(discussion_id: str, message_hash: str):
+def add_vector_check_hash(discussion_id: str, message_hash: str,
+                          api_key_hash: Optional[str] = None):
     """
     Adds a new processed message hash to the historical log in a transaction.
 
     Args:
         discussion_id (str): The identifier for the discussion.
         message_hash (str): The new hash of the last message processed.
+        api_key_hash (str, optional): A 16-char hex hash of the API key for
+            per-user directory isolation.
     """
-    conn = get_db_connection(discussion_id)
+    conn = get_db_connection(discussion_id, api_key_hash=api_key_hash)
     if conn is None:
         return
 

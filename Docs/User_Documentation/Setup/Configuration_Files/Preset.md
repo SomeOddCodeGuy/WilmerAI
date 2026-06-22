@@ -6,6 +6,14 @@ directly passes the key-value pairs from a selected preset file into the final J
 This design allows WilmerAI to support any parameter offered by a target backend (e.g., KoboldCpp, Ollama,
 OpenAI-compatible) without requiring changes to the core application code.
 
+> **Newer alternative — embedded samplers on the endpoint.** Folder presets (described on this page)
+> still work exactly as before and remain the fallback. But you can now avoid maintaining one preset
+> file per API type by writing your samplers **once, in a canonical vocabulary, directly on the
+> endpoint** via a `presetSamplers` block; Wilmer translates them to whatever the endpoint's API type
+> needs and drops anything it does not support. See **Embedded Samplers (`presetSamplers`)** in
+> [`Endpoint.md`](./Endpoint.md). A folder preset can still be layered on top of an embedded block as
+> a native-field override via the endpoint's `appendPresetName`.
+
 -----
 
 #### **File Location and Structure**
@@ -32,6 +40,14 @@ The full path to a preset file follows this pattern:
 
 * **Description**: The preset file itself. The filename, without the `.json` extension, serves as the preset's unique
   identifier within its `ApiPresetType` group.
+
+##### Example presets
+
+Each `<ApiPresetType>` folder ships a reference preset at `_example_preset/Example-Preset.json` showing the **native**
+sampler fields that API type expects (for example `rep_pen` / `sampler_order` for KoboldCpp, `stop_sequences` for
+ClaudeMessages, `think` for Ollama, `repetition_penalty` / `mirostat_mode` for Text-Generation-WebUI). The
+`_example_preset` folder is a reference only and is not loaded at runtime; copy a file into your user's preset folder
+(or the `<ApiPresetType>` root) and rename it to use it.
 
 -----
 
@@ -114,6 +130,40 @@ for `ollamaApiChat` would place the parameters inside an `options` object.
 
 The handler adapts the payload structure, but the parameter names (`temperature`, `top_p`, `stop`) and their values must
 be valid for the target LLM backend. Always consult the API documentation for the specific backend in use.
+
+One Ollama-specific exception to the `options` nesting: the `think` key is lifted back out to the top level of the
+request, because Ollama reads the reasoning toggle as a top-level field rather than a sampler option. So a preset
+key `"think": false` is sent as a top-level `think` in the request, while every other preset key stays inside `options`.
+
+-----
+
+#### **Disabling Model Reasoning ("Thinking") via Presets**
+
+Many current models emit a separate reasoning/"thinking" stream before their answer. The shipped workflows assume
+reasoning is **off** for the non-reasoning roles (`General`, `Fast`, `Vision`, `Worker`) and for every node inside a
+manual chain-of-thought (`*_cot`) workflow, because those workflows enforce reasoning themselves and a second,
+model-native reasoning pass is redundant. The reasoning roles (`General-Reasoning`, `Fast-Reasoning`) leave it **on**.
+
+Whether thinking can actually be turned off from a preset depends entirely on the backend. Presets are passed straight
+through to the backend payload (see above), so a preset can only disable thinking if the backend exposes a thinking
+toggle in its request body. The table below summarizes what is possible per `ApiTypes` `presetType`:
+
+| `presetType` | Handler payload shape | Disabling thinking from the preset |
+| --- | --- | --- |
+| `LlamaCppServer` | OpenAI `chat/completions`, preset keys merged top-level | Supported. `"chat_template_kwargs": { "enable_thinking": false, "thinking_budget": 0 }`. To enable, supply `"chat_template_kwargs": { "thinking_budget": <n> }` and omit `enable_thinking`. |
+| `ClaudeMessages` | Anthropic `messages`, preset keys merged top-level | Supported, and off by default: omit the `thinking` key entirely. To enable, add `"thinking": { "type": "enabled", "budget_tokens": <n> }`. |
+| `Text-Generation-WebUI` | OpenAI `chat/completions`, preset keys merged top-level | Best effort only. `"chat_template_kwargs": { "enable_thinking": false }` is honored only if the loaded backend forwards `chat_template_kwargs` into the chat template; not every TGW loader does. |
+| `OllamaApiChat` / `OllamaApiGenerate` | sampler keys nested under `options`; `think` lifted to top level | Supported. Set `"think": false` in the preset. The handler lifts the `think` key out of `options` to the top level of the request, where Ollama reads it; all other keys stay under `options`. Omit `think` (or set it `true`) to let a thinking model reason. |
+| `OpenAiCompatibleApis` | `/v1/completions`, preset keys merged top-level | Depends on the ApiType (this preset folder is shared). For the **raw `/v1/completions`** ApiType it is not possible from a preset: the text-completions endpoint runs no chat template, so `chat_template_kwargs` has nothing to act on, and you must control thinking through the prompt or the endpoint-level strip. The standard **OpenAI chat** ApiType does support it: an embedded `thinkingMode` resolves to `reasoning_effort` on the request. |
+| `KoboldCpp` | `/api/v1/generate`, preset keys merged top-level | Not possible from a preset. KoboldCpp's generate API exposes no thinking toggle. Use the endpoint-level strip. |
+
+##### Endpoint-level fallback
+
+For any backend that cannot disable thinking from a preset, the reasoning text can still be removed from the model's
+**output** at the endpoint level. Set `"removeThinking": true` on the `Endpoint` config and define `startThinkTag` /
+`endThinkTag` (and `expectOnlyClosingThinkTag` if the model emits only a closing tag). This strips the reasoning block
+after generation rather than preventing it, so the tokens are still spent, but the reasoning stays out of the
+conversation that downstream nodes and the user see.
 
 -----
 

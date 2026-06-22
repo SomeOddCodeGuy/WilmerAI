@@ -15,6 +15,7 @@ def mock_dependencies(mocker):
     # Mock the tool classes to prevent their __init__ from running real logic
     mocker.patch('Middleware.workflows.handlers.impl.tool_node_handler.SlowButQualityRAGTool')
     mocker.patch('Middleware.workflows.handlers.impl.tool_node_handler.OfflineWikiApiClient')
+    mocker.patch('Middleware.workflows.handlers.impl.tool_node_handler.OfflineResearcherApiClient')
 
     # Mock the dynamic module loader function
     mock_run_dynamic_module = mocker.patch('Middleware.workflows.handlers.impl.tool_node_handler.run_dynamic_module')
@@ -41,6 +42,7 @@ def tool_node_handler(mock_dependencies):
     # Replace the actual tool instances with mocks for fine-grained control in tests
     handler.slow_but_quality_rag_service = MagicMock()
     handler.offline_wiki_api_client = MagicMock()
+    handler.offline_researcher_api_client = MagicMock()
     return handler
 
 
@@ -71,6 +73,7 @@ def test_tool_node_handler_initialization(mock_dependencies):
     # These assertions verify that the __init__ method correctly instantiates the tool classes
     assert handler.slow_but_quality_rag_service is not None
     assert handler.offline_wiki_api_client is not None
+    assert handler.offline_researcher_api_client is not None
 
 
 @pytest.mark.parametrize(
@@ -81,6 +84,8 @@ def test_tool_node_handler_initialization(mock_dependencies):
         ("OfflineWikiApiBestFullArticle", "_handle_offline_wiki_node"),
         ("OfflineWikiApiTopNFullArticles", "_handle_offline_wiki_node"),
         ("OfflineWikiApiPartialArticle", "_handle_offline_wiki_node"),
+        ("OfflineResearcherApiQuickSearch", "_handle_offline_researcher_node"),
+        ("OfflineResearcherApiDeepResearch", "_handle_offline_researcher_node"),
         ("ConversationalKeywordSearchPerformerTool", "_perform_keyword_search"),
         ("MemoryKeywordSearchPerformerTool", "_perform_keyword_search"),
         ("SlowButQualityRAG", "_perform_slow_but_quality_rag"),
@@ -293,6 +298,174 @@ def test_handle_offline_wiki_node_handles_exception(tool_node_handler, execution
     result = tool_node_handler._handle_offline_wiki_node(execution_context)
 
     assert result == "I'm sorry, I couldn't find any Wikipedia information about 'resolved_Test Query'."
+
+
+# --- Tests for _handle_offline_researcher_node ---
+
+def test_handle_offline_researcher_quick_success(tool_node_handler, execution_context):
+    execution_context.config = {
+        "type": "OfflineResearcherApiQuickSearch",
+        "promptToSearch": "what is a decorator?",
+    }
+    tool_node_handler.offline_researcher_api_client.search.return_value = {
+        "status": "answered",
+        "answer": "A decorator wraps a function.",
+        "no_information_found": False,
+        "sources": [{"book": "wikipedia_en", "title": "Decorator"}],
+    }
+
+    result = tool_node_handler._handle_offline_researcher_node(execution_context)
+
+    tool_node_handler.offline_researcher_api_client.search.assert_called_once_with(
+        query="resolved_what is a decorator?",
+        mode="quick",
+        max_iterations=None,
+        timeout_seconds=240,
+    )
+    assert result == "A decorator wraps a function."
+
+
+def test_handle_offline_researcher_deep_uses_deep_mode_and_longer_timeout(tool_node_handler, execution_context):
+    execution_context.config = {
+        "type": "OfflineResearcherApiDeepResearch",
+        "promptToSearch": "research bicycle suspension",
+    }
+    tool_node_handler.offline_researcher_api_client.search.return_value = {
+        "status": "answered",
+        "answer": "## Overview\nLots of detail.",
+        "no_information_found": False,
+        "sources": [],
+    }
+
+    tool_node_handler._handle_offline_researcher_node(execution_context)
+
+    tool_node_handler.offline_researcher_api_client.search.assert_called_once_with(
+        query="resolved_research bicycle suspension",
+        mode="deep",
+        max_iterations=None,
+        timeout_seconds=600,
+    )
+
+
+def test_handle_offline_researcher_passes_max_iterations_and_timeout_overrides(tool_node_handler, execution_context):
+    execution_context.config = {
+        "type": "OfflineResearcherApiDeepResearch",
+        "promptToSearch": "research bicycle suspension",
+        "maxIterations": 5,
+        "timeoutSeconds": 900,
+    }
+    tool_node_handler.offline_researcher_api_client.search.return_value = {
+        "status": "answered",
+        "answer": "report",
+        "no_information_found": False,
+        "sources": [],
+    }
+
+    tool_node_handler._handle_offline_researcher_node(execution_context)
+
+    tool_node_handler.offline_researcher_api_client.search.assert_called_once_with(
+        query="resolved_research bicycle suspension",
+        mode="deep",
+        max_iterations=5,
+        timeout_seconds=900,
+    )
+
+
+def test_handle_offline_researcher_no_information_found_returns_sentinel(tool_node_handler, execution_context):
+    execution_context.config = {
+        "type": "OfflineResearcherApiQuickSearch",
+        "promptToSearch": "obscure query",
+    }
+    tool_node_handler.offline_researcher_api_client.search.return_value = {
+        "status": "exhausted",
+        "answer": "No pertinent information was found in the search",
+        "no_information_found": True,
+        "sources": [],
+    }
+
+    result = tool_node_handler._handle_offline_researcher_node(execution_context)
+
+    assert result == "No pertinent information was found in the search"
+
+
+def test_handle_offline_researcher_error_returns_fallback(tool_node_handler, execution_context):
+    execution_context.config = {
+        "type": "OfflineResearcherApiQuickSearch",
+        "promptToSearch": "anything",
+    }
+    tool_node_handler.offline_researcher_api_client.search.return_value = {
+        "status": "error",
+        "reason": "kiwix_unreachable",
+        "answer": None,
+        "no_information_found": False,
+        "sources": [],
+    }
+
+    result = tool_node_handler._handle_offline_researcher_node(execution_context)
+
+    assert "error" in result.lower()
+    assert "kiwix_unreachable" in result
+    assert "resolved_anything" in result
+
+
+def test_handle_offline_researcher_includes_sources_when_requested(tool_node_handler, execution_context):
+    execution_context.config = {
+        "type": "OfflineResearcherApiQuickSearch",
+        "promptToSearch": "what is a decorator?",
+        "includeSources": True,
+    }
+    tool_node_handler.offline_researcher_api_client.search.return_value = {
+        "status": "answered",
+        "answer": "A decorator wraps a function.",
+        "no_information_found": False,
+        "sources": [
+            {"book": "wikipedia_en", "title": "Decorator"},
+            {"book": "python_docs", "title": "PEP 318"},
+        ],
+    }
+
+    result = tool_node_handler._handle_offline_researcher_node(execution_context)
+
+    assert result.startswith("A decorator wraps a function.")
+    assert "Sources:" in result
+    assert "- wikipedia_en :: Decorator" in result
+    assert "- python_docs :: PEP 318" in result
+
+
+def test_handle_offline_researcher_missing_answer_returns_sentinel(tool_node_handler, execution_context):
+    execution_context.config = {
+        "type": "OfflineResearcherApiQuickSearch",
+        "promptToSearch": "anything",
+    }
+    tool_node_handler.offline_researcher_api_client.search.return_value = {
+        "status": "answered",
+        "answer": "",
+        "no_information_found": False,
+        "sources": [],
+    }
+
+    result = tool_node_handler._handle_offline_researcher_node(execution_context)
+
+    assert result == "No pertinent information was found in the search"
+
+
+def test_handle_offline_researcher_client_exception_returns_fallback(tool_node_handler, execution_context):
+    execution_context.config = {
+        "type": "OfflineResearcherApiQuickSearch",
+        "promptToSearch": "anything",
+    }
+    tool_node_handler.offline_researcher_api_client.search.side_effect = Exception("boom")
+
+    result = tool_node_handler._handle_offline_researcher_node(execution_context)
+
+    assert "resolved_anything" in result
+    assert "could not be reached" in result.lower()
+
+
+def test_handle_offline_researcher_raises_no_prompt(tool_node_handler, execution_context):
+    execution_context.config = {"type": "OfflineResearcherApiQuickSearch"}  # Missing promptToSearch
+    with pytest.raises(ValueError, match="No 'promptToSearch' specified for OfflineResearcherApi node."):
+        tool_node_handler._handle_offline_researcher_node(execution_context)
 
 
 # --- Tests for _perform_keyword_search ---

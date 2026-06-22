@@ -1,6 +1,6 @@
 ### **In-Workflow Routing: The `ConditionalCustomWorkflow` Node**
 
-The **`ConditionalCustomWorkflow` Node** extends the `CustomWorkflow` node with powerful branching logic. It dynamically
+The **`ConditionalCustomWorkflow` Node** extends the `CustomWorkflow` node with branching logic. It dynamically
 selects and executes a specific sub-workflow based on the resolved value of a conditional variable (e.g., the output
 from a previous node). This allows you to create adaptive workflows that react differently based on runtime conditions.
 
@@ -44,13 +44,13 @@ The node executes with the following priority:
    the node will then look for and execute the workflow specified under the `"Default"` key in the
    `conditionalWorkflows` map.
 
-4. **Caution: Known Issue: Route Override Key Casing**: When looking for overrides in the `routeOverrides` map, the logic is
-   different. The system will look for a key that matches the **Capitalized** version of the resolved `conditionalKey`
-   value (e.g., `"python"` becomes `"Python"`). This means the keys in your `routeOverrides` object **must be
-   capitalized** to be found.
+4. **No Fallback Defined (Error)**: If no match is found and neither `UseDefaultContentInsteadOfWorkflow` nor a
+   `"Default"` key in `conditionalWorkflows` is provided, the node will error at runtime. You must always include at
+   least one fallback. If you want unmatched values to be a no-op, set `"UseDefaultContentInsteadOfWorkflow": ""`.
 
-    * **Correct**: `"Python"`, `"JavaScript"`
-    * **Incorrect**: `"python"`, `"javascript"`
+5. **Route Override Key Casing**: Keys in the `routeOverrides` map are matched **case-insensitively** (the same way
+   `conditionalWorkflows` keys are matched), so capitalization does not matter. A resolved `conditionalKey` value of
+   `"python"`, `"Python"`, or `"PYTHON"` will all match a `routeOverrides` key written in any casing.
 
 -----
 
@@ -93,4 +93,4 @@ not supported, it returns a static message instead of running a general-purpose 
 * **`scoped_variables`**: If a workflow is chosen, the user's last message will be passed to it and be available as
   `{agent1Input}`.
 * **`routeOverrides`**: If the `"Python"` or `"JavaScript"` route is chosen, the system prompt of the first node in that
-  child workflow will be overridden with the specified text. Note that the keys are correctly capitalized.
+  child workflow will be overridden with the specified text. Note that the keys are matched case-insensitively.

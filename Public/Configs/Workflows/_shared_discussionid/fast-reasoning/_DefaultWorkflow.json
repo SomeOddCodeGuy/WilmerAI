@@ -1,0 +1,33 @@
+{
+  "VisionModel": "Vision-Endpoint",
+  "VisionPreset": "Vision-Endpoint",
+  "VisionRespondTokenSize": 6000,
+  "MinMessagesToSendVisionLLM": 10,
+  "MaxTokensToSendVisionLLM": 8000,
+  "RespondingModel": "Fast-Reasoning-Endpoint",
+  "RespondingPreset": "Fast-Reasoning-Endpoint",
+  "RespondingResponseTokenSize": 8000,
+  "MinMessagesToSendRespondingLLM": 10,
+  "MaxTokensToSendRespondingLLM": 15000,
+  "nodes": [
+    {
+      "displayOnlyComment": "Meant for your small and fast general reasoning llm. Separate vision node works well with discussion id to avoid re-processing images",
+      "title": "Run General Workflow",
+      "type": "CustomWorkflow",
+      "workflowName": "General_With_Vision_DiscussionId",
+      "workflowUserFolderOverride": "_common",
+      "scoped_variables": [
+        "{VisionModel}",
+        "{VisionPreset}",
+        "{VisionRespondTokenSize}",
+        "{MinMessagesToSendVisionLLM}",
+        "{MaxTokensToSendVisionLLM}",
+        "{RespondingModel}",
+        "{RespondingPreset}",
+        "{RespondingResponseTokenSize}",
+        "{MinMessagesToSendRespondingLLM}",
+        "{MaxTokensToSendRespondingLLM}"
+      ]
+    }
+  ]
+}

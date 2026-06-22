@@ -23,6 +23,14 @@ logger = logging.getLogger(__name__)
 # The safety_margin parameter (default 1.10) provides deliberate additional
 # overestimation to prevent context window overflow. The effective combined rate
 # after margin is ~1.485 tokens/word.
+#
+# This estimate is conservative by design: it must never under-count for any
+# model (an under-count risks a hard context-overflow rejection), so it is
+# calibrated for the worst case (dense/code text on small-vocab tokenizers). On
+# efficient large-vocab models it can run ~1.85x high. The algorithm is left as
+# the safe worst case on purpose; the per-endpoint wilmerContextEstimationLevel
+# (see config_utils.get_estimation_level_multiplier) is the calibration knob that
+# reclaims the wasted headroom for endpoints whose model packs tokens efficiently.
 def rough_estimate_token_length(text: str, safety_margin: float = 1.10) -> int:
     """Estimates the token length of a prompt, overestimating slightly.
 

@@ -59,6 +59,8 @@ class StreamingResponseHandler:
         else:
             self._prefix_buffer_limit = 100
 
+        self._lowercase_tool_names = self.workflow_node_config.get("lowercaseToolCallFunctionNames", False)
+
         # Buffer if stripping is needed OR if reconstruction might be needed
         self._should_buffer_for_prefixes = self._is_prefix_stripping_needed() or (self.generation_prompt is not None)
 
@@ -281,6 +283,17 @@ class StreamingResponseHandler:
             # Tool call chunks bypass all text processing (prefix stripping,
             # think-block removal, etc.) and are emitted directly.
             if tool_calls_delta is not None:
+                if self._lowercase_tool_names:
+                    for tc in tool_calls_delta:
+                        func = tc.get("function")
+                        if func and isinstance(func.get("name"), str):
+                            original_name = func["name"]
+                            func["name"] = original_name.lower()
+                            if func["name"] != original_name:
+                                # DEBUG, not INFO: streaming tool-call deltas arrive
+                                # frequently and this would otherwise flood the log.
+                                logger.debug("Tool call function name lowercased: '%s' -> '%s'",
+                                             original_name, func["name"])
                 completion_json = api_helpers.build_response_json(
                     token=content_delta,
                     finish_reason=finish_reason,

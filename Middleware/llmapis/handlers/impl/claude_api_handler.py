@@ -61,7 +61,7 @@ class ClaudeApiHandler(BaseChatCompletionsHandler):
 
     def __init__(self, base_url: str, api_key: str, gen_input: Dict[str, Any], model_name: str,
                  headers: Dict[str, str], stream: bool, api_type_config, endpoint_config,
-                 max_tokens, dont_include_model: bool = False):
+                 max_tokens, dont_include_model: bool = False, suppress_retries: bool = False):
         super().__init__(
             base_url=base_url, api_key=api_key, gen_input=gen_input, model_name=model_name,
             headers={
@@ -70,7 +70,8 @@ class ClaudeApiHandler(BaseChatCompletionsHandler):
                 "anthropic-version": "2023-06-01"
             },
             stream=stream, api_type_config=api_type_config, endpoint_config=endpoint_config,
-            max_tokens=max_tokens, dont_include_model=dont_include_model
+            max_tokens=max_tokens, dont_include_model=dont_include_model,
+            suppress_retries=suppress_retries
         )
         self._tool_call_index = 0
         self._active_tool_call_id = None

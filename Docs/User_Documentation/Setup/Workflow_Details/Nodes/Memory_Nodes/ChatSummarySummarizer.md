@@ -1,11 +1,11 @@
 ## The `chatSummarySummarizer` Node
 
 This guide provides a comprehensive, code-validated overview of the `chatSummarySummarizer` node. It details its
-powerful iterative logic and its role as the core engine for creating and updating rolling chat summaries.
+iterative logic and its role as the core engine for creating and updating rolling chat summaries.
 
 ### Core Purpose
 
-The **`chatSummarySummarizer`** is a powerful, low-level **creator node** that manages the iterative process of updating
+The **`chatSummarySummarizer`** is a low-level **creator node** that manages the iterative process of updating
 the rolling chat summary. It is designed to handle a large number of new memory chunks by processing them in intelligent
 batches, preventing the LLM context from becoming too large and ensuring a coherent, evolving summary over a long
 conversation.

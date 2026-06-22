@@ -540,3 +540,49 @@ class TestPreparePayloadTools:
         )
         assert "tool_choice" not in payload
         assert "tools" in payload
+
+
+class TestOllamaChatThinkParameter:
+    """
+    Ollama reads the reasoning toggle as a top-level 'think' field, not inside
+    'options'. A preset's 'think' key must be lifted out of options to the top level.
+    """
+
+    @staticmethod
+    def _config_with_think(base_config, think_value):
+        config = dict(base_config)
+        config["gen_input"] = {"temperature": 0.7, "think": think_value}
+        return config
+
+    def test_think_false_hoisted_to_top_level(self, mock_handler_config, mocker):
+        """A 'think': false preset key becomes a top-level payload field, not an options field."""
+        handler = OllamaChatHandler(**self._config_with_think(mock_handler_config, False), stream=False)
+        mocker.patch.object(handler, '_build_messages_from_conversation',
+                            return_value=[{"role": "user", "content": "Hi"}])
+
+        payload = handler._prepare_payload(conversation=[], system_prompt=None, prompt="Hi")
+
+        assert payload["think"] is False
+        assert "think" not in payload["options"]
+        assert payload["options"]["temperature"] == 0.7
+
+    def test_think_true_hoisted_to_top_level(self, mock_handler_config, mocker):
+        """A 'think': true preset key is hoisted the same way."""
+        handler = OllamaChatHandler(**self._config_with_think(mock_handler_config, True), stream=True)
+        mocker.patch.object(handler, '_build_messages_from_conversation',
+                            return_value=[{"role": "user", "content": "Hi"}])
+
+        payload = handler._prepare_payload(conversation=[], system_prompt=None, prompt="Hi")
+
+        assert payload["think"] is True
+        assert "think" not in payload["options"]
+
+    def test_no_think_key_means_no_top_level_think(self, mock_handler_config, mocker):
+        """When no preset sets 'think', the payload omits it entirely (Ollama default behavior)."""
+        handler = OllamaChatHandler(**mock_handler_config, stream=False)
+        mocker.patch.object(handler, '_build_messages_from_conversation',
+                            return_value=[{"role": "user", "content": "Hi"}])
+
+        payload = handler._prepare_payload(conversation=[], system_prompt=None, prompt="Hi")
+
+        assert "think" not in payload

@@ -1,0 +1,20 @@
+{
+  "temperature": 0.8,
+  "top_k": 40,
+  "top_p": 0.95,
+  "min_p": 0.05,
+  "typical_p": 1.0,
+  "repeat_penalty": 1.0,
+  "repeat_last_n": 64,
+  "presence_penalty": 0.0,
+  "frequency_penalty": 0.0,
+  "mirostat": 0,
+  "mirostat_tau": 5.0,
+  "mirostat_eta": 0.1,
+  "chat_template_kwargs": {
+    "enable_thinking": false
+  },
+  "stop": [
+    "<|END_RESPONSE|>"
+  ]
+}

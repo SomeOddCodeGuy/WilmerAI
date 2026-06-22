@@ -237,3 +237,50 @@ def test_parse_non_stream_response(ollama_generate_handler, caplog, response_jso
     # AND if the 'response' key was missing, an error should be logged
     if 'response' not in response_json:
         assert "Could not find 'response' key in Ollama generate response" in caplog.text
+
+
+def _build_generate_handler(mock_configs, gen_input, stream=False):
+    """Builds an OllamaGenerateApiHandler with a custom gen_input for think tests."""
+    return OllamaGenerateApiHandler(
+        base_url="http://localhost:11434",
+        api_key="",
+        gen_input=gen_input,
+        model_name="test-model:latest",
+        headers={"Content-Type": "application/json"},
+        stream=stream,
+        api_type_config=mock_configs["api_type_config"],
+        endpoint_config=mock_configs["endpoint_config"],
+        max_tokens=1024,
+    )
+
+
+def test_think_false_hoisted_to_top_level(mock_configs, mocker):
+    """A 'think': false preset key becomes a top-level payload field, not an options field."""
+    handler = _build_generate_handler(mock_configs, {"temperature": 0.8, "think": False})
+    mocker.patch.object(handler, '_build_prompt_from_conversation', return_value="prompt")
+
+    payload = handler._prepare_payload(None, "sys", "user")
+
+    assert payload["think"] is False
+    assert "think" not in payload["options"]
+    assert payload["options"]["temperature"] == 0.8
+
+
+def test_think_true_hoisted_to_top_level(mock_configs, mocker):
+    """A 'think': true preset key is hoisted the same way."""
+    handler = _build_generate_handler(mock_configs, {"think": True}, stream=True)
+    mocker.patch.object(handler, '_build_prompt_from_conversation', return_value="prompt")
+
+    payload = handler._prepare_payload(None, "sys", "user")
+
+    assert payload["think"] is True
+    assert "think" not in payload["options"]
+
+
+def test_no_think_key_means_no_top_level_think(ollama_generate_handler, mocker):
+    """When no preset sets 'think', the payload omits it entirely (Ollama default behavior)."""
+    mocker.patch.object(ollama_generate_handler, '_build_prompt_from_conversation', return_value="prompt")
+
+    payload = ollama_generate_handler._prepare_payload(None, "sys", "user")
+
+    assert "think" not in payload

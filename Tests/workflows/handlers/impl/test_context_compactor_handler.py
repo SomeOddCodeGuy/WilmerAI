@@ -295,6 +295,47 @@ class TestHandle:
         assert mock_update.call_count == 0
 
 
+class TestEstimationLevelScaling:
+    """Invariant K (compactor half): wilmerContextEstimationLevel in the compactor
+    settings scales the recent/old section token budgets. Config-local: it applies
+    whenever set, with NO clampPromptToContextWindow gating. Conservative / absent
+    leaves the budgets unchanged."""
+
+    @patch("Middleware.workflows.handlers.impl.context_compactor_handler.read_chunks_with_hashes")
+    @patch("Middleware.workflows.handlers.impl.context_compactor_handler.get_context_compactor_settings_path")
+    @patch("Middleware.workflows.handlers.impl.context_compactor_handler.load_config")
+    def test_aggressive_level_scales_section_budgets(self, mock_load, mock_path, mock_read,
+                                                     handler, base_context, sample_settings):
+        """aggressive (1.5x): recent/old 300 -> 450 passed to _calculate_boundaries."""
+        mock_load.return_value = dict(sample_settings, wilmerContextEstimationLevel="aggressive")
+        mock_read.return_value = []
+        base_context.messages = _make_messages(15, token_size_per_msg=100)
+        with patch.object(handler, '_calculate_boundaries',
+                          return_value={"old_start_idx": 0, "recent_start_idx": 0}) as mock_calc, \
+                patch.object(handler, '_should_compact', return_value=(False, False)):
+            handler.handle(base_context)
+        args = mock_calc.call_args[0]
+        assert args[1] == 450  # recent_context_tokens
+        assert args[2] == 450  # old_context_tokens
+
+    @patch("Middleware.workflows.handlers.impl.context_compactor_handler.read_chunks_with_hashes")
+    @patch("Middleware.workflows.handlers.impl.context_compactor_handler.get_context_compactor_settings_path")
+    @patch("Middleware.workflows.handlers.impl.context_compactor_handler.load_config")
+    def test_absent_level_leaves_section_budgets_unchanged(self, mock_load, mock_path, mock_read,
+                                                           handler, base_context, sample_settings):
+        """No level (default) leaves the configured 300/300 budgets exactly as-is."""
+        mock_load.return_value = sample_settings  # no wilmerContextEstimationLevel
+        mock_read.return_value = []
+        base_context.messages = _make_messages(15, token_size_per_msg=100)
+        with patch.object(handler, '_calculate_boundaries',
+                          return_value={"old_start_idx": 0, "recent_start_idx": 0}) as mock_calc, \
+                patch.object(handler, '_should_compact', return_value=(False, False)):
+            handler.handle(base_context)
+        args = mock_calc.call_args[0]
+        assert args[1] == 300
+        assert args[2] == 300
+
+
 class TestRunCompaction:
     """Tests for the _run_compaction method."""
 
@@ -863,7 +904,10 @@ class TestGetCompactorLock:
     def test_returns_lock_for_new_discussion(self):
         """A Lock is created and returned for a previously unseen discussion ID."""
         lock = _get_compactor_lock("disc-1")
-        assert isinstance(lock, threading.Lock)
+        # threading.Lock is a factory function, not a class (so it can't be the
+        # second arg to isinstance on Python 3.12+); compare against the concrete
+        # lock type instead.
+        assert isinstance(lock, type(threading.Lock()))
 
     def test_returns_same_lock_for_same_discussion(self):
         """Calling twice with the same ID returns the identical Lock object."""

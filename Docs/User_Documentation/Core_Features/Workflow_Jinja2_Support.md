@@ -1,17 +1,17 @@
 ### **Workflow Node Jinja2 Support**
 
-This guide provides a comprehensive overview of how to leverage the **Jinja2 templating engine** within WilmerAI
-workflow nodes. While standard variable substitution (`{my_variable}`) is suitable for simple cases, enabling Jinja2
-unlocks advanced capabilities like conditional logic, loops, and data manipulation directly within your prompts.
+This guide describes how to use the **Jinja2 templating engine** within WilmerAI workflow nodes. While standard
+variable substitution (`{my_variable}`) is suitable for simple cases, enabling Jinja2 adds capabilities like
+conditional logic, loops, and data manipulation directly within your prompts.
 
 This feature is powered by the `$WorkflowVariableManager$`, which dynamically switches between standard formatting and
 the Jinja2 engine based on a simple flag in your node's configuration.
 
 -----
 
-### \#\# 1. Overview & Key Capabilities
+### 1. Overview & Key Capabilities
 
-Jinja2 is a powerful templating language for Python. By enabling it on a per-node basis, you can transform static prompt
+Jinja2 is a templating language for Python. By enabling it on a per-node basis, you can transform static prompt
 strings into dynamic, logic-driven templates that react to the state of the workflow in real-time.
 
 **Key Capabilities:**
@@ -22,12 +22,12 @@ strings into dynamic, logic-driven templates that react to the state of the work
   conversation histories or other collections of data precisely.
 * **Direct Variable Access:** All standard workflow variables (e.g., `{agent1Output}`, `{todays_date_pretty}`) are
   available within the Jinja2 context.
-* **Seamless Integration:** The feature is a non-breaking, opt-in enhancement. Nodes without the Jinja2 flag continue to
+* **Non-Breaking Integration:** The feature is a non-breaking, opt-in enhancement. Nodes without the Jinja2 flag continue to
   function with standard substitution.
 
 -----
 
-### \#\# 2. How to Enable and Use Jinja2
+### 2. How to Enable and Use Jinja2
 
 Activating the Jinja2 engine for a specific node is as simple as adding a single property to its JSON configuration.
 
@@ -54,7 +54,7 @@ Once enabled, you can use Jinja2 syntax in the relevant string fields. Remember 
 
 #### **Example 1: Conditional Prompting**
 
-This is a powerful pattern for creating chains that react to the output of a previous "thinking" or "classification"
+This is a common pattern for creating chains that react to the output of a previous "thinking" or "classification"
 step. Here, the system prompt for a `Standard` node changes based on the result of the first node.
 
 ```json
@@ -96,18 +96,18 @@ The `{messages}` variable provides the entire conversation history as a list of 
 }
 ```
 
-* In this example, `{{ message.role | capitalize }}` also demonstrates a **filter**, another powerful Jinja2 feature
+* In this example, `{{ message.role | capitalize }}` also demonstrates a **filter**, another Jinja2 feature
   that can modify the variable before it's printed.
 
 -----
 
-### \#\# 4. How It Works (Under the Hood)
+### 4. How It Works (Under the Hood)
 
-The logic for handling Jinja2 is centralized within the `$WorkflowVariableManager$`.
+The logic for handling Jinja2 is centralized within the `WorkflowVariableManager`.
 
-1. **Handler Invocation:** A node handler (e.g., ` $StandardNodeHandler$ or  `$SpecializedNodeHandler$` ) calls the  `
-   workflow\_variable\_service.apply\_variables()
-   `method, passing it the raw prompt string and the current`$ExecutionContext$\`.
+1. **Handler Invocation:** A node handler (e.g., `StandardNodeHandler` or `SpecializedNodeHandler`) calls the
+   `workflow_variable_service.apply_variables()` method, passing it the raw prompt string and the current
+   `ExecutionContext`.
 
 2. **Flag Check:** The `apply_variables` method checks for the `jinja2` flag within the context object:
    `context.config.get('jinja2', False)`.

@@ -2,7 +2,8 @@ from copy import deepcopy
 
 import pytest
 
-from Middleware.services.llm_dispatch_service import LLMDispatchService
+from Middleware.services.llm_dispatch_service import (
+    LLMDispatchService, _CLAMP_PER_MESSAGE_OVERHEAD_TOKENS, _CLAMP_HEADROOM_TOKENS)
 from Middleware.workflows.models.execution_context import ExecutionContext
 
 # --- Test Data ---
@@ -49,6 +50,20 @@ def mock_context(mocker):
     context.messages = deepcopy(SAMPLE_MESSAGES)
 
     return context
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_user_config(mocker):
+    """Isolate dispatch tests from the real user config file.
+
+    The context clamp resolves node -> endpoint -> user -> default(OFF) via the
+    shared config_utils.is_context_clamp_enabled, whose user level calls
+    get_user_config(); default it to an empty dict (clamp OFF) so tests are
+    hermetic. A test that wants the user-level flag re-patches the returned mock's
+    return_value.
+    """
+    return mocker.patch(
+        'Middleware.utilities.config_utils.get_user_config', return_value={})
 
 
 # --- Test Suite for Completions API Logic ---
@@ -1333,3 +1348,717 @@ class TestDispatchEnsureUserMessage:
         LLMDispatchService.dispatch(context=mock_context)
 
         mock_ensure.assert_not_called()
+
+
+class TestDispatchMaxConversationTokenSize:
+    """Tests for ``lastMessagesToSendInsteadOfPromptMaxTokenSize``: an optional token
+    ceiling layered on top of the ``lastMessagesToSendInsteadOfPrompt`` message-count
+    cap, so a long agentic conversation (large tool results) cannot overflow the
+    endpoint context window. Keeps the most recent messages that fit within budget."""
+
+    def test_chat_absent_param_sends_all_last_n(self, mock_context):
+        """Without the param, the chat path is unchanged: all last-N messages are sent."""
+        mock_context.llm_handler.takes_message_collection = True
+        mock_context.config = {"systemPrompt": "Sys.", "lastMessagesToSendInsteadOfPrompt": 4}
+
+        LLMDispatchService.dispatch(context=mock_context)
+
+        conversation = mock_context.llm_handler.llm.get_response_from_llm.call_args[1]["conversation"]
+        assert conversation[0] == {"role": "system", "content": "Sys."}
+        assert [m["content"] for m in conversation[1:]] == [
+            "Hello, human.", "How are you?", "I am a large language model.", "Tell me a joke."]
+
+    def test_chat_token_cap_trims_to_budget(self, mock_context, mocker):
+        """With a token ceiling, only the most-recent messages within budget are sent."""
+        mock_context.llm_handler.takes_message_collection = True
+        mock_context.config = {"systemPrompt": "Sys.", "lastMessagesToSendInsteadOfPrompt": 5,
+                               "lastMessagesToSendInsteadOfPromptMaxTokenSize": 200}
+        # Each candidate message estimates to 100 tokens.
+        mocker.patch('Middleware.utilities.prompt_extraction_utils.rough_estimate_token_length',
+                     return_value=100)
+
+        LLMDispatchService.dispatch(context=mock_context)
+
+        conversation = mock_context.llm_handler.llm.get_response_from_llm.call_args[1]["conversation"]
+        # Budget 200 at 100/msg => the last 2 messages survive; system is always added.
+        assert conversation[0]["role"] == "system"
+        assert [m["content"] for m in conversation[1:]] == [
+            "I am a large language model.", "Tell me a joke."]
+
+    def test_chat_token_cap_keeps_at_least_one(self, mock_context, mocker):
+        """A budget smaller than the most-recent message still yields exactly that one (floor 1)."""
+        mock_context.llm_handler.takes_message_collection = True
+        mock_context.config = {"systemPrompt": "Sys.", "lastMessagesToSendInsteadOfPrompt": 5,
+                               "lastMessagesToSendInsteadOfPromptMaxTokenSize": 1}
+        mocker.patch('Middleware.utilities.prompt_extraction_utils.rough_estimate_token_length',
+                     return_value=100)
+
+        LLMDispatchService.dispatch(context=mock_context)
+
+        conversation = mock_context.llm_handler.llm.get_response_from_llm.call_args[1]["conversation"]
+        assert [m["content"] for m in conversation[1:]] == ["Tell me a joke."]
+
+    def test_chat_generous_cap_keeps_all_last_n(self, mock_context):
+        """A generous ceiling does not trim: same result as no param."""
+        mock_context.llm_handler.takes_message_collection = True
+        mock_context.config = {"systemPrompt": "Sys.", "lastMessagesToSendInsteadOfPrompt": 4,
+                               "lastMessagesToSendInsteadOfPromptMaxTokenSize": 100000}
+
+        LLMDispatchService.dispatch(context=mock_context)
+
+        conversation = mock_context.llm_handler.llm.get_response_from_llm.call_args[1]["conversation"]
+        assert [m["content"] for m in conversation[1:]] == [
+            "Hello, human.", "How are you?", "I am a large language model.", "Tell me a joke."]
+
+    def test_completions_token_cap_preslices_source(self, mock_context, mocker):
+        """On the completions path, the ceiling pre-slices the messages handed to the formatter."""
+        mock_context.llm_handler.takes_message_collection = False  # completions API
+        mock_context.config = {"systemPrompt": "Sys.", "lastMessagesToSendInsteadOfPrompt": 5,
+                               "lastMessagesToSendInsteadOfPromptMaxTokenSize": 1}
+        mocker.patch('Middleware.utilities.prompt_extraction_utils.rough_estimate_token_length',
+                     return_value=100)
+        mocker.patch('Middleware.services.llm_dispatch_service.format_system_prompt_with_template',
+                     return_value="formatted_system")
+        mock_fmt = mocker.patch(
+            'Middleware.services.llm_dispatch_service.get_formatted_last_n_turns_as_string',
+            return_value="formatted")
+
+        LLMDispatchService.dispatch(context=mock_context)
+
+        passed_messages = mock_fmt.call_args[0][0]
+        assert [m["content"] for m in passed_messages] == ["Tell me a joke."]
+
+    def test_none_content_message_does_not_crash(self, mock_context):
+        """Tool-call assistant messages with content=None must not crash the token estimator."""
+        mock_context.llm_handler.takes_message_collection = True
+        mock_context.messages = [
+            {"role": "user", "content": "Do the thing."},
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "t1"}]},
+            {"role": "tool", "content": "result", "tool_call_id": "t1"},
+        ]
+        mock_context.config = {"systemPrompt": "Sys.", "lastMessagesToSendInsteadOfPrompt": 10,
+                               "lastMessagesToSendInsteadOfPromptMaxTokenSize": 100000}
+
+        LLMDispatchService.dispatch(context=mock_context)  # must not raise
+
+        conversation = mock_context.llm_handler.llm.get_response_from_llm.call_args[1]["conversation"]
+        assert [m.get("content") for m in conversation[1:]] == ["Do the thing.", None, "result"]
+
+
+# --- Tests for the endpoint-context-aware pre-send clamp ---
+
+class TestEstimateTokensForTools:
+    """Tests for the static _estimate_tokens_for_tools helper."""
+
+    def test_none_returns_zero(self):
+        assert LLMDispatchService._estimate_tokens_for_tools(None) == 0
+
+    def test_empty_returns_zero(self):
+        assert LLMDispatchService._estimate_tokens_for_tools([]) == 0
+
+    def test_tool_list_returns_positive(self):
+        tools = [{"type": "function", "function": {"name": "read_file", "description": "Reads a file."}}]
+        assert LLMDispatchService._estimate_tokens_for_tools(tools) > 0
+
+    def test_non_serializable_returns_zero(self):
+        """A tool definition that cannot be JSON-serialized is counted as 0, not raised."""
+        tools = [{"type": "function", "bad": {1, 2, 3}}]  # set is not JSON serializable
+        assert LLMDispatchService._estimate_tokens_for_tools(tools) == 0
+
+
+class TestComputeConversationTokenBudget:
+    """Tests for the static _compute_conversation_token_budget helper."""
+
+    def _handler(self, mocker, endpoint_file, max_tokens=0):
+        llm = mocker.Mock()
+        llm.endpoint_file = endpoint_file
+        llm.max_tokens = max_tokens
+        handler = mocker.Mock()
+        handler.llm = llm
+        return handler
+
+    def test_none_when_endpoint_file_not_dict(self, mocker):
+        """A mocked handler (endpoint_file is a Mock, not a dict) disables the clamp."""
+        handler = mocker.Mock()  # handler.llm.endpoint_file is an auto-Mock, not a dict
+        assert LLMDispatchService._compute_conversation_token_budget(handler, "sys", None) is None
+
+    def test_none_when_window_missing(self, mocker):
+        handler = self._handler(mocker, {}, max_tokens=100)
+        assert LLMDispatchService._compute_conversation_token_budget(handler, "sys", None) is None
+
+    def test_none_when_window_zero_or_negative(self, mocker):
+        for bad in (0, -1):
+            handler = self._handler(mocker, {"maxContextTokenSize": bad}, max_tokens=100)
+            assert LLMDispatchService._compute_conversation_token_budget(handler, "sys", None) is None
+
+    def test_none_when_window_is_bool(self, mocker):
+        """A boolean maxContextTokenSize (misconfig) is rejected, not treated as 1."""
+        handler = self._handler(mocker, {"maxContextTokenSize": True}, max_tokens=100)
+        assert LLMDispatchService._compute_conversation_token_budget(handler, "sys", None) is None
+
+    def test_budget_formula(self, mocker):
+        """budget = window - n_predict - est(system) - est(tools) - headroom."""
+        mocker.patch('Middleware.services.llm_dispatch_service.rough_estimate_token_length',
+                     return_value=50)
+        handler = self._handler(mocker, {"maxContextTokenSize": 1000}, max_tokens=200)
+        # system "sys" -> 50, tools None -> 0, headroom 512
+        assert LLMDispatchService._compute_conversation_token_budget(handler, "sys", None) == 1000 - 200 - 50 - 0 - 512
+
+    def test_budget_subtracts_tools(self, mocker):
+        mocker.patch('Middleware.services.llm_dispatch_service.rough_estimate_token_length',
+                     return_value=50)
+        handler = self._handler(mocker, {"maxContextTokenSize": 1000}, max_tokens=200)
+        tools = [{"type": "function", "function": {"name": "f"}}]
+        # system 50 + tools 50 subtracted
+        assert LLMDispatchService._compute_conversation_token_budget(handler, "sys", tools) == 1000 - 200 - 50 - 50 - 512
+
+    def test_empty_system_counts_zero(self, mocker):
+        handler = self._handler(mocker, {"maxContextTokenSize": 1000}, max_tokens=200)
+        # Empty system prompt -> 0 tokens, no estimator call needed
+        assert LLMDispatchService._compute_conversation_token_budget(handler, "", None) == 1000 - 200 - 0 - 0 - 512
+
+    def test_non_numeric_max_tokens_treated_as_zero(self, mocker):
+        handler = self._handler(mocker, {"maxContextTokenSize": 1000}, max_tokens="oops")
+        assert LLMDispatchService._compute_conversation_token_budget(handler, "", None) == 1000 - 0 - 0 - 0 - 512
+
+    def test_negative_budget_logged_and_returned(self, mocker, caplog):
+        """When response+system+headroom exceed the window, a negative budget is
+        returned (callers still trim to it) and a warning is logged."""
+        handler = self._handler(mocker, {"maxContextTokenSize": 100}, max_tokens=200)
+        with caplog.at_level("WARNING"):
+            budget = LLMDispatchService._compute_conversation_token_budget(handler, "", None)
+        assert budget == 100 - 200 - 0 - 0 - 512
+        assert any("budget" in r.message for r in caplog.records)
+
+
+class TestTrimMessagesToTokenBudget:
+    """Tests for the static _trim_messages_to_token_budget helper."""
+
+    def test_none_budget_returns_same_object(self):
+        messages = [{"role": "user", "content": "a"}]
+        result = LLMDispatchService._trim_messages_to_token_budget(messages, None)
+        assert result is messages
+
+    def test_empty_returns_same_object(self):
+        messages = []
+        result = LLMDispatchService._trim_messages_to_token_budget(messages, 100)
+        assert result is messages
+
+    def test_drops_oldest_to_fit(self, mocker):
+        """With each message at 100 tokens (+8 overhead = 108), a 250 budget keeps the 2 newest."""
+        mocker.patch('Middleware.services.llm_dispatch_service.rough_estimate_token_length',
+                     return_value=100)
+        messages = [{"role": "user", "content": f"m{i}"} for i in range(5)]
+        result = LLMDispatchService._trim_messages_to_token_budget(messages, 250)
+        assert [m["content"] for m in result] == ["m3", "m4"]
+
+    def test_keeps_at_least_one(self, mocker, caplog):
+        """A budget below a single message still yields exactly the most recent one,
+        kept WHOLE (never content-truncated), with a warning."""
+        mocker.patch('Middleware.services.llm_dispatch_service.rough_estimate_token_length',
+                     return_value=100)
+        messages = [{"role": "user", "content": "old"}, {"role": "user", "content": "new"}]
+        with caplog.at_level("WARNING"):
+            result = LLMDispatchService._trim_messages_to_token_budget(messages, 1)
+        assert len(result) == 1
+        # The single kept message is sent WHOLE; conversation content is never chopped.
+        assert result[0] == {"role": "user", "content": "new"}
+        assert any("single most-recent" in r.message for r in caplog.records)
+
+    def test_generous_budget_keeps_all(self, mocker):
+        mocker.patch('Middleware.services.llm_dispatch_service.rough_estimate_token_length',
+                     return_value=10)
+        messages = [{"role": "user", "content": f"m{i}"} for i in range(4)]
+        result = LLMDispatchService._trim_messages_to_token_budget(messages, 100000)
+        assert [m["content"] for m in result] == ["m0", "m1", "m2", "m3"]
+
+    def test_keeps_single_oversized_message_whole(self, caplog):
+        """A single message larger than the whole budget is kept WHOLE (never content-
+        truncated) and a warning is logged: a visible backend rejection beats silently
+        dropping the operator's content. Uses the real estimator."""
+        content = " ".join(f"w{i}" for i in range(500))
+        messages = [{"role": "user", "content": content}]
+        with caplog.at_level("WARNING"):
+            result = LLMDispatchService._trim_messages_to_token_budget(messages, 100)
+        assert len(result) == 1
+        # Byte-for-byte intact: all 500 words survive, nothing chopped from either end.
+        assert result[0]["content"] == content
+        assert any("single most-recent" in r.message for r in caplog.records)
+
+    def test_none_content_does_not_crash(self, mocker):
+        """A message with content=None is handled (treated as empty)."""
+        mocker.patch('Middleware.services.llm_dispatch_service.rough_estimate_token_length',
+                     return_value=10)
+        messages = [{"role": "assistant", "content": None}, {"role": "user", "content": "hi"}]
+        result = LLMDispatchService._trim_messages_to_token_budget(messages, 100000)
+        assert len(result) == 2
+
+
+class TestClampChatCollectionToBudget:
+    """Tests for the static _clamp_chat_collection_to_budget helper."""
+
+    def test_none_budget_noop(self):
+        collection = [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}]
+        original = deepcopy(collection)
+        LLMDispatchService._clamp_chat_collection_to_budget(collection, None)
+        assert collection == original
+
+    def test_preserves_leading_system_messages(self, mocker):
+        """The leading system message is kept; only the body is trimmed."""
+        mocker.patch('Middleware.services.llm_dispatch_service.rough_estimate_token_length',
+                     return_value=100)
+        collection = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "m0"},
+            {"role": "assistant", "content": "m1"},
+            {"role": "user", "content": "m2"},
+        ]
+        # budget 250 at 108/msg keeps the 2 newest body messages.
+        LLMDispatchService._clamp_chat_collection_to_budget(collection, 250)
+        assert collection[0] == {"role": "system", "content": "sys"}
+        assert [m["content"] for m in collection[1:]] == ["m1", "m2"]
+
+    def test_body_only_no_system(self, mocker):
+        mocker.patch('Middleware.services.llm_dispatch_service.rough_estimate_token_length',
+                     return_value=100)
+        collection = [{"role": "user", "content": f"m{i}"} for i in range(4)]
+        LLMDispatchService._clamp_chat_collection_to_budget(collection, 250)
+        assert [m["content"] for m in collection] == ["m2", "m3"]
+
+
+class TestWarnIfAuthoredPromptOverflows:
+    """Tests for _warn_if_authored_prompt_overflows, which warns but NEVER mutates
+    an operator-authored prompt (a hard backend failure beats silent truncation)."""
+
+    def _handler(self, mocker, window=1000):
+        llm = mocker.Mock()
+        llm.endpoint_file = {"maxContextTokenSize": window}
+        handler = mocker.Mock()
+        handler.llm = llm
+        return handler
+
+    def test_none_budget_no_warning(self, mocker, caplog):
+        handler = self._handler(mocker)
+        with caplog.at_level("WARNING"):
+            LLMDispatchService._warn_if_authored_prompt_overflows("hello", None, {}, handler)
+        assert not caplog.records
+
+    def test_empty_prompt_no_warning(self, mocker, caplog):
+        handler = self._handler(mocker)
+        with caplog.at_level("WARNING"):
+            LLMDispatchService._warn_if_authored_prompt_overflows("", 100, {}, handler)
+        assert not caplog.records
+
+    def test_fits_no_warning(self, mocker, caplog):
+        mocker.patch('Middleware.services.llm_dispatch_service.rough_estimate_token_length',
+                     return_value=10)
+        handler = self._handler(mocker)
+        with caplog.at_level("WARNING"):
+            LLMDispatchService._warn_if_authored_prompt_overflows("short", 100, {}, handler)
+        assert not caplog.records
+
+    def test_overflow_warns_and_does_not_mutate(self, mocker, caplog):
+        """When the authored prompt exceeds the budget a warning is logged; the helper
+        returns None and never alters the prompt."""
+        mocker.patch('Middleware.services.llm_dispatch_service.rough_estimate_token_length',
+                     return_value=5000)
+        handler = self._handler(mocker, window=1000)
+        with caplog.at_level("WARNING"):
+            result = LLMDispatchService._warn_if_authored_prompt_overflows(
+                "big prompt", 200, {"title": "MyNode"}, handler)
+        assert result is None
+        assert any("authored prompt" in r.message for r in caplog.records)
+
+
+class TestDispatchPreSendClampIntegration:
+    """End-to-end tests that the clamp is wired into dispatch for both API branches."""
+
+    def _set_endpoint(self, mock_context, window, n_predict):
+        mock_context.llm_handler.llm.endpoint_file = {"maxContextTokenSize": window}
+        mock_context.llm_handler.llm.max_tokens = n_predict
+
+    def test_chat_doer_collection_trimmed_to_window(self, mock_context, mocker):
+        """A chat last-N collection that overflows the window is trimmed to the most recent."""
+        mock_context.llm_handler.takes_message_collection = True
+        self._set_endpoint(mock_context, window=1000, n_predict=100)
+        mock_context.config = {"systemPrompt": "Sys.", "lastMessagesToSendInsteadOfPrompt": 10,
+                               "clampPromptToContextWindow": True}
+        mocker.patch('Middleware.services.llm_dispatch_service.rough_estimate_token_length',
+                     return_value=100)
+        # budget = 1000 - 100 - 100(sys) - 0 - 512 = 288; 108/msg keeps 2 newest.
+        LLMDispatchService.dispatch(context=mock_context)
+        conversation = mock_context.llm_handler.llm.get_response_from_llm.call_args[1]["conversation"]
+        assert conversation[0]["role"] == "system"
+        assert [m["content"] for m in conversation[1:]] == [
+            "I am a large language model.", "Tell me a joke."]
+
+    def test_chat_authored_prompt_never_truncated(self, mock_context, caplog):
+        """A chat node whose authored prompt overflows the window is sent INTACT, never
+        silently truncated; a warning is logged instead (hard failure beats sabotage)."""
+        mock_context.llm_handler.takes_message_collection = True
+        self._set_endpoint(mock_context, window=1000, n_predict=100)
+        big = " ".join(f"w{i}" for i in range(3000))
+        mock_context.config = {"systemPrompt": "Sys.", "prompt": big,
+                               "clampPromptToContextWindow": True}
+        with caplog.at_level("WARNING"):
+            LLMDispatchService.dispatch(context=mock_context)
+        conversation = mock_context.llm_handler.llm.get_response_from_llm.call_args[1]["conversation"]
+        assert conversation[0] == {"role": "system", "content": "Sys."}
+        user_msg = conversation[-1]
+        assert user_msg["role"] == "user"
+        # The authored prompt survives in full -- no head or tail chopped.
+        assert user_msg["content"] == big
+        assert any("authored prompt" in r.message for r in caplog.records)
+
+    def test_chat_noop_when_fits(self, mock_context):
+        """A generous window leaves the chat collection untouched."""
+        mock_context.llm_handler.takes_message_collection = True
+        self._set_endpoint(mock_context, window=65536, n_predict=800)
+        mock_context.config = {"systemPrompt": "Sys.", "lastMessagesToSendInsteadOfPrompt": 10,
+                               "clampPromptToContextWindow": True}
+        LLMDispatchService.dispatch(context=mock_context)
+        conversation = mock_context.llm_handler.llm.get_response_from_llm.call_args[1]["conversation"]
+        assert [m["content"] for m in conversation[1:]] == [
+            "Hello, bot.", "Hello, human.", "How are you?", "I am a large language model.", "Tell me a joke."]
+
+    def test_chat_clamp_then_ensure_recovers_user_message(self, mock_context, mocker):
+        """When the clamp drops the only (oldest) user message, the user-message safety
+        net recovers it from the full conversation."""
+        mock_context.llm_handler.takes_message_collection = True
+        self._set_endpoint(mock_context, window=1000, n_predict=100)
+        mock_context.config = {"systemPrompt": "Sys.", "lastMessagesToSendInsteadOfPrompt": 10,
+                               "clampPromptToContextWindow": True}
+        mock_context.messages = [
+            {"role": "user", "content": "the original task"},
+            {"role": "assistant", "content": "a"},
+            {"role": "assistant", "content": "b"},
+            {"role": "assistant", "content": "c"},
+        ]
+        mocker.patch('Middleware.services.llm_dispatch_service.rough_estimate_token_length',
+                     return_value=100)
+        # budget 288, 108/msg keeps newest 2 (b, c) -> no user -> ensure re-adds it.
+        LLMDispatchService.dispatch(context=mock_context)
+        conversation = mock_context.llm_handler.llm.get_response_from_llm.call_args[1]["conversation"]
+        user_msgs = [m for m in conversation if m["role"] == "user"]
+        assert any(m["content"] == "the original task" for m in user_msgs)
+
+    def test_completions_source_messages_trimmed(self, mock_context, mocker):
+        """On the completions last-N path, the message slice handed to the formatter is trimmed."""
+        mock_context.llm_handler.takes_message_collection = False
+        self._set_endpoint(mock_context, window=1000, n_predict=100)
+        mock_context.config = {"systemPrompt": "Sys.", "lastMessagesToSendInsteadOfPrompt": 10,
+                               "clampPromptToContextWindow": True}
+        mocker.patch('Middleware.services.llm_dispatch_service.rough_estimate_token_length',
+                     return_value=100)
+        mocker.patch('Middleware.services.llm_dispatch_service.format_system_prompt_with_template',
+                     return_value="fs")
+        mock_fmt = mocker.patch(
+            'Middleware.services.llm_dispatch_service.get_formatted_last_n_turns_as_string',
+            return_value="fmt")
+        # budget = 1000 - 100 - 100(sys) - 512 = 288; 108/msg keeps 2 newest of the 6.
+        LLMDispatchService.dispatch(context=mock_context)
+        passed_messages = mock_fmt.call_args[0][0]
+        assert [m["content"] for m in passed_messages] == [
+            "I am a large language model.", "Tell me a joke."]
+
+    def test_completions_authored_prompt_never_truncated(self, mock_context, mocker, caplog):
+        """On the completions fixed-prompt path, an oversized authored prompt is sent
+        INTACT, never truncated; a warning is logged instead."""
+        mock_context.llm_handler.takes_message_collection = False
+        self._set_endpoint(mock_context, window=1000, n_predict=100)
+        big = " ".join(f"w{i}" for i in range(3000))
+        mock_context.config = {"systemPrompt": "Sys.", "prompt": big,
+                               "clampPromptToContextWindow": True}
+        mocker.patch('Middleware.services.llm_dispatch_service.format_system_prompt_with_template',
+                     return_value="fs")
+        with caplog.at_level("WARNING"):
+            LLMDispatchService.dispatch(context=mock_context)
+        sent_prompt = mock_context.llm_handler.llm.get_response_from_llm.call_args[1]["prompt"]
+        # The whole authored prompt survives (all 3000 words); nothing chopped.
+        assert len(sent_prompt.split()) == 3000
+        assert any("authored prompt" in r.message for r in caplog.records)
+
+    def test_completions_fixed_prompt_noop_when_fits(self, mock_context, mocker):
+        mock_context.llm_handler.takes_message_collection = False
+        self._set_endpoint(mock_context, window=65536, n_predict=100)
+        mock_context.config = {"systemPrompt": "Sys.", "prompt": "short prompt",
+                               "clampPromptToContextWindow": True}
+        mocker.patch('Middleware.services.llm_dispatch_service.format_system_prompt_with_template',
+                     return_value="fs")
+        LLMDispatchService.dispatch(context=mock_context)
+        sent_prompt = mock_context.llm_handler.llm.get_response_from_llm.call_args[1]["prompt"]
+        assert sent_prompt == "short prompt"
+
+    def test_clamp_disabled_with_mocked_endpoint(self, mock_context):
+        """With a fully-mocked handler (no real endpoint_file dict), the clamp is a
+        no-op: all last-N messages pass through unchanged."""
+        mock_context.llm_handler.takes_message_collection = True
+        # Do NOT set endpoint_file/max_tokens to real values -> they are Mocks.
+        mock_context.config = {"systemPrompt": "Sys.", "lastMessagesToSendInsteadOfPrompt": 10}
+        LLMDispatchService.dispatch(context=mock_context)
+        conversation = mock_context.llm_handler.llm.get_response_from_llm.call_args[1]["conversation"]
+        assert [m["content"] for m in conversation[1:]] == [
+            "Hello, bot.", "Hello, human.", "How are you?", "I am a large language model.", "Tell me a joke."]
+
+
+class TestPromptIntegrityBattery:
+    """Exhaustive battery proving the operator's authored content holds firm across
+    the clamp/level matrix. Covers handoff invariants C (systemPrompt never
+    truncated), E (clamp OFF is byte-for-byte pre-feature), F (conservative ==
+    baseline), H (the level scales the conversation budget, monotonically), and I
+    (the endpoint window sent to the backend is never scaled by the level). The
+    sacred rule under test: Wilmer may drop whole oldest CONVERSATION messages, but
+    must NEVER alter the authored prompt/systemPrompt."""
+
+    # --- helpers -------------------------------------------------------------
+    def _eight_user_messages(self):
+        return [{"role": "user", "content": f"u{i}"} for i in range(8)]
+
+    def _setup_level_case(self, mock_context, mocker, level=None, clamp=True, window=1000,
+                          n_predict=100):
+        """Eight equal-sized user messages, estimator pinned at 100/msg, so the
+        surviving count is a clean function of the level-scaled budget.
+
+        With window=1000, n_predict=100, system=100, headroom=512 and 108/msg:
+        budget = int((1000-100)*level) - 100 - 512; survivors = floor(budget/108),
+        capped at 8. => conservative 2, balanced 4, aggressive 6, xaggressive 8.
+        """
+        mock_context.llm_handler.takes_message_collection = True
+        endpoint = {"maxContextTokenSize": window}
+        if level is not None:
+            endpoint["wilmerContextEstimationLevel"] = level
+        mock_context.llm_handler.llm.endpoint_file = endpoint
+        mock_context.llm_handler.llm.max_tokens = n_predict
+        mock_context.messages = self._eight_user_messages()
+        mock_context.config = {"systemPrompt": "Sys.", "lastMessagesToSendInsteadOfPrompt": 8}
+        if clamp:
+            mock_context.config["clampPromptToContextWindow"] = True
+        mocker.patch('Middleware.services.llm_dispatch_service.rough_estimate_token_length',
+                     return_value=100)
+
+    def _body(self, mock_context):
+        conversation = mock_context.llm_handler.llm.get_response_from_llm.call_args[1]["conversation"]
+        return [m["content"] for m in conversation if m["role"] != "system"]
+
+    # --- C: systemPrompt is never truncated ----------------------------------
+    def test_chat_huge_system_prompt_preserved_intact(self, mock_context):
+        """A system prompt far larger than the window is kept WHOLE as the leading
+        system message (its tokens are budgeted out, never chopped)."""
+        mock_context.llm_handler.takes_message_collection = True
+        big_system = " ".join(f"s{i}" for i in range(5000))
+        mock_context.llm_handler.llm.endpoint_file = {"maxContextTokenSize": 1000}
+        mock_context.llm_handler.llm.max_tokens = 100
+        mock_context.config = {"systemPrompt": big_system, "lastMessagesToSendInsteadOfPrompt": 5,
+                               "clampPromptToContextWindow": True}
+        LLMDispatchService.dispatch(context=mock_context)
+        conversation = mock_context.llm_handler.llm.get_response_from_llm.call_args[1]["conversation"]
+        assert conversation[0] == {"role": "system", "content": big_system}
+
+    def test_completions_huge_system_prompt_preserved_intact(self, mock_context, mocker):
+        """On completions, the (huge) system prompt is forwarded intact; the clamp
+        never touches it."""
+        mock_context.llm_handler.takes_message_collection = False
+        big_system = " ".join(f"s{i}" for i in range(5000))
+        mock_context.llm_handler.llm.endpoint_file = {"maxContextTokenSize": 1000}
+        mock_context.llm_handler.llm.max_tokens = 100
+        mock_context.config = {"systemPrompt": big_system, "lastMessagesToSendInsteadOfPrompt": 5,
+                               "clampPromptToContextWindow": True}
+        # Identity system template so we can assert the content survived end to end;
+        # stub the conversation formatter so the test does not touch the filesystem.
+        mocker.patch('Middleware.services.llm_dispatch_service.format_system_prompt_with_template',
+                     side_effect=lambda s, *a, **k: s)
+        mocker.patch('Middleware.services.llm_dispatch_service.get_formatted_last_n_turns_as_string',
+                     return_value="fmt")
+        LLMDispatchService.dispatch(context=mock_context)
+        sent_system = mock_context.llm_handler.llm.get_response_from_llm.call_args[1]["system_prompt"]
+        assert sent_system == big_system
+
+    # --- E: clamp OFF is byte-for-byte pre-feature behavior -------------------
+    def test_clamp_off_absent_chat_no_trim_no_warning(self, mock_context, mocker, caplog):
+        """Flag absent: even with a tiny window, NOTHING is trimmed and nothing is
+        logged (the clamp is the master switch; off means let the chips fall)."""
+        self._setup_level_case(mock_context, mocker, level=None, clamp=False)
+        with caplog.at_level("WARNING"):
+            LLMDispatchService.dispatch(context=mock_context)
+        assert self._body(mock_context) == [f"u{i}" for i in range(8)]
+        assert not caplog.records
+
+    def test_clamp_off_false_chat_no_trim(self, mock_context, mocker):
+        """Flag explicitly False overrides everything: no trimming."""
+        self._setup_level_case(mock_context, mocker, level="xaggressive", clamp=False)
+        mock_context.config["clampPromptToContextWindow"] = False
+        LLMDispatchService.dispatch(context=mock_context)
+        assert self._body(mock_context) == [f"u{i}" for i in range(8)]
+
+    def test_clamp_off_does_not_scale_doer_cap(self, mock_context, mocker):
+        """With the clamp OFF, a non-conservative endpoint level is INERT: the doer
+        cap (lastMessagesToSendInsteadOfPromptMaxTokenSize) is applied at its RAW
+        value, not level-scaled (handoff Q1)."""
+        mock_context.llm_handler.takes_message_collection = True
+        mock_context.llm_handler.llm.endpoint_file = {
+            "maxContextTokenSize": 1000, "wilmerContextEstimationLevel": "xaggressive"}
+        mock_context.messages = self._eight_user_messages()
+        mock_context.config = {"systemPrompt": "Sys.", "lastMessagesToSendInsteadOfPrompt": 8,
+                               "lastMessagesToSendInsteadOfPromptMaxTokenSize": 200}
+        mocker.patch('Middleware.utilities.prompt_extraction_utils.rough_estimate_token_length',
+                     return_value=100)
+        LLMDispatchService.dispatch(context=mock_context)
+        # Raw cap 200 at 100/msg keeps exactly the 2 newest. If the level (1.85) had
+        # leaked in, the cap would have been 370 and 3 messages would survive.
+        assert self._body(mock_context) == ["u6", "u7"]
+
+    def test_clamp_off_authored_prompt_no_warning(self, mock_context, caplog):
+        """Clamp OFF: an overflowing authored prompt is sent as-is with NO warning
+        (warnings are part of clamp awareness, which is off)."""
+        mock_context.llm_handler.takes_message_collection = True
+        big = " ".join(f"w{i}" for i in range(3000))
+        mock_context.llm_handler.llm.endpoint_file = {"maxContextTokenSize": 1000}
+        mock_context.llm_handler.llm.max_tokens = 100
+        mock_context.config = {"systemPrompt": "Sys.", "prompt": big}  # no clamp flag
+        with caplog.at_level("WARNING"):
+            LLMDispatchService.dispatch(context=mock_context)
+        conversation = mock_context.llm_handler.llm.get_response_from_llm.call_args[1]["conversation"]
+        assert conversation[-1]["content"] == big
+        assert not caplog.records
+
+    # --- F: conservative == baseline (absence behaves as conservative) --------
+    def test_absent_level_equals_conservative(self, mock_context, mocker):
+        """Clamp ON with no level set keeps the same messages as an explicit
+        conservative level (both 1.0): the default is a true no-op on the budget."""
+        self._setup_level_case(mock_context, mocker, level=None, clamp=True)
+        LLMDispatchService.dispatch(context=mock_context)
+        assert self._body(mock_context) == ["u6", "u7"]
+
+    def test_explicit_conservative_matches(self, mock_context, mocker):
+        self._setup_level_case(mock_context, mocker, level="conservative", clamp=True)
+        LLMDispatchService.dispatch(context=mock_context)
+        assert self._body(mock_context) == ["u6", "u7"]
+
+    # --- H: the level scales the conversation budget, monotonically -----------
+    @pytest.mark.parametrize("level,kept", [
+        ("conservative", 2),
+        ("balanced", 4),
+        ("aggressive", 6),
+        ("xaggressive", 8),
+    ])
+    def test_level_scales_conversation_budget(self, mock_context, mocker, level, kept):
+        """A higher level lets strictly more conversation through (the whole point of
+        the calibration knob), and only ever drops whole oldest messages."""
+        self._setup_level_case(mock_context, mocker, level=level, clamp=True)
+        LLMDispatchService.dispatch(context=mock_context)
+        assert self._body(mock_context) == [f"u{i}" for i in range(8 - kept, 8)]
+
+    def test_level_effect_is_monotonic(self, mock_context, mocker):
+        """Sweep all four levels and assert the surviving-message count never
+        decreases as the level rises."""
+        counts = []
+        for level in ("conservative", "balanced", "aggressive", "xaggressive"):
+            mock_context.llm_handler.llm.get_response_from_llm.reset_mock()
+            self._setup_level_case(mock_context, mocker, level=level, clamp=True)
+            LLMDispatchService.dispatch(context=mock_context)
+            counts.append(len(self._body(mock_context)))
+        assert counts == sorted(counts)
+        assert counts[0] < counts[-1]  # the knob demonstrably reclaims window
+
+    # --- I: the endpoint window forwarded to the backend is never scaled ------
+    def test_level_does_not_mutate_endpoint_window(self, mock_context, mocker):
+        """The level scales Wilmer's INTERNAL budget only; it must never change the
+        maxContextTokenSize value (which is what the backend receives as
+        truncate_length)."""
+        self._setup_level_case(mock_context, mocker, level="xaggressive", clamp=True)
+        LLMDispatchService.dispatch(context=mock_context)
+        assert mock_context.llm_handler.llm.endpoint_file["maxContextTokenSize"] == 1000
+
+
+class TestTrimBudgetBoundariesAdversarial:
+    """Adversarial boundary tests for the core conversation-trim primitive
+    `_trim_messages_to_token_budget` -- the sacred path. Conversation content is
+    NEVER truncated; whole oldest messages drop; the newest is always kept whole."""
+
+    OVERHEAD = _CLAMP_PER_MESSAGE_OVERHEAD_TOKENS  # per-message framing cost (8)
+
+    def _msgs(self, n):
+        return [{"role": "user", "content": f"m{i}"} for i in range(n)]
+
+    def test_exact_boundary_two_fit(self, mocker):
+        # cost/msg = 100 + overhead. budget == 2 messages exactly -> keep 2.
+        mocker.patch('Middleware.services.llm_dispatch_service.rough_estimate_token_length', return_value=100)
+        budget = 2 * (100 + self.OVERHEAD)
+        result = LLMDispatchService._trim_messages_to_token_budget(self._msgs(5), budget)
+        assert [m["content"] for m in result] == ["m3", "m4"]
+
+    def test_one_under_boundary_drops_to_one(self, mocker):
+        # One token under the two-message cost -> only the newest survives.
+        mocker.patch('Middleware.services.llm_dispatch_service.rough_estimate_token_length', return_value=100)
+        budget = 2 * (100 + self.OVERHEAD) - 1
+        result = LLMDispatchService._trim_messages_to_token_budget(self._msgs(5), budget)
+        assert [m["content"] for m in result] == ["m4"]
+
+    def test_budget_zero_keeps_newest_whole_no_warning(self, mocker, caplog):
+        # budget <= 0 is the misconfig case (warned where the budget is computed); the trim
+        # primitive keeps the newest WHOLE and does NOT re-warn.
+        mocker.patch('Middleware.services.llm_dispatch_service.rough_estimate_token_length', return_value=100)
+        with caplog.at_level("WARNING"):
+            result = LLMDispatchService._trim_messages_to_token_budget(self._msgs(4), 0)
+        assert [m["content"] for m in result] == ["m3"]
+        assert not caplog.records
+
+    def test_budget_negative_keeps_newest_whole_no_warning(self, mocker, caplog):
+        mocker.patch('Middleware.services.llm_dispatch_service.rough_estimate_token_length', return_value=100)
+        with caplog.at_level("WARNING"):
+            result = LLMDispatchService._trim_messages_to_token_budget(self._msgs(4), -500)
+        assert [m["content"] for m in result] == ["m3"]
+        assert not caplog.records
+
+    def test_oversized_single_message_preserved_byte_for_byte(self):
+        # Real estimator, realistic content (code, braces, unicode, newlines) far over budget.
+        content = ("def f(x):\n    return {'a': x}  # café ☕\n" * 50)
+        result = LLMDispatchService._trim_messages_to_token_budget([{"role": "user", "content": content}], 50)
+        assert len(result) == 1
+        assert result[0]["content"] == content  # not one character chopped
+
+    def test_oversized_single_message_warns_exactly_once(self, caplog):
+        content = " ".join(f"w{i}" for i in range(800))
+        with caplog.at_level("WARNING"):
+            LLMDispatchService._trim_messages_to_token_budget([{"role": "user", "content": content}], 100)
+        warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warnings) == 1
+        assert "single most-recent" in warnings[0].message
+
+    def test_normal_oldest_drop_does_not_warn(self, mocker, caplog):
+        # Dropping whole oldest messages (the common case) is reported at the dispatch INFO
+        # layer, NOT as a WARNING from the primitive.
+        mocker.patch('Middleware.services.llm_dispatch_service.rough_estimate_token_length', return_value=100)
+        with caplog.at_level("WARNING"):
+            LLMDispatchService._trim_messages_to_token_budget(self._msgs(5), 2 * (100 + self.OVERHEAD))
+        assert not caplog.records
+
+    def test_none_and_empty_content_do_not_crash(self):
+        # Real estimator; tool-call assistants (content=None) and empty strings must be safe.
+        messages = [{"role": "assistant", "content": None}, {"role": "user", "content": ""},
+                    {"role": "tool", "content": "result"}, {"role": "user", "content": "go"}]
+        result = LLMDispatchService._trim_messages_to_token_budget(messages, 100000)
+        assert [m.get("content") for m in result] == [None, "", "result", "go"]
+
+    def test_overhead_makes_borderline_message_not_fit(self, mocker):
+        # A message whose CONTENT estimate equals the budget still does not fit once the
+        # per-message framing overhead is added -> it is the lone (oversized) survivor.
+        mocker.patch('Middleware.services.llm_dispatch_service.rough_estimate_token_length', return_value=100)
+        result = LLMDispatchService._trim_messages_to_token_budget(self._msgs(3), 100)
+        assert [m["content"] for m in result] == ["m2"]  # 100 content + 8 overhead > 100
+
+    def test_returns_new_list_not_mutating_input(self, mocker):
+        mocker.patch('Middleware.services.llm_dispatch_service.rough_estimate_token_length', return_value=100)
+        original = self._msgs(5)
+        snapshot = list(original)
+        LLMDispatchService._trim_messages_to_token_budget(original, 2 * (100 + self.OVERHEAD))
+        assert original == snapshot  # input list untouched
+
+    def test_chat_clamp_preserves_system_and_trims_only_body_at_boundary(self, mocker):
+        # Adversarial integration: system message must survive even at a tight budget that
+        # drops most of the body; never content-truncated.
+        mocker.patch('Middleware.services.llm_dispatch_service.rough_estimate_token_length', return_value=100)
+        collection = [{"role": "system", "content": "SYSTEM RULES"}] + self._msgs(6)
+        LLMDispatchService._clamp_chat_collection_to_budget(collection, 2 * (100 + self.OVERHEAD))
+        assert collection[0] == {"role": "system", "content": "SYSTEM RULES"}
+        assert [m["content"] for m in collection[1:]] == ["m4", "m5"]

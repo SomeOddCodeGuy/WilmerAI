@@ -73,6 +73,7 @@ _ROLE_TAG_MAP = {
     "user": "User: ",
     "assistant": "Assistant: ",
     "system": "System: ",
+    "tool": "Tool Result: ",
 }
 
 
@@ -83,8 +84,9 @@ def _format_messages_to_string(messages: List[Dict[str, Any]], add_role_tags: bo
 
     Args:
         messages (List[Dict[str, Any]]): The messages to format.
-        add_role_tags (bool): If ``True``, prepends "User: ", "Assistant: ", or
-            "System: " to each message based on its role.
+        add_role_tags (bool): If ``True``, prepends a role tag to each message
+            based on its role: "User: ", "Assistant: ", "System: ", or
+            "Tool Result: " (for tool-role messages).
         separator (str): The string used to join messages together.
 
     Returns:
@@ -122,9 +124,9 @@ def extract_last_n_turns_as_string(messages: List[Dict[str, Any]], n: int, inclu
         remove_all_systems_override (bool, optional): If `True`, all system messages
                                                        are removed. See `extract_last_n_turns`
                                                        for details. Defaults to `False`.
-        add_role_tags (bool, optional): If `True`, prepends "User: ", "Assistant: ", or
-                                        "System: " to each message based on its role.
-                                        Defaults to `False`.
+        add_role_tags (bool, optional): If `True`, prepends "User: ", "Assistant: ",
+                                        "System: ", or "Tool Result: " to each message
+                                        based on its role. Defaults to `False`.
         separator (str, optional): The string used to join messages together.
                                     Defaults to ``'\\n'``.
 
@@ -192,7 +194,7 @@ def extract_last_turns_by_estimated_token_limit(messages: List[Dict[str, str]], 
     selected = []
 
     for message in reversed(filtered_messages):
-        message_tokens = rough_estimate_token_length(message.get("content", ""))
+        message_tokens = rough_estimate_token_length(message.get("content") or "")
         if not selected:
             # Always include at least one message
             selected.append(message)
@@ -246,7 +248,8 @@ def extract_last_turns_by_estimated_token_limit_as_string(messages: List[Dict[st
 
 def extract_last_turns_with_min_messages_and_token_limit(messages: List[Dict[str, str]], min_messages: int,
                                                           token_limit: int, include_sysmes: bool = True,
-                                                          remove_all_systems_override=False) -> List[Dict[str, str]]:
+                                                          remove_all_systems_override=False,
+                                                          budget_overrides_min: bool = False) -> List[Dict[str, str]]:
     """
     Extracts recent messages up to a minimum count, then expanding up to a token budget.
 
@@ -255,7 +258,9 @@ def extract_last_turns_with_min_messages_and_token_limit(messages: List[Dict[str
     adding older messages as long as the cumulative estimated token count does not
     exceed ``token_limit``.  If the minimum messages alone already exceed the
     token limit, the minimum messages are still returned (the message-count floor
-    takes precedence).
+    takes precedence) -- UNLESS ``budget_overrides_min`` is set, in which case the
+    floor yields to ``token_limit`` (keeping at least the most-recent message) so
+    the selection can never overflow the caller's window.
 
     Token estimation uses ``rough_estimate_token_length``, which intentionally
     overestimates to stay safe when enforcing limits.
@@ -270,11 +275,18 @@ def extract_last_turns_with_min_messages_and_token_limit(messages: List[Dict[str
             excluded. Defaults to ``True``.
         remove_all_systems_override (bool, optional): If ``True``, removes all
             system messages regardless of ``include_sysmes``. Defaults to ``False``.
+        budget_overrides_min (bool, optional): When ``True``, the ``min_messages``
+            floor yields to ``token_limit`` instead of overriding it -- whole
+            messages are dropped (never content) until the selection fits, but the
+            single most-recent message is always kept. Used by the context-window
+            clamp so a floored conversation variable cannot overflow the endpoint.
+            Defaults to ``False`` (hard floor, the historical behavior).
 
     Returns:
-        List[Dict[str, str]]: Selected messages in chronological order.  Always
-            contains at least ``min_messages`` messages (or all available messages
-            if fewer exist).
+        List[Dict[str, str]]: Selected messages in chronological order.  Contains
+            at least ``min_messages`` messages (or all available) -- except when
+            ``budget_overrides_min`` is set and the budget is smaller, where it may
+            contain fewer (down to the single most-recent message).
     """
     if not messages:
         return []
@@ -298,10 +310,19 @@ def extract_last_turns_with_min_messages_and_token_limit(messages: List[Dict[str
     selected = []
 
     for message in reversed(filtered_messages):
-        message_tokens = rough_estimate_token_length(message.get("content", ""))
+        message_tokens = rough_estimate_token_length(message.get("content") or "")
 
         if len(selected) < min_messages:
-            # Phase 1: always include up to min_messages
+            # Phase 1: the message-count floor. By default it is a HARD floor: the
+            # minimum messages are included even when their tokens exceed the limit.
+            # When budget_overrides_min is set (the context-window clamp is on) the
+            # floor instead YIELDS to the budget -- once an additional floor message
+            # would push the total over token_limit we stop, so the selection cannot
+            # overflow the caller's window. The single most-recent message is always
+            # kept (``selected`` is still empty on the first iteration); only whole
+            # messages are dropped, content is never truncated.
+            if budget_overrides_min and selected and accumulated_tokens + message_tokens > token_limit:
+                break
             selected.append(message)
             accumulated_tokens += message_tokens
         elif accumulated_tokens + message_tokens <= token_limit:
@@ -318,7 +339,8 @@ def extract_last_turns_with_min_messages_and_token_limit_as_string(messages: Lis
                                                                     token_limit: int, include_sysmes: bool = True,
                                                                     remove_all_systems_override=False,
                                                                     add_role_tags: bool = False,
-                                                                    separator: str = '\n') -> str:
+                                                                    separator: str = '\n',
+                                                                    budget_overrides_min: bool = False) -> str:
     """
     Extracts recent messages with a minimum count floor and token budget ceiling,
     then joins them into a single string.
@@ -339,6 +361,10 @@ def extract_last_turns_with_min_messages_and_token_limit_as_string(messages: Lis
             to each message. Defaults to ``False``.
         separator (str, optional): The string used to join messages together.
             Defaults to ``'\\n'``.
+        budget_overrides_min (bool, optional): Forwarded to
+            ``extract_last_turns_with_min_messages_and_token_limit``; when ``True``
+            the ``min_messages`` floor yields to ``token_limit``. Defaults to
+            ``False``.
 
     Returns:
         str: The content of the selected messages joined as a single string.
@@ -348,7 +374,8 @@ def extract_last_turns_with_min_messages_and_token_limit_as_string(messages: Lis
         return ""
 
     selected_messages = extract_last_turns_with_min_messages_and_token_limit(
-        messages, min_messages, token_limit, include_sysmes, remove_all_systems_override
+        messages, min_messages, token_limit, include_sysmes, remove_all_systems_override,
+        budget_overrides_min=budget_overrides_min
     )
 
     return _format_messages_to_string(selected_messages, add_role_tags, separator)
@@ -612,12 +639,18 @@ def format_tool_calls_as_text(tool_calls: List[Dict[str, Any]]) -> str:
 
 def enrich_messages_with_tool_calls(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Returns a shallow copy of messages with tool call text injected into
-    assistant message content.
+    Returns a shallow copy of messages with tool-related text injected into
+    message content for assistant and tool-result messages.
 
     For each assistant message that has a ``tool_calls`` field, the formatted
-    tool call text is appended to (or used as) the message content. Messages
-    without tool calls are returned unchanged.
+    tool call text (``[Tool Call: {name}] {summary}``) is appended to (or
+    used as) the message content.
+
+    For each tool-result message (``role == "tool"``), a ``[Tool Result: {name}]``
+    prefix is prepended to the content so downstream consumers can identify
+    which tool produced the output.
+
+    Messages that do not need enrichment are passed through as-is.
 
     Args:
         messages (List[Dict[str, Any]]): The conversation messages.
@@ -643,6 +676,17 @@ def enrich_messages_with_tool_calls(messages: List[Dict[str, Any]]) -> List[Dict
                 msg["content"] = content + "\n" + tool_text
             else:
                 msg["content"] = tool_text
+            result.append(msg)
+        elif message.get("role") == "tool":
+            msg = dict(message)
+            tool_name = message.get("name", "unknown_tool")
+            content = msg.get("content") or ""
+            # Escape both the tool name and the content: a tool name containing
+            # raw curly braces would otherwise survive to the downstream
+            # str.format() pass in apply_variables() and could raise.
+            tool_name = escape_brackets_in_string(tool_name)
+            content = escape_brackets_in_string(content)
+            msg["content"] = f"[Tool Result: {tool_name}] {content}"
             result.append(msg)
         else:
             result.append(message)

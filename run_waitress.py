@@ -10,9 +10,20 @@ import os
 
 # Parse arguments FIRST to set instance_global_variables before importing anything else
 parser = argparse.ArgumentParser(description="Launch WilmerAI with Waitress (Windows)")
-parser.add_argument("--ConfigDirectory", type=str, help="Custom path to the configuration directory")
+parser.add_argument("--ConfigDirectory", type=str, help="Custom path to the configuration directory (typically the Public/Configs subfolder). Kept for backwards compatibility; new installations should prefer --PublicDirectory.")
+parser.add_argument("--PublicDirectory", type=str, help="Custom path to the Public/ root (the parent of Configs, DiscussionIds, SqlLiteDBs, and logs). When set, all runtime data defaults to subfolders under this path unless overridden individually.")
 parser.add_argument("--User", action='append', help="User to run Wilmer as (can be repeated for multi-user)")
-parser.add_argument("--LoggingDirectory", type=str, default="logs", help="Directory for log files")
+parser.add_argument("--LoggingDirectory", type=str, default=None,
+                    help="Directory for log files. Defaults to {PublicDirectory}/logs when "
+                         "--PublicDirectory is set, otherwise {install_dir}/Public/logs (install-pinned; "
+                         "does not depend on the current working directory).")
+parser.add_argument("--UserLevelSqlLiteDirectory", type=str, default=None,
+                    help="Override directory for per-user SQLite databases (workflow locks). "
+                         "Takes precedence over the sqlLiteDirectory user config setting.")
+parser.add_argument("--DiscussionDirectory", type=str, default=None,
+                    help="Override directory for per-discussion data files (memories, "
+                         "summaries, vector DBs). Takes precedence over the discussionDirectory "
+                         "user config setting.")
 parser.add_argument("--file-logging", action='store_true', default=None,
                     help="Enable file logging. In single-user mode, falls back to the "
                          "user's useFileLogging config setting. In multi-user mode, "
@@ -28,6 +39,13 @@ parser.add_argument("--concurrency", type=int, default=1,
 parser.add_argument("--concurrency-timeout", type=int, default=900,
                     help="Seconds to wait for a concurrency slot before returning 503 "
                          "(default: %(default)s)")
+parser.add_argument("--concurrency-level", type=str, choices=["wilmer", "endpoint"], default="wilmer",
+                    help="Where the concurrency gate is enforced. 'wilmer' (default) gates "
+                         "at the WSGI front door: only --concurrency requests run at a time. "
+                         "'endpoint' lifts the request-level gate and instead serializes only "
+                         "outbound LLM API calls, allowing reentrant requests (e.g. a Wilmer "
+                         "workflow that calls another service which calls back into Wilmer) "
+                         "to make progress without deadlocking.")
 parser.add_argument("positional", nargs="*", help="Positional arguments for ConfigDirectory and User")
 args = parser.parse_args()
 
@@ -46,13 +64,28 @@ if len(args.positional) > 1 and args.positional[1].strip():
 
 if args.ConfigDirectory and args.ConfigDirectory.strip():
     instance_global_variables.CONFIG_DIRECTORY = args.ConfigDirectory.strip().rstrip('/\\')
+if args.PublicDirectory and args.PublicDirectory.strip():
+    instance_global_variables.PUBLIC_DIRECTORY = args.PublicDirectory.strip().rstrip('/\\')
 if args.User:
     users = [u.strip() for u in args.User if u.strip()]
     if users:
         instance_global_variables.USERS = users
 
+from Middleware.utilities import config_utils
 if args.LoggingDirectory and args.LoggingDirectory.strip():
     instance_global_variables.LOGGING_DIRECTORY = args.LoggingDirectory.strip()
+else:
+    # No explicit --LoggingDirectory: resolve via get_root_public_directory()
+    # so the default is install-pinned (not cwd-relative). Picks up
+    # --PublicDirectory when set, otherwise {install_dir}/Public/.
+    instance_global_variables.LOGGING_DIRECTORY = os.path.join(
+        config_utils.get_root_public_directory(), 'logs'
+    )
+
+if args.UserLevelSqlLiteDirectory and args.UserLevelSqlLiteDirectory.strip():
+    instance_global_variables.USER_LEVEL_SQLITE_DIRECTORY = args.UserLevelSqlLiteDirectory.strip().rstrip('/\\')
+if args.DiscussionDirectory and args.DiscussionDirectory.strip():
+    instance_global_variables.DISCUSSION_DIRECTORY = args.DiscussionDirectory.strip().rstrip('/\\')
 
 # Resolve <user> token
 log_dir = instance_global_variables.LOGGING_DIRECTORY
@@ -78,6 +111,7 @@ if args.listen is not None:
 
 instance_global_variables.CONCURRENCY_LIMIT = args.concurrency
 instance_global_variables.CONCURRENCY_TIMEOUT = args.concurrency_timeout
+instance_global_variables.CONCURRENCY_LEVEL = args.concurrency_level
 
 # Import the server module which will configure logging
 try:

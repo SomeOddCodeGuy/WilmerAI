@@ -7,7 +7,8 @@ from Middleware.utilities.config_utils import (
     get_context_compactor_settings_path,
     get_discussion_context_compactor_old_file_path,
     get_discussion_context_compactor_oldest_file_path,
-    load_config
+    load_config,
+    get_estimation_level_multiplier
 )
 from Middleware.utilities.file_utils import read_chunks_with_hashes, update_chunks_with_hashes
 from Middleware.utilities.hashing_utils import hash_content
@@ -91,6 +92,15 @@ class ContextCompactorHandler(BaseHandler):
         lookback_start_turn = settings.get("lookbackStartTurn", 5)
         recent_context_tokens = settings.get("recentContextTokens", 20000)
         old_context_tokens = settings.get("oldContextTokens", 20000)
+        # Calibrate the recent/old section budgets for this compactor config's model.
+        # The boundaries are measured with Wilmer's deliberately conservative estimator,
+        # which over-counts on efficient large-vocab tokenizers and so under-fills each
+        # section; the config-local wilmerContextEstimationLevel scales the budgets up to
+        # reclaim that headroom (conservative = 1.0 = unchanged). The compactor bypasses
+        # dispatch, so this is NOT gated on the clamp; the level value is the opt-in.
+        compactor_multiplier = get_estimation_level_multiplier(settings)
+        recent_context_tokens = int(recent_context_tokens * compactor_multiplier)
+        old_context_tokens = int(old_context_tokens * compactor_multiplier)
         if lookback_start_turn > 0 and len(messages) > lookback_start_turn:
             working_messages = messages[:-lookback_start_turn]
         else:

@@ -109,19 +109,107 @@ def populated_memory_db(memory_db_path):
 # === Test Cases ===
 
 # --- Helper Function Tests ---
-def test_get_db_path(mocker):
+def test_get_db_path_new_location(mocker, tmp_path):
     """
-    Tests that the database path is constructed correctly and the directory is created.
+    When neither a new database nor a legacy database exists, the function
+    returns the new path inside the discussion folder.
     """
-    mock_makedirs = mocker.patch("os.makedirs")
-    expected_path = f"Public/{TEST_DISCUSSION_ID}_vector_memory.db"
-    # Mock os.path.join to ensure consistency across platforms if necessary
-    mocker.patch("os.path.join", return_value=expected_path)
+    discussion_folder = tmp_path / "discussions" / TEST_DISCUSSION_ID
+    mocker.patch(
+        "Middleware.utilities.vector_db_utils.config_utils.get_discussion_folder_path",
+        return_value=str(discussion_folder),
+    )
+    mocker.patch(
+        "Middleware.utilities.vector_db_utils._legacy_vector_db_path",
+        return_value=str(tmp_path / "nonexistent_legacy.db"),
+    )
 
     result = _get_db_path(TEST_DISCUSSION_ID)
 
-    mock_makedirs.assert_called_once_with("Public", exist_ok=True)
-    assert result == expected_path
+    assert result == str(discussion_folder / "vector_memory.db")
+
+
+def test_get_db_path_legacy_stickiness(mocker, tmp_path):
+    """
+    When the new path does not exist but a legacy database file is present,
+    the legacy path is returned so existing data keeps being used in place.
+    """
+    discussion_folder = tmp_path / "discussions" / TEST_DISCUSSION_ID
+    discussion_folder.mkdir(parents=True)
+    legacy_db = tmp_path / "Public" / f"{TEST_DISCUSSION_ID}_vector_memory.db"
+    legacy_db.parent.mkdir(parents=True)
+    legacy_db.write_bytes(b"")
+
+    mocker.patch(
+        "Middleware.utilities.vector_db_utils.config_utils.get_discussion_folder_path",
+        return_value=str(discussion_folder),
+    )
+    mocker.patch(
+        "Middleware.utilities.vector_db_utils._legacy_vector_db_path",
+        return_value=str(legacy_db),
+    )
+
+    result = _get_db_path(TEST_DISCUSSION_ID)
+
+    assert result == str(legacy_db)
+
+
+def test_get_db_path_new_preferred_when_both_exist(mocker, tmp_path):
+    """
+    Once a new-location database exists, it is preferred even if a legacy
+    file is also present.
+    """
+    discussion_folder = tmp_path / "discussions" / TEST_DISCUSSION_ID
+    discussion_folder.mkdir(parents=True)
+    new_db = discussion_folder / "vector_memory.db"
+    new_db.write_bytes(b"")
+    legacy_db = tmp_path / "Public" / f"{TEST_DISCUSSION_ID}_vector_memory.db"
+    legacy_db.parent.mkdir(parents=True)
+    legacy_db.write_bytes(b"")
+
+    mocker.patch(
+        "Middleware.utilities.vector_db_utils.config_utils.get_discussion_folder_path",
+        return_value=str(discussion_folder),
+    )
+    mocker.patch(
+        "Middleware.utilities.vector_db_utils._legacy_vector_db_path",
+        return_value=str(legacy_db),
+    )
+
+    result = _get_db_path(TEST_DISCUSSION_ID)
+
+    assert result == str(new_db)
+
+
+def test_get_db_path_cwd_legacy_stickiness(mocker, tmp_path):
+    """
+    When the new path and the project-root legacy path do not exist but a
+    cwd-relative legacy database is present (a non-project-root launch), that
+    cwd legacy path is returned so existing data is not silently orphaned.
+    """
+    discussion_folder = tmp_path / "discussions" / TEST_DISCUSSION_ID
+    discussion_folder.mkdir(parents=True)
+    cwd_legacy_db = tmp_path / "cwd" / "Public" / f"{TEST_DISCUSSION_ID}_vector_memory.db"
+    cwd_legacy_db.parent.mkdir(parents=True)
+    cwd_legacy_db.write_bytes(b"")
+    missing_project_legacy = tmp_path / "project_root" / "Public" / f"{TEST_DISCUSSION_ID}_vector_memory.db"
+
+    mocker.patch(
+        "Middleware.utilities.vector_db_utils.config_utils.get_discussion_folder_path",
+        return_value=str(discussion_folder),
+    )
+    mocker.patch(
+        "Middleware.utilities.vector_db_utils._legacy_vector_db_path",
+        return_value=str(missing_project_legacy),
+    )
+    mocker.patch(
+        "Middleware.utilities.vector_db_utils._legacy_vector_db_path_cwd",
+        return_value=str(cwd_legacy_db),
+    )
+
+    result = _get_db_path(TEST_DISCUSSION_ID)
+
+    assert result == str(cwd_legacy_db)
 
 
 @pytest.mark.parametrize(

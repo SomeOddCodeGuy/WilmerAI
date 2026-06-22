@@ -42,9 +42,15 @@ class TestConfigUtils:
         """Resets global variables before each test to ensure isolation."""
         original_users = instance_global_variables.USERS
         original_config_dir = instance_global_variables.CONFIG_DIRECTORY
+        original_public_dir = instance_global_variables.PUBLIC_DIRECTORY
+        original_sqlite_dir = instance_global_variables.USER_LEVEL_SQLITE_DIRECTORY
+        original_discussion_dir = instance_global_variables.DISCUSSION_DIRECTORY
         yield
         instance_global_variables.USERS = original_users
         instance_global_variables.CONFIG_DIRECTORY = original_config_dir
+        instance_global_variables.PUBLIC_DIRECTORY = original_public_dir
+        instance_global_variables.USER_LEVEL_SQLITE_DIRECTORY = original_sqlite_dir
+        instance_global_variables.DISCUSSION_DIRECTORY = original_discussion_dir
         instance_global_variables.clear_request_user()
 
     def test_get_project_root_directory_path(self, mocker):
@@ -161,6 +167,23 @@ class TestConfigUtils:
 
         assert path == '/proj/Public/Configs'
 
+    def test_get_root_config_directory_empty_string_falls_back_to_public(self, mocker):
+        """An empty-string CONFIG_DIRECTORY must fall back to {public}/Configs, not return ''.
+
+        This is reachable when a user passes '/' as the ConfigDirectory, since
+        '/'.rstrip('/\\\\') == ''. A truthy guard (not 'is not None') handles it;
+        a revert to 'is not None' would return os.path.join('') == '' and is caught here.
+        """
+        instance_global_variables.CONFIG_DIRECTORY = ''
+        mocker.patch(
+            'Middleware.utilities.config_utils.get_root_public_directory',
+            return_value='/proj/Public',
+        )
+
+        path = config_utils.get_root_config_directory()
+
+        assert path == os.path.join('/proj/Public', 'Configs')
+
     def test_get_discussion_file_path(self, mocker, mock_user_config):
         """
         Tests construction of a path to a discussion-specific file.
@@ -216,9 +239,11 @@ class TestConfigUtils:
 
     def test_get_discussion_file_path_falls_back_when_empty(self, mocker):
         """
-        Tests that an empty discussionDirectory falls back to Public/DiscussionIds.
+        Tests that an empty discussionDirectory falls back to {public_root}/DiscussionIds.
         """
         mocker.patch('Middleware.utilities.config_utils.get_config_value', return_value='')
+        mocker.patch('Middleware.utilities.config_utils.get_root_public_directory',
+                     return_value='/project/Public')
         mocker.patch('Middleware.utilities.config_utils.get_project_root_directory_path',
                      return_value='/project')
         mock_makedirs = mocker.patch('os.makedirs')
@@ -227,7 +252,7 @@ class TestConfigUtils:
 
         path = config_utils.get_discussion_file_path('disc1', 'memories')
 
-        base_dir = os.path.join('/project', 'Public', 'DiscussionIds')
+        base_dir = os.path.join('/project/Public', 'DiscussionIds')
         expected_dir = os.path.join(base_dir, 'disc1')
         expected = os.path.join(expected_dir, 'memories.json')
         assert path == expected
@@ -235,9 +260,11 @@ class TestConfigUtils:
 
     def test_get_discussion_file_path_falls_back_when_none(self, mocker):
         """
-        Tests that a None discussionDirectory falls back to Public/DiscussionIds.
+        Tests that a None discussionDirectory falls back to {public_root}/DiscussionIds.
         """
         mocker.patch('Middleware.utilities.config_utils.get_config_value', return_value=None)
+        mocker.patch('Middleware.utilities.config_utils.get_root_public_directory',
+                     return_value='/project/Public')
         mocker.patch('Middleware.utilities.config_utils.get_project_root_directory_path',
                      return_value='/project')
         mock_makedirs = mocker.patch('os.makedirs')
@@ -246,7 +273,7 @@ class TestConfigUtils:
 
         path = config_utils.get_discussion_file_path('disc1', 'chat_summary')
 
-        base_dir = os.path.join('/project', 'Public', 'DiscussionIds')
+        base_dir = os.path.join('/project/Public', 'DiscussionIds')
         expected_dir = os.path.join(base_dir, 'disc1')
         expected = os.path.join(expected_dir, 'chat_summary.json')
         assert path == expected
@@ -254,8 +281,8 @@ class TestConfigUtils:
 
     def test_get_discussion_file_path_falls_back_when_directory_cannot_be_created(self, mocker):
         """
-        Tests that an invalid/uncreatable discussionDirectory (e.g. a Windows path
-        on macOS) falls back to Public/DiscussionIds.
+        Tests that an uncreatable discussionDirectory falls back to the legacy
+        location under Public/DiscussionIds as a last resort.
         """
         mocker.patch('Middleware.utilities.config_utils.get_config_value', return_value='D:\\Temp')
         mocker.patch('Middleware.utilities.config_utils.get_project_root_directory_path',
@@ -266,11 +293,75 @@ class TestConfigUtils:
 
         path = config_utils.get_discussion_file_path('disc1', 'memories')
 
-        base_dir = os.path.join('/project', 'Public', 'DiscussionIds')
-        expected_dir = os.path.join(base_dir, 'disc1')
+        legacy_base_dir = os.path.join('/project', 'Public', 'DiscussionIds')
+        expected_dir = os.path.join(legacy_base_dir, 'disc1')
         expected = os.path.join(expected_dir, 'memories.json')
         assert path == expected
         assert mock_makedirs.call_count == 2
+
+    def test_get_discussion_file_path_sticks_to_legacy_folder_when_present(self, mocker):
+        """
+        Legacy stickiness: if the new target folder (under --PublicDirectory)
+        does not exist but the discussion folder already exists at the
+        pre-refactor location ({project_root}/Public/DiscussionIds/{disc}),
+        that legacy folder is used for reads and writes so existing data is
+        not stranded.
+        """
+        instance_global_variables.PUBLIC_DIRECTORY = '/shared/alice/Public'
+        mocker.patch('Middleware.utilities.config_utils.get_config_value', return_value=None)
+        mocker.patch('Middleware.utilities.config_utils.get_project_root_directory_path',
+                     return_value='/project')
+        mocker.patch('os.makedirs')
+        mocker.patch('os.path.join', side_effect=os.path.join)
+
+        target_folder = os.path.join('/shared/alice/Public', 'DiscussionIds', 'disc1')
+        legacy_folder = os.path.join('/project', 'Public', 'DiscussionIds', 'disc1')
+        mocker.patch('os.path.exists', side_effect=lambda p: p == legacy_folder)
+
+        path = config_utils.get_discussion_file_path('disc1', 'memories')
+
+        assert path == os.path.join(legacy_folder, 'memories.json')
+        assert target_folder not in path
+
+    def test_get_discussion_file_path_respects_cli_override(self, mocker):
+        """
+        The --DiscussionDirectory CLI flag takes precedence over both user
+        config and the PublicDirectory-based default.
+        """
+        instance_global_variables.DISCUSSION_DIRECTORY = '/cli/discussions'
+        mocker.patch('Middleware.utilities.config_utils.get_config_value',
+                     return_value='/user/config/discussions')
+        mocker.patch('Middleware.utilities.config_utils.get_root_public_directory',
+                     return_value='/project/Public')
+        mocker.patch('Middleware.utilities.config_utils.get_project_root_directory_path',
+                     return_value='/project')
+        mocker.patch('os.makedirs')
+        mocker.patch('os.path.exists', return_value=False)
+        mocker.patch('os.path.join', side_effect=os.path.join)
+
+        path = config_utils.get_discussion_file_path('disc1', 'memories')
+
+        assert path == os.path.join('/cli/discussions', 'disc1', 'memories.json')
+
+    def test_get_discussion_file_path_uses_public_directory_default(self, mocker):
+        """
+        When --PublicDirectory is set and no per-file override is in play,
+        discussions land at {PublicDirectory}/DiscussionIds/ (a sibling of
+        Configs, not inside it).
+        """
+        instance_global_variables.PUBLIC_DIRECTORY = '/shared/alice/Public'
+        mocker.patch('Middleware.utilities.config_utils.get_config_value', return_value=None)
+        mocker.patch('Middleware.utilities.config_utils.get_project_root_directory_path',
+                     return_value='/project')
+        mocker.patch('os.makedirs')
+        mocker.patch('os.path.exists', return_value=False)
+        mocker.patch('os.path.join', side_effect=os.path.join)
+
+        path = config_utils.get_discussion_file_path('disc1', 'memories')
+
+        expected = os.path.join('/shared/alice/Public', 'DiscussionIds', 'disc1', 'memories.json')
+        assert path == expected
+        assert 'Configs' not in path
 
     def test_get_discussion_file_path_no_legacy_fallback_with_api_key_hash(self, mocker, mock_user_config):
         """
@@ -298,7 +389,8 @@ class TestConfigUtils:
 
     def test_get_custom_dblite_filepath_with_config(self, mocker, mock_user_config):
         """
-        Tests that the SQLite path is correctly retrieved from user config.
+        Tests that the SQLite path is correctly retrieved from user config
+        when no CLI override is set.
         """
         mocker.patch('Middleware.utilities.config_utils.get_config_value',
                      return_value=mock_user_config['sqlLiteDirectory'])
@@ -309,14 +401,84 @@ class TestConfigUtils:
 
     def test_get_custom_dblite_filepath_no_config(self, mocker):
         """
-        Tests that the SQLite path falls back to the project root if not in config.
+        Tests that the SQLite path falls back to {public_root}/SqlLiteDBs
+        when no CLI override and no user config are present. The DB directory
+        is a sibling of Configs under Public, not inside Configs.
         """
         mocker.patch('Middleware.utilities.config_utils.get_config_value', return_value=None)
-        mocker.patch('Middleware.utilities.config_utils.get_project_root_directory_path', return_value='/project/root')
+        mocker.patch('Middleware.utilities.config_utils.get_root_public_directory',
+                     return_value='/project/Public')
 
         path = config_utils.get_custom_dblite_filepath()
 
-        assert path == '/project/root'
+        assert path == os.path.join('/project/Public', 'SqlLiteDBs')
+        assert 'Configs' not in path
+
+    def test_get_custom_dblite_filepath_cli_override(self, mocker, mock_user_config):
+        """
+        The --UserLevelSqlLiteDirectory CLI flag takes precedence over both
+        user config and the PublicDirectory-based default.
+        """
+        instance_global_variables.USER_LEVEL_SQLITE_DIRECTORY = '/cli/sqlite'
+        mocker.patch('Middleware.utilities.config_utils.get_config_value',
+                     return_value=mock_user_config['sqlLiteDirectory'])
+        mocker.patch('Middleware.utilities.config_utils.get_root_public_directory',
+                     return_value='/project/Public')
+
+        path = config_utils.get_custom_dblite_filepath()
+
+        assert path == '/cli/sqlite'
+
+    def test_get_custom_dblite_filepath_uses_public_directory_default(self, mocker):
+        """
+        When --PublicDirectory is set and no per-file override is in play,
+        SQLite databases land at {PublicDirectory}/SqlLiteDBs/.
+        """
+        instance_global_variables.PUBLIC_DIRECTORY = '/shared/alice/Public'
+        mocker.patch('Middleware.utilities.config_utils.get_config_value', return_value=None)
+
+        path = config_utils.get_custom_dblite_filepath()
+
+        assert path == os.path.join('/shared/alice/Public', 'SqlLiteDBs')
+        assert 'Configs' not in path
+
+    def test_get_root_config_directory_derives_from_public_directory(self, mocker):
+        """
+        When --PublicDirectory is set but --ConfigDirectory is not,
+        get_root_config_directory returns {PublicDirectory}/Configs/.
+        """
+        instance_global_variables.PUBLIC_DIRECTORY = '/shared/alice/Public'
+        instance_global_variables.CONFIG_DIRECTORY = None
+
+        path = config_utils.get_root_config_directory()
+
+        assert path == os.path.join('/shared/alice/Public', 'Configs')
+
+    def test_get_root_config_directory_config_cli_wins_over_public(self, mocker):
+        """
+        --ConfigDirectory takes precedence over --PublicDirectory for config
+        resolution (backwards compat for installations already using
+        --ConfigDirectory).
+        """
+        instance_global_variables.PUBLIC_DIRECTORY = '/shared/alice/Public'
+        instance_global_variables.CONFIG_DIRECTORY = '/legacy/custom-config-dir'
+
+        path = config_utils.get_root_config_directory()
+
+        assert path == '/legacy/custom-config-dir'
+
+    def test_get_root_public_directory_defaults_to_project_public(self, mocker):
+        """
+        Without --PublicDirectory, the public root defaults to
+        {project_root}/Public (the in-tree location).
+        """
+        instance_global_variables.PUBLIC_DIRECTORY = None
+        mocker.patch('Middleware.utilities.config_utils.get_project_root_directory_path',
+                     return_value='/project')
+
+        path = config_utils.get_root_public_directory()
+
+        assert path == os.path.join('/project', 'Public')
 
     def test_get_endpoint_subdirectory(self, mocker, mock_user_config):
         """
@@ -851,3 +1013,264 @@ class TestGetRedactLogOutput:
         """Tests that False is returned when the config key is missing (None)."""
         mocker.patch('Middleware.utilities.config_utils.get_config_value', return_value=None)
         assert config_utils.get_redact_log_output() is False
+
+
+class TestLoadMcpServerConfig:
+    """Tests for the load_mcp_server_config function."""
+
+    def test_loads_named_server_from_mcpservers_directory(self, mocker):
+        """Verifies the config file is resolved under MCPServers/<name>.json and parsed."""
+        mocker.patch(
+            'Middleware.utilities.config_utils.get_root_config_directory',
+            return_value='/fake/config',
+        )
+        mock_join = mocker.patch('os.path.join', return_value='/fake/config/MCPServers/filesystem.json')
+        mock_data = json.dumps({"transport": "stdio", "command": "echo"})
+        mocker.patch('builtins.open', mock_open(read_data=mock_data))
+
+        config = config_utils.load_mcp_server_config('filesystem')
+
+        assert config == {"transport": "stdio", "command": "echo"}
+        mock_join.assert_called_once_with('/fake/config', 'MCPServers', 'filesystem.json')
+
+
+class TestGetEstimationLevelMultiplier:
+    """Tests for get_estimation_level_multiplier, the single source of truth that
+    maps wilmerContextEstimationLevel to a budget multiplier. Default conservative
+    (1.0) everywhere it is absent, so configs that never set it are unchanged."""
+
+    def test_missing_key_returns_conservative_no_warning(self, caplog):
+        """A config without the key defaults to conservative (1.0) and stays silent
+        (absence is the norm, not a misconfiguration)."""
+        with caplog.at_level("WARNING"):
+            assert config_utils.get_estimation_level_multiplier({}) == 1.0
+        assert not caplog.records
+
+    def test_none_value_returns_conservative_no_warning(self, caplog):
+        with caplog.at_level("WARNING"):
+            assert config_utils.get_estimation_level_multiplier(
+                {config_utils.ESTIMATION_LEVEL_KEY: None}) == 1.0
+        assert not caplog.records
+
+    def test_non_dict_returns_conservative_no_warning(self, caplog):
+        """A non-dict (e.g. a mocked endpoint_file, or None) yields conservative
+        without warning; this is the 'no config available' path, not a misconfig."""
+        with caplog.at_level("WARNING"):
+            assert config_utils.get_estimation_level_multiplier(None) == 1.0
+            assert config_utils.get_estimation_level_multiplier("nope") == 1.0
+        assert not caplog.records
+
+    @pytest.mark.parametrize("level,expected", [
+        ("conservative", 1.0),
+        ("balanced", 1.25),
+        ("aggressive", 1.5),
+        ("xaggressive", 1.85),
+    ])
+    def test_each_valid_level(self, level, expected):
+        assert config_utils.get_estimation_level_multiplier(
+            {config_utils.ESTIMATION_LEVEL_KEY: level}) == expected
+
+    def test_case_and_whitespace_insensitive(self):
+        assert config_utils.get_estimation_level_multiplier(
+            {config_utils.ESTIMATION_LEVEL_KEY: "  Balanced  "}) == 1.25
+
+    def test_unknown_string_warns_once_and_defaults(self, caplog):
+        """An unrecognized level falls back to conservative and warns exactly once."""
+        with caplog.at_level("WARNING"):
+            result = config_utils.get_estimation_level_multiplier(
+                {config_utils.ESTIMATION_LEVEL_KEY: "ultra"})
+        assert result == 1.0
+        warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warnings) == 1
+        assert config_utils.ESTIMATION_LEVEL_KEY in warnings[0].message
+
+    def test_non_string_warns_once_and_defaults(self, caplog):
+        """A non-string (e.g. a number) falls back to conservative and warns once."""
+        with caplog.at_level("WARNING"):
+            result = config_utils.get_estimation_level_multiplier(
+                {config_utils.ESTIMATION_LEVEL_KEY: 1.5})
+        assert result == 1.0
+        warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warnings) == 1
+
+    def test_all_levels_monotonic_increasing(self):
+        """The four levels must be strictly increasing so a higher level always
+        reclaims at least as much window (conservative is the safe floor)."""
+        values = [config_utils.ESTIMATION_LEVEL_MULTIPLIERS[k]
+                  for k in ("conservative", "balanced", "aggressive", "xaggressive")]
+        assert values == sorted(values)
+        assert values[0] == 1.0
+        assert all(a < b for a, b in zip(values, values[1:]))
+
+
+class TestComputeEndpointWindowBudget:
+    """Adversarial tests for the shared window-budget helper. It is the single basis
+    for BOTH the dispatch clamp and the variable-manager cap, so any bug here corrupts
+    both. budget = (window - n_predict) * level - headroom."""
+
+    def test_basic_conservative(self):
+        # (1000 - 200) * 1.0 - 512 = 288
+        assert config_utils.compute_endpoint_window_budget({"maxContextTokenSize": 1000}, 200, 512) == 288
+
+    def test_level_scales_window_minus_response_not_headroom(self):
+        # aggressive: int((1000-200)*1.5) - 512 = 1200 - 512 = 688. Headroom subtracted AFTER scaling.
+        ep = {"maxContextTokenSize": 1000, "wilmerContextEstimationLevel": "aggressive"}
+        assert config_utils.compute_endpoint_window_budget(ep, 200, 512) == 688
+
+    def test_headroom_is_not_inside_the_scaling(self):
+        # If headroom were scaled, this would be int((1000-200-512)*1.85). Prove it is NOT:
+        # the correct value is int((1000-200)*1.85) - 512 = 1480 - 512 = 968.
+        ep = {"maxContextTokenSize": 1000, "wilmerContextEstimationLevel": "xaggressive"}
+        assert config_utils.compute_endpoint_window_budget(ep, 200, 512) == 968
+        assert config_utils.compute_endpoint_window_budget(ep, 200, 512) != int((1000 - 200 - 512) * 1.85)
+
+    def test_none_when_endpoint_not_dict(self):
+        for bad in (None, "65536", ["x"], 1000, 3.5):
+            assert config_utils.compute_endpoint_window_budget(bad, 200, 512) is None
+
+    def test_none_when_window_missing(self):
+        assert config_utils.compute_endpoint_window_budget({}, 200, 512) is None
+
+    def test_none_when_window_zero_or_negative(self):
+        for bad in (0, -1, -100000):
+            assert config_utils.compute_endpoint_window_budget({"maxContextTokenSize": bad}, 200, 512) is None
+
+    def test_bool_window_rejected_not_treated_as_int(self):
+        # True/False are int subclasses; a boolean window must be rejected, not read as 1/0.
+        assert config_utils.compute_endpoint_window_budget({"maxContextTokenSize": True}, 0, 0) is None
+        assert config_utils.compute_endpoint_window_budget({"maxContextTokenSize": False}, 0, 0) is None
+
+    def test_string_window_rejected(self):
+        assert config_utils.compute_endpoint_window_budget({"maxContextTokenSize": "1000"}, 200, 512) is None
+
+    def test_float_window_accepted_and_floored(self):
+        # 1000.9 -> int 1000; (1000 - 200) - 0 = 800.
+        assert config_utils.compute_endpoint_window_budget({"maxContextTokenSize": 1000.9}, 200, 0) == 800
+
+    def test_n_predict_non_numeric_treated_as_zero(self):
+        assert config_utils.compute_endpoint_window_budget({"maxContextTokenSize": 1000}, "oops", 0) == 1000
+        assert config_utils.compute_endpoint_window_budget({"maxContextTokenSize": 1000}, None, 0) == 1000
+        assert config_utils.compute_endpoint_window_budget({"maxContextTokenSize": 1000}, [5], 0) == 1000
+
+    def test_n_predict_bool_treated_as_zero(self):
+        # True must NOT count as n_predict=1.
+        assert config_utils.compute_endpoint_window_budget({"maxContextTokenSize": 1000}, True, 0) == 1000
+
+    def test_n_predict_negative_treated_as_zero(self):
+        assert config_utils.compute_endpoint_window_budget({"maxContextTokenSize": 1000}, -500, 0) == 1000
+
+    def test_n_predict_exceeds_window_returns_negative_not_none(self):
+        # Misconfig (response > window): a negative budget is RETURNED so callers can degrade,
+        # NOT None (None would silently disable the clamp).
+        budget = config_utils.compute_endpoint_window_budget({"maxContextTokenSize": 1000}, 2000, 512)
+        assert budget == 1000 - 2000 - 512
+        assert budget is not None
+
+    def test_response_equals_window_gives_negative_headroom(self):
+        assert config_utils.compute_endpoint_window_budget({"maxContextTokenSize": 1000}, 1000, 512) == -512
+
+    def test_unknown_level_falls_back_to_conservative(self):
+        ep = {"maxContextTokenSize": 1000, "wilmerContextEstimationLevel": "ludicrous"}
+        assert config_utils.compute_endpoint_window_budget(ep, 200, 512) == 288  # 1.0, same as no level
+
+    def test_zero_headroom(self):
+        assert config_utils.compute_endpoint_window_budget({"maxContextTokenSize": 1000}, 200, 0) == 800
+
+    def test_does_not_mutate_endpoint_config(self):
+        ep = {"maxContextTokenSize": 65536, "wilmerContextEstimationLevel": "aggressive"}
+        before = dict(ep)
+        config_utils.compute_endpoint_window_budget(ep, 16000, 512)
+        assert ep == before  # the window value is read, never changed
+
+    def test_shared_headroom_constant_value(self):
+        # Dispatch aliases this; if it ever changes, both subsystems move together.
+        assert config_utils.CONTEXT_WINDOW_BUDGET_HEADROOM_TOKENS == 512
+
+
+class TestIsContextClampEnabled:
+    """Adversarial tests for the shared clamp resolution (node > endpoint > user >
+    default OFF). Used by BOTH dispatch and the variable manager, so a precedence or
+    coercion bug silently changes behavior everywhere."""
+
+    @pytest.fixture(autouse=True)
+    def _no_user_config(self, mocker):
+        # User level defaults to {} (no flag); individual tests override return_value/side_effect.
+        self._user = mocker.patch('Middleware.utilities.config_utils.get_user_config', return_value={})
+
+    def test_default_off_when_absent_everywhere(self):
+        assert config_utils.is_context_clamp_enabled({}, {}) is False
+
+    def test_node_true(self):
+        assert config_utils.is_context_clamp_enabled({"clampPromptToContextWindow": True}, {}) is True
+
+    def test_node_false_overrides_endpoint_true(self):
+        assert config_utils.is_context_clamp_enabled(
+            {"clampPromptToContextWindow": False}, {"clampPromptToContextWindow": True}) is False
+
+    def test_node_true_overrides_endpoint_false(self):
+        assert config_utils.is_context_clamp_enabled(
+            {"clampPromptToContextWindow": True}, {"clampPromptToContextWindow": False}) is True
+
+    def test_endpoint_used_when_node_absent(self):
+        assert config_utils.is_context_clamp_enabled({}, {"clampPromptToContextWindow": True}) is True
+
+    def test_node_null_falls_through_to_endpoint(self):
+        # Explicit JSON null at the node must NOT be read as False; fall through.
+        assert config_utils.is_context_clamp_enabled(
+            {"clampPromptToContextWindow": None}, {"clampPromptToContextWindow": True}) is True
+
+    def test_endpoint_null_falls_through_to_user(self):
+        self._user.return_value = {"clampPromptToContextWindow": True}
+        assert config_utils.is_context_clamp_enabled({}, {"clampPromptToContextWindow": None}) is True
+
+    def test_user_true_when_node_endpoint_absent(self):
+        self._user.return_value = {"clampPromptToContextWindow": True}
+        assert config_utils.is_context_clamp_enabled({}, {}) is True
+
+    def test_user_false_when_node_endpoint_absent(self):
+        self._user.return_value = {"clampPromptToContextWindow": False}
+        assert config_utils.is_context_clamp_enabled({}, {}) is False
+
+    def test_node_beats_user(self):
+        self._user.return_value = {"clampPromptToContextWindow": True}
+        assert config_utils.is_context_clamp_enabled({"clampPromptToContextWindow": False}, {}) is False
+
+    def test_endpoint_beats_user(self):
+        self._user.return_value = {"clampPromptToContextWindow": True}
+        assert config_utils.is_context_clamp_enabled({}, {"clampPromptToContextWindow": False}) is False
+
+    @pytest.mark.parametrize("val,expected", [
+        ("true", True), ("True", True), ("TRUE", True), ("  true  ", True),
+        ("1", True), ("yes", True), ("on", True),
+        ("false", False), ("False", False), ("0", False), ("no", False),
+        ("off", False), ("garbage", False), ("", False),
+    ])
+    def test_string_coercion(self, val, expected):
+        assert config_utils.is_context_clamp_enabled({"clampPromptToContextWindow": val}, {}) is expected
+
+    @pytest.mark.parametrize("val,expected", [
+        (1, True), (0, False), (2, True), (-1, True),
+        ([1], True), ([], False), ({"a": 1}, True), ({}, False),
+    ])
+    def test_non_string_non_bool_coercion(self, val, expected):
+        assert config_utils.is_context_clamp_enabled({"clampPromptToContextWindow": val}, {}) is expected
+
+    def test_node_not_dict_is_skipped_not_crashed(self):
+        for bad in (None, "nope", ["x"], 5):
+            assert config_utils.is_context_clamp_enabled(bad, {"clampPromptToContextWindow": True}) is True
+
+    def test_endpoint_not_dict_is_skipped(self):
+        assert config_utils.is_context_clamp_enabled({}, None) is False  # node {} -> ep None -> user {} -> default
+
+    def test_user_config_raises_defaults_off(self):
+        self._user.side_effect = RuntimeError("no user resolvable")
+        assert config_utils.is_context_clamp_enabled({}, {}) is False
+
+    def test_user_config_non_dict_ignored(self):
+        self._user.return_value = "not a dict"
+        assert config_utils.is_context_clamp_enabled({}, {}) is False
+
+    def test_returns_real_bool_not_truthy(self):
+        # Callers gate on identity in places; ensure a genuine bool comes back.
+        assert config_utils.is_context_clamp_enabled({"clampPromptToContextWindow": "true"}, {}) is True
+        assert config_utils.is_context_clamp_enabled({}, {}) is False

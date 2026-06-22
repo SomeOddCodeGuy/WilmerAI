@@ -10,7 +10,7 @@ from Middleware.services.llm_service import LlmHandlerService
 from Middleware.services.memory_service import MemoryService
 from Middleware.utilities import vector_db_utils
 from Middleware.utilities.config_utils import get_discussion_memory_file_path, get_endpoint_config, load_config, \
-    get_discussion_id_workflow_path, get_discussion_condensation_tracker_file_path
+    get_discussion_id_workflow_path, get_discussion_condensation_tracker_file_path, get_estimation_level_multiplier
 from Middleware.utilities.file_utils import read_chunks_with_hashes, \
     update_chunks_with_hashes, read_condensation_tracker, write_condensation_tracker
 from Middleware.utilities.hashing_utils import extract_text_blocks_from_hashed_chunks, find_last_matching_hash_message, \
@@ -28,6 +28,13 @@ logger = logging.getLogger(__name__)
 _condensation_locks: Dict[str, threading.Lock] = {}
 _condensation_locks_guard = threading.Lock()
 _MAX_CONDENSATION_LOCKS = 500
+# Bounded wait (seconds) for the per-discussion condensation lock. Generous on purpose:
+# a concurrent request condensing a large memory file can legitimately hold the lock for
+# minutes, and the bound only exists to stop a permanently-stuck holder from hanging the
+# (often post-returnToUser) memory node — and its reader greenlet — for the life of the
+# process. Override per workflow with 'condensationLockTimeoutSeconds'; set it to 0 (or
+# negative) to wait indefinitely (the original, unbounded behavior).
+_DEFAULT_CONDENSATION_LOCK_TIMEOUT_SECONDS = 600
 
 
 def _get_condensation_lock(discussion_id: str) -> threading.Lock:
@@ -171,14 +178,17 @@ JSON Output:"""
                             vector_db_utils.add_memory_to_vector_db(
                                 context.discussion_id,
                                 memory_summary,
-                                json.dumps(memory_metadata)
+                                json.dumps(memory_metadata),
+                                api_key_hash=context.api_key_hash,
                             )
                             successful_adds += 1
 
                 if successful_adds > 0:
                     # Write the hash immediately after successfully storing memories for this chunk
                     # This makes the process resumable - if interrupted, we can pick up from the last hash
-                    vector_db_utils.add_vector_check_hash(context.discussion_id, chunk_hash)
+                    vector_db_utils.add_vector_check_hash(
+                        context.discussion_id, chunk_hash, api_key_hash=context.api_key_hash
+                    )
                     logger.info(
                         f"Successfully generated and stored {successful_adds} vector memory/memories for discussion {context.discussion_id}. Hash logged for resumability.")
                     total_memories_stored += successful_adds
@@ -261,6 +271,27 @@ JSON Output:"""
         filtered_chunks = [s for s in search_result_chunks if s]
         return '\n\n'.join(filtered_chunks)
 
+    @staticmethod
+    def _resolve_condensation_lock_timeout(workflow_config: Dict) -> float:
+        """Returns the bounded wait (seconds) for the per-discussion condensation lock.
+
+        Reads 'condensationLockTimeoutSeconds' from the memory workflow config, defaulting
+        to a generous bound. A value of 0 or negative means wait indefinitely (restoring
+        the original unbounded behavior). A non-numeric value falls back to the default.
+
+        Args:
+            workflow_config (Dict): The memory workflow config; may carry
+                'condensationLockTimeoutSeconds'.
+
+        Returns:
+            float: The lock wait in seconds (0 or negative means wait indefinitely).
+        """
+        raw = workflow_config.get('condensationLockTimeoutSeconds', _DEFAULT_CONDENSATION_LOCK_TIMEOUT_SECONDS)
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return float(_DEFAULT_CONDENSATION_LOCK_TIMEOUT_SECONDS)
+
     def handle_discussion_id_flow(self, context: ExecutionContext, force_file_memory: bool = False) -> None:
         """
         Handles the automatic generation of long-term memories for a conversation.
@@ -287,7 +318,7 @@ JSON Output:"""
         use_vector_memory_from_config = discussion_id_workflow_config.get('useVectorForQualityMemory', False)
 
         if use_vector_memory_from_config and not force_file_memory:
-            vector_db_utils.initialize_vector_db(context.discussion_id)
+            vector_db_utils.initialize_vector_db(context.discussion_id, api_key_hash=context.api_key_hash)
             logger.debug("Running vector memory check.")
 
             lookback_turns = discussion_id_workflow_config.get('lookbackStartTurn', 3)
@@ -298,7 +329,9 @@ JSON Output:"""
             end_index = len(messages_copy) - lookback_turns
 
             # 1. Get the history of the last N hashes, not just one.
-            hash_history = vector_db_utils.get_vector_check_hash_history(context.discussion_id, limit=10)
+            hash_history = vector_db_utils.get_vector_check_hash_history(
+                context.discussion_id, limit=10, api_key_hash=context.api_key_hash
+            )
 
             start_index = 0  # Default to the beginning if no hash is found
             if hash_history:
@@ -328,6 +361,14 @@ JSON Output:"""
 
             if new_message_content_to_process:
                 chunk_size = discussion_id_workflow_config.get('vectorMemoryChunkEstimatedTokenSize', 1000)
+                # Calibrate the token threshold for this memory config's model. Wilmer's
+                # estimator over-counts on efficient large-vocab tokenizers, which would
+                # trigger and size chunks on too little real content; the config-local
+                # wilmerContextEstimationLevel scales the estimate-space threshold up so a
+                # chunk holds the intended amount of real text (conservative = 1.0 =
+                # unchanged). Memory bypasses dispatch, so this is NOT gated on the clamp;
+                # the level value in this config is the opt-in.
+                chunk_size = int(chunk_size * get_estimation_level_multiplier(discussion_id_workflow_config))
                 max_messages = discussion_id_workflow_config.get('vectorMemoryMaxMessagesBetweenChunks', 5)
 
                 token_count = rough_estimate_token_length(
@@ -401,6 +442,12 @@ JSON Output:"""
 
             logger.info(f"Found {len(new_message_content_to_process)} new messages to consider for memory generation.")
             chunk_size = discussion_id_workflow_config.get('chunkEstimatedTokenSize', 1000)
+            # Calibrate the token threshold for this memory config's model (see the
+            # vector-memory path above): the config-local wilmerContextEstimationLevel
+            # scales the estimate-space threshold up for efficient tokenizers so a chunk
+            # holds the intended real content. Conservative (default) = 1.0 = unchanged;
+            # not gated on the dispatch clamp (the level value is the opt-in).
+            chunk_size = int(chunk_size * get_estimation_level_multiplier(discussion_id_workflow_config))
             max_messages = discussion_id_workflow_config.get('maxMessagesBetweenChunks', 5)
             token_count = rough_estimate_token_length(
                 '\n'.join(m['content'] for m in new_message_content_to_process if 'content' in m)
@@ -430,24 +477,39 @@ JSON Output:"""
                     rag_prompt = discussion_id_workflow_config.get('prompt', '')
                     # Hold the per-discussion lock across both write and condensation
                     # to prevent concurrent memory operations from overwriting each other.
+                    # Wait is bounded so a stuck holder can't hang this (often
+                    # post-returnToUser) node forever; on timeout we skip this round
+                    # rather than proceed unlocked (which would risk the very overwrite
+                    # the lock prevents). The work is self-healing — the unprocessed
+                    # messages still meet the threshold on the next qualifying turn.
                     lock = _get_condensation_lock(context.discussion_id)
-                    lock.acquire()
-                    try:
-                        self.process_new_memory_chunks(text_chunks, hashed_chunks, rag_system_prompt, rag_prompt,
-                                                       discussion_id_workflow_config, context)
-                        # When regenerating after file deletion, seed the condensation tracker
-                        # with the latest memory hash so condensation starts fresh from here.
-                        if not file_exists and discussion_id_workflow_config.get('condenseMemories', False):
-                            tracker_path = get_discussion_condensation_tracker_file_path(context.discussion_id, api_key_hash=api_key_hash)
-                            last_hash = hashed_chunks[-1][1]
-                            write_condensation_tracker(tracker_path, {'lastCondensationHash': last_hash}, encryption_key=encryption_key)
-                            logger.info(
-                                f"Memory file was regenerated from scratch. "
-                                f"Seeded condensation tracker with latest hash for {context.discussion_id}."
-                            )
-                        self._condense_memories_already_locked(context.discussion_id, discussion_id_workflow_config, context)
-                    finally:
-                        lock.release()
+                    lock_timeout = self._resolve_condensation_lock_timeout(discussion_id_workflow_config)
+                    acquired = lock.acquire() if lock_timeout <= 0 else lock.acquire(timeout=lock_timeout)
+                    if not acquired:
+                        logger.warning(
+                            "Could not acquire the condensation lock for discussion %s within %ss; "
+                            "skipping memory generation this round (it will retry on the next "
+                            "qualifying turn). Set 'condensationLockTimeoutSeconds' to 0 to wait "
+                            "indefinitely.",
+                            context.discussion_id, lock_timeout,
+                        )
+                    else:
+                        try:
+                            self.process_new_memory_chunks(text_chunks, hashed_chunks, rag_system_prompt, rag_prompt,
+                                                           discussion_id_workflow_config, context)
+                            # When regenerating after file deletion, seed the condensation tracker
+                            # with the latest memory hash so condensation starts fresh from here.
+                            if not file_exists and discussion_id_workflow_config.get('condenseMemories', False):
+                                tracker_path = get_discussion_condensation_tracker_file_path(context.discussion_id, api_key_hash=api_key_hash)
+                                last_hash = hashed_chunks[-1][1]
+                                write_condensation_tracker(tracker_path, {'lastCondensationHash': last_hash}, encryption_key=encryption_key)
+                                logger.info(
+                                    f"Memory file was regenerated from scratch. "
+                                    f"Seeded condensation tracker with latest hash for {context.discussion_id}."
+                                )
+                            self._condense_memories_already_locked(context.discussion_id, discussion_id_workflow_config, context)
+                        finally:
+                            lock.release()
             else:
                 if not file_exists:
                     logger.info("Thresholds not met. Memory file does not exist; message threshold is disabled "

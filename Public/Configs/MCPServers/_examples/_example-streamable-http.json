@@ -1,0 +1,5 @@
+{
+  "transport": "streamable_http",
+  "url": "http://localhost:8888/mcp",
+  "headers": {}
+}

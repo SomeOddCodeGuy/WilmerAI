@@ -86,12 +86,17 @@ class TestSlowButQualityRAGTool:
         mock_vector_db.add_memory_to_vector_db.assert_called_with(
             mock_context.discussion_id,
             "A test summary.",
-            json.dumps({"title": "Test", "summary": "A test summary.", "entities": [], "key_phrases": []})
+            json.dumps({"title": "Test", "summary": "A test summary.", "entities": [], "key_phrases": []}),
+            api_key_hash=mock_context.api_key_hash,
         )
 
         assert mock_vector_db.add_vector_check_hash.call_count == 2
-        mock_vector_db.add_vector_check_hash.assert_any_call(mock_context.discussion_id, "hash1")
-        mock_vector_db.add_vector_check_hash.assert_any_call(mock_context.discussion_id, "hash2")
+        mock_vector_db.add_vector_check_hash.assert_any_call(
+            mock_context.discussion_id, "hash1", api_key_hash=mock_context.api_key_hash
+        )
+        mock_vector_db.add_vector_check_hash.assert_any_call(
+            mock_context.discussion_id, "hash2", api_key_hash=mock_context.api_key_hash
+        )
 
     @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.vector_db_utils')
     @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.SlowButQualityRAGTool.process_single_chunk')
@@ -118,9 +123,12 @@ class TestSlowButQualityRAGTool:
         mock_vector_db.add_memory_to_vector_db.assert_called_once_with(
             mock_context.discussion_id,
             "Direct summary.",
-            json.dumps({"title": "Direct", "summary": "Direct summary.", "entities": ["a"], "key_phrases": ["b"]})
+            json.dumps({"title": "Direct", "summary": "Direct summary.", "entities": ["a"], "key_phrases": ["b"]}),
+            api_key_hash=mock_context.api_key_hash,
         )
-        mock_vector_db.add_vector_check_hash.assert_called_once_with(mock_context.discussion_id, "chunk_hash")
+        mock_vector_db.add_vector_check_hash.assert_called_once_with(
+            mock_context.discussion_id, "chunk_hash", api_key_hash=mock_context.api_key_hash
+        )
 
     def test_perform_keyword_search_routes_correctly(self, mock_context):
         """Tests that perform_keyword_search calls the correct sub-method based on target."""
@@ -238,6 +246,58 @@ class TestSlowButQualityRAGTool:
             tool.handle_discussion_id_flow(mock_context)
 
             mock_process.assert_called_once()
+
+    def test_resolve_condensation_lock_timeout(self):
+        """The lock-timeout resolver honors the config override, 0/negative (wait forever),
+        and falls back to the generous default for missing or non-numeric values."""
+        from Middleware.workflows.tools.slow_but_quality_rag_tool import (
+            _DEFAULT_CONDENSATION_LOCK_TIMEOUT_SECONDS as DEFAULT,
+        )
+        resolve = SlowButQualityRAGTool._resolve_condensation_lock_timeout
+        assert resolve({}) == float(DEFAULT)
+        assert resolve({'condensationLockTimeoutSeconds': 5}) == 5.0
+        assert resolve({'condensationLockTimeoutSeconds': 0}) == 0.0
+        assert resolve({'condensationLockTimeoutSeconds': -1}) == -1.0
+        assert resolve({'condensationLockTimeoutSeconds': 'nope'}) == float(DEFAULT)
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.os.path.exists', return_value=True)
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.load_config')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.read_chunks_with_hashes', return_value=[])
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.rough_estimate_token_length', return_value=2000)
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_discussion_memory_file_path')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.chunk_messages_with_hashes')
+    def test_handle_discussion_id_flow_skips_when_lock_contended(
+            self, mock_chunker, mock_get_path, mock_estimate_tokens, mock_read_hashes, mock_load_config,
+            mock_path_exists, mock_context, caplog
+    ):
+        """If the per-discussion condensation lock can't be acquired within the bound, the
+        node skips this round (no unlocked write) instead of blocking forever (PASS2-005)."""
+        from Middleware.workflows.tools.slow_but_quality_rag_tool import _get_condensation_lock
+
+        tool = SlowButQualityRAGTool()
+        mock_load_config.return_value = {
+            'useVectorForQualityMemory': False,
+            'lookbackStartTurn': 1,
+            'chunkEstimatedTokenSize': 1000,
+            'maxMessagesBetweenChunks': 5,
+            'condensationLockTimeoutSeconds': 0.01,
+        }
+        mock_context.messages = [{"role": "user", "content": f"message {i}"} for i in range(5)]
+        mock_chunker.return_value = [("some chunk text", "some_hash")]
+
+        # Hold the lock so the node's bounded acquire times out.
+        lock = _get_condensation_lock(mock_context.discussion_id)
+        assert lock.acquire()
+        try:
+            with patch.object(tool, 'process_new_memory_chunks') as mock_process:
+                with caplog.at_level(
+                    "WARNING", logger="Middleware.workflows.tools.slow_but_quality_rag_tool"
+                ):
+                    tool.handle_discussion_id_flow(mock_context)
+                mock_process.assert_not_called()
+            assert any("skipping memory generation" in r.getMessage() for r in caplog.records)
+        finally:
+            lock.release()
 
     def test_perform_rag_on_conversation_chunk_no_discussion_id(self, mock_context):
         """Tests that perform_rag_on_conversation_chunk returns empty string when discussion_id is None."""
@@ -632,6 +692,65 @@ class TestSlowButQualityRAGTool:
         }
         # 4 new messages (well below maxMessagesBetweenChunks=100), so message trigger won't fire.
         # Token count is 999 < 1000 threshold, so token trigger shouldn't fire either.
+        mock_context.messages = [{"role": "user", "content": f"message {i}"} for i in range(25)]
+
+        with patch.object(tool, 'process_new_memory_chunks') as mock_process:
+            tool.handle_discussion_id_flow(mock_context)
+            mock_process.assert_not_called()
+
+    # --- Invariant K (memory half): wilmerContextEstimationLevel scales the memory
+    # chunk-size thresholds. Config-local (lives in the discussion-id workflow config),
+    # applied whenever set with NO clampPromptToContextWindow gating; conservative /
+    # absent leaves the thresholds unchanged. ---
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.load_config')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.vector_db_utils')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.chunk_messages_with_hashes')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.hash_single_message')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.rough_estimate_token_length', return_value=6000)
+    def test_estimation_level_raises_vector_token_threshold(
+            self, mock_estimate_tokens, mock_hasher, mock_chunker, mock_vector_db, mock_load_config, mock_context
+    ):
+        """An estimate of 6000 triggers at conservative (>= 6000) but NOT at aggressive,
+        which scales the threshold to 9000 (6000 < 9000). The level raised the bar."""
+        tool = SlowButQualityRAGTool()
+        mock_load_config.return_value = {
+            'useVectorForQualityMemory': True,
+            'lookbackStartTurn': 1,
+            'vectorMemoryChunkEstimatedTokenSize': 6000,
+            'vectorMemoryMaxMessagesBetweenChunks': 100,
+            'wilmerContextEstimationLevel': 'aggressive',
+        }
+        mock_context.messages = [{"role": "user", "content": f"message_{i}"} for i in range(10)]
+        mock_hasher.side_effect = lambda msg: f"hash_of_{msg['content']}"
+        mock_vector_db.get_vector_check_hash_history.return_value = []
+
+        with patch.object(tool, 'generate_and_store_vector_memories') as mock_generate:
+            tool.handle_discussion_id_flow(mock_context)
+            mock_generate.assert_not_called()
+            mock_chunker.assert_not_called()
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.os.path.exists', return_value=True)
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.load_config')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.read_chunks_with_hashes',
+           return_value=[("existing chunk", "existing_hash")])
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.rough_estimate_token_length', return_value=1000)
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_discussion_memory_file_path')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.find_last_matching_hash_message', return_value=20)
+    def test_estimation_level_raises_file_token_threshold(
+            self, mock_find_hash, mock_get_path, mock_estimate_tokens,
+            mock_read_hashes, mock_load_config, mock_path_exists, mock_context
+    ):
+        """An estimate of 1000 triggers file-memory at conservative (>= 1000) but NOT at
+        aggressive, which scales the threshold to 1500 (1000 < 1500)."""
+        tool = SlowButQualityRAGTool()
+        mock_load_config.return_value = {
+            'useVectorForQualityMemory': False,
+            'lookbackStartTurn': 1,
+            'chunkEstimatedTokenSize': 1000,
+            'maxMessagesBetweenChunks': 100,
+            'wilmerContextEstimationLevel': 'aggressive',
+        }
         mock_context.messages = [{"role": "user", "content": f"message {i}"} for i in range(25)]
 
         with patch.object(tool, 'process_new_memory_chunks') as mock_process:

@@ -273,7 +273,9 @@ class WorkflowProcessor:
             for idx, config in enumerate(self.configs):
                 # Check for cancellation at the start of each node execution
                 if cancellation_service.is_cancelled(self.request_id):
-                    logger.warning(f"Request {self.request_id} has been cancelled. Terminating workflow early.")
+                    logger.warning(
+                        f"Request {self.request_id} has been cancelled. Terminating workflow early. "
+                        f"(step {idx}, post_return={returned_to_user}, workflow={self.workflow_config_name})")
                     cancellation_service.acknowledge_cancellation(self.request_id)
                     raise EarlyTerminationException(f"Workflow execution cancelled for request {self.request_id}")
 
@@ -283,8 +285,10 @@ class WorkflowProcessor:
                 node_name = self._get_node_name(config)
                 endpoint_name, endpoint_url = self._get_endpoint_details(config)
 
+                is_post_return = returned_to_user
                 logger.info(
-                    f'------Workflow {self.workflow_config_name}; step {idx}; node type: {config.get("type", "Standard")}')
+                    f'------Workflow {self.workflow_config_name}; step {idx}; node type: {config.get("type", "Standard")}'
+                    f'{" [post-returnToUser]" if is_post_return else ""}')
 
                 if "systemPrompt" in config or "prompt" in config:
                     if self.override_first_available_prompts:
@@ -374,6 +378,9 @@ class WorkflowProcessor:
                                 endpoint_name = endpoint_name_template
 
                             endpoint_config = get_endpoint_config(endpoint_name) if endpoint_name else {}
+                            logger.debug("Creating StreamingResponseHandler. lowercaseToolCallFunctionNames=%s, allowTools=%s",
+                                         config.get("lowercaseToolCallFunctionNames", False),
+                                         config.get("allowTools", False))
                             stream_handler = StreamingResponseHandler(endpoint_config, config,
                                                                       generation_prompt=generation_prompt,
                                                                       request_id=self.request_id)
@@ -384,6 +391,11 @@ class WorkflowProcessor:
                         result = result_gen
                         if not self.stream and isinstance(result, str) and generation_prompt:
                             result = self._reconstruct_non_streaming(result, generation_prompt)
+                        if isinstance(result, dict) and result.get('tool_calls') and config.get("lowercaseToolCallFunctionNames", False):
+                            for tc in result['tool_calls']:
+                                func = tc.get("function")
+                                if func and isinstance(func.get("name"), str):
+                                    func["name"] = func["name"].lower()
                         yield result
 
                     if is_timestamping_enabled_for_node:
@@ -413,10 +425,24 @@ class WorkflowProcessor:
                     ))
                 else:
                     logger.debug("Executing a non-responding node flow.")
+                    if is_post_return:
+                        logger.info(
+                            f"Post-returnToUser node starting: step {idx}, type={node_type}, "
+                            f"name='{node_name}', request_id={self.request_id}")
                     result = self._process_section(
                         config=config, agent_outputs=combined_agent_variables,
                         is_responding_node=False
                     )
+                    if is_post_return:
+                        result_preview = repr(result[:200]) if isinstance(result, str) and len(result) > 200 else repr(result)
+                        # The result can be conversation-derived (e.g. memory text), so route it
+                        # through sensitive_log to honor redactLogOutput/encryption; the surrounding
+                        # step/type/name fields are metadata and stay in the message.
+                        sensitive_log(
+                            logger, logging.INFO,
+                            f"Post-returnToUser node finished: step {idx}, type={node_type}, "
+                            f"name='{node_name}', result=%s",
+                            result_preview)
                     agent_outputs[f'agent{idx + 1}Output'] = result
 
                     # Record node execution info for non-responding node
@@ -433,6 +459,18 @@ class WorkflowProcessor:
         except EarlyTerminationException:
             logger.info(
                 f"Terminating workflow early. Unlocking locks for InstanceID: '{instance_global_variables.INSTANCE_ID}' and workflow ID: '{self.workflow_id}'")
+            raise
+        except (KeyboardInterrupt, SystemExit, GeneratorExit):
+            # Normal control-flow / teardown, not an error: a streaming consumer that
+            # stops early raises GeneratorExit at the suspended yield, and Ctrl-C /
+            # process shutdown raise the others. Re-raise cleanly so the finally below
+            # still unlocks, but without an ERROR-level traceback for what is routine.
+            # Mirrors the handler-level handling in base_llm_api_handler.
+            raise
+        except BaseException as e:
+            logger.error(
+                f"BaseException in execute() for workflow '{self.workflow_config_name}': "
+                f"{type(e).__name__}: {e}", exc_info=True)
             raise
         finally:
             end_time = time.perf_counter()

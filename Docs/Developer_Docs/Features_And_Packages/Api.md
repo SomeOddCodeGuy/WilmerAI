@@ -4,7 +4,7 @@
 
 ## 1\. Overview
 
-This directory contains the primary entry point for the WilmerAI application: a Flask web server that exposes all public-facing API endpoints. Its fundamental role is to act as a robust **compatibility and translation layer**. It accepts requests conforming to popular external schemas (like OpenAI and Ollama), transforms the data into a standardized internal format, and dispatches the request to the central workflow engine for processing.
+This directory contains the primary entry point for the WilmerAI application: a Flask web server that exposes all public-facing API endpoints. Its fundamental role is to act as a **compatibility and translation layer**. It accepts requests conforming to popular external schemas (like OpenAI and Ollama), transforms the data into a standardized internal format, and dispatches the request to the central workflow engine for processing.
 
 The architecture is designed to be modular and extensible. The API logic is broken down into an orchestrator (`ApiServer`), a business logic gateway (`workflow_gateway`), and a series of self-contained **handlers** for specific API schemas. A key component of this architecture is the `ResponseBuilderService`, which centralizes all logic for constructing API-specific JSON responses, ensuring that outgoing data matches the schema expected by the client.
 
@@ -205,7 +205,9 @@ When multiple users are configured:
 * The models endpoint aggregates models from all users
 * The model field determines which user's config to use per request
 * Per-user `port` config settings are ignored; the port must be specified via `--port` (defaults to `5050`)
-* The concurrency gate serializes all requests regardless of user, protecting shared hardware
+* The concurrency gate serializes all requests regardless of user, protecting shared hardware. In `endpoint` mode
+  (`--concurrency-level endpoint`) the gate is enforced at the outbound LLM call rather than at the request boundary;
+  the protection of shared hardware is preserved but requests themselves can overlap freely
 * Log output is isolated per user into separate files (see Logging section below)
 
 Per-request user resolution uses `get_request_user()` / `set_request_user()` stored in `_request_context`
@@ -231,9 +233,9 @@ on whether multi-user mode is active:
 
 | Format | Example | Result |
 |--------|---------|--------|
-| `username:workflow` | `chris:openwebui-coding` | `(None, "openwebui-coding")` |
-| `workflow` | `openwebui-coding` | `(None, "openwebui-coding")` if in `_shared/` |
-| `username:workflow:latest` | `chris:openwebui-coding:latest` | Strips `:latest`, same as above |
+| `username:workflow` | `chat-ui:general` | `(None, "general")` |
+| `workflow` | `general` | `(None, "general")` if in `_shared/` |
+| `username:workflow:latest` | `chat-ui:general:latest` | Strips `:latest`, same as above |
 | Non-matching | `gpt-4` | `(None, None)`, uses normal routing |
 
 **Multi-user mode** (USERS has 2+ entries):
@@ -241,8 +243,8 @@ on whether multi-user mode is active:
 | Format | Example | Result |
 |--------|---------|--------|
 | `username` | `user-two` | `("user-two", None)` -- routes to user-two's default workflow |
-| `username:workflow` | `user-two:coding` | `("user-two", "coding")` -- routes to user-two's shared workflow |
-| `workflow` (bare) | `coding` | `(None, None)` -- rejected, user must be specified |
+| `username:workflow` | `user-two:general` | `("user-two", "general")` -- routes to user-two's shared workflow |
+| `workflow` (bare) | `general` | `(None, None)` -- rejected, user must be specified |
 | Non-matching | `gpt-4` | `(None, None)` -- rejected by `require_identified_user()` |
 
 ### Folder Structure
@@ -250,25 +252,29 @@ on whether multi-user mode is active:
 ```
 Public/Configs/Workflows/
 ├── _shared/
-│   ├── openwebui-coding/           # Listed by models endpoint as folder name
+│   ├── general/                    # Listed by models endpoint as folder name
 │   │   └── _DefaultWorkflow.json   # Workflow loaded when folder is selected
-│   ├── openwebui-general/
+│   ├── fast/
 │   │   └── _DefaultWorkflow.json
-│   └── openwebui-task/
+│   ├── general-reasoning/
+│   │   └── _DefaultWorkflow.json
+│   ├── fast-reasoning/
+│   │   └── _DefaultWorkflow.json
+│   └── task/
 │       └── _DefaultWorkflow.json
-├── chris/                          # Default user folder
+├── example-user/                   # A user's own workflow folder (optional)
 │   └── ...
 ```
 
 ### Request Flow with Workflow Override
 
 1. Client queries `/v1/models` → receives list of models from all configured users
-2. Client sends request with `"model": "chris:openwebui-coding"`
-3. Handler calls `api_helpers.set_request_context_from_model("chris:openwebui-coding")`
-4. In multi-user mode, the request-scoped user is set to `chris`
+2. Client sends request with `"model": "chat-ui:general"`
+3. Handler calls `api_helpers.set_request_context_from_model("chat-ui:general")`
+4. In multi-user mode, the request-scoped user is set to `chat-ui`
 5. `workflow_gateway.handle_user_prompt()` detects the override
-6. Workflow is loaded from `_shared/openwebui-coding/_DefaultWorkflow.json`
-7. Response includes `"model": "chris:openwebui-coding"`
+6. Workflow is loaded from `_shared/general/_DefaultWorkflow.json`
+7. Response includes `"model": "chat-ui:general"`
 8. Handler calls `api_helpers.clear_request_context()` in `finally` block
 
 ### Key Files
@@ -332,8 +338,30 @@ The fix: each streaming generator checks whether the chunk it just yielded conta
 - **Ollama**: checks for `"done": true` or `"done":true` in the encoded bytes
 - **OpenAI**: checks for `[DONE]` in the encoded bytes
 
-When detected, the generator returns immediately. The `finally` block fires the stop signal and schedules
-asynchronous cleanup of the backend reader greenlet.
+When detected, the generator returns immediately — but the backend reader greenlet is **not** killed.
+This allows post-returnToUser workflow nodes (memory summarization, categorization, reflection, etc.)
+to finish processing in the background. The reader greenlet is only killed on client disconnect or error.
+
+In the fallback (non-Eventlet) streaming path, the same stream-complete marker is detected, but
+instead of returning, the generator sets a flag and continues consuming the `handle_user_prompt()`
+iterator without yielding. This drives `execute()` through any remaining post-returnToUser nodes
+before the generator naturally exhausts.
+
+**Connection-hold consequence (fallback only).** Because there is no background greenlet in this path,
+the only way to keep the workflow running after the responder streams its answer is to keep driving the
+same WSGI generator. The client has already received the stream terminator and sees a complete response,
+but the underlying HTTP request — and the worker handling it (Waitress thread, Gunicorn sync worker, or
+the Flask dev server) — stays occupied until the post-returnToUser nodes finish and the generator
+exhausts. Deployments with heavy post-return work (large memory generation, reflection sub-workflows)
+on a small worker pool should size the pool accordingly. The Eventlet path does **not** have this
+property: it returns at the terminator (closing the connection) and finishes post-return nodes in the
+background greenlet.
+
+**Post-terminator exception containment (fallback only).** If a post-returnToUser node raises *after* the
+terminator has been sent, the failure must not propagate out of the WSGI generator — the client already
+saw a visually-complete stream, and re-raising would corrupt connection teardown. The fallback generator
+therefore logs and swallows any exception that occurs once the done flag is set (mirroring the contained
+handling in the Eventlet reader), and only re-raises exceptions that occur *before* the terminator.
 
 ### Heartbeat Format
 
@@ -347,21 +375,40 @@ Heartbeats differ between API formats:
 Both formats cause a TCP write, which is sufficient for disconnect detection -- if the client has closed the
 connection, the write will fail and trigger cancellation.
 
-### Non-Blocking Greenlet Cleanup
+### Greenlet Lifecycle After Stream Completion
 
-When the Eventlet streaming generator returns (after stream-complete detection or natural exhaustion), its
-`finally` block must clean up the background reader greenlet. This cleanup uses `eventlet.spawn(reader_greenlet.kill)`
-rather than a direct `reader_greenlet.kill()` call.
+When the Eventlet streaming generator returns after stream-complete detection, the backend reader greenlet
+is intentionally left running. The reader continues driving the `handle_user_prompt()` generator chain,
+which allows `execute()` to process any remaining post-returnToUser workflow nodes (e.g., memory writes,
+reflection sub-workflows, categorization). The reader greenlet exits naturally when `execute()` finishes
+and the generator chain raises `StopIteration`.
 
-The reason: `kill()` is a blocking call that sends `GreenletExit` to the reader and waits for it to terminate.
-If the reader is inside `handle_user_prompt()` doing post-stream workflow processing (non-responding nodes,
-lock releases, etc.), this wait can take seconds. During that wait, the generator's `finally` block is blocked,
-which prevents the Eventlet WSGI server from finalizing the HTTP response (sending the chunked transfer encoding
-terminator and closing the TCP connection). From the client's perspective, the response data has arrived but the
-HTTP transaction has not completed -- this can corrupt the client's HTTP connection state.
+The reader greenlet is only killed (via `eventlet.spawn(reader_greenlet.kill)`) when the streaming generator
+exits due to client disconnect (`GeneratorExit`, `ClientDisconnected`, `BrokenPipeError`, `ConnectionError`)
+or an unexpected error. In these cases, cancellation is also requested via `cancellation_service`, and each
+node in `execute()` checks for cancellation at the start of its iteration.
 
-By spawning the kill into a separate greenlet, the `finally` block returns immediately, allowing the WSGI server
-to finalize and close the response. The reader greenlet is cleaned up asynchronously in the background.
+**Unbounded post-return lifetime.** On *natural* completion there is no per-node deadline or time-based cancellation:
+the reader terminates only when `handle_user_prompt()` exhausts. A post-returnToUser node that blocks indefinitely
+therefore keeps its reader greenlet (and the request-scoped state it captured) alive for the life of the process, since
+the client has already disconnected at the terminator and nothing else will reclaim it. This is an inherent trade-off
+of letting post-return work outlive the client; bound such nodes with their own timeouts rather than relying on the
+request lifecycle to free them. The known concrete instance of this — the per-discussion memory condensation lock in
+`slow_but_quality_rag_tool.py` — is now bounded by default: the acquire waits `condensationLockTimeoutSeconds` (default
+600s) and, on timeout, skips memory generation for that round (self-healing — it retries on the next qualifying turn)
+rather than blocking forever. Set that key to 0 to restore the original unbounded wait.
+
+Correspondingly, the streaming generator's `finally` block sends `stop_signal` to the reader **only** on this
+kill path. On *natural* completion (the generator returned at the terminator), it leaves `stop_signal`
+unsent and lets the reader send it from its own `finally` when `execute()` finishes. This matters because the
+reader only checks `stop_signal` before queueing a chunk: if a future post-returnToUser node ever yielded
+output, signaling from the generator's natural-completion path would cause the reader to `break` and cut that
+output off. Post-return nodes are non-responding today (they don't yield), so this is defensive, not a current
+bug.
+
+The asynchronous `eventlet.spawn(reader_greenlet.kill)` pattern (rather than a direct blocking `kill()`) is
+used to avoid blocking the generator's `finally` block, which would delay the WSGI server's HTTP response
+finalization.
 
 ### Implementation Details
 
@@ -394,7 +441,7 @@ preventing zombie connections from accumulating if a client fails to close its e
 The architecture makes it easy to add new functionality. The `ApiServer` automatically discovers new handlers, so in
 most cases, you only need to add new files without modifying existing ones.
 
-### **Example 2: Add Support for a New API Type (e.g., Anthropic)**
+### **Example: Add Support for a New API Type (e.g., Anthropic)**
 
 This more advanced example shows how to add compatibility for an entirely new API schema, supporting both streaming and
 non-streaming.
@@ -468,6 +515,16 @@ non-streaming.
 WilmerAI includes an optional concurrency-limiting layer that restricts how many requests can be in-flight at the
 same time. This is implemented as a WSGI middleware rather than using Flask-level hooks, for reasons explained below.
 
+The layer can operate at one of two granularities, selected at startup by the `--concurrency-level` flag:
+
+* **`wilmer` (default)**: the semaphore is held at the WSGI middleware. Only `--concurrency` requests run at a time;
+  excess requests wait at the front door or are rejected with 503 after the timeout. This is the historical behaviour
+  and is described in detail in the subsections below.
+* **`endpoint`**: the WSGI middleware passes every request through immediately. The same semaphore is instead
+  acquired and released inside `LlmApiService.get_response_from_llm` around the outbound LLM HTTP call. This allows
+  reentrant requests (workflows that call out to services that loop back into the same Wilmer instance) to make
+  progress without deadlocking against a request-level gate. See section 7.7 for the `endpoint`-mode mechanics.
+
 ### Why WSGI Middleware Instead of Flask Hooks
 
 Flask provides `before_request` and `teardown_request` hooks that initially seem like a natural place to
@@ -523,21 +580,27 @@ The `__call__` method implements the WSGI interface and follows this sequence:
    cancellation) are passed directly to the inner app without acquiring. This prevents lightweight metadata
    endpoints from being blocked behind long-running LLM calls.
 
-2. **Acquire with timeout**: For POST requests, calls `semaphore.acquire(timeout=self._acquire_timeout)`. If the
-   semaphore cannot be acquired within the timeout window, the request is rejected immediately.
+2. **Level check**: Reads `instance_global_variables.CONCURRENCY_LEVEL` at call time (not at middleware construction).
+   When the level is `endpoint`, the middleware short-circuits and passes the request straight through to the inner
+   app without touching the semaphore. The gate is enforced inside `LlmApiService` instead. Reading the level on each
+   call (rather than once at startup) keeps test setup simple and means a single middleware instance behaves
+   consistently regardless of when the level was set.
 
-3. **503 on timeout**: When acquire fails, the middleware calls `start_response("503 Service Unavailable", ...)`
+3. **Acquire with timeout**: For POST requests in `wilmer` mode, calls `semaphore.acquire(timeout=self._acquire_timeout)`.
+   If the semaphore cannot be acquired within the timeout window, the request is rejected immediately.
+
+4. **503 on timeout**: When acquire fails, the middleware calls `start_response("503 Service Unavailable", ...)`
    and returns a pre-encoded JSON body with an error message. The semaphore is never held in this path, so there
    is nothing to release.
 
-4. **Call the inner app**: If acquired, the middleware calls `self._app(environ, start_response)` to get the
+5. **Call the inner app**: If acquired, the middleware calls `self._app(environ, start_response)` to get the
    response iterable from Flask.
 
-5. **Exception handling**: If the inner app raises during the call (before returning a response), the middleware
+6. **Exception handling**: If the inner app raises during the call (before returning a response), the middleware
    releases the semaphore immediately and re-raises the exception. This prevents a leaked semaphore slot from
    permanently reducing capacity.
 
-6. **Wrap the response**: On success, the response iterable is wrapped in `_SemaphoreReleasingIterator`, which
+7. **Wrap the response**: On success, the response iterable is wrapped in `_SemaphoreReleasingIterator`, which
    takes ownership of releasing the semaphore when the response is fully consumed.
 
 ### Application Point
@@ -568,7 +631,13 @@ This ensures it sits between the WSGI server (Eventlet) and Flask's routing laye
 * **`--concurrency-timeout S`**: Sets the maximum number of seconds a request will wait to acquire the semaphore
   before being rejected with a 503. Stored in `instance_global_variables.CONCURRENCY_TIMEOUT`. Defaults to 900
   seconds (15 minutes). This generous default accounts for long-running LLM inference on local hardware.
-  Users with slower hardware or very large models may want to increase this further.
+  Users with slower hardware or very large models may want to increase this further. Applies to both `wilmer` and
+  `endpoint` modes -- in `endpoint` mode, an LLM call that times out at the gate raises `TimeoutError` from inside
+  `get_response_from_llm` instead of returning a WSGI 503.
+
+* **`--concurrency-level {wilmer,endpoint}`**: Selects which layer holds the semaphore. Stored in
+  `instance_global_variables.CONCURRENCY_LEVEL`. Defaults to `wilmer`. See section 7.7 for the `endpoint`-mode
+  implementation details.
 
 ### Method-Based Exemptions
 
@@ -579,12 +648,57 @@ environ. This approach avoids maintaining a path allowlist -- if a new POST endp
 call an LLM, it would need to be handled (e.g., by switching to a path-based check or adding it to an
 exemption set).
 
+### 7.7 `endpoint`-Mode Gate (inside `LlmApiService`)
+
+When `CONCURRENCY_LEVEL == "endpoint"`, the WSGI middleware passes every request through and the same
+`BoundedSemaphore` is acquired around the outbound LLM HTTP call instead. The implementation lives in
+`Middleware/llmapis/llm_api.py`:
+
+* **`_acquire_endpoint_gate()`**: Module-level helper. Returns `False` immediately if the level is not `endpoint` or
+  if no semaphore was configured (e.g. `--concurrency 0`). Otherwise calls `sem.acquire(timeout=CONCURRENCY_TIMEOUT)`
+  and returns `True` on success. Raises `TimeoutError` if the semaphore could not be acquired within the timeout.
+
+* **`_release_endpoint_gate(acquired)`**: Releases the semaphore if and only if `acquired` is `True`. The helper
+  re-reads `get_request_semaphore()` rather than caching it across the call so it remains correct under test
+  patching.
+
+These helpers are wrapped around two specific code paths inside `LlmApiService.get_response_from_llm`:
+
+1. **Non-streaming**: `gate_held = _acquire_endpoint_gate()` is called just before
+   `self._api_handler.handle_non_streaming(...)`. The release happens in the outer `finally`. If the handler raises
+   and a backup endpoint is configured, the gate is released *before* `_build_backup_service().get_response_from_llm(...)`
+   is invoked so the backup's own `_acquire_endpoint_gate` does not deadlock against the parent at `--concurrency 1`.
+
+2. **Streaming**: The acquire/release is moved inside `stream_wrapper`, the generator returned by
+   `get_response_from_llm` for streaming calls. The gate is acquired on the *first iteration* of the generator
+   (not at construction), held across every `yield`, and released in `finally`. This means:
+
+   * If the caller abandons the generator (via `gen.close()`), the gate is released by `finally`.
+   * If the upstream handler raises mid-stream, the gate is released by `finally` before the exception propagates.
+   * If failover triggers before any token has been yielded, the gate is released *before* `yield from
+     backup_service.get_response_from_llm(...)` so the backup can acquire its own slot.
+
+The same `BoundedSemaphore` instance is used in both modes; only the layer at which it is acquired changes.
+`--concurrency` continues to control its initial count and `--concurrency-timeout` continues to control the maximum
+wait. `--concurrency 0` disables the gate entirely in both modes (the semaphore is never created).
+
+### Why release before delegating to a backup
+
+At `--concurrency 1`, holding the gate across a failover delegation would deadlock against ourselves: the parent
+service would still hold the only slot while the backup tries to acquire one. The parent never returns until the
+backup returns, and the backup never starts until the parent releases. Both the streaming and non-streaming failover
+paths explicitly release the gate before invoking the backup. The backup re-acquires through its own normal
+`_acquire_endpoint_gate` call, no special-case API.
+
 ### Key Files
 
 * `Middleware/api/concurrency_middleware.py`: Contains `ConcurrencyLimitMiddleware` and
-  `_SemaphoreReleasingIterator`. This is the entire middleware implementation.
+  `_SemaphoreReleasingIterator`. Reads `CONCURRENCY_LEVEL` at call time to decide whether to acquire or pass
+  through.
 * `Middleware/common/instance_global_variables.py`: Stores the `BoundedSemaphore` instance
-  (`_request_semaphore`), along with `CONCURRENCY_LIMIT` and `CONCURRENCY_TIMEOUT` configuration values.
-  Provides `initialize_request_semaphore(n)` and `get_request_semaphore()`.
+  (`_request_semaphore`), along with `CONCURRENCY_LIMIT`, `CONCURRENCY_TIMEOUT`, and `CONCURRENCY_LEVEL`
+  configuration values. Provides `initialize_request_semaphore(n)` and `get_request_semaphore()`.
 * `Middleware/api/api_server.py`: `ApiServer._apply_concurrency_middleware()` conditionally wraps
   `app.wsgi_app` with the middleware during server initialization.
+* `Middleware/llmapis/llm_api.py`: Module-level `_acquire_endpoint_gate()` / `_release_endpoint_gate()` and the
+  `LlmApiService.get_response_from_llm` wrapping that uses them in `endpoint` mode.

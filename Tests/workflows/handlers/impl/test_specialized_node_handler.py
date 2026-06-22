@@ -220,6 +220,48 @@ class TestHandleGetCustomFile:
             custom_delimiter="\n"
         )
 
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.load_custom_file', return_value="trimmed")
+    def test_passes_tail_count_through(self, mock_load_file, specialized_handler, base_context):
+        """Should forward tailCount to the file utility when opted in."""
+        base_context.config = {"filepath": "/path/to/file.txt", "tailCount": 5}
+
+        result = specialized_handler.handle_get_custom_file(base_context)
+
+        assert result == "trimmed"
+        mock_load_file.assert_called_once_with(
+            filepath="/path/to/file.txt",
+            delimiter="\n",
+            custom_delimiter="\n",
+            tail_count=5
+        )
+
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.load_custom_file', return_value="trimmed")
+    def test_passes_head_count_and_chunk_delimiter_through(self, mock_load_file, specialized_handler, base_context):
+        """Should forward headCount and chunkDelimiter to the file utility."""
+        base_context.config = {"filepath": "/f.txt", "headCount": 3, "chunkDelimiter": "\n\n---\n\n"}
+
+        specialized_handler.handle_get_custom_file(base_context)
+
+        mock_load_file.assert_called_once_with(
+            filepath="/f.txt",
+            delimiter="\n",
+            custom_delimiter="\n",
+            head_count=3,
+            chunk_delimiter="\n\n---\n\n"
+        )
+
+    def test_rejects_both_head_and_tail_count(self, specialized_handler, base_context):
+        """Should reject configs that set both headCount and tailCount."""
+        base_context.config = {"filepath": "/f.txt", "headCount": 2, "tailCount": 2}
+        result = specialized_handler.handle_get_custom_file(base_context)
+        assert result == "GetCustomFile: specify only one of 'headCount' or 'tailCount', not both"
+
+    def test_rejects_invalid_tail_count(self, specialized_handler, base_context):
+        """Should reject a non-positive tailCount."""
+        base_context.config = {"filepath": "/f.txt", "tailCount": 0}
+        result = specialized_handler.handle_get_custom_file(base_context)
+        assert result == "GetCustomFile: 'tailCount' must be an integer >= 1"
+
 
 class TestHandleSaveCustomFile:
     """Tests the 'SaveCustomFile' node logic."""
@@ -322,6 +364,22 @@ class TestHandleSaveCustomFile:
             filepath="/data/2025_12_07/session-xyz_summary.txt",
             content="Summary content"
         )
+
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.save_custom_file')
+    def test_passes_append_mode_through(self, mock_save_file, specialized_handler, base_context):
+        """Should forward mode='append' to the save utility when opted in."""
+        base_context.config = {"filepath": "/path/save.txt", "content": "note", "mode": "append"}
+
+        result = specialized_handler.handle_save_custom_file(base_context)
+
+        mock_save_file.assert_called_once_with(filepath="/path/save.txt", content="note", mode="append")
+        assert result == "File successfully saved to /path/save.txt"
+
+    def test_rejects_invalid_mode(self, specialized_handler, base_context):
+        """Should reject a mode other than overwrite/append."""
+        base_context.config = {"filepath": "/path/save.txt", "content": "note", "mode": "bogus"}
+        result = specialized_handler.handle_save_custom_file(base_context)
+        assert result == "SaveCustomFile: 'mode' must be 'overwrite' or 'append', got 'bogus'"
 
 
 class TestHandleImageProcessorNode:
@@ -1305,6 +1363,62 @@ Line 3
         result = specialized_handler.handle_tag_text_extractor(base_context)
 
         assert result == ""
+
+    def test_returns_default_text_when_tag_missing(self, specialized_handler, base_context, mock_variable_service):
+        """When the tag is absent and defaultText is configured, return defaultText (not empty)."""
+        base_context.config = {
+            "tagToExtractFrom": "<other>some content</other>",
+            "fieldToExtract": "next_step",
+            "defaultText": "fallback instruction"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_tag_text_extractor(base_context)
+
+        assert result == "fallback instruction"
+
+    def test_returns_default_text_when_tag_present_but_empty(self, specialized_handler, base_context, mock_variable_service):
+        """An empty/whitespace-only tag body falls back to defaultText (mirrors a truncated <next_step>)."""
+        base_context.config = {
+            "tagToExtractFrom": "<next_step>   </next_step>",
+            "fieldToExtract": "next_step",
+            "defaultText": "fallback instruction"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_tag_text_extractor(base_context)
+
+        assert result == "fallback instruction"
+
+    def test_prefers_extracted_content_over_default_text(self, specialized_handler, base_context, mock_variable_service):
+        """A real extraction always wins over defaultText."""
+        base_context.config = {
+            "tagToExtractFrom": "<next_step>do the thing</next_step>",
+            "fieldToExtract": "next_step",
+            "defaultText": "fallback instruction"
+        }
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_tag_text_extractor(base_context)
+
+        assert result == "do the thing"
+
+    def test_default_text_receives_variable_substitution(self, specialized_handler, base_context, mock_variable_service):
+        """defaultText is run through workflow-variable substitution before being returned."""
+        base_context.config = {
+            "tagToExtractFrom": "<other>x</other>",
+            "fieldToExtract": "next_step",
+            "defaultText": "{agent2Output}"
+        }
+
+        def mock_apply(template, ctx):
+            return "previous scratchpad step" if template == "{agent2Output}" else template
+
+        mock_variable_service.apply_variables.side_effect = mock_apply
+
+        result = specialized_handler.handle_tag_text_extractor(base_context)
+
+        assert result == "previous scratchpad step"
 
     def test_returns_empty_when_text_source_missing(self, specialized_handler, base_context):
         """Should return empty string and log warning when tagToExtractFrom is missing."""

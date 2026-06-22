@@ -5,11 +5,21 @@ import uuid
 
 INSTANCE_ID = str(uuid.uuid4())
 CONFIG_DIRECTORY = None
+PUBLIC_DIRECTORY = None  # --PublicDirectory override for the Public/ root (parent of Configs, DiscussionIds, SqlLiteDBs, logs)
 USERS = None
 LOGGING_DIRECTORY = "logs"
 FILE_LOGGING = None  # None = check user's config (single-user) or default off (multi-user); True/False = explicit CLI flag
+USER_LEVEL_SQLITE_DIRECTORY = None  # --UserLevelSqlLiteDirectory override for per-user SQLite databases
+DISCUSSION_DIRECTORY = None  # --DiscussionDirectory override for per-discussion data files
 CONCURRENCY_LIMIT = 1
 CONCURRENCY_TIMEOUT = 900
+# Concurrency enforcement layer:
+#   "wilmer"   - default; the semaphore is held at the WSGI middleware so only
+#                CONCURRENCY_LIMIT incoming requests run at a time.
+#   "endpoint" - the semaphore is held only during the outbound LLM call inside
+#                LlmApiService.get_response_from_llm. Multiple requests may be
+#                in flight simultaneously; only outbound LLM calls are serialized.
+CONCURRENCY_LEVEL = "wilmer"
 PORT = None  # None = resolve from user config (single-user) or default (multi-user)
 LISTEN_ADDRESS = "127.0.0.1"  # Bind address; use --listen to expose on network (0.0.0.0)
 _request_semaphore = None

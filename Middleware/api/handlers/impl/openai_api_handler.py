@@ -8,6 +8,8 @@ import uuid
 try:
     import eventlet
     from eventlet.queue import Queue as EventletQueue, Empty as EventletQueueEmpty
+    # greenlet is a hard dependency of eventlet; only needed on the eventlet path
+    from greenlet import GreenletExit
 
     EVENTLET_AVAILABLE = True
 except ImportError:
@@ -99,6 +101,19 @@ def _stream_with_eventlet_optimized(request_id: str, messages: List[Dict], strea
             else:
                 logger.error(f"Error in backend reader greenlet for request_id {request_id}: {e}", exc_info=True)
                 event_queue.put(("error", e))
+        except GreenletExit:
+            # Routine teardown: the streaming generator kills this reader on client
+            # disconnect/error, so a GreenletExit here is expected lifecycle, not an
+            # application failure. Log quietly and let the greenlet exit.
+            logger.info(f"Backend reader greenlet for request_id {request_id} was killed during stream teardown.")
+            raise
+        except (KeyboardInterrupt, SystemExit):
+            # Process-level signals (Ctrl-C / interpreter shutdown) must propagate,
+            # not be swallowed as a reader error.
+            raise
+        except BaseException as e:
+            logger.error(f"BaseException in backend_reader for request_id {request_id}: "
+                         f"{type(e).__name__}: {e}", exc_info=True)
         finally:
             if not stop_signal.ready():
                 stop_signal.send(True)
@@ -107,6 +122,7 @@ def _stream_with_eventlet_optimized(request_id: str, messages: List[Dict], strea
 
     def streaming_generator():
         """Main generator consumed by Eventlet WSGI."""
+        should_kill_reader = False
         try:
             while not stop_signal.ready() or not event_queue.empty():
                 try:
@@ -122,8 +138,8 @@ def _stream_with_eventlet_optimized(request_id: str, messages: List[Dict], strea
                         yield encoded
 
                         # If this chunk is the SSE stream terminator, return immediately.
-                        # Without this, post-stream workflow processing keeps the generator
-                        # alive, holding the connection open unnecessarily.
+                        # The backend_reader greenlet continues running so that
+                        # post-returnToUser workflow nodes can finish processing.
                         if b'[DONE]' in encoded:
                             return
 
@@ -138,22 +154,26 @@ def _stream_with_eventlet_optimized(request_id: str, messages: List[Dict], strea
             logger.info(f"Client disconnected from OpenAI streaming request {request_id}. Error: {type(e).__name__}.")
             if request_id and not cancellation_service.is_cancelled(request_id):
                 cancellation_service.request_cancellation(request_id)
+            should_kill_reader = True
             raise
         except Exception as e:
             if request_id and cancellation_service.is_cancelled(request_id):
                 logger.info(f"Backend streaming stopped due to cancellation for request_id {request_id}.")
             else:
                 logger.error(f"Unexpected error in OpenAI streaming generator: {e}", exc_info=True)
+            should_kill_reader = True
             raise
         finally:
-            if not stop_signal.ready():
-                stop_signal.send(True)
-            if reader_greenlet:
-                # Kill the reader asynchronously to avoid blocking HTTP response
-                # finalization. A blocking kill() here would delay the chunked TE
-                # terminator and TCP close, since the generator's finally block runs
-                # before the WSGI server can finalize the response.
-                eventlet.spawn(reader_greenlet.kill)
+            # Only stop the backend reader when tearing it down due to a client
+            # disconnect or error. On natural completion (we returned at [DONE]) the
+            # reader is left running so post-returnToUser nodes finish; it sends
+            # stop_signal itself from its own finally. Signaling here on natural
+            # completion would cut off a future post-return node that yields.
+            if should_kill_reader:
+                if not stop_signal.ready():
+                    stop_signal.send(True)
+                if reader_greenlet:
+                    eventlet.spawn(reader_greenlet.kill)
 
     response = Response(
         streaming_generator(),
@@ -207,17 +227,20 @@ def _stream_response_fallback(request_id: str, messages: List[Dict], stream: boo
         set_encryption_context(captured_encryption_active)
         logger.debug(f"OpenAI Fallback Generator starting for request_id: {request_id}")
         try:
+            done_sent = False
             for chunk in handle_user_prompt(request_id, messages, stream, api_key=api_key,
                                             tools=tools, tool_choice=tool_choice):
                 if isinstance(chunk, str):
                     encoded = chunk.encode('utf-8')
                 else:
                     encoded = chunk
+                if done_sent:
+                    # After stream terminator, consume remaining chunks without
+                    # yielding so post-returnToUser workflow nodes can finish.
+                    continue
                 yield encoded
-                # Stop after stream terminator to prevent the generator from staying
-                # alive during post-stream workflow processing.
                 if b'[DONE]' in encoded:
-                    return
+                    done_sent = True
         except (GeneratorExit, ClientDisconnected, BrokenPipeError, ConnectionError) as e:
             if request_id:
                 if not cancellation_service.is_cancelled(request_id):
@@ -229,6 +252,15 @@ def _stream_response_fallback(request_id: str, messages: List[Dict], stream: boo
             if request_id and cancellation_service.is_cancelled(request_id):
                 logger.info(
                     f"Backend streaming stopped due to cancellation for request_id {request_id}. Exiting generator.")
+                return
+            if done_sent:
+                # The client already received [DONE]; a failure in a post-returnToUser
+                # node must not propagate out of the WSGI generator (it would corrupt
+                # connection teardown after a visually-complete stream). Log and
+                # swallow, mirroring the eventlet reader's contained handling.
+                logger.error(
+                    f"Post-stream node failed after [DONE] in OpenAI fallback streaming "
+                    f"for request_id {request_id}: {e}", exc_info=True)
                 return
             logger.error(f"Unexpected error in OpenAI streaming response: {e}", exc_info=True)
             raise

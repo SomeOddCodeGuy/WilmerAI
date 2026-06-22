@@ -356,7 +356,7 @@ def get_formatted_last_turns_by_estimated_token_limit_as_string(messages: List[D
     selected = []
 
     for message in reversed(filtered_messages):
-        message_tokens = rough_estimate_token_length(message.get("content", ""))
+        message_tokens = rough_estimate_token_length(message.get("content") or "")
         if not selected:
             selected.append(message)
             accumulated_tokens += message_tokens
@@ -374,7 +374,8 @@ def get_formatted_last_turns_by_estimated_token_limit_as_string(messages: List[D
 def get_formatted_last_turns_with_min_messages_and_token_limit_as_string(messages: List[Dict[str, str]],
                                                                           min_messages: int, token_limit: int,
                                                                           template_file_name: str,
-                                                                          isChatCompletion: bool) -> str:
+                                                                          isChatCompletion: bool,
+                                                                          budget_overrides_min: bool = False) -> str:
     """
     Retrieves and formats recent messages with a minimum count floor and token
     budget ceiling as a single concatenated string.
@@ -395,6 +396,10 @@ def get_formatted_last_turns_with_min_messages_and_token_limit_as_string(message
             for formatting.
         isChatCompletion (bool): A flag indicating if the LLM supports
             chat completions.
+        budget_overrides_min (bool, optional): When ``True``, the ``min_messages``
+            floor yields to ``token_limit`` (whole messages dropped, never content,
+            keeping at least the most-recent message) so a floored variable cannot
+            overflow the endpoint window. Defaults to ``False`` (hard floor).
 
     Returns:
         str: A single string with the selected messages concatenated and
@@ -409,8 +414,14 @@ def get_formatted_last_turns_with_min_messages_and_token_limit_as_string(message
     selected = []
 
     for message in reversed(filtered_messages):
-        message_tokens = rough_estimate_token_length(message.get("content", ""))
+        message_tokens = rough_estimate_token_length(message.get("content") or "")
         if len(selected) < min_messages:
+            # Hard count floor by default; yields to the token budget when
+            # budget_overrides_min is set (context-window clamp on), always keeping
+            # at least the most-recent message. Mirrors
+            # extract_last_turns_with_min_messages_and_token_limit.
+            if budget_overrides_min and selected and accumulated_tokens + message_tokens > token_limit:
+                break
             selected.append(message)
             accumulated_tokens += message_tokens
         elif accumulated_tokens + message_tokens <= token_limit:

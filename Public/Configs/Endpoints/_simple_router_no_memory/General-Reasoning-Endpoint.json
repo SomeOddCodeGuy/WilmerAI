@@ -1,0 +1,33 @@
+{
+  "modelNameForDisplayOnly": "General-Reasoning",
+  "endpoint": "http://127.0.0.1:5001",
+  "apiTypeConfigFileName": "LlamaCppServer",
+  "maxContextTokenSize": 32786,
+  "modelNameToSendToAPI": "",
+  "promptTemplate": "llama3",
+  "addGenerationPrompt": true,
+  "trimBeginningAndEndLineBreaks": true,
+  "dontIncludeModel": true,
+  "removeThinking": false,
+  "startThinkTag": "",
+  "endThinkTag": "",
+  "expectOnlyClosingThinkTag": false,
+  "addTextToStartOfSystem": false,
+  "textToAddToStartOfSystem": " ",
+  "addTextToStartOfPrompt": false,
+  "textToAddToStartOfPrompt": "",
+  "addTextToStartOfCompletion": false,
+  "textToAddToStartOfCompletion": "",
+  "ensureTextAddedToAssistantWhenChatCompletion": false,
+  "presetSamplers": {
+    "temperature": 0.6,
+    "top_p": 0.95,
+    "min_p": 0,
+    "stop": [
+      "<|END_RESPONSE|>"
+    ],
+    "chat_template_kwargs": {
+      "thinking_budget": 16384
+    }
+  }
+}

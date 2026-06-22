@@ -507,7 +507,27 @@ class SpecializedNodeHandler(BaseHandler):
         if custom_return_delimiter is None:
             custom_return_delimiter = delimiter
 
-        return load_custom_file(filepath=filepath, delimiter=delimiter, custom_delimiter=custom_return_delimiter)
+        # Optional, opt-in head/tail limiting. Absent => whole file is returned.
+        head_count = context.config.get("headCount")
+        tail_count = context.config.get("tailCount")
+        chunk_delimiter = context.config.get("chunkDelimiter")
+
+        if head_count is not None and tail_count is not None:
+            return "GetCustomFile: specify only one of 'headCount' or 'tailCount', not both"
+        for field_name, field_value in (("headCount", head_count), ("tailCount", tail_count)):
+            if field_value is not None and (not isinstance(field_value, int)
+                                            or isinstance(field_value, bool) or field_value < 1):
+                return f"GetCustomFile: '{field_name}' must be an integer >= 1"
+
+        load_kwargs = {"filepath": filepath, "delimiter": delimiter, "custom_delimiter": custom_return_delimiter}
+        if head_count is not None:
+            load_kwargs["head_count"] = head_count
+        if tail_count is not None:
+            load_kwargs["tail_count"] = tail_count
+        if chunk_delimiter is not None:
+            load_kwargs["chunk_delimiter"] = chunk_delimiter
+
+        return load_custom_file(**load_kwargs)
 
     def handle_save_custom_file(self, context: ExecutionContext) -> str:
         """
@@ -531,6 +551,10 @@ class SpecializedNodeHandler(BaseHandler):
         if content_template is None:
             return "No content specified"
 
+        mode = context.config.get("mode")
+        if mode is not None and mode not in ("overwrite", "append"):
+            return f"SaveCustomFile: 'mode' must be 'overwrite' or 'append', got '{mode}'"
+
         # Apply variable substitution to both filepath and content
         resolved_filepath = self.workflow_variable_service.apply_variables(
             filepath_template, context
@@ -539,8 +563,12 @@ class SpecializedNodeHandler(BaseHandler):
             content_template, context
         )
 
+        save_kwargs = {"filepath": resolved_filepath, "content": resolved_content}
+        if mode is not None:
+            save_kwargs["mode"] = mode
+
         try:
-            save_custom_file(filepath=resolved_filepath, content=resolved_content)
+            save_custom_file(**save_kwargs)
             return f"File successfully saved to {resolved_filepath}"
         except Exception as e:
             logger.error(f"Failed to save file to {resolved_filepath}. Error: {e}")
@@ -839,7 +867,18 @@ class SpecializedNodeHandler(BaseHandler):
 
         match = pattern.search(resolved_text)
         if match:
-            return match.group(1).strip()
+            extracted = match.group(1).strip()
+            if extracted:
+                return extracted
+
+        # Tag was absent, unclosed, or wrapped only whitespace. If a defaultText is
+        # configured, return it (with workflow-variable substitution applied) so a
+        # downstream node never silently receives an empty string. This is what lets
+        # the OpenCode planners turn a malformed/empty <next_step> into a usable
+        # fallback instruction for the doer instead of a blank one.
+        default_template = context.config.get("defaultText")
+        if default_template:
+            return self.workflow_variable_service.apply_variables(default_template, context)
 
         logger.debug(f"TagTextExtractor: Tag '<{resolved_tag}>' not found in text.")
         return ""

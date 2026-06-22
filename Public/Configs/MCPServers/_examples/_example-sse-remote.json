@@ -1,0 +1,7 @@
+{
+  "transport": "sse",
+  "url": "http://localhost:8888/sse",
+  "headers": {
+    "Authorization": "Bearer YOUR_TOKEN_HERE"
+  }
+}

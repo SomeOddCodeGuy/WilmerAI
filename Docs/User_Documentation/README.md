@@ -1,6 +1,6 @@
 ### **Project Overview: WilmerAI**
 
-WilmerAI is a middleware system that acts as a powerful orchestration engine between front-end applications and various
+WilmerAI is a middleware system that acts as an orchestration engine between front-end applications and various
 Large Language Model (LLM) backends. It allows you to build complex, multi-step AI behaviors using a node-based workflow
 system, all while presenting a simple, industry-standard API to your existing tools.
 
@@ -12,7 +12,7 @@ tools, and memory systems to process a single user request.
 ## The Core Concept: The Workflow Engine
 
 At the heart of WilmerAI is a **node-based workflow engine**. A workflow is a JSON file that defines a sequence of
-steps, or "nodes," to be executed in order. This allows you to create sophisticated logic that goes far beyond a simple
+steps, or "nodes," to be executed in order. This allows you to create multi-step logic that goes far beyond a simple
 single-LLM response.
 
 * **Nodes as Building Blocks**: Each node in a workflow performs a specific task, such as calling an LLM, searching a
@@ -29,7 +29,7 @@ single-LLM response.
 
 ## Key Capabilities
 
-WilmerAI integrates several powerful features into its workflow engine, enabling you to build highly customized and
+WilmerAI integrates several features into its workflow engine, enabling you to build highly customized and
 intelligent systems.
 
 ### Adaptable API Gateway
@@ -106,8 +106,8 @@ is unchanged. See [Per-User Encryption and Data Isolation](Core_Features/Per_Use
 ### External Tool Integration
 
 The workflow engine can be extended with custom tools. This includes nodes for running local Python scripts or
-connecting to external services. A built-in example is the **Offline Wikipedia Integration**, which allows a workflow to
-query a local Wikipedia database to provide factual context for a response.
+connecting to external services. A built-in example is the **Offline Wikipedia Integration**, which allows a workflow
+to query a local Wikipedia database to provide factual context for a response.
 
 -----
 
@@ -128,7 +128,7 @@ query a local Wikipedia database to provide factual context for a response.
 
 -----
 
-## 3\. Directory Breakdown
+## Directory Breakdown
 
 ```plaintext
 WilmerAI
@@ -197,10 +197,11 @@ server.py. Takes the following optional parameters:
 * `--User` - String input that specifies the name of the user you'd like to start the app as. Can be repeated for multi-user mode.
 * `--port` - Integer input that specifies the port to listen on. In single-user mode, falls back to the user's config. In multi-user mode, defaults to 5050.
 * `--listen` - Listen on the network. With no value, binds to 0.0.0.0 (all interfaces). Optionally accepts a specific address.
-* `--concurrency` - Integer input that sets the max concurrent requests. 0 = no limit. Default: 1.
+* `--concurrency` - Integer input that sets the max concurrent requests (or LLM calls in endpoint mode). 0 = no limit. Default: 1.
 * `--concurrency-timeout` - Integer input that sets the seconds to wait for a concurrency slot before returning 503. Default: 900.
+* `--concurrency-level` - `wilmer` or `endpoint`. Selects where the gate is enforced. `wilmer` (default) gates at the request boundary; `endpoint` lifts the request gate and serializes only outbound LLM API calls, allowing reentrant requests (workflows that call back into the same Wilmer instance) to make progress. Default: `wilmer`.
 * `--file-logging` - Enable file logging. In single-user mode, falls back to the user's useFileLogging config setting. In multi-user mode, defaults to off.
-* `--LoggingDirectory` - Directory for log files. Defaults to `logs`.
+* `--LoggingDirectory` - Directory for log files. When unset, defaults to `{PublicDirectory}/logs/` if `--PublicDirectory` is provided, otherwise `{install_dir}/Public/logs/`. The default is install-pinned (derived from the location of `server.py` on disk) and does not depend on the current working directory.
 
 #### **`server.py`**
 
@@ -220,9 +221,9 @@ directly from their front-end's model dropdown without changing configuration fi
    models. In single-user mode, these are workflows from `_shared/` in `username:workflow` format. In multi-user mode,
    models are aggregated from all configured users.
 
-2. **Workflow Selection**: When your front-end sends a request with a model field like `"model": "chris:openwebui-coding"`,
+2. **Workflow Selection**: When your front-end sends a request with a model field like `"model": "chat-ui:general"`,
    WilmerAI extracts the workflow name and executes that workflow directly from the `_shared` folder. In multi-user
-   mode, if `chris` matches a configured user, that user's config is used for the request.
+   mode, if `chat-ui` matches a configured user, that user's config is used for the request.
 
 3. **Response Format**: Responses include the model in `username:workflow` format when a workflow override is active,
    allowing your front-end to maintain the selected workflow across requests.
@@ -242,28 +243,32 @@ All users share the same concurrency gate, which serializes requests to shared L
 user they belong to.
 
 The models endpoint will list models from all configured users. A front-end can target a specific user by sending
-`"model": "user-two"` or `"model": "user-two:coding"` in the request.
+`"model": "user-two"` or `"model": "user-two:general"` in the request.
 
 ### Folder Structure
 
 ```
 Public/Configs/Workflows/
 ├── _shared/
-│   ├── openwebui-coding/           # Listed by models endpoint as folder name
+│   ├── general/                    # Listed by models endpoint as folder name
 │   │   └── _DefaultWorkflow.json   # Workflow loaded when folder is selected
-│   ├── openwebui-general/
+│   ├── fast/
 │   │   └── _DefaultWorkflow.json
-│   └── openwebui-task/
+│   ├── general-reasoning/
+│   │   └── _DefaultWorkflow.json
+│   ├── fast-reasoning/
+│   │   └── _DefaultWorkflow.json
+│   └── task/
 │       └── _DefaultWorkflow.json
-├── chris/                          # Default user folder
+├── example-user/                   # A user's own workflow folder (optional)
 │   └── ...
 ```
 
 ### Usage
 
-1. Create a folder in `Public/Configs/Workflows/_shared/` with your workflow name (e.g., `openwebui-coding/`)
+1. Create a folder in `Public/Configs/Workflows/_shared/` with your workflow name (e.g., `general/`)
 2. Place a `_DefaultWorkflow.json` file inside the folder
-3. Folder names become the selectable model names (e.g., `openwebui-coding/` → `chris:openwebui-coding`)
+3. Folder names become the selectable model names (e.g., `general/` → `chat-ui:general`)
 4. Query `/v1/models` or `/api/tags` from your front-end to see available workflows
 5. Select a workflow from the model dropdown in your front-end application
 
@@ -273,9 +278,9 @@ The API accepts these model field formats:
 
 | Format | Example | Behavior |
 |--------|---------|----------|
-| `username:workflow` | `chris:openwebui-coding` | Uses the specified workflow (and user in multi-user mode) |
-| `username` | `chris` | In multi-user mode, routes to that user's default workflow |
-| `workflow` | `openwebui-coding` | Uses workflow if it exists in `_shared/` |
+| `username:workflow` | `chat-ui:general` | Uses the specified workflow (and user in multi-user mode) |
+| `username` | `chat-ui` | In multi-user mode, routes to that user's default workflow |
+| `workflow` | `general` | Uses workflow if it exists in `_shared/` |
 | Anything else | `gpt-4` | Falls back to normal routing |
 
 ### workflowConfigsSubDirectoryOverride

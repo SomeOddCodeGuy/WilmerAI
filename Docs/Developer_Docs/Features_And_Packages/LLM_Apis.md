@@ -1,8 +1,7 @@
 ### **Developer Guide: `Middleware/llmapis/`**
 
-This guide provides a deep dive into the architecture and implementation of the `Middleware/llmapis/` package. It has
-been updated to reflect the verified data flows, class responsibilities, and specific implementation details of the
-current codebase.
+This guide provides a deep dive into the architecture and implementation of the `Middleware/llmapis/` package, covering
+its data flows, class responsibilities, and implementation details.
 
 -----
 
@@ -21,7 +20,7 @@ To solve the problem of API heterogeneity, the package employs two key design pa
 * A **Factory Pattern**, where a central service class (`$LlmApiService$`) is responsible for selecting and
   instantiating the correct handler (strategy) at runtime based on configuration.
 
-This architecture makes the system highly extensible, allowing new LLM backends to be integrated with minimal changes to
+This architecture makes the system extensible, allowing new LLM backends to be integrated with minimal changes to
 the core application logic.
 
 -----
@@ -244,3 +243,100 @@ When no tool calls are present, the method returns a plain string as before.
 The same normalization rules apply: Claude and Ollama handlers convert their native tool call structures to OpenAI
 format before returning. Ollama specifically converts `arguments` from a dict to a JSON string to match OpenAI's
 convention.
+
+-----
+
+## 7\. Endpoint Failover
+
+The `$LlmApiService$` supports transparent failover to a backup endpoint when the primary endpoint raises an exception.
+This is configured per-endpoint via the optional `backupEndpointName` field in the endpoint JSON. Backups may chain
+arbitrarily (each backup can itself specify a further backup), and cycle protection prevents infinite loops from
+misconfiguration.
+
+### Triggering Condition
+
+Failover is triggered on **any** exception raised by the handler call — including `requests.exceptions.ConnectionError`,
+`Timeout`, `RequestException`, and generic `ValueError` / `RuntimeError` / `OSError`. The feature deliberately does not
+introduce new timeout behaviour; the existing `$get_connect_timeout()` connect timeout and the 14400-second read
+timeout are unchanged. This is intentional: WilmerAI is often used with local models that legitimately take many minutes
+to respond, and we do not want to spuriously failover on long reads.
+
+### Streaming vs Non-Streaming
+
+* **Non-streaming**: If `$handle_non_streaming()$` raises, the service instantiates an `$LlmApiService$` for the backup
+  endpoint and delegates the call. The delegated call returns the backup's response transparently to the caller.
+
+* **Streaming**: The wrapping generator tracks whether any token has been yielded to the caller. If the handler raises
+  **before** the first token, failover delegates to the backup's generator and yields its tokens instead. If the handler
+  raises **after** one or more tokens have been emitted, the original exception is re-raised — streaming failover cannot
+  recover mid-stream because the client has already received partial data.
+
+### Retry Suppression
+
+When an endpoint has a backup configured, its `$LlmApiHandler$` is instantiated with `suppress_retries=True`. This has
+two effects on the handler's HTTP behaviour:
+
+1. The underlying `$urllib3 Retry$` adapter is configured with `total=0`, disabling the automatic 5xx retry loop.
+2. The manual retry loop in `$handle_non_streaming()$` collapses to a single attempt (`retries = 1` instead of `retries = 3`).
+
+Endpoints without a backup (typically the tail of a chain, or endpoints configured without failover) retain the original
+retry behaviour: 5 `urllib3` retries with exponential backoff on 5xx responses, and 3 manual attempts on network
+exceptions in the non-streaming path.
+
+### Egress Guard
+
+Failover ships the whole conversation/prompt to the backup's host, so `$_build_backup_service()$` classifies that host
+before delegating (`_classify_backup_host`, parsing the backup endpoint's `endpoint` URL):
+
+- **local** — loopback / RFC1918-private / link-local IP, or `localhost`/`*.localhost`: allowed silently.
+- **remote** — a public IP literal: **blocked** with a `$RuntimeError$` unless the backup endpoint sets
+  `allowRemoteBackup: true`. This is safe-by-default: a transient local failure cannot silently send the prompt to a
+  public address.
+- **unknown** — a hostname that cannot be classified without DNS: allowed, but logged at `$WARNING$` as possible
+  off-machine egress (a synchronous guard deliberately does not resolve DNS, and blanket-blocking hostnames would break
+  the common case of referencing a backend by name).
+
+The guard classifies by address only; it does not inspect what the backend does with the data. `allowRemoteBackup` is
+read from the backup endpoint's config (the host that would receive the traffic opts in).
+
+### Preset Resolution
+
+The backup service is constructed with the preset name from the originating endpoint's optional `backupPresetName`
+field, falling back to the originating request's own preset name when that field is unset
+(`presetname=self._backup_preset_name or self._presetname` in `$_build_backup_service()$`). That name is resolved
+against the **backup's own** preset type, so a heterogeneous backup (a different API type) must either ship a preset of
+the inherited name in its `Presets/<type>/` directory or set `backupPresetName` to one it does — otherwise construction
+raises `$FileNotFoundError$` mid-failover. See `Endpoint.md` (`backupPresetName`) for the operator-facing description.
+
+### Concurrency Gate Interaction
+
+When `CONCURRENCY_LEVEL == "endpoint"`, `$get_response_from_llm()$` also acquires the per-instance LLM-call semaphore for
+the duration of the outbound call and **must release it before delegating to a backup** — otherwise the backup's own
+acquire would deadlock against the still-held slot at `limit=1`. The full mechanics (acquire/release placement,
+streaming vs non-streaming, generator-close handling) are documented in `Api.md` §7.7. The slot-wait `$TimeoutError$` is
+not a backend failure and does **not** trigger failover.
+
+### Cycle Protection
+
+Each `$LlmApiService$` carries a `_visited_endpoints: Set[str]` set that accumulates across the chain. The primary adds
+itself to the set on construction. When building the backup service, `$_build_backup_service()$` checks whether the
+backup name is already in the set; if so, it raises `$RuntimeError$` with a message naming the offending chain. Callers
+should never pass `_visited_endpoints` explicitly — it is an internal parameter populated by the service itself during
+failover.
+
+### Lifecycle and Logging
+
+* Each failover hop logs a `$WARNING$` on the `$Middleware.llmapis.llm_api$` logger with the primary name, the
+  exception type and message, and the backup name being attempted.
+* A stream failure after tokens have already been emitted logs an `$ERROR$` explaining that failover is not possible.
+* Cycles raise `$RuntimeError$` naming the offending endpoint chain.
+* The primary handler's `$close()$` is invoked exactly once before delegation; the backup service manages its own
+  handler lifecycle.
+* `$is_busy_flag$` is cleared before delegation and remains `False` after the backup returns or after the chain is
+  exhausted.
+
+### Caller Transparency
+
+No caller code needs to change. `$LlmApiService$` is instantiated with the primary endpoint name as usual, and the
+service handles failover internally. All call sites — workflow nodes, memory/summarization, categorization, chat
+responders — inherit failover automatically.
