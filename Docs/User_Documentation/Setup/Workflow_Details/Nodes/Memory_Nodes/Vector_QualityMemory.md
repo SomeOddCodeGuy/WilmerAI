@@ -19,7 +19,7 @@ generation from delaying the AI's response to the user.
 
 ### Internal Execution Flow
 
-The node's logic is a sophisticated, multi-step process orchestrated by an internal tool:
+The node's logic is a multi-step process orchestrated by an internal tool:
 
 1. **Mode Detection**: The node first checks if a `discussionId` is present in the context.
     * **Stateful (Default)**: If a `discussionId` is present, it proceeds with the full memory creation flow.

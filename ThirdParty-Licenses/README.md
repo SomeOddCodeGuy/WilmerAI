@@ -79,3 +79,21 @@ _Last Updated: 2026-03-29_
 * License Type: `Zope Public License (ZPL) Version 2.1`
 * Code: https://github.com/Pylons/waitress
 * License: https://github.com/Pylons/waitress/blob/main/LICENSE.txt
+
+#### mcp:
+
+_Last Updated: 2026-05-30_
+
+* License Type: `MIT License`
+* Code: https://github.com/modelcontextprotocol/python-sdk
+* License: https://github.com/modelcontextprotocol/python-sdk/blob/main/LICENSE
+* Note: The official Model Context Protocol Python SDK, used by the `MCPToolCall` workflow node to communicate with MCP servers over stdio, SSE, and streamable HTTP transports.
+
+#### PySocks:
+
+_Last Updated: 2026-05-30_
+
+* License Type: `BSD 3-Clause "New" or "Revised" License`
+* Code: https://github.com/Anorov/PySocks
+* License: https://github.com/Anorov/PySocks/blob/master/LICENSE
+* Note: SOCKS4/SOCKS5 proxy client. Required by `requests` when the `WebFetch` workflow node uses a `socks5://` or `socks4://` proxy URL; loaded transparently by `requests` when a SOCKS proxy is configured.

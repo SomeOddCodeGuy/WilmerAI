@@ -1219,3 +1219,89 @@ class TestToolCallDictResult:
         assert result_list[0]['tool_calls'] == tool_call_result['tool_calls']
         assert result_list[0]['finish_reason'] == 'tool_calls'
         assert result_list[0]['content'] == ''
+
+
+class TestLowercaseToolCallFunctionNames:
+    """Tests for the lowercaseToolCallFunctionNames node config option in non-streaming mode."""
+
+    def test_lowercases_tool_call_names_when_enabled(self, workflow_processor_factory, mock_node_handlers):
+        """Tool call function names should be lowercased when the flag is true."""
+        tool_call_result = {
+            'content': '',
+            'tool_calls': [
+                {'id': 'call_1', 'type': 'function', 'function': {'name': 'Glob', 'arguments': '{"pattern": "*.py}'}},
+                {'id': 'call_2', 'type': 'function', 'function': {'name': 'Grep', 'arguments': '{"q": "foo"}'}},
+            ],
+            'finish_reason': 'tool_calls'
+        }
+        config = [{
+            "type": "Standard",
+            "endpointName": "TestEndpoint",
+            "lowercaseToolCallFunctionNames": True,
+        }]
+        mock_node_handlers["Standard"].handle.return_value = tool_call_result
+
+        processor = workflow_processor_factory(configs=config, stream=False)
+        result_list = list(processor.execute())
+
+        assert len(result_list) == 1
+        assert result_list[0]['tool_calls'][0]['function']['name'] == 'glob'
+        assert result_list[0]['tool_calls'][1]['function']['name'] == 'grep'
+
+    def test_does_not_lowercase_when_disabled(self, workflow_processor_factory, mock_node_handlers):
+        """Tool call function names should be left as-is when the flag is false (default)."""
+        tool_call_result = {
+            'content': '',
+            'tool_calls': [
+                {'id': 'call_1', 'type': 'function', 'function': {'name': 'Glob', 'arguments': '{}'}},
+            ],
+            'finish_reason': 'tool_calls'
+        }
+        config = [{
+            "type": "Standard",
+            "endpointName": "TestEndpoint",
+        }]
+        mock_node_handlers["Standard"].handle.return_value = tool_call_result
+
+        processor = workflow_processor_factory(configs=config, stream=False)
+        result_list = list(processor.execute())
+
+        assert len(result_list) == 1
+        assert result_list[0]['tool_calls'][0]['function']['name'] == 'Glob'
+
+    def test_does_not_affect_string_results(self, workflow_processor_factory, mock_node_handlers):
+        """When the result is a plain string (no tool calls), the flag has no effect."""
+        config = [{
+            "type": "Standard",
+            "endpointName": "TestEndpoint",
+            "lowercaseToolCallFunctionNames": True,
+        }]
+        mock_node_handlers["Standard"].handle.return_value = "Hello world"
+
+        processor = workflow_processor_factory(configs=config, stream=False)
+        result_list = list(processor.execute())
+
+        assert len(result_list) == 1
+        assert result_list[0] == "Hello world"
+
+    def test_handles_already_lowercase_names(self, workflow_processor_factory, mock_node_handlers):
+        """Names that are already lowercase pass through without issue."""
+        tool_call_result = {
+            'content': '',
+            'tool_calls': [
+                {'id': 'call_1', 'type': 'function', 'function': {'name': 'get_weather', 'arguments': '{}'}},
+            ],
+            'finish_reason': 'tool_calls'
+        }
+        config = [{
+            "type": "Standard",
+            "endpointName": "TestEndpoint",
+            "lowercaseToolCallFunctionNames": True,
+        }]
+        mock_node_handlers["Standard"].handle.return_value = tool_call_result
+
+        processor = workflow_processor_factory(configs=config, stream=False)
+        result_list = list(processor.execute())
+
+        assert len(result_list) == 1
+        assert result_list[0]['tool_calls'][0]['function']['name'] == 'get_weather'

@@ -44,7 +44,7 @@ def test_search_vector_memories_no_results_found(mocker, memory_service):
     result = memory_service.search_vector_memories(discussion_id="123", keywords="search terms")
 
     # Assert
-    mock_search.assert_called_once_with("123", "search terms", 5)
+    mock_search.assert_called_once_with("123", "search terms", 5, api_key_hash=None)
     assert result == "No relevant memories found in the vector database for the given keywords."
 
 
@@ -60,7 +60,7 @@ def test_search_vector_memories_with_results(mocker, memory_service):
     result = memory_service.search_vector_memories(discussion_id="123", keywords="search terms", limit=10)
 
     # Assert
-    mock_search.assert_called_once_with("123", "search terms", 10)
+    mock_search.assert_called_once_with("123", "search terms", 10, api_key_hash=None)
     expected_output = "Summary of memory 1.\n\n---\n\nSummary of memory 2."
     assert result == expected_output
 

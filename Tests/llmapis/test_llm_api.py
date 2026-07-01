@@ -44,6 +44,9 @@ def mock_configs(mocker):
     mocker.patch(
         "Middleware.llmapis.llm_api.get_openai_preset_path", return_value="/fake/path/to/preset.json"
     )
+    # "test_preset" is a folder preset, not an endpoint with a presetSamplers block,
+    # so the endpoint probe returns None and resolution uses the folder file.
+    mocker.patch("Middleware.llmapis.llm_api.try_get_endpoint_config", return_value=None)
     mocker.patch("os.path.exists", return_value=True)
     mocker.patch(
         "builtins.open", mock_open(read_data=json.dumps(MOCK_PRESET_CONFIG))
@@ -96,6 +99,7 @@ class TestLlmApiService:
         mocker.patch("Middleware.llmapis.llm_api.get_endpoint_config", return_value=mock_endpoint_config)
         mocker.patch("Middleware.llmapis.llm_api.get_api_type_config", return_value=mock_api_type_config)
         mocker.patch("Middleware.llmapis.llm_api.get_openai_preset_path", return_value="/fake/preset.json")
+        mocker.patch("Middleware.llmapis.llm_api.try_get_endpoint_config", return_value=None)
         mocker.patch("os.path.exists", return_value=True)
         mocker.patch("builtins.open", mock_open(read_data=json.dumps(MOCK_PRESET_CONFIG)))
 

@@ -1,3 +1,43 @@
+import pytest
+
+
+def test_eventlet_path_runs_post_return_nodes_to_completion(app, mocker):
+    """Direct test of the Ollama Eventlet streaming path (ISS-035 + ISS-026).
+
+    Mirrors the OpenAI version: the generator sleeps between the done:true terminator and a
+    post-return chunk so the client-facing generator returns first. With the ISS-026 fix the
+    generator does not send stop_signal on natural completion, so the reader keeps draining and
+    the post-return node runs. Under the old behavior the post-return node would never execute.
+    """
+    eventlet = pytest.importorskip("eventlet")
+    from Middleware.api.handlers.impl import ollama_api_handler as h
+
+    executed = []
+
+    def stream_generator():
+        yield '{"message":{"role":"assistant","content":"Hi"},"done":false}\n'
+        yield '{"message":{"role":"assistant","content":""},"done": true}\n'
+        eventlet.sleep(0.1)
+        yield '{"message":{"role":"assistant","content":"post"},"done":false}\n'
+        executed.append("post_return_ran")
+
+    mocker.patch.object(h, 'handle_user_prompt', return_value=stream_generator())
+
+    with app.test_request_context('/api/chat'):
+        response = h._stream_with_eventlet_optimized('req-evt', [{"role": "user", "content": "hi"}], True)
+        client_chunks = list(response.response)
+
+    for _ in range(200):
+        if executed:
+            break
+        eventlet.sleep(0.01)
+
+    joined = b"".join(c if isinstance(c, bytes) else c.encode("utf-8") for c in client_chunks)
+    assert b'"done": true' in joined
+    assert b'"post"' not in joined
+    assert executed == ["post_return_ran"]
+
+
 def test_generate_non_streaming(client, mocker):
     """Tests the /api/generate endpoint with stream=False."""
     mock_handle_prompt = mocker.patch('Middleware.api.handlers.impl.ollama_api_handler.handle_user_prompt')
@@ -249,6 +289,88 @@ def test_generate_streaming_stops_after_done_true(client, mocker):
     assert response.status_code == 200
     assert b'"done": true' in response.data
     assert b'ghost' not in response.data
+
+
+def test_chat_streaming_runs_post_return_nodes_after_done(client, mocker):
+    """Post-returnToUser nodes must run to completion after a done:true chunk.
+
+    The fix keeps the backend generator being driven past the done:true sentinel
+    so non-responding post-return nodes execute, even though their output is not
+    delivered to the client. This asserts the backend is fully drained (the side
+    effect fires), not merely that post-done ghost chunks are excluded.
+    """
+    executed = []
+
+    def stream_generator():
+        yield '{"message":{"role":"assistant","content":"Hello"},"done":false}\n'
+        yield '{"message":{"role":"assistant","content":""},"done": true}\n'
+        executed.append("post_return_node_ran")
+        yield '{"message":{"role":"assistant","content":"ghost"},"done":false}\n'
+
+    mock_handle_prompt = mocker.patch('Middleware.api.handlers.impl.ollama_api_handler.handle_user_prompt')
+    mock_handle_prompt.return_value = stream_generator()
+
+    payload = {
+        "model": "test-model",
+        "messages": [{"role": "user", "content": "Hi"}],
+        "stream": True
+    }
+    response = client.post('/api/chat', json=payload)
+
+    assert response.status_code == 200
+    body = response.data
+    assert b'"done": true' in body
+    assert b'ghost' not in body
+    assert executed == ["post_return_node_ran"]
+
+
+def test_generate_streaming_runs_post_return_nodes_after_done(client, mocker):
+    """The /api/generate fallback path also drives post-return nodes past done:true."""
+    executed = []
+
+    def stream_generator():
+        yield '{"response":"Hello","done":false}'
+        yield '{"response":"","done": true}'
+        executed.append("post_return_node_ran")
+        yield '{"response":"ghost","done":false}'
+
+    mock_handle_prompt = mocker.patch('Middleware.api.handlers.impl.ollama_api_handler.handle_user_prompt')
+    mock_handle_prompt.return_value = stream_generator()
+
+    payload = {"model": "test-model", "prompt": "Test", "stream": True}
+    response = client.post('/api/generate', json=payload)
+
+    assert response.status_code == 200
+    body = response.data
+    assert b'"done": true' in body
+    assert b'ghost' not in body
+    assert executed == ["post_return_node_ran"]
+
+
+def test_post_done_exception_is_swallowed_in_fallback(client, mocker):
+    """A post-terminator node failure must not propagate out of the WSGI generator.
+
+    The client already received a visually-complete stream; re-raising would corrupt
+    connection teardown. The fallback path logs and swallows it instead.
+    """
+
+    def stream_generator():
+        yield '{"message":{"role":"assistant","content":"Hi"},"done":false}\n'
+        yield '{"message":{"role":"assistant","content":""},"done": true}\n'
+        raise RuntimeError("post-return node blew up")
+
+    mock_handle_prompt = mocker.patch('Middleware.api.handlers.impl.ollama_api_handler.handle_user_prompt')
+    mock_handle_prompt.return_value = stream_generator()
+
+    payload = {
+        "model": "test-model",
+        "messages": [{"role": "user", "content": "Hi"}],
+        "stream": True,
+    }
+    response = client.post('/api/chat', json=payload)
+
+    assert response.status_code == 200
+    assert b'"done": true' in response.data
 
 
 def test_chat_streaming_stops_after_compact_done_true(client, mocker):

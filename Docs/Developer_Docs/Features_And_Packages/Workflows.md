@@ -1,9 +1,8 @@
 ### **Developer Guide: WilmerAI Logic Engine (`Middleware/workflows/`)**
 
-This guide provides a deep dive into the architecture and implementation of the WilmerAI logic engine. It has been
-updated to reflect the current, refactored system, which is built around a central `ExecutionContext` object.
-Understanding this structure is essential for debugging, extending, and utilizing the full capabilities of the workflow
-system.
+This guide provides a deep dive into the architecture and implementation of the WilmerAI logic engine, which is built
+around a central `ExecutionContext` object. Understanding this structure is essential for debugging and extending the
+workflow system.
 
 -----
 
@@ -23,8 +22,8 @@ defined by a workflow.
   `run_custom_workflow`) are called by external services to initiate a workflow. The manager is responsible for loading
   the workflow configuration, instantiating all necessary dependencies (including all node handlers), and delegating
   execution to the `$WorkflowProcessor$`.
-- **`$WorkflowProcessor$`:** The low-level execution engine. It iterates through the nodes of a loaded workflow. For *
-  *each node**, it assembles a new, comprehensive **`$ExecutionContext$`** object containing the complete runtime state.
+- **`$WorkflowProcessor$`:** The low-level execution engine. It iterates through the nodes of a loaded workflow. For
+  **each node**, it assembles a new, comprehensive **`$ExecutionContext$`** object containing the complete runtime state.
   It then dispatches this context to the appropriate handler for execution.
 - **`$ExecutionContext$`:** A central dataclass object that encapsulates all runtime data for a single node's execution.
   It holds the node's configuration, the entire conversation history, outputs from previous nodes (`agent_outputs`),
@@ -139,6 +138,31 @@ This section details the responsibility of each key file in the `Middleware/work
       `"Conditional"`, `"StringConcatenator"`, `"TagTextExtractor"`, and `"DelimitedChunker"`.
     - `context_compactor_handler.py`: Handles the `"ContextCompactor"` node type, which compacts conversation
       history into rolling summaries.
+    - `web_fetch_handler.py`: Handles the `"WebFetch"` node type, which issues HTTP/HTTPS requests via the `requests`
+      library and returns the response as text, parsed JSON, a full status/headers/body envelope, or HTML stripped to
+      visible text. The HTML stripper is a small `html.parser` subclass (`_HtmlTextExtractor`) defined in the same
+      module — no third-party HTML parsing dependency. Supports `onError: "return"` so the workflow can branch on
+      failures. Optional `proxy` field forwards a single URL to `requests` as `proxies={"http": ..., "https": ...}`;
+      any scheme `requests` supports works, including SOCKS via the `PySocks` extra.
+    - `curl_command_handler.py`: Handles the `"CurlCommand"` node type, which shells out to the system `curl` binary
+      with `shell=False`. Arguments are supplied as a JSON list and variable-substituted per
+      element. Output formats: `stdout`, `stdout+stderr`, or a JSON envelope with returncode. Same `onError` semantics
+      as `WebFetch`. Optional `proxy` field is translated to `-x <url>` and prepended to the `args` list before
+      invoking curl; the curl binary handles the proxy entirely on its own. curl is spawned via `subprocess.Popen`
+      and its stdout is read on a reader thread with a running byte total: the process is killed the instant the body
+      exceeds `maxResponseBytes` (stderr is drained concurrently and bounded to the same cap), giving a true in-process
+      cap that the injected `--max-filesize` alone cannot guarantee for chunked/unknown-length responses.
+    - `mcp_tool_call_handler.py`: Handles the `"MCPToolCall"` node type, which invokes a single tool on a named MCP
+      server. The server registry lives under `Public/Configs/MCPServers/` and is loaded via
+      `config_utils.load_mcp_server_config`. The actual transport handling (stdio / sse / streamable_http) is
+      delegated to `Middleware/workflows/tools/mcp_client_tool.py`, which uses the official `mcp` Python SDK and bridges
+      sync-to-async via `asyncio.run` (one fresh connection per call; no pooling in v1). `MCPClient.call_tool` rejects a
+      `server_name` containing path separators or a `:` drive-letter prefix (path-traversal guard), and bounds the
+      whole operation — transport connect, the `initialize` handshake, and the tool call — with
+      `asyncio.wait_for(timeout)` so a server that connects but never finishes the handshake cannot wedge the worker.
+      Note that `asyncio.run` drives its loop synchronously, so the call blocks the calling eventlet greenlet for up to
+      `timeout` seconds (pre-existing; the `wait_for` bound makes the worst case finite). Same `onError` semantics as
+      `WebFetch`.
 
 #### `streaming/`
 
@@ -197,6 +221,14 @@ in a workflow.
    For streaming, `$StreamingResponseHandler$` detects `tool_calls` in the chunk data and emits them directly as SSE
    output, bypassing the text processing pipeline (prefix stripping, think-block removal). For non-streaming, the
    dispatch service returns a `Dict` with `content`, `tool_calls`, and `finish_reason` keys instead of a plain string.
+6. **Name Normalization (optional):** If the node config has `lowercaseToolCallFunctionNames` set to `true`, function
+   names in tool call responses are lowercased before being sent to the client. For streaming, this happens in
+   `$StreamingResponseHandler.process_stream()$` when it detects `tool_calls` in the chunk delta -- the `function.name`
+   field is lowercased in place before building the SSE response JSON. For non-streaming, the lowercasing happens in
+   `$WorkflowProcessor.execute()$` after the handler returns a dict result with `tool_calls`, before the result is
+   yielded to the API layer. This is off by default to preserve the original casing for frontends that require it
+   (e.g., Claude Code). It is intended for local models (Gemma, Qwen, etc.) that produce capitalized names like `Glob`
+   instead of `glob`.
 
 -----
 
@@ -265,7 +297,7 @@ Adding new functionality typically involves one of the following methods.
 
 ### A. Add a New Node Type
 
-This is the most powerful way to extend the system and has been streamlined by the `ExecutionContext` architecture.
+This is the most flexible way to extend the system and has been streamlined by the `ExecutionContext` architecture.
 
 1. **Define the Node Configuration:** Decide on the JSON parameters your node will need in the workflow file.
 

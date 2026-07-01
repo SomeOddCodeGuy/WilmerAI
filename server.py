@@ -105,9 +105,20 @@ def _resolve_logging_directory():
 def parse_arguments():
     """Parse command-line arguments for configuration."""
     parser = argparse.ArgumentParser(description="Process configuration directory and user arguments.")
-    parser.add_argument("--ConfigDirectory", type=str, help="Custom path to the configuration directory")
+    parser.add_argument("--ConfigDirectory", type=str, help="Custom path to the configuration directory (typically the Public/Configs subfolder). Kept for backwards compatibility; new installations should prefer --PublicDirectory.")
+    parser.add_argument("--PublicDirectory", type=str, help="Custom path to the Public/ root (the parent of Configs, DiscussionIds, SqlLiteDBs, and logs). When set, all runtime data defaults to subfolders under this path unless overridden individually.")
     parser.add_argument("--User", action='append', help="User to run Wilmer as (can be repeated for multi-user)")
-    parser.add_argument("--LoggingDirectory", type=str, default="logs", help="Directory for log files")
+    parser.add_argument("--LoggingDirectory", type=str, default=None,
+                        help="Directory for log files. Defaults to {PublicDirectory}/logs when "
+                             "--PublicDirectory is set, otherwise {install_dir}/Public/logs (install-pinned; "
+                             "does not depend on the current working directory).")
+    parser.add_argument("--UserLevelSqlLiteDirectory", type=str, default=None,
+                        help="Override directory for per-user SQLite databases (workflow locks). "
+                             "Takes precedence over the sqlLiteDirectory user config setting.")
+    parser.add_argument("--DiscussionDirectory", type=str, default=None,
+                        help="Override directory for per-discussion data files (memories, "
+                             "summaries, vector DBs). Takes precedence over the discussionDirectory "
+                             "user config setting.")
     parser.add_argument("--file-logging", action='store_true', default=None,
                         help="Enable file logging. In single-user mode, falls back to the "
                              "user's useFileLogging config setting. In multi-user mode, "
@@ -123,6 +134,13 @@ def parse_arguments():
     parser.add_argument("--concurrency-timeout", type=int, default=900,
                         help="Seconds to wait for a concurrency slot before returning 503 "
                              "(default: %(default)s)")
+    parser.add_argument("--concurrency-level", type=str, choices=["wilmer", "endpoint"], default="wilmer",
+                        help="Where the concurrency gate is enforced. 'wilmer' (default) gates "
+                             "at the WSGI front door: only --concurrency requests run at a time. "
+                             "'endpoint' lifts the request-level gate and instead serializes only "
+                             "outbound LLM API calls, allowing reentrant requests (e.g. a Wilmer "
+                             "workflow that calls another service which calls back into Wilmer) "
+                             "to make progress without deadlocking.")
     parser.add_argument("positional", nargs="*", help="Positional arguments for ConfigDirectory and User")
     args = parser.parse_args()
 
@@ -138,6 +156,8 @@ def parse_arguments():
 
     if args.ConfigDirectory and args.ConfigDirectory.strip():
         instance_global_variables.CONFIG_DIRECTORY = args.ConfigDirectory.strip().rstrip('/\\')
+    if args.PublicDirectory and args.PublicDirectory.strip():
+        instance_global_variables.PUBLIC_DIRECTORY = args.PublicDirectory.strip().rstrip('/\\')
     if args.User:
         users = [u.strip() for u in args.User if u.strip()]
         if users:
@@ -145,8 +165,20 @@ def parse_arguments():
 
     if args.LoggingDirectory and args.LoggingDirectory.strip():
         instance_global_variables.LOGGING_DIRECTORY = args.LoggingDirectory.strip()
+    else:
+        # No explicit --LoggingDirectory: resolve via get_root_public_directory()
+        # so the default is install-pinned (not cwd-relative). Picks up
+        # --PublicDirectory when set, otherwise {install_dir}/Public/.
+        instance_global_variables.LOGGING_DIRECTORY = os.path.join(
+            config_utils.get_root_public_directory(), 'logs'
+        )
 
     _resolve_logging_directory()
+
+    if args.UserLevelSqlLiteDirectory and args.UserLevelSqlLiteDirectory.strip():
+        instance_global_variables.USER_LEVEL_SQLITE_DIRECTORY = args.UserLevelSqlLiteDirectory.strip().rstrip('/\\')
+    if args.DiscussionDirectory and args.DiscussionDirectory.strip():
+        instance_global_variables.DISCUSSION_DIRECTORY = args.DiscussionDirectory.strip().rstrip('/\\')
 
     if args.file_logging is not None:
         instance_global_variables.FILE_LOGGING = args.file_logging
@@ -158,6 +190,7 @@ def parse_arguments():
 
     instance_global_variables.CONCURRENCY_LIMIT = args.concurrency
     instance_global_variables.CONCURRENCY_TIMEOUT = args.concurrency_timeout
+    instance_global_variables.CONCURRENCY_LEVEL = args.concurrency_level
 
 
 _MULTI_USER_DEFAULT_PORT = 5050
@@ -255,7 +288,7 @@ def initialize_app():
     is_multi_user = users and len(users) > 1
 
     if use_file_logging:
-        log_directory = instance_global_variables.LOGGING_DIRECTORY
+        log_directory = os.path.expanduser(instance_global_variables.LOGGING_DIRECTORY)
         os.makedirs(log_directory, exist_ok=True)
         if is_multi_user:
             file_handler = UserRoutingFileHandler(log_directory)
@@ -300,7 +333,10 @@ def initialize_app():
 
     instance_global_variables.initialize_request_semaphore(instance_global_variables.CONCURRENCY_LIMIT)
     if instance_global_variables.CONCURRENCY_LIMIT > 0:
-        logger.info(f"Concurrency limit: {instance_global_variables.CONCURRENCY_LIMIT}")
+        logger.info(
+            f"Concurrency limit: {instance_global_variables.CONCURRENCY_LIMIT} "
+            f"(level: {instance_global_variables.CONCURRENCY_LEVEL})"
+        )
     else:
         logger.info("No concurrency limit")
 

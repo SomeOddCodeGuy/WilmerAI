@@ -72,11 +72,20 @@ class OllamaChatHandler(BaseChatCompletionsHandler):
         self.set_gen_input()
         messages = self._build_messages_from_conversation(conversation, system_prompt, prompt)
 
+        # Ollama reads the reasoning toggle as a top-level "think" field; every other
+        # generation parameter belongs under "options". A preset can therefore set
+        # "think": false (or true) and the handler lifts it out of options to the top level.
+        options = dict(self.gen_input or {})
+        think = options.pop("think", None)
+
         payload = {
             "model": self.model_name,
             "messages": messages,
-            "options": self.gen_input or {}
+            "options": options
         }
+
+        if think is not None:
+            payload["think"] = think
 
         if not self.stream:
             payload["stream"] = False

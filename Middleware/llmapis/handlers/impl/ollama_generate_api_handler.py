@@ -56,13 +56,22 @@ class OllamaGenerateApiHandler(BaseCompletionsHandler):
         self.set_gen_input()
         full_prompt = self._build_prompt_from_conversation(system_prompt, prompt)
 
+        # Ollama reads the reasoning toggle as a top-level "think" field; every other
+        # generation parameter belongs under "options". A preset can therefore set
+        # "think": false (or true) and the handler lifts it out of options to the top level.
+        options = dict(self.gen_input or {})
+        think = options.pop("think", None)
+
         payload = {
             "model": self.model_name,
             "prompt": full_prompt,
             "stream": self.stream,
             "raw": True,
-            "options": self.gen_input or {}
+            "options": options
         }
+
+        if think is not None:
+            payload["think"] = think
 
         logger.info(f"Payload prepared for {self.__class__.__name__}")
         sensitive_log(logger, logging.DEBUG, "URL: %s, Payload: %s", self.base_url, json.dumps(payload, indent=2))

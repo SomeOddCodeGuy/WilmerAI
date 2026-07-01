@@ -1,7 +1,6 @@
 ### **Feature Guide: Custom Nested Workflows**
 
-Are your workflows becoming overly complex? Do you find yourself rebuilding the same logic for common tasks? WilmerAI’s
-**Custom Nested Workflows** feature allows you to run one workflow as a single, reusable step inside another.
+WilmerAI’s **Custom Nested Workflows** feature allows you to run one workflow as a single, reusable step inside another.
 
 -----
 
@@ -27,7 +26,7 @@ can be designated as the "responder" to provide the final output directly to the
 
 ## Key Benefits of Nested Workflows
 
-Using this feature allows you to create more organized, efficient, and powerful automations.
+Using this feature allows you to create more organized and efficient automations.
 
 * **Reusability**: Build common tasks (like searching a database, summarizing text, or categorizing input) as a
   standalone workflow. You can then call this "sub-workflow" from anywhere, saving you from duplicating logic.

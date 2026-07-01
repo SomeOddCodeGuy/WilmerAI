@@ -167,7 +167,7 @@ questions about the request and/or your expected output.
 #### Example Code Written With This Guide
 
 Using the exact steps outlined in this guide, except dropping the wikipedia references in the example prompt, I
-generated the recursive coding poc workflow in `_common/_archive/` folder. I'll be toying with it over the course of the next
-couple of weeks, but so far it seems to work alright.
+generated a recursive coding proof-of-concept workflow. It was an experiment and is no longer shipped with WilmerAI, but
+the guide's steps still produce that kind of workflow.
 
 I'll continue to improve this as we go.

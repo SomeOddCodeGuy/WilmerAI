@@ -1,7 +1,7 @@
 ## Custom Nested Workflows: The `CustomWorkflow` Node
 
 The **`CustomWorkflow` Node** allows you to execute an entire, separate workflow from within the current workflow. This
-is incredibly powerful for encapsulating reusable logic, breaking down complex processes into smaller, manageable parts,
+is useful for encapsulating reusable logic, breaking down complex processes into smaller, manageable parts,
 and orchestrating multi-step agentic tasks. The final result of the child workflow is captured and stored in the
 parent's state, accessible to subsequent nodes.
 
@@ -32,7 +32,7 @@ of the child workflow is then returned to the parent and saved as the output of 
 
 #### **Passing Data to a Child Workflow (Input)**
 
-1. **`scoped_variables` (Recommended Method):** This is the most powerful and flexible method. The values you list are
+1. **`scoped_variables` (Recommended Method):** This is the most flexible method. The values you list are
    passed to the child workflow and can be accessed *at any node* using the `{agent#Input}` syntax, where the number
    corresponds to the order in the array (e.g., the first item becomes `{agent1Input}`).
 

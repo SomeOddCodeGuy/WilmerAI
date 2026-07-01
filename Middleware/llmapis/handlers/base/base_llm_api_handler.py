@@ -15,6 +15,7 @@ except ImportError:
     EVENTLET_AVAILABLE = False
 
 
+from Middleware.llmapis.sampler_translation import normalize_gen_input
 from Middleware.services.cancellation_service import cancellation_service
 from Middleware.utilities.config_utils import get_config_property_if_exists, get_connect_timeout
 from Middleware.utilities.sensitive_logging_utils import sensitive_log, log_prompt_content
@@ -32,7 +33,8 @@ class LlmApiHandler(ABC):
     """
 
     def __init__(self, base_url: str, api_key: str, gen_input: Dict[str, Any], model_name: str, headers: Dict[str, str],
-                 stream: bool, api_type_config, endpoint_config, max_tokens, dont_include_model: bool = False):
+                 stream: bool, api_type_config, endpoint_config, max_tokens, dont_include_model: bool = False,
+                 suppress_retries: bool = False):
         """
         Initializes the API handler and a persistent requests session.
 
@@ -47,14 +49,21 @@ class LlmApiHandler(ABC):
             endpoint_config: Configuration object for the specific endpoint.
             max_tokens: The maximum number of tokens to generate.
             dont_include_model (bool): If True, omits the model name from the payload.
+            suppress_retries (bool): If True, disables urllib3 5xx retries and shrinks the
+                manual non-streaming retry loop to a single attempt. Set by LlmApiService
+                when a backup endpoint is configured so failover happens on first failure.
         """
         self.base_url = base_url
         self.api_key = api_key
         self.gen_input = gen_input
         self.model_name = model_name
         self.headers = headers
+        self.suppress_retries = suppress_retries
         self.session = requests.Session()
-        retries = Retry(total=5, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
+        if suppress_retries:
+            retries = Retry(total=0)
+        else:
+            retries = Retry(total=5, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
         self.session.mount("http://", HTTPAdapter(max_retries=retries))
         self.session.mount("https://", HTTPAdapter(max_retries=retries))
         self.stream = stream
@@ -345,7 +354,7 @@ class LlmApiHandler(ABC):
 
         payload = self._prepare_payload(conversation, system_prompt, prompt, tools=tools, tool_choice=tool_choice)
         url = self._get_api_endpoint_url()
-        retries = 3
+        retries = 1 if self.suppress_retries else 3
 
         for attempt in range(retries):
             # Check for cancellation before each retry
@@ -416,6 +425,15 @@ class LlmApiHandler(ABC):
                 logger.error(f"Unexpected error in {self.__class__.__name__}: {e}", exc_info=True)
                 # Cleanup handled in finally
                 raise
+            except (KeyboardInterrupt, SystemExit, GeneratorExit):
+                # Normal control-flow / teardown (Ctrl-C, process shutdown, eventlet
+                # GreenletExit arrives as GeneratorExit): re-raise cleanly without logging
+                # an error-level traceback for what is not an error.
+                raise
+            except BaseException as e:
+                logger.error(f"BaseException in {self.__class__.__name__} (request_id={request_id}): "
+                             f"{type(e).__name__}: {e}", exc_info=True)
+                raise
             finally:
                 # Ensure cleanup happens after every attempt (success or failure)
                 if request_id:
@@ -425,17 +443,41 @@ class LlmApiHandler(ABC):
 
     def set_gen_input(self):
         """
-        Updates the generation parameters with values from configuration files.
+        Injects the structurally-managed generation fields, then normalizes.
+
+        `stream` is always set, since whether the request streams is a transport
+        decision rather than a user-tunable value. The max-tokens and
+        context-truncation fields are injected from the node/endpoint, but an
+        explicit `null` already present for either (for example from an
+        append-preset override) is honored as a request to omit that field rather
+        than overwritten. Context truncation is only injected when the endpoint
+        actually defines `maxContextTokenSize`; this also avoids the prior behavior
+        of leaking a `null` into the payload when it was absent. Finally the whole
+        gen_input is normalized so omitted (`null`) keys are dropped and the
+        literal-null sentinel is resolved.
         """
-        if self.truncate_property_name:
-            self.gen_input[self.truncate_property_name] = self.endpoint_config.get("maxContextTokenSize", None)
         if self.stream_property_name:
             self.gen_input[self.stream_property_name] = self.stream
+
+        if self.truncate_property_name:
+            explicitly_omitted = (self.truncate_property_name in self.gen_input
+                                  and self.gen_input[self.truncate_property_name] is None)
+            max_context = self.endpoint_config.get("maxContextTokenSize", None)
+            if not explicitly_omitted and max_context is not None:
+                self.gen_input[self.truncate_property_name] = max_context
+
         if self.max_token_property_name:
-            self.gen_input[self.max_token_property_name] = self.max_tokens
-            logger.debug(f"Added {self.max_token_property_name}={self.max_tokens} to gen_input")
+            explicitly_omitted = (self.max_token_property_name in self.gen_input
+                                  and self.gen_input[self.max_token_property_name] is None)
+            if explicitly_omitted:
+                logger.debug(f"{self.max_token_property_name} omitted by explicit null in preset; not injecting.")
+            else:
+                self.gen_input[self.max_token_property_name] = self.max_tokens
+                logger.debug(f"Added {self.max_token_property_name}={self.max_tokens} to gen_input")
         else:
             logger.warning(f"max_token_property_name is not set, max_tokens will not be included in payload")
+
+        self.gen_input = normalize_gen_input(self.gen_input)
 
     def close(self):
         """Closes the HTTP session to release keep-alive connections."""

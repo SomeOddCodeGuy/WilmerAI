@@ -10,8 +10,8 @@ external tools, custom logic, and advanced data manipulation beyond the built-in
 
 The **`PythonModule`** node type provides a direct interface to the Python runtime environment from within a WilmerAI
 workflow. It allows a workflow to execute a specified function within a Python script, pass data to it using workflow
-variables, and receive a string output back. This output is then made available to all subsequent nodes, seamlessly
-integrating the script's result into the workflow's data flow.
+variables, and receive a string output back. This output is then made available to all subsequent nodes, integrating
+the script's result into the workflow's data flow.
 
 This capability is designed for users who need to:
 
@@ -33,8 +33,10 @@ requires specifying the script's location and any arguments to be passed to it.
   returned by the Python script will be stored in an output variable based on the node's position in the workflow
   (e.g., `{agent1Output}`, `{agent2Output}`, etc.), following the same convention as all other node types.
 * `"type"`: **(String, Required)** Must be set to `"PythonModule"`.
-* `"module_path"`: **(String, Required)** The absolute file path to the target `.py` script on the machine where the
-  WilmerAI server is running.
+* `"module_path"`: **(String, Required)** The file path to the target `.py` script on the machine where the
+  WilmerAI server is running. May be absolute, or relative — a relative path is resolved against the current
+  working directory first and, when not found there, against the WilmerAI install root (so repo-relative paths
+  like `"Public/workflow_python_scripts/_isevendays_mcp_scripts/ensure_system_prompt.py"` are portable).
 * `"args"`: **(Array, Optional)** A list of positional arguments that will be passed to the script's entry point
   function. The values in this array support WilmerAI variables, which are resolved before execution.
 * `"kwargs"`: **(Object, Optional)** A key-value object of keyword arguments to be passed to the script's entry point

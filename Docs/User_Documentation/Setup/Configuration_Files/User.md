@@ -164,22 +164,34 @@ Each User JSON file contains a single object with the following key-value pairs.
 
 ##### `discussionDirectory`
 
-* **Description**: The absolute path to the directory where persistent conversation files (e.g., `_memories.json`,
-  `_chat_summary.json`) are stored. The application requires this directory to exist when a `discussionId` is used. For
-  Windows paths, use double backslashes (`\\`).
+* **Description**: The absolute path to the directory where persistent conversation files (memories, summaries, vector
+  memory databases, etc.) are stored. When unset, WilmerAI falls back to `{PublicDirectory}/DiscussionIds/` -- a
+  *sibling* of `Configs/` under the `Public/` root, never inside `Configs/`. The `--DiscussionDirectory` CLI flag
+  overrides this setting. For Windows paths, use double backslashes (`\\`).
 * **Data Type**: `string` (file path)
-* **Required**: Yes
+* **Required**: No
 * **Example**: `"D:\\WilmerAI\\Discussions"`
+* **Resolution order**: CLI `--DiscussionDirectory` > this config setting > `{PublicDirectory}/DiscussionIds/` (or
+  `{project_root}/Public/DiscussionIds/` when `--PublicDirectory` is not set).
+* **Backwards compatibility**: If a discussion folder already exists at the pre-refactor location
+  (`{project_root}/Public/DiscussionIds/{discussion_id}/`), that folder continues to be used for reads and writes; no
+  automatic migration happens.
 
 -----
 
 ##### `sqlLiteDirectory`
 
 * **Description**: The absolute path to the directory where the user's SQLite database (`WilmerDb.<username>.sqlite`)
-  will be created. This database is used by the `LockingService` for `WorkflowLock` nodes.
+  will be created. This database is used by the `LockingService` for `WorkflowLock` nodes. When unset, WilmerAI falls
+  back to `{PublicDirectory}/SqlLiteDBs/` -- a sibling of `Configs/`, not inside it. The
+  `--UserLevelSqlLiteDirectory` CLI flag overrides this setting.
 * **Data Type**: `string` (file path)
-* **Required**: Yes
+* **Required**: No
 * **Example**: `"D:\\WilmerAI\\Databases"`
+* **Resolution order**: CLI `--UserLevelSqlLiteDirectory` > this config setting > `{PublicDirectory}/SqlLiteDBs/` (or
+  `{project_root}/Public/SqlLiteDBs/` when `--PublicDirectory` is not set).
+* **Backwards compatibility**: If a database file already exists at a pre-refactor location (the current working
+  directory or the project root), it continues to be used; move the file to the new location to migrate.
 
 -----
 
@@ -189,7 +201,7 @@ Each User JSON file contains a single object with the following key-value pairs.
   the user's LLM endpoints (API URLs, keys, etc.).
 * **Data Type**: `string`
 * **Required**: Yes
-* **Example**: `"assistant-single-model"`
+* **Example**: `"_shared"`
 
 -----
 
@@ -270,6 +282,23 @@ Each User JSON file contains a single object with the following key-value pairs.
 * **Required**: No
 * **Default**: `"\n"`
 * **Example**: `"\n*** END MESSAGE ***\n"`
+
+-----
+
+##### `userWideWorkflowVariables`
+
+* **Description**: An object of operator-defined shared variables exposed as `{placeholders}` to every workflow this
+  user runs. Each key/value becomes a substitution variable usable in any node prompt, system prompt, or path field, and
+  a value may itself reference another variable (e.g. `"{Discussion_Id}"`), which resolves on a second substitution
+  pass. The intended use is a single source of truth for values that would otherwise be repeated across many workflow
+  files -- for example a base directory for a workflow's on-disk state files, changed in one place instead of in each
+  workflow. These are the lowest-precedence variables: a built-in (date/time, `Discussion_Id`, the conversation
+  variables) or a workflow-level key of the same name always wins, so a custom entry can only fill a name nothing else
+  defines and can never shadow a built-in.
+* **Data Type**: `object` (string keys to string values)
+* **Required**: No
+* **Default**: none
+* **Example**: `{ "opencodePlansDir": "./opencode_plans" }`
 
 -----
 
@@ -443,7 +472,7 @@ Here is a fully-commented example user configuration file.
   // Directory to store the user's SQLite database for workflow locking.
   "sqlLiteDirectory": "D:\\WilmerAI\\Databases",
   // Subdirectory for this user's LLM endpoint configurations.
-  "endpointConfigsSubDirectory": "assistant-single-model",
+  "endpointConfigsSubDirectory": "_shared",
   // Optional override to use a shared folder for workflow configurations (within _overrides/).
   "workflowConfigsSubDirectoryOverride": "coding-workflows",
   // Optional override to use a shared folder for generation presets.

@@ -1,11 +1,11 @@
 ## The `VectorMemorySearch` Node
 
 This guide provides a comprehensive, code-validated overview of the `VectorMemorySearch` node. It details the node's
-precise execution logic, properties, and best practices for implementing powerful Retrieval-Augmented Generation (RAG).
+precise execution logic, properties, and best practices for implementing Retrieval-Augmented Generation (RAG).
 
 ### Core Purpose
 
-The **`VectorMemorySearch`** node is the primary tool for RAG in WilmerAI. It performs a powerful, relevance-based
+The **`VectorMemorySearch`** node is the primary tool for RAG in WilmerAI. It performs a relevance-based
 keyword search against a discussion's dedicated vector memory database. This allows an agent to instantly retrieve
 specific facts, topics, or details from any point in a long conversation's history to inform its next response.
 

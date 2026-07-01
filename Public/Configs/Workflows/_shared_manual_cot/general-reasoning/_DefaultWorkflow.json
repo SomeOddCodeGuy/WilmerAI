@@ -1,0 +1,33 @@
+{
+  "ThinkingModel": "General-Endpoint",
+  "ThinkingPreset": "General-Endpoint",
+  "ThinkingResponseTokenSize": 12000,
+  "MinMessagesToSendThinkingLLM": 10,
+  "MaxTokensToSendThinkingLLM": 15000,
+  "RespondingModel": "General-Endpoint",
+  "RespondingPreset": "General-Endpoint",
+  "RespondingResponseTokenSize": 8000,
+  "MinMessagesToSendRespondingLLM": 10,
+  "MaxTokensToSendRespondingLLM": 15000,
+  "nodes": [
+    {
+      "displayOnlyComment": "Meant for your best general llm. This workflow has a manual chain of thought step for models that lack reasoning, or have broken reasoning",
+      "title": "Run General Workflow",
+      "type": "CustomWorkflow",
+      "workflowName": "General_CoT",
+      "workflowUserFolderOverride": "_common",
+      "scoped_variables": [
+        "{ThinkingModel}",
+        "{ThinkingPreset}",
+        "{ThinkingResponseTokenSize}",
+        "{MinMessagesToSendThinkingLLM}",
+        "{MaxTokensToSendThinkingLLM}",
+        "{RespondingModel}",
+        "{RespondingPreset}",
+        "{RespondingResponseTokenSize}",
+        "{MinMessagesToSendRespondingLLM}",
+        "{MaxTokensToSendRespondingLLM}"
+      ]
+    }
+  ]
+}

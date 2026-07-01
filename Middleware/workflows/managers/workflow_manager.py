@@ -16,11 +16,14 @@ from Middleware.utilities.config_utils import (
 )
 from Middleware.utilities.prompt_extraction_utils import extract_discussion_id, remove_discussion_id_tag
 from Middleware.workflows.handlers.impl.context_compactor_handler import ContextCompactorHandler
+from Middleware.workflows.handlers.impl.curl_command_handler import CurlCommandHandler
+from Middleware.workflows.handlers.impl.mcp_tool_call_handler import MCPToolCallHandler
 from Middleware.workflows.handlers.impl.memory_node_handler import MemoryNodeHandler
 from Middleware.workflows.handlers.impl.specialized_node_handler import SpecializedNodeHandler
 from Middleware.workflows.handlers.impl.standard_node_handler import StandardNodeHandler
 from Middleware.workflows.handlers.impl.sub_workflow_handler import SubWorkflowHandler
 from Middleware.workflows.handlers.impl.tool_node_handler import ToolNodeHandler
+from Middleware.workflows.handlers.impl.web_fetch_handler import WebFetchHandler
 from Middleware.workflows.managers.workflow_variable_manager import WorkflowVariableManager
 from Middleware.workflows.processors.workflows_processor import WorkflowProcessor
 
@@ -193,6 +196,9 @@ class WorkflowManager:
         specialized_node_handler = SpecializedNodeHandler(**common_dependencies)
         sub_workflow_handler = SubWorkflowHandler(**common_dependencies)
         context_compactor_handler = ContextCompactorHandler(**common_dependencies)
+        web_fetch_handler = WebFetchHandler(**common_dependencies)
+        curl_command_handler = CurlCommandHandler(**common_dependencies)
+        mcp_tool_call_handler = MCPToolCallHandler(**common_dependencies)
 
         self.node_handlers = {
             "Standard": StandardNodeHandler(**common_dependencies),
@@ -222,6 +228,9 @@ class WorkflowManager:
             "OfflineWikiApiTopNFullArticles": tool_node_handler,
             "OfflineWikiApiPartialArticle": tool_node_handler,
 
+            "OfflineResearcherApiQuickSearch": tool_node_handler,
+            "OfflineResearcherApiDeepResearch": tool_node_handler,
+
             # Other node types
             "CustomWorkflow": sub_workflow_handler,
             "ConditionalCustomWorkflow": sub_workflow_handler,
@@ -238,6 +247,10 @@ class WorkflowManager:
             "DelimitedChunker": specialized_node_handler,
 
             "ContextCompactor": context_compactor_handler,
+
+            "WebFetch": web_fetch_handler,
+            "CurlCommand": curl_command_handler,
+            "MCPToolCall": mcp_tool_call_handler,
         }
 
     def run_workflow(self, messages, request_id, discussionId: str = None, stream: bool = False,

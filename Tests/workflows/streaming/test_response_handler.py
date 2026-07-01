@@ -703,3 +703,144 @@ class TestToolCallStreamBypass:
             assert has_done, f"[DONE] sentinel should be emitted for {api_type}"
         else:
             assert not has_done, f"[DONE] sentinel should NOT be emitted for {api_type}"
+
+
+class TestLowercaseToolCallFunctionNames:
+    """Tests for the lowercaseToolCallFunctionNames node config option, which
+    lowercases tool call function names in streaming responses."""
+
+    @pytest.fixture
+    def mock_deps(self, mocker):
+        def mock_build_response_json(token, finish_reason, **kwargs):
+            import json
+            result = {"token": token, "finish_reason": str(finish_reason) if finish_reason else "None"}
+            if kwargs.get('tool_calls') is not None:
+                result["tool_calls"] = kwargs['tool_calls']
+            return json.dumps(result)
+
+        mock_api_helpers = mocker.patch('Middleware.workflows.streaming.response_handler.api_helpers')
+        mock_api_helpers.build_response_json.side_effect = mock_build_response_json
+        mock_api_helpers.sse_format.side_effect = lambda data, output_format: f"data: {data}\n\n"
+
+        mocker.patch(
+            'Middleware.workflows.streaming.response_handler.get_is_chat_complete_add_user_assistant',
+            return_value=False)
+        mocker.patch(
+            'Middleware.workflows.streaming.response_handler.get_is_chat_complete_add_missing_assistant',
+            return_value=False)
+
+        mock_remover_instance = mocker.MagicMock()
+        mock_remover_instance.process_delta.side_effect = lambda delta: delta
+        mock_remover_instance.finalize.return_value = ""
+        mocker.patch('Middleware.workflows.streaming.response_handler.StreamingThinkRemover',
+                     return_value=mock_remover_instance)
+
+        mocker.patch('Middleware.workflows.streaming.response_handler.instance_global_variables.get_api_type',
+                     return_value="openaichatcompletion")
+
+        return {"api_helpers": mock_api_helpers}
+
+    def test_lowercases_tool_call_name_when_enabled(self, mock_deps):
+        """When lowercaseToolCallFunctionNames is true, function names should be lowercased."""
+        import json
+        handler = StreamingResponseHandler({}, {"lowercaseToolCallFunctionNames": True})
+
+        tc = [{"index": 0, "id": "call_1", "type": "function",
+               "function": {"name": "Glob", "arguments": '{"pat'}}]
+
+        raw_stream = raw_dict_generator_factory([
+            {"token": "", "tool_calls": tc},
+            {"token": "", "finish_reason": "tool_calls"},
+        ])
+
+        result = list(handler.process_stream(raw_stream))
+
+        tool_events = [r for r in result if '"tool_calls"' in r]
+        assert len(tool_events) >= 1
+        parsed = json.loads(tool_events[0].replace("data: ", "").strip())
+        assert parsed["tool_calls"][0]["function"]["name"] == "glob"
+
+    def test_does_not_lowercase_when_disabled(self, mock_deps):
+        """When lowercaseToolCallFunctionNames is false (default), names are untouched."""
+        import json
+        handler = StreamingResponseHandler({}, {})
+
+        tc = [{"index": 0, "id": "call_1", "type": "function",
+               "function": {"name": "Glob", "arguments": '{"pat'}}]
+
+        raw_stream = raw_dict_generator_factory([
+            {"token": "", "tool_calls": tc},
+            {"token": "", "finish_reason": "tool_calls"},
+        ])
+
+        result = list(handler.process_stream(raw_stream))
+
+        tool_events = [r for r in result if '"tool_calls"' in r]
+        parsed = json.loads(tool_events[0].replace("data: ", "").strip())
+        assert parsed["tool_calls"][0]["function"]["name"] == "Glob"
+
+    def test_lowercases_multiple_tool_calls(self, mock_deps):
+        """Multiple tool calls in a single chunk all get lowercased."""
+        import json
+        handler = StreamingResponseHandler({}, {"lowercaseToolCallFunctionNames": True})
+
+        tc = [
+            {"index": 0, "id": "call_1", "type": "function",
+             "function": {"name": "Grep", "arguments": "{}"}},
+            {"index": 1, "id": "call_2", "type": "function",
+             "function": {"name": "Read", "arguments": "{}"}},
+        ]
+
+        raw_stream = raw_dict_generator_factory([
+            {"token": "", "tool_calls": tc, "finish_reason": "tool_calls"},
+        ])
+
+        result = list(handler.process_stream(raw_stream))
+
+        tool_events = [r for r in result if '"tool_calls"' in r]
+        parsed = json.loads(tool_events[0].replace("data: ", "").strip())
+        assert parsed["tool_calls"][0]["function"]["name"] == "grep"
+        assert parsed["tool_calls"][1]["function"]["name"] == "read"
+
+    def test_skips_chunks_without_name_field(self, mock_deps):
+        """Subsequent streaming chunks that only have arguments (no name) are handled gracefully."""
+        import json
+        handler = StreamingResponseHandler({}, {"lowercaseToolCallFunctionNames": True})
+
+        tc_initial = [{"index": 0, "id": "call_1", "type": "function",
+                       "function": {"name": "Glob", "arguments": '{"pat'}}]
+        tc_args = [{"index": 0, "function": {"arguments": 'tern": "*.py"}'}}]
+
+        raw_stream = raw_dict_generator_factory([
+            {"token": "", "tool_calls": tc_initial},
+            {"token": "", "tool_calls": tc_args},
+            {"token": "", "finish_reason": "tool_calls"},
+        ])
+
+        result = list(handler.process_stream(raw_stream))
+
+        tool_events = [r for r in result if '"tool_calls"' in r]
+        first_parsed = json.loads(tool_events[0].replace("data: ", "").strip())
+        assert first_parsed["tool_calls"][0]["function"]["name"] == "glob"
+
+        second_parsed = json.loads(tool_events[1].replace("data: ", "").strip())
+        assert "name" not in second_parsed["tool_calls"][0]["function"]
+        assert second_parsed["tool_calls"][0]["function"]["arguments"] == 'tern": "*.py"}'
+
+    def test_already_lowercase_names_unchanged(self, mock_deps):
+        """Names that are already lowercase pass through without issue."""
+        import json
+        handler = StreamingResponseHandler({}, {"lowercaseToolCallFunctionNames": True})
+
+        tc = [{"index": 0, "id": "call_1", "type": "function",
+               "function": {"name": "get_weather", "arguments": "{}"}}]
+
+        raw_stream = raw_dict_generator_factory([
+            {"token": "", "tool_calls": tc, "finish_reason": "tool_calls"},
+        ])
+
+        result = list(handler.process_stream(raw_stream))
+
+        tool_events = [r for r in result if '"tool_calls"' in r]
+        parsed = json.loads(tool_events[0].replace("data: ", "").strip())
+        assert parsed["tool_calls"][0]["function"]["name"] == "get_weather"

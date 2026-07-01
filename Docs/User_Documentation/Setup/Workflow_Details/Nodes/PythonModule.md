@@ -1,6 +1,6 @@
 ## The `PythonModule` Node
 
-The `PythonModule` node is a powerful and flexible feature that allows you to extend WilmerAI's capabilities by
+The `PythonModule` node is a flexible feature that allows you to extend WilmerAI's capabilities by
 executing custom Python scripts directly within your workflows. This enables you to perform complex data manipulation,
 interact with external APIs, access local files, or integrate any custom logic you need.
 
@@ -45,9 +45,12 @@ To use this node, you must configure it in your workflow's JSON file. Below is a
 
 * `"module_path"`: **(String, Required)**
 
-    * **Purpose**: The full, absolute file path to the Python (`.py`) script you want to execute.
-    * **Value**: A valid path on the machine where the WilmerAI server is running, for example,
-      `"D:/WilmerAI/MyScripts/MyTestModule.py"`.
+    * **Purpose**: The file path to the Python (`.py`) script you want to execute.
+    * **Value**: An absolute path on the machine where the WilmerAI server is running, for example,
+      `"D:/WilmerAI/MyScripts/MyTestModule.py"`, or a relative path. A relative path is resolved against the
+      current working directory first and, when not found there, against the WilmerAI install root — so a
+      repo-relative path like `"Public/workflow_python_scripts/_isevendays_mcp_scripts/ensure_system_prompt.py"` works no matter which directory
+      Wilmer was launched from.
 
 * `"args"`: **(Array, Optional)**
 

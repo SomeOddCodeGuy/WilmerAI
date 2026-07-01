@@ -66,7 +66,7 @@ Consider a RAG (Retrieval-Augmented Generation) agent that answers questions bas
 
 2. **Node 2: Final Answer Generation:** The keywords are used to retrieve relevant documents. The second node's job is
    to read the original question and the retrieved documents to generate a comprehensive answer. This is a complex task
-   that can be assigned to a **more powerful model** like GPT-4o.
+   that can be assigned to a **more capable model** like GPT-4o.
 
     * **Endpoint:** `OpenAI-GPT4o-Cloud`
 

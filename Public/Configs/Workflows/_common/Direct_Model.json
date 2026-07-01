@@ -1,0 +1,18 @@
+[
+  {
+    "title": "Direct Model: Passes exact system prompt and conversation dictionary directly to the model. Only modified if Clamp is enabled",
+    "agentName": "Direct Model Agent",
+    "systemPrompt": "{chat_system_prompt}",
+    "prompt": "",
+    "lastMessagesToSendInsteadOfPrompt": 25,
+    "endpointName": "{agent1Input}",
+    "preset": "{agent2Input}",
+    "maxResponseSizeInTokens": "{agent3Input}",
+    "addUserTurnTemplate": true,
+    "addDiscussionIdTimestampsForLLM": false,
+    "jinja2": false,
+    "acceptImages": true,
+    "maxImagesToSend": 5,
+    "allowTools": true
+  }
+]

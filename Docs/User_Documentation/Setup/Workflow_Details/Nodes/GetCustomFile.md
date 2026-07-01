@@ -73,6 +73,27 @@ Each field is explained in detail below.
     * **Default Behavior**: If omitted, it defaults to the value provided in `delimiter`. This effectively makes the
       replacement a no-op, preserving the original delimiters.
 
+* #### **`headCount`** / **`tailCount`**
+
+    * **Type**: `Integer`
+    * **Required**: No
+    * **Description**: Optional, opt-in limiting. When set, the node returns only the first N (`headCount`) or last N
+      (`tailCount`) chunks of the file instead of the whole thing -- the content is split on `chunkDelimiter` (a single
+      newline by default, so "the last N lines"). This is the clean way to feed only the recent tail of an unbounded log
+      into an LLM without reading the entire file into context. Set **at most one** of the two; setting both returns an
+      error. A count larger than the number of chunks simply returns everything.
+    * **Default Behavior**: If neither is set, the entire file is returned. Limiting is applied **before** the
+      `delimiter`/`customReturnDelimiter` replacement.
+
+* #### **`chunkDelimiter`**
+
+    * **Type**: `String`
+    * **Required**: No
+    * **Description**: The separator that defines a "chunk" for `headCount`/`tailCount`. Defaults to a single newline
+      (`\n`), i.e. line-based. Set it to a record separator such as `"\n\n---\n\n"` to keep whole entries instead of
+      lines.
+    * **Default Behavior**: `\n`. Has no effect unless `headCount` or `tailCount` is set.
+
 -----
 
 ### Example
@@ -182,6 +203,10 @@ It's crucial to understand how the node behaves in specific situations:
   node will return the string: `"Custom instruction file did not exist"`.
 * **Empty File**: If the file is found but is completely empty, the node will return the string:
   `"No additional information added"`.
+* **Head/Tail Limiting**: If `headCount` or `tailCount` is set, only the first/last N chunks (split on `chunkDelimiter`,
+  default newline) are returned, applied before delimiter replacement. Setting both returns
+  `"GetCustomFile: specify only one of 'headCount' or 'tailCount', not both"`, and a non-positive or non-integer count
+  returns `"GetCustomFile: '<field>' must be an integer >= 1"`.
 * **Missing `filepath`**: If the `filepath` field is missing from the configuration, the node will return the string:
   `"No filepath specified"`.
 * **Empty Discussion_Id**: If `{Discussion_Id}` is used but no discussion ID is present in the context, it will be
