@@ -7,5 +7,5 @@ Pillow==12.2.0
 eventlet==0.41.0
 waitress==3.0.2
 cryptography==48.0.1
-mcp==1.27.2
+mcp==1.28.1
 PySocks==1.7.1
