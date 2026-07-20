@@ -34,7 +34,7 @@ requires specifying the script's location and any arguments to be passed to it.
   (e.g., `{agent1Output}`, `{agent2Output}`, etc.), following the same convention as all other node types.
 * `"type"`: **(String, Required)** Must be set to `"PythonModule"`.
 * `"module_path"`: **(String, Required)** The file path to the target `.py` script on the machine where the
-  WilmerAI server is running. May be absolute, or relative — a relative path is resolved against the current
+  WilmerAI server is running. May be absolute, or relative; a relative path is resolved against the current
   working directory first and, when not found there, against the WilmerAI install root (so repo-relative paths
   like `"Public/workflow_python_scripts/_isevendays_mcp_scripts/ensure_system_prompt.py"` are portable).
 * `"args"`: **(Array, Optional)** A list of positional arguments that will be passed to the script's entry point
@@ -142,9 +142,8 @@ def Invoke(*args, **kwargs):
 
 ## Part 3: Advanced Error Handling
 
-For more robust error management, a script can raise a `DynamicModuleError`. This provides a controlled way to report
-failures back to WilmerAI. The error message will be logged and returned as the node's output without halting the entire
-workflow execution.
+A script can raise a `DynamicModuleError` to report a failure back to WilmerAI in a controlled way. The error message
+will be logged and returned as the node's output without halting the entire workflow execution.
 
 ### **Example of Raising a Controlled Error**
 

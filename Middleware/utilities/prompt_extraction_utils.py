@@ -22,6 +22,33 @@ discussion_identifiers = {
     "discussion_id_end": "[/DiscussionId]"
 }
 
+_DISCUSSION_ID_RE = re.compile(
+    f'{re.escape(discussion_identifiers["discussion_id_start"])}(.*?)'
+    f'{re.escape(discussion_identifiers["discussion_id_end"])}'
+)
+
+
+def _filter_system_messages(messages: List[Dict[str, str]], include_sysmes: bool,
+                            remove_all_systems_override: bool) -> List[Dict[str, str]]:
+    """
+    Applies the system-message filtering rules shared by the extract_last_* selectors.
+
+    Args:
+        messages (List[Dict[str, str]]): The conversation messages.
+        include_sysmes (bool): When ``True``, only leading system messages are
+            dropped; when ``False``, all system messages are dropped.
+        remove_all_systems_override (bool): When ``True``, all system messages
+            are dropped regardless of ``include_sysmes``.
+
+    Returns:
+        List[Dict[str, str]]: The filtered messages (a new list; input unchanged).
+    """
+    if remove_all_systems_override or not include_sysmes:
+        return [message for message in messages if message["role"] != "system"]
+    first_non_system_index = next(
+        (i for i, message in enumerate(messages) if message["role"] != "system"), 0)
+    return messages[first_non_system_index:]
+
 
 def extract_last_n_turns(messages: List[Dict[str, str]], n: int, include_sysmes: bool = True,
                          remove_all_systems_override=False) -> List[Dict[str, str]]:
@@ -53,19 +80,7 @@ def extract_last_n_turns(messages: List[Dict[str, str]], n: int, include_sysmes:
     if not messages or n == 0:
         return []
 
-    filtered_messages = list(messages)
-
-    if remove_all_systems_override:
-        filtered_messages = [message for message in filtered_messages if message["role"] != "system"]
-        return filtered_messages[-n:]
-
-    if not include_sysmes:
-        filtered_messages = [message for message in filtered_messages if message["role"] != "system"]
-    else:
-        first_non_system_index = next((i for i, message in enumerate(filtered_messages) if message["role"] != "system"),
-                                      0)
-        filtered_messages = filtered_messages[first_non_system_index:]
-
+    filtered_messages = _filter_system_messages(messages, include_sysmes, remove_all_systems_override)
     return filtered_messages[-n:]
 
 
@@ -175,18 +190,7 @@ def extract_last_turns_by_estimated_token_limit(messages: List[Dict[str, str]], 
     if not messages:
         return []
 
-    filtered_messages = list(messages)
-
-    if remove_all_systems_override:
-        filtered_messages = [message for message in filtered_messages if message["role"] != "system"]
-    elif not include_sysmes:
-        filtered_messages = [message for message in filtered_messages if message["role"] != "system"]
-    else:
-        first_non_system_index = next(
-            (i for i, message in enumerate(filtered_messages) if message["role"] != "system"), 0
-        )
-        filtered_messages = filtered_messages[first_non_system_index:]
-
+    filtered_messages = _filter_system_messages(messages, include_sysmes, remove_all_systems_override)
     if not filtered_messages:
         return []
 
@@ -258,7 +262,7 @@ def extract_last_turns_with_min_messages_and_token_limit(messages: List[Dict[str
     adding older messages as long as the cumulative estimated token count does not
     exceed ``token_limit``.  If the minimum messages alone already exceed the
     token limit, the minimum messages are still returned (the message-count floor
-    takes precedence) -- UNLESS ``budget_overrides_min`` is set, in which case the
+    takes precedence), UNLESS ``budget_overrides_min`` is set, in which case the
     floor yields to ``token_limit`` (keeping at least the most-recent message) so
     the selection can never overflow the caller's window.
 
@@ -276,7 +280,7 @@ def extract_last_turns_with_min_messages_and_token_limit(messages: List[Dict[str
         remove_all_systems_override (bool, optional): If ``True``, removes all
             system messages regardless of ``include_sysmes``. Defaults to ``False``.
         budget_overrides_min (bool, optional): When ``True``, the ``min_messages``
-            floor yields to ``token_limit`` instead of overriding it -- whole
+            floor yields to ``token_limit`` instead of overriding it: whole
             messages are dropped (never content) until the selection fits, but the
             single most-recent message is always kept. Used by the context-window
             clamp so a floored conversation variable cannot overflow the endpoint.
@@ -284,25 +288,14 @@ def extract_last_turns_with_min_messages_and_token_limit(messages: List[Dict[str
 
     Returns:
         List[Dict[str, str]]: Selected messages in chronological order.  Contains
-            at least ``min_messages`` messages (or all available) -- except when
+            at least ``min_messages`` messages (or all available), except when
             ``budget_overrides_min`` is set and the budget is smaller, where it may
             contain fewer (down to the single most-recent message).
     """
     if not messages:
         return []
 
-    filtered_messages = list(messages)
-
-    if remove_all_systems_override:
-        filtered_messages = [message for message in filtered_messages if message["role"] != "system"]
-    elif not include_sysmes:
-        filtered_messages = [message for message in filtered_messages if message["role"] != "system"]
-    else:
-        first_non_system_index = next(
-            (i for i, message in enumerate(filtered_messages) if message["role"] != "system"), 0
-        )
-        filtered_messages = filtered_messages[first_non_system_index:]
-
+    filtered_messages = _filter_system_messages(messages, include_sysmes, remove_all_systems_override)
     if not filtered_messages:
         return []
 
@@ -316,7 +309,7 @@ def extract_last_turns_with_min_messages_and_token_limit(messages: List[Dict[str
             # Phase 1: the message-count floor. By default it is a HARD floor: the
             # minimum messages are included even when their tokens exceed the limit.
             # When budget_overrides_min is set (the context-window clamp is on) the
-            # floor instead YIELDS to the budget -- once an additional floor message
+            # floor instead YIELDS to the budget: once an additional floor message
             # would push the total over token_limit we stop, so the selection cannot
             # overflow the caller's window. The single most-recent message is always
             # kept (``selected`` is still empty on the first iteration); only whole
@@ -396,11 +389,25 @@ def extract_discussion_id(messages: List[Dict[str, str]]) -> Optional[str]:
     Returns:
         Optional[str]: The extracted discussion ID as a string if found, otherwise `None`.
     """
-    pattern = f'{re.escape(discussion_identifiers["discussion_id_start"])}(.*?){re.escape(discussion_identifiers["discussion_id_end"])}'
+    from Middleware.utilities.config_utils import _is_safe_flat_config_name
+
     for message in messages:
-        match = re.search(pattern, message['content'])
+        match = _DISCUSSION_ID_RE.search(message['content'])
         if match:
-            return match.group(1)
+            discussion_id = match.group(1)
+            # The discussion id is joined into filesystem paths (discussion folder,
+            # cursor files, vision cache, {Discussion_Id} templates). A value with a
+            # path separator, drive colon, or '..' could escape the intended folder,
+            # so reject it here at the single point of extraction and treat the request
+            # as stateless rather than propagate an unsafe path component downstream.
+            # An empty tag (already falsy/stateless downstream) is left untouched.
+            if discussion_id and not _is_safe_flat_config_name(discussion_id):
+                logger.warning(
+                    "Ignoring DiscussionId containing path-unsafe characters; "
+                    "processing request without a discussion id."
+                )
+                return None
+            return discussion_id
     return None
 
 
@@ -439,8 +446,7 @@ def remove_discussion_id_tag_from_string(message: str) -> str:
     Returns:
         str: The message string with the discussion ID tag removed.
     """
-    pattern = f'{re.escape(discussion_identifiers["discussion_id_start"])}.*?{re.escape(discussion_identifiers["discussion_id_end"])}'
-    return re.sub(pattern, '', message)
+    return _DISCUSSION_ID_RE.sub('', message)
 
 
 def separate_messages(messages: List[Dict[str, str]], separate_sysmes: bool = False) -> Tuple[
@@ -529,87 +535,39 @@ def parse_conversation(input_string: str) -> List[Dict[str, str]]:
     return conversation
 
 
-def extract_initial_system_prompt(input_string: str, begin_sys: str) -> Tuple[str, str]:
+def _summarize_tool_arguments(arguments: Any) -> str:
     """
-    Extracts the initial system prompt and the rest of the string.
+    Extracts a brief summary from a tool call's arguments.
 
-    This function searches for a specific system prompt tag at the beginning of
-    a string. If found, it separates the system prompt content from the rest of
-    the string and returns both parts.
+    Accepts either the OpenAI-style JSON string form or the Ollama-native dict
+    form. Returns the value of the first string-typed field, truncated to 200
+    characters. If no string field exists (or the value cannot be parsed as a
+    dict), returns a truncated string rendering of the raw arguments.
 
     Args:
-        input_string (str): The full input string, potentially containing a
-                            system prompt.
-        begin_sys (str): The starting tag that marks the beginning of the
-                         system prompt.
-
-    Returns:
-        Tuple[str, str]: A tuple containing:
-                         - `str`: The extracted system prompt content.
-                         - `str`: The remaining part of the string after the
-                                  system prompt and its tag have been removed.
-    """
-    if not input_string.startswith(begin_sys):
-        return "", input_string
-
-    # Find the end of the system prompt, which is the start of the next tag or the end of the string
-    rest_of_string = input_string[len(begin_sys):]
-    next_tag_match = re.search(r'\[Beg_\w+\]', rest_of_string)
-
-    if next_tag_match:
-        split_index = next_tag_match.start()
-        system_prompt = rest_of_string[:split_index].strip()
-        remaining_string = rest_of_string[split_index:].strip()
-    else:
-        system_prompt = rest_of_string.strip()
-        remaining_string = ""
-
-    return system_prompt, remaining_string
-
-
-def process_remaining_string(remaining_string: str, template: Dict[str, str]) -> str:
-    """
-    Removes the initial system prompt tag from a string.
-
-    This is a helper function that specifically removes the `Begin_Sys` tag
-    from the beginning of a given string.
-
-    Args:
-        remaining_string (str): The string to process, from which the tag
-                                should be removed.
-        template (Dict[str, str]): A dictionary containing the tag definitions.
-
-    Returns:
-        str: The processed string with the `Begin_Sys` tag removed.
-    """
-    if remaining_string.startswith(template["Begin_Sys"]):
-        return remaining_string[len(template["Begin_Sys"]):].strip()
-    return remaining_string.strip()
-
-
-def _summarize_tool_arguments(arguments_str: str) -> str:
-    """
-    Extracts a brief summary from a tool call's arguments JSON string.
-
-    Parses the JSON and returns the value of the first string-typed field,
-    truncated to 200 characters.  If parsing fails or no string field exists,
-    returns the raw arguments string truncated to 200 characters.
-
-    Args:
-        arguments_str (str): The raw JSON string of tool call arguments.
+        arguments (Any): The tool call arguments: a JSON string, a dict, or
+            any other value a backend might supply.
 
     Returns:
         str: A short summary of the arguments.
     """
-    try:
-        args = json.loads(arguments_str)
-        if isinstance(args, dict):
-            for value in args.values():
-                if isinstance(value, str):
-                    return value[:200]
-    except (json.JSONDecodeError, TypeError):
-        pass
-    return (arguments_str or "")[:200]
+    parsed = arguments
+    if isinstance(parsed, str):
+        try:
+            parsed = json.loads(parsed)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            parsed = None
+    if isinstance(parsed, dict):
+        for value in parsed.values():
+            if isinstance(value, str):
+                return value[:200]
+    # No string field found, or the arguments were neither a JSON object string
+    # nor a dict: fall back to a truncated string form of whatever was passed.
+    if arguments is None:
+        return ""
+    if isinstance(arguments, str):
+        return arguments[:200]
+    return str(arguments)[:200]
 
 
 def format_tool_calls_as_text(tool_calls: List[Dict[str, Any]]) -> str:
@@ -629,12 +587,53 @@ def format_tool_calls_as_text(tool_calls: List[Dict[str, Any]]) -> str:
     """
     parts = []
     for call in tool_calls:
-        func = call.get("function", {})
+        if not isinstance(call, dict):
+            continue
+        func = call.get("function")
+        if not isinstance(func, dict):
+            func = {}
         name = func.get("name", "unknown")
         args_str = func.get("arguments", "")
         summary = _summarize_tool_arguments(args_str)
         parts.append(f"[Tool Call: {name}] {summary}")
     return "\n".join(parts)
+
+
+def _tool_call_label_map(messages: List[Dict[str, Any]]) -> Dict[str, str]:
+    """
+    Builds a lookup from each assistant tool-call ``id`` to a short label of the
+    form ``"{name} {summary}"`` (the same summary used for ``[Tool Call: ...]``).
+
+    Tool-result messages (``role == "tool"``) typically carry only a
+    ``tool_call_id`` referencing the assistant call, not the tool name itself.
+    This map lets a result be labeled with the tool that produced it and the
+    target it acted on (for example the file a ``read`` returned or a ``write``
+    landed on) instead of an opaque ``unknown_tool``.
+
+    Args:
+        messages (List[Dict[str, Any]]): The conversation messages.
+
+    Returns:
+        Dict[str, str]: Mapping of tool-call id to its rendered label. Calls
+            without an id are skipped.
+    """
+    label_by_call_id: Dict[str, str] = {}
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        for call in message.get("tool_calls") or []:
+            if not isinstance(call, dict):
+                continue
+            call_id = call.get("id")
+            if not isinstance(call_id, str) or not call_id:
+                continue
+            func = call.get("function")
+            if not isinstance(func, dict):
+                func = {}
+            name = func.get("name", "unknown")
+            summary = _summarize_tool_arguments(func.get("arguments", ""))
+            label_by_call_id[call_id] = f"{name} {summary}" if summary else name
+    return label_by_call_id
 
 
 def enrich_messages_with_tool_calls(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -648,7 +647,11 @@ def enrich_messages_with_tool_calls(messages: List[Dict[str, Any]]) -> List[Dict
 
     For each tool-result message (``role == "tool"``), a ``[Tool Result: {name}]``
     prefix is prepended to the content so downstream consumers can identify
-    which tool produced the output.
+    which tool produced the output. Because a result usually carries only a
+    ``tool_call_id`` and not the tool name, the name (and its argument summary,
+    e.g. the file path) is recovered from the originating assistant call via
+    that id; it falls back to an explicit ``name`` field and then to
+    ``unknown_tool``.
 
     Messages that do not need enrichment are passed through as-is.
 
@@ -660,6 +663,8 @@ def enrich_messages_with_tool_calls(messages: List[Dict[str, Any]]) -> List[Dict
             that needed enrichment are copied; others are passed through
             as-is.
     """
+    label_by_call_id = _tool_call_label_map(messages)
+
     result = []
     for message in messages:
         tool_calls = message.get("tool_calls")
@@ -679,7 +684,14 @@ def enrich_messages_with_tool_calls(messages: List[Dict[str, Any]]) -> List[Dict
             result.append(msg)
         elif message.get("role") == "tool":
             msg = dict(message)
-            tool_name = message.get("name", "unknown_tool")
+            # Attribute the result to the call that produced it: results usually
+            # carry only a tool_call_id, so recover the tool name (and its
+            # argument summary, e.g. the file path) from the originating call.
+            # Fall back to an explicit name, then a constant.
+            call_id = message.get("tool_call_id")
+            tool_name = label_by_call_id.get(call_id) if isinstance(call_id, str) else None
+            if not tool_name:
+                tool_name = message.get("name") or "unknown_tool"
             content = msg.get("content") or ""
             # Escape both the tool name and the content: a tool name containing
             # raw curly braces would otherwise survive to the downstream

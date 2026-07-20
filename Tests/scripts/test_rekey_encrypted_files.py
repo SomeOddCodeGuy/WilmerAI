@@ -5,10 +5,51 @@ from unittest.mock import patch, MagicMock, call
 
 import pytest
 
-from Middleware.utilities.encryption_utils import derive_fernet_key, encrypt_bytes, decrypt_bytes
+from Middleware.utilities.encryption_utils import derive_fernet_key, hash_api_key, encrypt_bytes, decrypt_bytes
+import Scripts.rekey_encrypted_files as rekey
 from Scripts.rekey_encrypted_files import (
-    process_file, collect_json_files, _load_journal, _save_journal, _remove_journal, main,
+    process_file, collect_json_files, find_discussion_directory,
+    _load_journal, _save_journal, _remove_journal, main,
 )
+
+
+class TestFindDiscussionDirectory:
+    """Tests for find_discussion_directory: it reads the user config and honors a
+    configured, existing discussionDirectory, otherwise falls back to the
+    in-tree Public/DiscussionIds default."""
+
+    def test_uses_configured_directory_when_it_exists(self, tmp_path):
+        disc_dir = tmp_path / "my_discussions"
+        disc_dir.mkdir()
+        config_path = tmp_path / "user.json"
+        config_path.write_text(json.dumps({"discussionDirectory": str(disc_dir)}))
+
+        assert find_discussion_directory(str(config_path)) == str(disc_dir)
+
+    def test_falls_back_when_directory_empty(self, tmp_path):
+        config_path = tmp_path / "user.json"
+        config_path.write_text(json.dumps({"discussionDirectory": ""}))
+
+        result = find_discussion_directory(str(config_path))
+
+        assert result == os.path.join(rekey.project_root, "Public", "DiscussionIds")
+
+    def test_falls_back_when_directory_missing_from_config(self, tmp_path):
+        config_path = tmp_path / "user.json"
+        config_path.write_text(json.dumps({"port": 5000}))
+
+        result = find_discussion_directory(str(config_path))
+
+        assert result == os.path.join(rekey.project_root, "Public", "DiscussionIds")
+
+    def test_falls_back_when_configured_directory_does_not_exist(self, tmp_path):
+        config_path = tmp_path / "user.json"
+        config_path.write_text(json.dumps(
+            {"discussionDirectory": str(tmp_path / "nope_not_here")}))
+
+        result = find_discussion_directory(str(config_path))
+
+        assert result == os.path.join(rekey.project_root, "Public", "DiscussionIds")
 
 
 class TestProcessFile:
@@ -154,6 +195,17 @@ class TestCollectJsonFiles:
         (tmp_path / "readme.txt").write_text("not json")
         assert collect_json_files(str(tmp_path)) == []
 
+    def test_excludes_rekey_journal(self, tmp_path):
+        """The crash-recovery journal is never treated as a data file: processing
+        it mid-rekey would encrypt the journal and break resume."""
+        (tmp_path / "memories.json").write_text("{}")
+        (tmp_path / ".rekey_journal.json").write_text('{"completed": []}')
+
+        result = collect_json_files(str(tmp_path))
+
+        json_names = [os.path.basename(f) for f in result]
+        assert json_names == ["memories.json"]
+
 
 class TestRekeyJournal:
     """Tests for the journal-based crash recovery functions."""
@@ -230,8 +282,12 @@ class TestMain:
         mock_find_config.assert_called_once_with("testuser")
         mock_find_disc.assert_called_once_with("/fake/config/testuser.json")
         mock_process.assert_called_once()
-        # new_key should be None for decrypt-only mode
         positional_args = mock_process.call_args[0]
+        # The old key must be derived from the CLI api key salted with the
+        # username; a key derived without the username salt cannot decrypt
+        # files the server wrote.
+        assert positional_args[1] == derive_fernet_key("old-secret", username="testuser")
+        # new_key should be None for decrypt-only mode
         assert positional_args[2] is None
         mock_remove_journal.assert_called_once()
 
@@ -267,24 +323,28 @@ class TestMain:
 
         mock_find_config.assert_called_once_with("testuser")
         mock_process.assert_called_once()
-        # process_file should receive a non-None new_key
+        # Both keys must be derived from the respective api keys salted with
+        # the username; unsalted keys would silently produce undecryptable data.
         positional_args = mock_process.call_args[0]
-        assert positional_args[2] is not None  # new_key
-        # Directory should be renamed from old hash to new hash
-        mock_rename.assert_called_once()
+        assert positional_args[1] == derive_fernet_key("old-secret", username="testuser")
+        assert positional_args[2] == derive_fernet_key("new-secret", username="testuser")
+        # Directory is renamed from the old key's hash dir to the new key's hash dir
+        old_hash_dir = os.path.join("/fake/discussions", hash_api_key("old-secret"))
+        new_hash_dir = os.path.join("/fake/discussions", hash_api_key("new-secret"))
+        mock_rename.assert_called_once_with(old_hash_dir, new_hash_dir)
 
-    @patch(f"{MODULE}.find_user_config_path", side_effect=SystemExit(1))
+    @patch(f"{MODULE}.project_root", "/nonexistent/wilmer-test-root")
     @patch(f"{MODULE}.argparse.ArgumentParser")
-    def test_main_missing_user_config(self, mock_parser_cls, mock_find_config):
-        """Exits cleanly when the user config file does not exist."""
-        args = self._make_args(api_key="old-secret")
+    def test_main_missing_user_config(self, mock_parser_cls):
+        """The real find_user_config_path exits with code 1 when no config file
+        exists for the requested user (project_root is pointed at a path that
+        cannot contain one)."""
+        args = self._make_args(user="no_such_user_xyz", api_key="old-secret")
         mock_parser_cls.return_value.parse_args.return_value = args
 
-        # find_user_config_path calls sys.exit(1) when the config is missing
         with pytest.raises(SystemExit) as exc_info:
             main()
         assert exc_info.value.code == 1
-        mock_find_config.assert_called_once_with("testuser")
 
     @patch.dict(os.environ, {}, clear=False)
     @patch("shutil.copytree")
@@ -318,7 +378,9 @@ class TestMain:
 
         mock_copytree.assert_called_once()
         src, dst = mock_copytree.call_args[0]
-        assert "backup" in dst
+        expected_src = os.path.join("/fake/discussions", hash_api_key("old-secret"))
+        assert src == expected_src
+        assert dst == expected_src + "_backup"
         # Files should still be processed after backup
         mock_process.assert_called_once()
 
@@ -346,3 +408,92 @@ class TestMain:
         main()
 
         mock_process.assert_not_called()
+
+    @patch.dict(os.environ, {}, clear=False)
+    @patch(f"{MODULE}.input", return_value="Y")
+    @patch(f"{MODULE}._remove_journal")
+    @patch(f"{MODULE}._save_journal")
+    @patch(f"{MODULE}._load_journal")
+    @patch(f"{MODULE}.process_file", return_value=True)
+    @patch(f"{MODULE}.collect_json_files")
+    @patch(f"{MODULE}.os.path.isdir", return_value=True)
+    @patch(f"{MODULE}.find_discussion_directory", return_value="/fake/discussions")
+    @patch(f"{MODULE}.find_user_config_path", return_value="/fake/config/testuser.json")
+    @patch(f"{MODULE}.argparse.ArgumentParser")
+    def test_main_resume_skips_completed_files(
+        self, mock_parser_cls, mock_find_config, mock_find_disc,
+        mock_isdir, mock_collect, mock_process, mock_load_journal,
+        mock_save_journal, mock_remove_journal, mock_input,
+    ):
+        """A journal left by a crashed run marks file1 as completed, so only
+        file2 is processed on resume."""
+        os.environ.pop("WILMER_API_KEY", None)
+        os.environ.pop("WILMER_NEW_API_KEY", None)
+
+        args = self._make_args(api_key="old-secret")
+        mock_parser_cls.return_value.parse_args.return_value = args
+
+        file1 = "/fake/discussions/oldhash/file1.json"
+        file2 = "/fake/discussions/oldhash/file2.json"
+        mock_collect.return_value = [file1, file2]
+        mock_load_journal.return_value = {"completed": [file1]}
+
+        main()
+
+        mock_process.assert_called_once()
+        assert mock_process.call_args[0][0] == file2
+        mock_remove_journal.assert_called_once()
+
+    @patch.dict(os.environ, {"WILMER_API_KEY": "env-secret"}, clear=False)
+    @patch(f"{MODULE}.input", return_value="Y")
+    @patch(f"{MODULE}._remove_journal")
+    @patch(f"{MODULE}._save_journal")
+    @patch(f"{MODULE}._load_journal", return_value={"completed": []})
+    @patch(f"{MODULE}.process_file", return_value=True)
+    @patch(f"{MODULE}.collect_json_files")
+    @patch(f"{MODULE}.os.path.isdir", return_value=True)
+    @patch(f"{MODULE}.find_discussion_directory", return_value="/fake/discussions")
+    @patch(f"{MODULE}.find_user_config_path", return_value="/fake/config/testuser.json")
+    @patch(f"{MODULE}.argparse.ArgumentParser")
+    def test_main_api_key_falls_back_to_env_var(
+        self, mock_parser_cls, mock_find_config, mock_find_disc,
+        mock_isdir, mock_collect, mock_process, mock_load_journal,
+        mock_save_journal, mock_remove_journal, mock_input,
+    ):
+        """With --api-key omitted, the key is taken from WILMER_API_KEY and
+        used (username-salted) for decryption."""
+        os.environ.pop("WILMER_NEW_API_KEY", None)
+
+        args = self._make_args(api_key=None, new_api_key=None)
+        mock_parser_cls.return_value.parse_args.return_value = args
+
+        mock_collect.return_value = ["/fake/discussions/envhash/file1.json"]
+
+        main()
+
+        positional_args = mock_process.call_args[0]
+        assert positional_args[1] == derive_fernet_key("env-secret", username="testuser")
+        assert positional_args[2] is None
+
+    @patch.dict(os.environ, {}, clear=False)
+    @patch(f"{MODULE}.find_user_config_path")
+    @patch(f"{MODULE}.argparse.ArgumentParser")
+    def test_main_errors_when_no_api_key_anywhere(
+        self, mock_parser_cls, mock_find_config,
+    ):
+        """With neither --api-key nor WILMER_API_KEY, main() calls parser.error
+        (which raises SystemExit in a real parser) before touching any files."""
+        os.environ.pop("WILMER_API_KEY", None)
+        os.environ.pop("WILMER_NEW_API_KEY", None)
+
+        args = self._make_args(api_key=None)
+        mock_parser = mock_parser_cls.return_value
+        mock_parser.parse_args.return_value = args
+        mock_parser.error.side_effect = SystemExit(2)
+
+        with pytest.raises(SystemExit):
+            main()
+
+        mock_parser.error.assert_called_once()
+        assert "--api-key" in mock_parser.error.call_args[0][0]
+        mock_find_config.assert_not_called()

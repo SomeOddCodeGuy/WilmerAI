@@ -236,3 +236,239 @@ class TestLockingService:
                     WHERE WilmerSessionId != ?
                 ''')
         mock_cursor.execute.assert_called_once_with(delete_query, (current_session_id,))
+
+    @pytest.mark.parametrize("method_name, args, expected", [
+        ("create_node_lock", (FAKE_SESSION_ID, FAKE_WORKFLOW_ID, FAKE_LOCK_ID), None),
+        ("get_lock", (FAKE_LOCK_ID,), False),
+        ("delete_node_locks", (FAKE_SESSION_ID,), None),
+        ("delete_old_locks", (FAKE_SESSION_ID,), None),
+    ])
+    def test_public_methods_handle_failed_connection(self, locking_service, mocker, caplog,
+                                                     method_name, args, expected):
+        """Each public method degrades gracefully when _get_db_connection returns None:
+        create_node_lock logs and returns, get_lock returns False, and the delete
+        methods silently swallow the failure."""
+        mocker.patch.object(locking_service, '_get_db_connection', return_value=None)
+
+        result = getattr(locking_service, method_name)(*args)
+
+        assert result is expected
+        if method_name == "create_node_lock":
+            assert "Cannot create node lock" in caplog.text
+
+    def test_get_lock_reraises_db_error(self, locking_service, mock_sqlite3):
+        """A database error inside get_lock is re-raised after the connection is closed."""
+        _, mock_conn, mock_cursor = mock_sqlite3
+        mock_conn.close.reset_mock()
+        mock_cursor.execute.side_effect = sqlite3.OperationalError("disk I/O error")
+
+        with pytest.raises(sqlite3.OperationalError, match="disk I/O error"):
+            locking_service.get_lock(FAKE_LOCK_ID)
+
+        mock_conn.close.assert_called_once()
+
+
+class _NonClosingConnection:
+    """Proxy over a real sqlite3 connection whose close() is a no-op.
+
+    LockingService closes its connection after every operation, which would
+    destroy a plain ':memory:' database; the proxy keeps the single in-memory
+    database alive across calls while forwarding everything else.
+    """
+
+    def __init__(self, conn):
+        self._conn = conn
+
+    def close(self):
+        pass
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def __setattr__(self, name, value):
+        # Forward attribute assignment (e.g. isolation_level) to the real
+        # connection so the proxy is transparent for transaction control.
+        if name == "_conn":
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self._conn, name, value)
+
+
+@pytest.fixture
+def in_memory_locking_service(mocker):
+    """Provides a LockingService backed by a real in-memory SQLite database."""
+    mocker.patch('Middleware.services.locking_service.config_utils.get_current_username',
+                 return_value=FAKE_USERNAME)
+    mocker.patch('Middleware.services.locking_service.config_utils.get_custom_dblite_filepath',
+                 return_value=FAKE_DB_PATH)
+    # Report the DB directory as existing so no real directories or files are created.
+    mocker.patch('os.path.exists', return_value=True)
+    real_conn = sqlite3.connect(":memory:")
+    mocker.patch.object(LockingService, '_get_db_connection',
+                        return_value=_NonClosingConnection(real_conn))
+    service = LockingService()
+    yield service, real_conn
+    real_conn.close()
+
+
+class TestLockingServiceRealSql:
+    """Round-trip tests against a real in-memory SQLite database, proving the
+    generated SQL is valid end to end (the mocked suite above never executes it)."""
+
+    def test_lock_round_trip(self, in_memory_locking_service):
+        """create -> get True -> delete -> get False against real SQL."""
+        service, _ = in_memory_locking_service
+
+        assert service.get_lock(FAKE_LOCK_ID) is False
+
+        service.create_node_lock(FAKE_SESSION_ID, FAKE_WORKFLOW_ID, FAKE_LOCK_ID)
+        assert service.get_lock(FAKE_LOCK_ID) is True
+
+        service.delete_node_locks(workflow_lock_id=FAKE_LOCK_ID)
+        assert service.get_lock(FAKE_LOCK_ID) is False
+
+    def test_expired_lock_returns_false_and_row_is_deleted(self, in_memory_locking_service, mocker):
+        """An expired lock reads as False and its row is removed from the table."""
+        service, real_conn = in_memory_locking_service
+        creation_time = datetime(2025, 1, 1, 12, 0, 0)
+        mock_dt = mocker.patch('Middleware.services.locking_service.datetime')
+        mock_dt.now.return_value = creation_time
+        mock_dt.fromisoformat.side_effect = datetime.fromisoformat
+
+        service.create_node_lock(FAKE_SESSION_ID, FAKE_WORKFLOW_ID, FAKE_LOCK_ID)
+
+        # Advance past the stored 10-minute expiration.
+        mock_dt.now.return_value = creation_time + timedelta(hours=1)
+        assert service.get_lock(FAKE_LOCK_ID) is False
+
+        row_count = real_conn.execute(
+            f'SELECT COUNT(*) FROM {LockingService.TABLE_NAME} WHERE WorkflowLockId = ?',
+            (FAKE_LOCK_ID,)
+        ).fetchone()[0]
+        assert row_count == 0
+
+    def _row_count(self, real_conn):
+        return real_conn.execute(
+            f'SELECT COUNT(*) FROM {LockingService.TABLE_NAME} WHERE WorkflowLockId = ?',
+            (FAKE_LOCK_ID,)
+        ).fetchone()[0]
+
+    def test_acquire_lock_when_free_inserts_and_returns_true(self, in_memory_locking_service):
+        """A free lock is acquired atomically: returns True and inserts exactly one row."""
+        service, real_conn = in_memory_locking_service
+
+        assert service.acquire_lock(FAKE_SESSION_ID, FAKE_WORKFLOW_ID, FAKE_LOCK_ID) is True
+        assert self._row_count(real_conn) == 1
+        assert service.get_lock(FAKE_LOCK_ID) is True
+
+    def test_acquire_lock_when_held_returns_false_without_duplicate(self, in_memory_locking_service):
+        """A second acquisition of a live lock is refused and does not insert a duplicate row."""
+        service, real_conn = in_memory_locking_service
+
+        assert service.acquire_lock(FAKE_SESSION_ID, FAKE_WORKFLOW_ID, FAKE_LOCK_ID) is True
+        assert service.acquire_lock("other-session", "other-workflow", FAKE_LOCK_ID) is False
+        assert self._row_count(real_conn) == 1
+
+    def test_acquire_lock_reclaims_only_expired_row(self, in_memory_locking_service, mocker):
+        """An expired lock is reclaimed (its row replaced), leaving a single live lock."""
+        service, real_conn = in_memory_locking_service
+        creation_time = datetime(2025, 1, 1, 12, 0, 0)
+        mock_dt = mocker.patch('Middleware.services.locking_service.datetime')
+        mock_dt.now.return_value = creation_time
+        mock_dt.fromisoformat.side_effect = datetime.fromisoformat
+
+        assert service.acquire_lock(FAKE_SESSION_ID, FAKE_WORKFLOW_ID, FAKE_LOCK_ID) is True
+
+        # Advance past the 10-minute expiration; the stale row must be reclaimable.
+        mock_dt.now.return_value = creation_time + timedelta(hours=1)
+        assert service.acquire_lock("new-session", "new-workflow", FAKE_LOCK_ID) is True
+        assert self._row_count(real_conn) == 1
+
+    def test_acquire_lock_proceeds_when_db_unavailable(self, in_memory_locking_service, mocker):
+        """If the database cannot be opened, acquisition proceeds (returns True) as before."""
+        service, _ = in_memory_locking_service
+        mocker.patch.object(service, '_get_db_connection', return_value=None)
+        assert service.acquire_lock(FAKE_SESSION_ID, FAKE_WORKFLOW_ID, FAKE_LOCK_ID) is True
+
+    def test_delete_old_locks_removes_only_other_sessions(self, in_memory_locking_service):
+        """delete_old_locks removes rows from other sessions and keeps the current one."""
+        service, real_conn = in_memory_locking_service
+        service.create_node_lock("old-session", FAKE_WORKFLOW_ID, "old-lock")
+        service.create_node_lock("current-session", FAKE_WORKFLOW_ID, "current-lock")
+
+        service.delete_old_locks("current-session")
+
+        rows = real_conn.execute(
+            f'SELECT WilmerSessionId, WorkflowLockId FROM {LockingService.TABLE_NAME}'
+        ).fetchall()
+        assert rows == [("current-session", "current-lock")]
+
+    def test_delete_node_locks_filters_by_workflow_id(self, in_memory_locking_service):
+        """Deleting by workflow_id removes only that workflow's rows against real SQL."""
+        service, real_conn = in_memory_locking_service
+        service.create_node_lock(FAKE_SESSION_ID, "wf-A", "lock-A")
+        service.create_node_lock(FAKE_SESSION_ID, "wf-B", "lock-B")
+
+        service.delete_node_locks(workflow_id="wf-A")
+
+        rows = real_conn.execute(
+            f'SELECT WorkflowId, WorkflowLockId FROM {LockingService.TABLE_NAME}'
+        ).fetchall()
+        assert rows == [("wf-B", "lock-B")]
+        assert service.get_lock("lock-A") is False
+        assert service.get_lock("lock-B") is True
+
+
+class TestLockingServiceErrorPaths:
+    """Real-SQL coverage of the three exception handlers (the previously uncovered
+    statements). Errors are induced by dropping the table so the next execute()
+    raises a genuine sqlite3.OperationalError inside each method's try block."""
+
+    def _drop_table(self, real_conn):
+        real_conn.execute(f'DROP TABLE {LockingService.TABLE_NAME}')
+
+    def test_delete_node_locks_swallows_db_error(self, in_memory_locking_service, caplog):
+        """A DB error inside delete_node_locks is swallowed with the documented warning."""
+        service, real_conn = in_memory_locking_service
+        self._drop_table(real_conn)
+
+        with caplog.at_level("WARNING"):
+            service.delete_node_locks(workflow_lock_id=FAKE_LOCK_ID)  # must not raise
+
+        assert "Error unlocking locks" in caplog.text
+
+    def test_delete_old_locks_swallows_db_error(self, in_memory_locking_service, caplog):
+        """A DB error inside delete_old_locks is swallowed with the documented warning."""
+        service, real_conn = in_memory_locking_service
+        self._drop_table(real_conn)
+
+        with caplog.at_level("WARNING"):
+            service.delete_old_locks(FAKE_SESSION_ID)  # must not raise
+
+        assert "Error deleting old locks" in caplog.text
+
+    def test_acquire_lock_db_error_rolls_back_and_reraises(self, in_memory_locking_service):
+        """A failure inside the BEGIN IMMEDIATE transaction is rolled back and re-raised,
+        leaving no dangling transaction on the connection."""
+        service, real_conn = in_memory_locking_service
+        self._drop_table(real_conn)
+
+        with pytest.raises(sqlite3.OperationalError):
+            service.acquire_lock(FAKE_SESSION_ID, FAKE_WORKFLOW_ID, FAKE_LOCK_ID)
+
+        assert real_conn.in_transaction is False
+
+    def test_acquire_lock_busy_database_reports_lock_held(self, in_memory_locking_service, mocker, caplog):
+        """A write lock held by another connection past the busy timeout raises
+        OperationalError from BEGIN IMMEDIATE; that must degrade to "lock held"
+        (False) rather than crash the workflow."""
+        service, _ = in_memory_locking_service
+        busy_conn = mocker.MagicMock()
+        busy_conn.cursor.return_value.execute.side_effect = sqlite3.OperationalError("database is locked")
+        mocker.patch.object(LockingService, '_get_db_connection', return_value=busy_conn)
+
+        with caplog.at_level("WARNING"):
+            assert service.acquire_lock(FAKE_SESSION_ID, FAKE_WORKFLOW_ID, FAKE_LOCK_ID) is False
+
+        assert "busy" in caplog.text
+        busy_conn.close.assert_called_once()

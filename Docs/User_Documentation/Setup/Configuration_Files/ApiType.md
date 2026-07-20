@@ -4,7 +4,7 @@ The `ApiTypes` configuration files are the "drivers" for WilmerAI's `llmapis` la
 middleware should communicate with a specific type of Large Language Model (LLM) backend API. It acts as a translator,
 telling the system what to name the properties in the final JSON payload sent to the LLM.
 
-This allows WilmerAI to support various backends -- like Ollama, KoboldCpp, or any OpenAI-compatible service -- without
+This allows WilmerAI to support various backends (like Ollama, KoboldCpp, or any OpenAI-compatible service) without
 changing its core code. You can add support for a new LLM provider simply by creating a new `ApiTypes` file.
 
 -----
@@ -44,10 +44,19 @@ Each `ApiTypes` JSON file contains a single object with the following key-value 
       `options` object.
 
   **Deprecated types (kept for backwards compatibility):** The following types are deprecated and route to their
-  standard handlers. Use the regular types above instead - they support images when used with the ImageProcessor node:
+  standard handlers. Use the regular types above instead; they support images when used with the ImageProcessor node:
     * `"koboldCppGenerateImageSpecific"` → use `"koboldCppGenerate"`
     * `"ollamaApiChatImageSpecific"` → use `"ollamaApiChat"`
     * `"openAIApiChatImageSpecific"` → use `"openAIChatCompletion"`
+
+  **Embeddings types:** The following types mark an endpoint as an **embeddings endpoint**, used by the memory
+  system's semantic search (see the memory documentation). Embeddings endpoints cannot be used for text generation;
+  a workflow node that references one will fail with a clear error. Presets and prompt templates do not apply, so
+  `presetType` and the property-name fields may be omitted entirely:
+    * `"openAIEmbeddings"`: For APIs following the OpenAI `/v1/embeddings` standard, including llama.cpp server
+      launched with `--embedding` and most OpenAI-compatible servers. Pre-defined file: `OpenAI-Embeddings.json`.
+    * `"ollamaEmbeddings"`: For the Ollama native `/api/embed` endpoint, used with embedding models such as
+      `nomic-embed-text`. Pre-defined file: `Ollama-Embeddings.json`.
 
 -----
 
@@ -120,6 +129,33 @@ Each `ApiTypes` JSON file contains a single object with the following key-value 
 
 -----
 
+##### `structuredOutput`
+
+* **Description**: Declares how this backend accepts a per-request JSON-schema constraint, enabling
+  structured output (tool enforcement on forced/`required` `tool_choice`, and the
+  `structuredOutputFile` node property). Declarative, like `thinking` and `samplerFieldMap`:
+  `field` names the request-body key the schema is written to (dotted for nesting, e.g.
+  `"structured_outputs.json"` for vLLM's native field), and `style` names the wrapper shape:
+  `"openaiJsonSchema"` (`{"type":"json_schema","json_schema":{"name","strict","schema"}}`; llama.cpp
+  server, LM Studio, vLLM, real OpenAI all accept this on `response_format`) or `"raw"` (the schema
+  object itself; Ollama's `format` field, Ollama 0.5.0+). For `"openaiJsonSchema"`, an optional
+  `strict` boolean (default `true`) sets the wrapper's `strict` flag. Backends that implement
+  OpenAI's strict mode (OpenAI itself, Azure) reject any schema that does not satisfy strict-mode
+  rules (`additionalProperties: false` on every object, every property required), returning a 400;
+  declare `"strict": false` for such backends unless every schema you use is strict-conformant.
+  Grammar-enforcing backends (llama.cpp, LM Studio, vLLM) enforce the schema regardless of the
+  flag. The shipped `Open-AI-API` type declares `"strict": false` for this reason. Wrapper styles
+  are implemented in `LlmApiHandler._attach_structured_output()`; adding a new API type that uses
+  an existing style requires no code. Omit the block entirely for backends without per-request
+  constraint support (for example the stock mlx-lm server, which silently ignores
+  `response_format`); structured output then does not engage for endpoints of this type. See
+  Workflow_Features.md, Structured Output.
+* **Data Type**: `object` (`field`: string, `style`: string, `strict`: optional boolean)
+* **Required**: No (omit when the backend has no supported mechanism)
+* **Example**: `{ "field": "response_format", "style": "openaiJsonSchema", "strict": false }`
+
+-----
+
 ##### `thinking`
 
 * **Description**: Describes how the canonical `thinkingMode` value resolves for this backend.
@@ -177,5 +213,5 @@ Here is a fully-commented example for an Ollama Chat API (`/api/chat`).
 
 Image processing is handled automatically by the ImageProcessor workflow node. When the ImageProcessor node is used,
 images are passed to the LLM and the handler formats them appropriately for each API type. For non-ImageProcessor nodes,
-images are automatically filtered out. This means you do not need separate "image-specific" API types - the same API
+images are automatically filtered out. This means you do not need separate "image-specific" API types: the same API
 type works for both text-only and vision-capable workflows.

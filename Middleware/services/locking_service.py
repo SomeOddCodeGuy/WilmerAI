@@ -3,7 +3,7 @@
 import logging
 import os
 import sqlite3
-import textwrap  # Import the textwrap module
+import textwrap
 import traceback
 from datetime import datetime, timedelta
 from typing import Optional
@@ -46,8 +46,8 @@ class LockingService:
         file exists, that legacy file is used instead so no automatic
         migration is performed. The old code created the lock DB as a
         working-directory-relative ``WilmerDb.<user>.sqlite``, so two legacy
-        locations are probed -- the cwd-relative path and the project-root
-        path -- because an install launched from a directory other than the
+        locations are probed (the cwd-relative path and the project-root
+        path) because an install launched from a directory other than the
         project root left its old file under whichever directory it was
         launched from.
 
@@ -87,8 +87,7 @@ class LockingService:
                                         the connection failed.
         """
         try:
-            conn = sqlite3.connect(self.db_path)
-            return conn
+            return sqlite3.connect(self.db_path)
         except sqlite3.OperationalError as e:
             logger.error(
                 f"Failed to connect to database at {self.db_path}. Please check the path and permissions. Error: {e}")
@@ -101,8 +100,9 @@ class LockingService:
         This method creates the database file and the 'WorkflowLocks' table if
         they do not already exist.
         """
-        if not os.path.exists(os.path.dirname(self.db_path)) and os.path.dirname(self.db_path) != '':
-            os.makedirs(os.path.dirname(self.db_path))
+        db_dir = os.path.dirname(self.db_path)
+        if db_dir and not os.path.exists(db_dir):
+            os.makedirs(db_dir)
 
         conn = self._get_db_connection()
         if conn:
@@ -123,7 +123,6 @@ class LockingService:
         Args:
             cursor (sqlite3.Cursor): The cursor object for executing SQL commands.
         """
-        # Use textwrap.dedent to remove leading whitespace
         create_table_query = textwrap.dedent(f'''
             CREATE TABLE IF NOT EXISTS {self.TABLE_NAME} (
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -155,7 +154,6 @@ class LockingService:
         try:
             cursor = conn.cursor()
             expiration_date = datetime.now() + timedelta(minutes=10)
-            # Use textwrap.dedent here as well
             insert_query = textwrap.dedent(f'''
                 INSERT INTO {self.TABLE_NAME}
                 (WilmerSessionId, WorkflowId, WorkflowLockId, ExpirationDate)
@@ -252,6 +250,81 @@ class LockingService:
 
         return False
 
+    def acquire_lock(self, wilmer_session_id: str, workflow_id: str, workflow_lock_id: str) -> bool:
+        """
+        Atomically acquires a workflow lock.
+
+        Replaces the previous check-then-act pattern (a separate ``get_lock`` read
+        followed by ``create_node_lock`` write), under which two concurrent requests
+        could both observe no lock and both insert one. The check and the insert run
+        inside a single ``BEGIN IMMEDIATE`` transaction, which takes SQLite's reserved
+        write lock up front and serializes concurrent acquirers, so the second caller
+        sees the first caller's row. An expired lock is reclaimed by deleting only that
+        specific expired row (by primary key) rather than every row for the id, so a
+        live lock held by another workflow is never freed.
+
+        Args:
+            wilmer_session_id (str): A unique ID for the current WilmerAI session.
+            workflow_id (str): The ID of the workflow being executed.
+            workflow_lock_id (str): The unique ID for the specific lock.
+
+        Returns:
+            bool: True if the lock was acquired (or locking is unavailable because the
+                database could not be opened), False if a live lock already exists.
+        """
+        conn = self._get_db_connection()
+        if conn is None:
+            # No DB means locking is unavailable; proceed as the prior code did
+            # (a missing lock store was treated as "no lock present").
+            logger.warning("Cannot acquire workflow lock, database connection failed; proceeding without a lock.")
+            return True
+
+        try:
+            conn.isolation_level = None  # take manual control of the transaction boundary
+            cursor = conn.cursor()
+            try:
+                cursor.execute("BEGIN IMMEDIATE")
+            except sqlite3.OperationalError:
+                # Another connection held SQLite's write lock past the busy
+                # timeout. Report the lock as held rather than crashing the
+                # workflow; the caller's contract is a boolean.
+                logger.warning("Workflow lock database is busy; treating lock '%s' as held.",
+                               workflow_lock_id)
+                return False
+            try:
+                cursor.execute(
+                    f'SELECT Id, ExpirationDate FROM {self.TABLE_NAME} WHERE WorkflowLockId = ?',
+                    (workflow_lock_id,))
+                rows = cursor.fetchall()
+
+                now = datetime.now()
+                expired_ids = []
+                for row_id, expiration in rows:
+                    if datetime.fromisoformat(expiration) < now:
+                        expired_ids.append(row_id)
+                    else:
+                        # A live lock exists; do not acquire.
+                        conn.rollback()
+                        return False
+
+                # Only expired rows (if any) remain; reclaim by removing exactly those.
+                for row_id in expired_ids:
+                    cursor.execute(f'DELETE FROM {self.TABLE_NAME} WHERE Id = ?', (row_id,))
+
+                expiration_date = now + timedelta(minutes=10)
+                cursor.execute(
+                    f'''INSERT INTO {self.TABLE_NAME}
+                        (WilmerSessionId, WorkflowId, WorkflowLockId, ExpirationDate)
+                        VALUES (?, ?, ?, ?)''',
+                    (wilmer_session_id, workflow_id, workflow_lock_id, expiration_date))
+                conn.commit()
+                return True
+            except Exception:
+                conn.rollback()
+                raise
+        finally:
+            conn.close()
+
     def delete_old_locks(self, current_wilmer_session_id: str):
         """
         Deletes all locks that do not belong to the current session.
@@ -269,7 +342,6 @@ class LockingService:
 
             try:
                 cursor = conn.cursor()
-                # Use textwrap.dedent for consistency and clarity
                 delete_query = textwrap.dedent(f'''
                     DELETE FROM {self.TABLE_NAME}
                     WHERE WilmerSessionId != ?

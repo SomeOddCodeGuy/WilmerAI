@@ -2,7 +2,7 @@
 
 The **`DelimitedChunker`** node splits a string on a delimiter and returns either the first N or last N chunks, rejoined
 with the same delimiter. It functions like `head` and `tail` for delimited content. This is useful for trimming long
-delimited data — for example, keeping only the most recent entries from a newline-separated log, or taking the first
+delimited data, for example keeping only the most recent entries from a newline-separated log, or taking the first
 few sections of a `---`-separated document.
 
 -----
@@ -125,7 +125,7 @@ If `agent1Output` contains a comma-separated row like `"alpha,beta,gamma,delta"`
 * **Delimiter Not Found:** If the delimiter does not appear in the content, there is exactly one chunk. For any
   `count >= 1`, the full content is returned unchanged.
 * **Count Equals or Exceeds Chunks:** If `count` is greater than or equal to the total number of chunks, the full
-  original content is returned unchanged — no error is raised.
+  original content is returned unchanged; no error is raised.
 * **Missing Required Fields:** If `content`, `delimiter`, `mode`, or `count` is missing from the configuration,
   the node returns a descriptive error message string (e.g., `"No delimiter specified"`).
 * **Invalid Mode:** If `mode` is anything other than `"head"` or `"tail"`, the node returns an error message naming

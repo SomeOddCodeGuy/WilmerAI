@@ -106,6 +106,30 @@ class TestOpenAiCompletionsApiHandler:
         assert "model" not in payload
         assert payload["prompt"] == "This is a test prompt"
 
+    def test_prepare_payload_unmocked_exact_payload(self, mocker, handler_config):
+        """
+        Tests _prepare_payload end-to-end (no parent mocking) with a realistic
+        api_type_config, asserting the exact payload: model, flattened prompt,
+        injected stream flag, and injected max_tokens.
+        """
+        mocker.patch("Middleware.llmapis.handlers.base.base_api_transport.get_connect_timeout", return_value=30)
+        handler_config["api_type_config"] = {
+            "streamPropertyName": "stream",
+            "maxNewTokensPropertyName": "max_tokens",
+        }
+        handler = OpenAiCompletionsApiHandler(**handler_config)
+
+        payload = handler._prepare_payload(None, "You are a bot. ", "Hello!")
+
+        assert payload == {
+            "model": "gpt-3.5-turbo-instruct",
+            "prompt": "You are a bot. Hello!",
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "stream": False,
+            "max_tokens": 150,
+        }
+
     # ##################################
     # ##### Non-Streaming Response Parsing
     # ##################################
@@ -147,7 +171,9 @@ class TestOpenAiCompletionsApiHandler:
         {},
         {"choices": []},
         {"choices": [{}]},
-        {"data": "some other structure"}
+        {"data": "some other structure"},
+        {"choices": 5},
+        {"choices": [5]},
     ])
     def test_parse_non_stream_response_handles_malformed_data(self, handler, malformed_response, mocker):
         """
@@ -185,6 +211,9 @@ class TestOpenAiCompletionsApiHandler:
         '{"malformed": "json"}',
         json.dumps({}),
         json.dumps({"choices": []}),
+        "123",
+        '{"choices": 5}',
+        '{"choices": ["x"]}',
     ])
     def test_process_stream_data_handles_invalid_chunks(self, streaming_handler, invalid_chunk_str, mocker):
         """
@@ -195,3 +224,43 @@ class TestOpenAiCompletionsApiHandler:
         assert result is None
         if invalid_chunk_str:
             mock_logger.assert_called_once()
+
+    # ##################################
+    # ##### End-to-End Streaming
+    # ##################################
+
+    def test_handle_streaming_yields_tokens_and_skips_done_marker(self, mocker, handler_config):
+        """
+        Tests handle_streaming end-to-end against a mocked SSE response whose
+        stream includes a 'data: [DONE]' terminator line. The token chunks are
+        yielded in order and the [DONE] line is skipped without error.
+        """
+        mocker.patch("Middleware.llmapis.handlers.base.base_api_transport.get_connect_timeout", return_value=30)
+        handler_config["stream"] = True
+        handler_config["api_type_config"] = {
+            "streamPropertyName": "stream",
+            "maxNewTokensPropertyName": "max_tokens",
+        }
+        handler = OpenAiCompletionsApiHandler(**handler_config)
+
+        sse_lines = [
+            "data: " + json.dumps({"choices": [{"text": "Hello", "finish_reason": None}]}),
+            "",
+            "data: " + json.dumps({"choices": [{"text": " world", "finish_reason": None}]}),
+            "data: [DONE]",
+        ]
+        mock_response = mocker.MagicMock()
+        mock_response.status_code = 200
+        mock_response.iter_lines.return_value = iter(sse_lines)
+        mock_post = mocker.patch.object(handler.session, "post")
+        mock_post.return_value.__enter__.return_value = mock_response
+
+        results = list(handler.handle_streaming(system_prompt="You are a bot. ", prompt="Hello!"))
+
+        assert results == [
+            {"token": "Hello", "finish_reason": None},
+            {"token": " world", "finish_reason": None},
+        ]
+        mock_post.assert_called_once()
+        assert mock_post.call_args.kwargs["json"]["stream"] is True
+        assert mock_post.call_args.args[0] == "https://api.test.local/v1/completions"

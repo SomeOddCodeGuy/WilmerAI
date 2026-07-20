@@ -158,7 +158,7 @@ def hello_world():
 #### **Behavior and Edge Cases**
 
 * **Default Fallback (`defaultText`):** If `defaultText` is configured, it is returned (with variable substitution
-  applied) in every case that would otherwise yield an empty string -- the tag is absent, unclosed/mismatched, or wraps
+  applied) in every case that would otherwise yield an empty string: the tag is absent, unclosed/mismatched, or wraps
   only whitespace. This keeps a downstream node from silently receiving an empty value. If `defaultText` is omitted, the
   empty-string behavior described below applies.
 * **Tag Not Found:** If the specified tag is not found in the text, the node returns an empty string (or `defaultText`,

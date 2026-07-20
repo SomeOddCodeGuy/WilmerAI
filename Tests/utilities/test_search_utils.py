@@ -1,33 +1,7 @@
 # Tests/utilities/test_search_utils.py
 
-import re
-
 import pytest
 
-
-# Mocking the tokenize function used in search_utils for consistent testing.
-def mock_tokenize(text: str) -> list[str]:
-    return re.findall(r'\b\w+\b', text)
-
-
-@pytest.fixture(autouse=True)
-def patch_dependencies(mocker):
-    """Patch dependencies used by search_utils."""
-    mocker.patch('Middleware.utilities.search_utils.tokenize', side_effect=mock_tokenize)
-
-    try:
-        from sklearn.feature_extraction.text import TfidfVectorizer
-        sklearn_available = True
-    except ImportError:
-        sklearn_available = False
-
-    if not sklearn_available:
-        mocker.patch('Middleware.utilities.search_utils.TfidfVectorizer', None)
-
-    return {'sklearn_available': sklearn_available}
-
-
-# Import functions after patching
 from Middleware.utilities.search_utils import (
     build_inverted_index,
     calculate_line_scores,
@@ -35,8 +9,6 @@ from Middleware.utilities.search_utils import (
     search_in_chunks,
     advanced_search_in_chunks,
     filter_keywords_by_speakers,
-    calculate_tfidf_scores,
-    advanced_search
 )
 
 # Sample data to be used across multiple tests
@@ -83,6 +55,18 @@ class TestBuildInvertedIndex:
         assert "goodbye" in index
         assert index["hello"] == [0, 2]
 
+    def test_build_inverted_index_dedupes_repeated_word_within_line(self):
+        """A word repeated on the same line is indexed once for that line."""
+        index = build_inverted_index(["dog dog"])
+        assert index["dog"] == [0]
+
+    def test_build_inverted_index_speaker_word_indexed_where_not_speaker(self):
+        """A word used as a speaker label on one line is still indexed on lines
+        where it appears as a plain word (speaker exclusion is per-line)."""
+        lines = ["User: hello world", "the user waved"]
+        index = build_inverted_index(lines)
+        assert index["user"] == [1]
+
 
 class TestCalculateLineScores:
     """Tests for the calculate_line_scores function."""
@@ -102,6 +86,15 @@ class TestCalculateLineScores:
         scores = calculate_line_scores(SAMPLE_LINES, sample_index, query_tokens)
         assert scores[0] == 2
         assert scores[1] == 2
+
+    def test_calculate_line_scores_ignores_out_of_range_postings(self):
+        """A stale index posting that points past the end of the lines list is
+        skipped instead of raising IndexError (guards callers that pass an
+        index built from a different lines list)."""
+        stale_index = {"dog": [0, 7]}
+        lines = ["the dog barked"]
+        scores = calculate_line_scores(lines, stale_index, ["dog"])
+        assert dict(scores) == {0: 1}
 
 
 class TestApplyProximityFilter:
@@ -144,6 +137,17 @@ class TestApplyProximityFilter:
         updated_scores = apply_proximity_filter(lines, scores.copy(), query_tokens, proximity_limit=1)
         assert updated_scores[0] == 3
 
+    def test_apply_proximity_filter_skips_out_of_range_line_numbers(self):
+        """A score entry whose line number is past the end of the lines list is
+        left untouched instead of raising IndexError; in-range entries are
+        still boosted normally."""
+        lines = ["quick brown fox"]
+        scores = {0: 2, 9: 5}
+        query_tokens = ["quick", "fox"]
+        updated_scores = apply_proximity_filter(lines, scores.copy(), query_tokens, proximity_limit=2)
+        assert updated_scores[0] == 3
+        assert updated_scores[9] == 5
+
 
 class TestSearchInChunks:
     """Tests for the simple search_in_chunks function."""
@@ -169,6 +173,12 @@ class TestSearchInChunks:
         results = search_in_chunks(SAMPLE_LINES, query)
         assert len(results) == 0
 
+    @pytest.mark.parametrize("empty_query", ["", "   ", "!!! ??"])
+    def test_search_in_chunks_tokenless_query_returns_empty(self, empty_query):
+        """A query that yields no word tokens (empty, whitespace, punctuation)
+        returns no chunks rather than matching everything."""
+        assert search_in_chunks(SAMPLE_LINES, empty_query) == []
+
 
 class TestAdvancedSearch:
     """Tests for the advanced search orchestrator functions with the fixed proximity logic."""
@@ -187,12 +197,13 @@ class TestAdvancedSearch:
         top_results = {SAMPLE_LINES[0], SAMPLE_LINES[1], SAMPLE_LINES[3], SAMPLE_LINES[4]}
         assert set(results[:4]) == top_results
 
-    def test_advanced_search_with_prebuilt_index(self, sample_index):
-        query = "quick dog"
-        results = advanced_search(SAMPLE_LINES, sample_index, query, max_excerpts=3, proximity_limit=5)
-        expected_top_result = "User: a quick note about the dog"
-        assert len(results) == 3
-        assert results[0] == expected_top_result.strip()
+    def test_advanced_search_in_chunks_empty_chunks_returns_empty(self):
+        """The empty-input guard: no chunks means no results."""
+        assert advanced_search_in_chunks([], "quick dog") == []
+
+    def test_advanced_search_in_chunks_empty_query_returns_empty(self):
+        """The empty-input guard: an empty query means no results."""
+        assert advanced_search_in_chunks(SAMPLE_LINES, "") == []
 
 
 class TestFilterKeywordsBySpeakers:
@@ -235,31 +246,3 @@ class TestFilterKeywordsBySpeakers:
         keywords = "User: AND hello"
         expected = "AND hello"
         assert filter_keywords_by_speakers(messages, keywords) == expected
-
-
-class TestTfidfScoring:
-    """Tests for the calculate_tfidf_scores function."""
-
-    def test_calculate_tfidf_scores(self, patch_dependencies):
-        if not patch_dependencies['sklearn_available']:
-            pytest.skip("scikit-learn not installed")
-
-        chunks = [
-            "this is the first document",
-            "this document is the second document",
-            "and this is the third one",
-            "is this the first document"
-        ]
-        query = "this is the first document"
-        scores = calculate_tfidf_scores(chunks, query)
-
-        assert len(scores) == len(chunks)
-        assert all(isinstance(s, float) for s in scores)
-        assert scores[0] > scores[1]
-        assert scores[0] > scores[2]
-        assert scores[3] > scores[1]
-        assert scores[3] > scores[2]
-
-    def test_calculate_tfidf_scores_empty_input(self):
-        assert calculate_tfidf_scores([], "query") == []
-        assert calculate_tfidf_scores(["doc1"], "") == [0.0]

@@ -65,12 +65,16 @@ each JSON file (without `.json`) is the value to put in a node's `server` field.
 ```json
 {
   "transport": "stdio",
-  "command": "npx",
-  "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed/directory"],
-  "env": {"NODE_ENV": "production"},
+  "command": "/absolute/path/to/mcp-server-filesystem",
+  "args": ["/path/to/allowed/directory"],
+  "env": {},
   "cwd": null
 }
 ```
+
+This runs a server you have already installed locally, so nothing is downloaded when the node runs. If you would
+rather use the zero-install quickstart, `"command": "npx"` with `"args": ["-y", "@modelcontextprotocol/server-filesystem", "..."]`
+has `npx` download and run the server on demand; be aware that form fetches the package on first use.
 
 * `command` *(required)*: The binary to execute.
 * `args` *(optional, default `[]`)*: Command-line arguments to the binary.
@@ -137,7 +141,7 @@ including timeout, variable substitution rules, and error handling.
 ## Choosing Between the Two Modes
 
 * **Use `MCPToolCall`** when the workflow author knows exactly which tool should run and when. The LLM never decides
-  which tool to call; the call is written into the workflow JSON. It is deterministic, auditable, and cheap — no
+  which tool to call; the call is written into the workflow JSON. It is deterministic, auditable, and cheap: no
   extra LLM turns are spent on tool selection.
 * **Use the agentic workflow** when the model should decide. The `Public/workflow_python_scripts/_isevendays_mcp_scripts/` integration discovers the tools a
   conversation mentions, injects their schemas into the system prompt, lets the model emit tool calls, executes

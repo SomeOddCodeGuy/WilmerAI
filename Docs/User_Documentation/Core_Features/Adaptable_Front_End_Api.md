@@ -1,7 +1,7 @@
 ### **Feature Guide: WilmerAI's Adaptable API Gateway**
 
 WilmerAI's Adaptable API Gateway acts as a compatibility layer for front-end applications. This allows you to connect
-existing tools and UIs -- like SillyTavern, OpenWebUI, or your own custom scripts -- as if you were connecting directly to
+existing tools and UIs (like SillyTavern, OpenWebUI, or your own custom scripts) as if you were connecting directly to
 industry-standard services like OpenAI or Ollama, without needing to learn a new API.
 
 This means you can use your existing user interface while utilizing the multi-step workflow capabilities of the WilmerAI
@@ -22,7 +22,7 @@ The client application is not aware of the backend processing, which allows it t
 1. **Standard Request:** Your UI (e.g., OpenWebUI) sends a standard request to WilmerAI's `/api/chat` endpoint, as if it
    were communicating with an Ollama server.
 2. **Internal Processing:** WilmerAI receives the request and passes it to its workflow engine. The engine may execute a
-   chain of actions -- like using a local model to extract keywords, searching a database, and then sending the results to
+   chain of actions, like using a local model to extract keywords, searching a database, and then sending the results to
    a cloud model like GPT-4o for the final answer.
 3. **Standard Response:** WilmerAI takes the final generated text and formats it into an Ollama-compliant JSON response.
 4. **Display:** Your UI receives the formatted response and displays it to the user, unaware of the multi-LLM
@@ -97,6 +97,39 @@ If your client sends an `Authorization: Bearer <key>` header with its requests, 
 in an isolated, per-key directory. If `encryptUsingApiKey` is enabled in the user config, files will also be encrypted
 at rest. This allows multiple users or applications to share a single WilmerAI instance securely. See the **Per-User
 Encryption** guide for details.
+
+### Request Cancellation and Idempotent Retries
+
+WilmerAI cancels backend generation when the requesting client goes away. If your client closes the HTTP connection
+of a `/v1/chat/completions` (or `/v1/completions`) request, whether mid-stream or before the first token has been
+sent, WilmerAI stops the associated backend generation and frees the slot it held. There is nothing to configure;
+this happens for every client. (Ollama clients can additionally cancel explicitly with `DELETE /api/chat` or
+`DELETE /api/generate`, described above.)
+
+To make retries safe on a single-GPU backend, a client may send an idempotency header:
+
+```
+X-Idempotency-Key: 9f6c1c1e-8e42-4a6f-b1a2-3c4d5e6f7a8b
+```
+
+The contract is:
+
+* Send **one** value per logical request, and reuse the **same** value across every retry of that request. Use a
+  fresh value for each new logical request. An opaque string of at most 128 characters (a UUID4 is ideal); the
+  header name is case-insensitive.
+* Only retry after an attempt failed **before** its response started (a connection error, or an accepted connection
+  that closed with no HTTP response). Never retry once tokens have begun arriving; replaying a half-delivered
+  stream corrupts the transcript.
+
+When WilmerAI receives a request whose key matches one that is still in flight, it treats the original as
+abandoned: it cancels that original's backend generation immediately and serves the new request fresh. It never
+splices or replays the old generation into the new response. This means a retry does not double-generate on the
+backend. The header is optional: a client that omits it behaves exactly as before, protected by the
+disconnect-cancellation above.
+
+The idempotency key is applied to the OpenAI-compatible completion endpoints (`/v1/chat/completions` and
+`/v1/completions`). Keys are only meaningful within a single running WilmerAI instance; they are not persisted
+across restarts.
 
 ### Access to Complex Workflows
 

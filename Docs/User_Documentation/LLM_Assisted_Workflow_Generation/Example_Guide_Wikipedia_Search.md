@@ -14,7 +14,7 @@ when writing other similar types of content.
 
 ***
 
-## Phase 1: Contextual Analysis - The Starting Point
+## Phase 1: Contextual Analysis (The Starting Point)
 
 Before any research begins, you must first understand the user's true intent. A single user message often lacks context.
 The first step in any research workflow should be to create an initial "analysis" node that examines the recent
@@ -93,7 +93,7 @@ one for the very first search pass, and another for all subsequent, refining pas
        passes (accumulated results).
     2. **Define the Goal**: Instruct the LLM to find a **knowledge gap** and generate a **semantically different** query
        that targets this gap.
-    3. **Leverage Previous Suggestions**: The summarizer in the next step will suggest new keywords. Tell this keyword
+    3. **Use Previous Suggestions**: The summarizer in the next step will suggest new keywords. Tell this keyword
        generator to pay close attention to those suggestions.
 
 ### **Step 2: Search, Select, and Summarize**
@@ -104,7 +104,7 @@ its own child workflow, like `Util_Workflow_Wiki_Select_And_Summarize`.
 1. **Broad Search**: Use the `OfflineWikiApiPartialArticle` node to retrieve the top 10 article summaries for the
    generated keyword. This is more reliable than hoping the single best match is the correct one.
 2. **Select the Best Candidate**: Use a `Standard` node as a "Selector Agent."
-    * **Prompting Strategy**: Give this agent the research objective, the list of 10 summaries, and -- most importantly -- a
+    * **Prompting Strategy**: Give this agent the research objective, the list of 10 summaries, and, most importantly, a
       list of **article titles that have already been read**. Instruct it to pick the single best article that is **not
       ** on the exclusion list. Force it to respond with either the exact article title or the phrase
       `NO_NOVEL_ARTICLE_FOUND`.

@@ -68,6 +68,22 @@ def base_context(mock_variable_service):
 
 
 @pytest.fixture
+def patch_compactor_file_paths():
+    """Patches the compactor file-path getters so handle() never resolves paths
+    through the real user config or creates discussion folders on disk."""
+    with patch(
+        "Middleware.workflows.handlers.impl.context_compactor_handler."
+        "get_discussion_context_compactor_old_file_path",
+        return_value="/fake/disc-test_context_compactor_old.json",
+    ) as mock_old_path, patch(
+        "Middleware.workflows.handlers.impl.context_compactor_handler."
+        "get_discussion_context_compactor_oldest_file_path",
+        return_value="/fake/disc-test_context_compactor_oldest.json",
+    ) as mock_oldest_path:
+        yield mock_old_path, mock_oldest_path
+
+
+@pytest.fixture
 def sample_settings():
     """Standard settings dict for testing."""
     return {
@@ -84,6 +100,16 @@ def sample_settings():
         "oldestUpdateSystemPrompt": "Update oldest summary.",
         "oldestUpdatePrompt": "Existing: [EXISTING_SUMMARY]\nNew: [NEW_CONTENT]",
     }
+
+
+def _fixed_messages(count):
+    """Messages whose content is exactly 35 chars of a single word, which
+    rough_estimate_token_length scores as exactly 11 tokens each
+    (max(1 * 1.35, 35 / 3.5) * 1.1 = 11)."""
+    return [
+        {"role": "user" if i % 2 == 0 else "assistant", "content": "x" * 35}
+        for i in range(count)
+    ]
 
 
 class TestCalculateBoundaries:
@@ -118,6 +144,31 @@ class TestCalculateBoundaries:
         boundaries = handler._calculate_boundaries([], 1000, 1000)
         assert boundaries["recent_start_idx"] == 0
         assert boundaries["old_start_idx"] == 0
+
+    def test_exact_boundary_indices(self, handler):
+        """Six 11-token messages with 22-token budgets split at exact indices:
+        messages 4-5 are Recent, 2-3 are Old, 0-1 are Oldest territory."""
+        messages = _fixed_messages(6)
+        boundaries = handler._calculate_boundaries(messages, 22, 22)
+        assert boundaries["recent_start_idx"] == 4
+        assert boundaries["old_start_idx"] == 2
+
+    def test_exact_budget_fit_keeps_everything_recent(self, handler):
+        """A budget exactly equal to the total token count (3 x 11 = 33) fits:
+        the comparison is strictly greater-than, so nothing spills into Old."""
+        messages = _fixed_messages(3)
+        boundaries = handler._calculate_boundaries(messages, 33, 33)
+        assert boundaries["recent_start_idx"] == 0
+        assert boundaries["old_start_idx"] == 0
+
+    def test_budget_smaller_than_single_message_empties_recent(self, handler):
+        """A recent budget below even one message (5 < 11) produces an empty
+        Recent section: recent_start_idx lands past the last message."""
+        messages = _fixed_messages(4)
+        boundaries = handler._calculate_boundaries(messages, 5, 22)
+        assert boundaries["recent_start_idx"] == 4
+        assert messages[boundaries["recent_start_idx"]:] == []
+        assert boundaries["old_start_idx"] == 2
 
 
 class TestShouldCompact:
@@ -197,6 +248,7 @@ class TestShouldCompact:
         assert shifted is True
 
 
+@pytest.mark.usefixtures("patch_compactor_file_paths")
 class TestHandle:
     """Tests for the main handle method."""
 
@@ -236,7 +288,9 @@ class TestHandle:
     def test_first_compaction_creates_old_section(self, mock_load_config, mock_path,
                                                   mock_read, mock_update,
                                                   handler, base_context, sample_settings):
-        """First-time compaction with enough messages creates Old section only."""
+        """First-time compaction with an already-long conversation summarizes the Old
+        window AND folds the pre-Old history into Oldest: both state files are written,
+        the old file first."""
         mock_load_config.return_value = sample_settings
         mock_read.side_effect = [
             [],
@@ -253,7 +307,13 @@ class TestHandle:
 
         assert "<context_compactor_old>" in result
         assert "Old summary result" in result
-        assert mock_update.call_count >= 1
+        # Both sections were persisted (old + oldest), routed to their own files.
+        assert mock_update.call_count == 2
+        written_paths = [c.args[1] for c in mock_update.call_args_list]
+        assert written_paths == [
+            "/fake/disc-test_context_compactor_old.json",
+            "/fake/disc-test_context_compactor_oldest.json",
+        ]
 
     @patch("Middleware.workflows.handlers.impl.context_compactor_handler.update_chunks_with_hashes")
     @patch("Middleware.workflows.handlers.impl.context_compactor_handler.read_chunks_with_hashes")
@@ -294,7 +354,45 @@ class TestHandle:
         assert "Cached oldest summary" in result
         assert mock_update.call_count == 0
 
+    @patch("Middleware.workflows.handlers.impl.context_compactor_handler.update_chunks_with_hashes")
+    @patch("Middleware.workflows.handlers.impl.context_compactor_handler.read_chunks_with_hashes")
+    @patch("Middleware.workflows.handlers.impl.context_compactor_handler.get_context_compactor_settings_path")
+    @patch("Middleware.workflows.handlers.impl.context_compactor_handler.load_config")
+    def test_lock_already_held_skips_compaction_and_returns_cached(self, mock_load_config, mock_path,
+                                                                   mock_read, mock_update,
+                                                                   handler, base_context, sample_settings):
+        """When another thread already holds the discussion's compactor lock, handle()
+        does not block or compact; it returns the cached summaries immediately."""
+        mock_load_config.return_value = sample_settings
+        cached_old = [("Cached old summary", "h1"), ("__boundary__", "h2")]
+        cached_oldest = [("Cached oldest summary", "h3")]
+        mock_read.side_effect = [
+            [],  # old state (empty -> compaction-worthy)
+            [],  # oldest state
+            cached_old,  # _return_cached_output reads
+            cached_oldest,
+        ]
+        base_context.messages = _make_messages(15, token_size_per_msg=100)
 
+        lock = _get_compactor_lock("disc-test")
+        assert lock.acquire(blocking=False)
+        try:
+            with patch.object(handler, '_calculate_boundaries',
+                              return_value={"old_start_idx": 0, "recent_start_idx": 3}), \
+                    patch.object(handler, '_run_compaction') as mock_run:
+                result = handler.handle(base_context)
+        finally:
+            lock.release()
+            with _compactor_locks_guard:
+                _compactor_locks.pop("disc-test", None)
+
+        mock_run.assert_not_called()
+        assert "Cached old summary" in result
+        assert "Cached oldest summary" in result
+        assert mock_update.call_count == 0
+
+
+@pytest.mark.usefixtures("patch_compactor_file_paths")
 class TestEstimationLevelScaling:
     """Invariant K (compactor half): wilmerContextEstimationLevel in the compactor
     settings scales the recent/old section token budgets. Config-local: it applies
@@ -340,11 +438,42 @@ class TestRunCompaction:
     """Tests for the _run_compaction method."""
 
     def test_compaction_without_boundary_shift(self, handler, base_context, sample_settings):
-        """When boundary hasn't shifted, only LLM call 1 runs."""
+        """A genuine no-shift cycle (previous Old boundary equals the current one)
+        runs only LLM call 1: there are no newly shifted messages to fold into Oldest."""
+        messages = _make_messages(10, token_size_per_msg=100)
+        boundaries = {"old_start_idx": 2, "recent_start_idx": 6}
+        # Prior state whose recorded boundary is exactly the current old_start_idx (2),
+        # so prev_old_start_idx == old_start_idx and the shifted slice is empty.
+        prev_boundary_hash = _hash(messages[2].get("content", ""))
+        old_state = [("old_summary", "recent_hash"), ("__boundary__", f"2:{prev_boundary_hash}")]
+
+        with patch.object(handler, '_call_llm', return_value="Summary") as mock_llm, \
+             patch.object(handler, '_save_state') as mock_save:
+            handler._run_compaction(
+                context=base_context, settings=sample_settings,
+                messages=messages, boundaries=boundaries,
+                old_state=old_state, oldest_state=[],
+                has_boundary_shifted=False, discussion_id="disc-test"
+            )
+            assert mock_llm.call_count == 1
+            mock_save.assert_called_once()
+            assert mock_save.call_args[0][1] == "old"
+
+    def test_first_compaction_folds_oldest_region(self, handler, base_context, sample_settings):
+        """First compaction of an already-large conversation must summarize the
+        messages before the Old window (messages[0:old_start_idx]) into Oldest rather
+        than drop them. Regression for the gate that ran this only on a boundary shift,
+        which left the earliest history in no summary at all on the first cycle."""
         messages = _make_messages(10, token_size_per_msg=100)
         boundaries = {"old_start_idx": 2, "recent_start_idx": 6}
 
-        with patch.object(handler, '_call_llm', return_value="Summary") as mock_llm, \
+        captured_prompts = []
+
+        def capture_llm(system_prompt, prompt, settings, context):
+            captured_prompts.append(prompt)
+            return "Summary"
+
+        with patch.object(handler, '_call_llm', side_effect=capture_llm) as mock_llm, \
              patch.object(handler, '_save_state') as mock_save:
             handler._run_compaction(
                 context=base_context, settings=sample_settings,
@@ -352,9 +481,15 @@ class TestRunCompaction:
                 old_state=[], oldest_state=[],
                 has_boundary_shifted=False, discussion_id="disc-test"
             )
-            assert mock_llm.call_count == 1
-            mock_save.assert_called_once()
-            assert mock_save.call_args[0][1] == "old"
+            # Old section + neutral summary of the oldest region + oldest update.
+            assert mock_llm.call_count == 3
+            save_sections = [c[0][1] for c in mock_save.call_args_list]
+            assert "old" in save_sections
+            assert "oldest" in save_sections
+            # The neutral summary (LLM call 2) must contain the earliest messages.
+            neutral_prompt = captured_prompts[1]
+            assert messages[0]["content"] in neutral_prompt
+            assert messages[1]["content"] in neutral_prompt
 
     def test_compaction_with_boundary_shift(self, handler, base_context, sample_settings):
         """When boundary has shifted, all 3 LLM calls run.
@@ -548,6 +683,37 @@ class TestRunCompaction:
             assert messages[3]["content"] in neutral_prompt
 
 
+    def test_saved_state_round_trip_prevents_recompaction(self, handler, base_context, sample_settings):
+        """Write-then-read cycle: the exact chunks _run_compaction persists (per the
+        file storage format in ContextCompactor.md section 8), fed back into
+        _should_compact for the same boundaries, must yield (False, False)."""
+        messages = _make_messages(10, token_size_per_msg=100)
+        boundaries = {"old_start_idx": 2, "recent_start_idx": 6}
+        saved = {}
+
+        def capture_save(discussion_id, section, chunks, context=None):
+            saved[section] = chunks
+
+        with patch.object(handler, '_call_llm', return_value="Old summary"), \
+                patch.object(handler, '_save_state', side_effect=capture_save):
+            handler._run_compaction(
+                context=base_context, settings=sample_settings,
+                messages=messages, boundaries=boundaries,
+                old_state=[], oldest_state=[],
+                has_boundary_shifted=False, discussion_id="disc-test"
+            )
+
+        recent_boundary_hash = _hash(messages[5]["content"])  # recent_start_idx - 1
+        old_boundary_hash = _hash(messages[2]["content"])  # old_start_idx
+        assert saved["old"] == [
+            ("Old summary", recent_boundary_hash),
+            ("__boundary__", f"2:{old_boundary_hash}"),
+        ]
+
+        should, shifted = handler._should_compact(messages, boundaries, saved["old"])
+        assert (should, shifted) == (False, False)
+
+
 class TestGenerateOldSection:
     """Tests for _generate_old_section."""
 
@@ -571,6 +737,17 @@ class TestGenerateOldSection:
         assert "[MESSAGES_TO_SUMMARIZE]" not in captured_prompts[0]
         assert "[RECENT_MESSAGES]" not in captured_prompts[0]
 
+    def test_empty_llm_response_falls_back_to_original_text(self, handler, base_context, sample_settings):
+        """A whitespace-only LLM response preserves the original messages text
+        instead of destroying the Old window content."""
+        old_messages = [{"role": "user", "content": "old msg"}]
+        recent_messages = [{"role": "assistant", "content": "recent msg"}]
+
+        with patch.object(handler, '_call_llm', return_value="   "):
+            result = handler._generate_old_section(old_messages, recent_messages, sample_settings, base_context)
+
+        assert result == "user: old msg"
+
 
 class TestGenerateNeutralSummary:
     """Tests for _generate_neutral_summary."""
@@ -591,6 +768,15 @@ class TestGenerateNeutralSummary:
         assert "shifted content" in captured_prompts[0]
         assert "[MESSAGES_TO_SUMMARIZE]" not in captured_prompts[0]
 
+    def test_empty_llm_response_falls_back_to_original_text(self, handler, base_context, sample_settings):
+        """An empty LLM response preserves the shifted messages text."""
+        shifted_messages = [{"role": "assistant", "content": "shifted content"}]
+
+        with patch.object(handler, '_call_llm', return_value=""):
+            result = handler._generate_neutral_summary(shifted_messages, sample_settings, base_context)
+
+        assert result == "assistant: shifted content"
+
 
 class TestUpdateOldestSection:
     """Tests for _update_oldest_section."""
@@ -610,6 +796,14 @@ class TestUpdateOldestSection:
         assert "new text" in captured_prompts[0]
         assert "[EXISTING_SUMMARY]" not in captured_prompts[0]
         assert "[NEW_CONTENT]" not in captured_prompts[0]
+
+    def test_empty_llm_response_preserves_existing_summary(self, handler, base_context, sample_settings):
+        """An empty LLM response keeps the existing rolling summary rather than
+        replacing it with nothing."""
+        with patch.object(handler, '_call_llm', return_value=""):
+            result = handler._update_oldest_section("existing text", "new text", sample_settings, base_context)
+
+        assert result == "existing text"
 
 
 class TestCallLlm:
@@ -727,6 +921,7 @@ class TestHashMessageContent:
         assert hash1 != hash2
 
 
+@pytest.mark.usefixtures("patch_compactor_file_paths")
 class TestLookbackSkipping:
     """Tests for lookback start turn skipping behavior."""
 
@@ -786,6 +981,36 @@ class TestLookbackSkipping:
                     called_messages = mock_calc.call_args[0][0]
                     assert len(called_messages) == 5
 
+    @patch("Middleware.workflows.handlers.impl.context_compactor_handler.read_chunks_with_hashes")
+    @patch("Middleware.workflows.handlers.impl.context_compactor_handler.get_context_compactor_settings_path")
+    @patch("Middleware.workflows.handlers.impl.context_compactor_handler.load_config")
+    def test_lookback_exceeding_message_count_uses_all_messages(self, mock_load_config, mock_path,
+                                                                mock_read, handler, base_context):
+        """Pins the current fallback: when the conversation has <= lookbackStartTurn
+        messages, NO messages are skipped (the whole conversation is used) rather than
+        skipping down to an empty window. Note: the user doc describes an unconditional
+        skip of the last N; this pins the implemented behavior."""
+        settings = {
+            "endpointName": "test-endpoint",
+            "preset": "test-preset",
+            "recentContextTokens": 100,
+            "oldContextTokens": 100,
+            "lookbackStartTurn": 5,
+        }
+        mock_load_config.return_value = settings
+        mock_read.return_value = []
+
+        messages = _make_messages(4, token_size_per_msg=50)
+        base_context.messages = messages
+
+        with patch.object(handler, '_calculate_boundaries', wraps=handler._calculate_boundaries) as mock_calc:
+            with patch.object(handler, '_should_compact', return_value=(False, False)):
+                with patch.object(handler, '_return_cached_output', return_value=""):
+                    handler.handle(base_context)
+                    assert mock_calc.called
+                    called_messages = mock_calc.call_args[0][0]
+                    assert len(called_messages) == 4
+
 
 class TestFilePersistence:
     """Tests for file persistence round-trip."""
@@ -841,6 +1066,41 @@ class TestFilePersistence:
         result = handler._load_state("disc-test", "oldest")
         mock_read.assert_called_once_with("/path/to/disc_context_compactor_oldest.json", encryption_key=None)
         assert result == [("oldest summary", "hash")]
+
+    @patch("Middleware.workflows.handlers.impl.context_compactor_handler.update_chunks_with_hashes")
+    @patch("Middleware.workflows.handlers.impl.context_compactor_handler.read_chunks_with_hashes")
+    @patch("Middleware.workflows.handlers.impl.context_compactor_handler.get_discussion_context_compactor_old_file_path")
+    def test_context_credentials_threaded_through(self, mock_old_path, mock_read, mock_update,
+                                                  handler, mock_variable_service):
+        """A context carrying non-None api_key_hash/encryption_key threads both through
+        to the path getter and the chunk read/write calls."""
+        mock_old_path.return_value = "/path/old.json"
+        mock_read.return_value = []
+        context = ExecutionContext(
+            request_id="req-test",
+            workflow_id="wf-test",
+            discussion_id="disc-test",
+            config={"type": "ContextCompactor"},
+            messages=[],
+            stream=False,
+            workflow_variable_service=mock_variable_service,
+            api_key_hash="hash-abc",
+            encryption_key=b"enc-key",
+        )
+
+        handler._load_state("disc-test", "old", context=context)
+        mock_old_path.assert_called_once_with("disc-test", api_key_hash="hash-abc")
+        mock_read.assert_called_once_with("/path/old.json", encryption_key=b"enc-key")
+
+        handler._save_state("disc-test", "old", [("summary", "hash")], context=context)
+        assert mock_old_path.call_count == 2
+        assert mock_old_path.call_args == call("disc-test", api_key_hash="hash-abc")
+        mock_update.assert_called_once_with(
+            [("summary", "hash")],
+            "/path/old.json",
+            mode="overwrite",
+            encryption_key=b"enc-key"
+        )
 
 
 class TestReturnCachedOutput:

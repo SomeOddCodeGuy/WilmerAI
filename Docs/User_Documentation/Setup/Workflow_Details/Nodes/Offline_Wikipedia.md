@@ -36,12 +36,11 @@ These fields are available for all Offline Wikipedia node types.
     * **Purpose**: A user-friendly name for this node instance, used for logging and workflow readability.
     * **Example**: `"Querying the offline wikipedia api"`
 
-* `"agentName"`: **(String, Required)**
+* `"agentName"`: **(String, Optional)**
 
-    * **Purpose**: Defines the name for the output variable. The text returned by the node will be stored in a workflow
-      variable based on this name.
-    * **Example**: If `agentName` is `"AIResearch"`, the output can be accessed in subsequent nodes using the variable
-      `{AIResearch}`.
+    * **Purpose**: A fallback display name used in logs when `title` is not set. It does not create a named output
+      variable; the node's return value is available to later nodes only positionally, as `{agent#Output}` (e.g.
+      `{agent1Output}` if this is the first node).
 
 * `"type"`: **(String, Required)**
 

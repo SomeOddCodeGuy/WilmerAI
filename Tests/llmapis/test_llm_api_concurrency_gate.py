@@ -146,7 +146,7 @@ class TestWilmerModeGate:
     def test_non_streaming_does_not_touch_semaphore(self, plain_endpoint, gate_env):
         gate_env.set("wilmer", limit=1)
         sem = gate_env.semaphore
-        sem.acquire()  # exhaust — would block any acquire attempt
+        sem.acquire()  # exhaust; would block any acquire attempt
 
         service = LlmApiService(endpoint="PLAIN", presetname="p", max_tokens=16, stream=False)
         handler = MagicMock()
@@ -223,7 +223,7 @@ class TestEndpointModeNonStreaming:
     def test_gate_timeout_raises_timeout_error(self, plain_endpoint, gate_env):
         gate_env.set("endpoint", limit=1, timeout=0.1)
         sem = gate_env.semaphore
-        sem.acquire()  # exhaust — caller will time out
+        sem.acquire()  # exhaust; caller will time out
 
         service = LlmApiService(endpoint="PLAIN", presetname="p", max_tokens=16, stream=False)
         handler = MagicMock()
@@ -232,7 +232,7 @@ class TestEndpointModeNonStreaming:
         with pytest.raises(TimeoutError, match="LLM call slot"):
             service.get_response_from_llm(prompt="hi")
 
-        # Handler must not have been called — we never got a slot
+        # Handler must not have been called; we never got a slot
         handler.handle_non_streaming.assert_not_called()
 
         sem.release()
@@ -244,7 +244,7 @@ class TestEndpointModeNonStreaming:
         inner finally that calls close() never ran on this path."""
         gate_env.set("endpoint", limit=1, timeout=0.1)
         sem = gate_env.semaphore
-        sem.acquire()  # exhaust — caller will time out
+        sem.acquire()  # exhaust; caller will time out
 
         service = LlmApiService(endpoint="PLAIN", presetname="p", max_tokens=16, stream=False)
         handler = MagicMock()
@@ -258,6 +258,42 @@ class TestEndpointModeNonStreaming:
         assert service.is_busy_flag is False
 
         sem.release()
+
+    def test_gate_timeout_with_backup_does_not_failover(self, single_chain, gate_env):
+        """A slot-wait timeout is not a backend failure: even when the endpoint
+        has a backup configured, the TimeoutError must reach the caller and the
+        backup must never be built or invoked (the backup would just wait on the
+        same exhausted gate)."""
+        gate_env.set("endpoint", limit=1, timeout=0.1)
+        sem = gate_env.semaphore
+        sem.acquire()  # exhaust; the caller will time out waiting for a slot
+
+        service = LlmApiService(endpoint="PRIMARY", presetname="p", max_tokens=16, stream=False)
+        handler = MagicMock()
+        service._api_handler = handler
+
+        with patch.object(LlmApiService, "_build_backup_service") as mock_build:
+            with pytest.raises(TimeoutError, match="LLM call slot"):
+                service.get_response_from_llm(prompt="hi")
+
+        mock_build.assert_not_called()
+        handler.handle_non_streaming.assert_not_called()
+
+        sem.release()
+
+    def test_gate_disabled_when_limit_zero(self, plain_endpoint, gate_env):
+        """limit=0 means no semaphore is configured (get_request_semaphore()
+        returns None); endpoint mode must pass the call through ungated."""
+        gate_env.set("endpoint", limit=0, timeout=0.1)
+        assert gate_env.semaphore is None
+
+        service = LlmApiService(endpoint="PLAIN", presetname="p", max_tokens=16, stream=False)
+        handler = MagicMock()
+        handler.handle_non_streaming.return_value = "ok"
+        service._api_handler = handler
+
+        assert service.get_response_from_llm(prompt="hi") == "ok"
+        handler.handle_non_streaming.assert_called_once()
 
     def test_failover_releases_gate_before_delegating(self, single_chain, gate_env):
         """Critical: at limit=1, if we held the gate while delegating to the
@@ -305,7 +341,7 @@ class TestEndpointModeStreaming:
 
         gen = service.get_response_from_llm(prompt="hi")
 
-        # Before iteration starts, semaphore should still be free — the gate
+        # Before iteration starts, semaphore should still be free: the gate
         # is acquired inside the generator on first next().
         assert sem.acquire(blocking=False)
         sem.release()
@@ -336,7 +372,7 @@ class TestEndpointModeStreaming:
         never start the backend stream, and leak no permit."""
         gate_env.set("endpoint", limit=1, timeout=0.1)
         sem = gate_env.semaphore
-        sem.acquire()  # exhaust — the streaming caller will time out
+        sem.acquire()  # exhaust; the streaming caller will time out
 
         service = LlmApiService(endpoint="PLAIN", presetname="p", max_tokens=16, stream=True)
         handler = MagicMock()
@@ -348,7 +384,7 @@ class TestEndpointModeStreaming:
         with pytest.raises(TimeoutError, match="LLM call slot"):
             next(gen)
 
-        # The backend stream must never have started — we never got a slot.
+        # The backend stream must never have started; we never got a slot.
         handler.handle_streaming.assert_not_called()
 
         # Release the originally-held slot; the gate must now be fully free,
@@ -356,6 +392,42 @@ class TestEndpointModeStreaming:
         sem.release()
         assert sem.acquire(blocking=False)
         sem.release()
+
+    def test_streaming_gate_timeout_with_backup_does_not_failover(self, single_chain, gate_env):
+        """Streaming twin of the non-streaming case: a slot-wait timeout on an
+        endpoint WITH a backup raises TimeoutError from the first next() and
+        never builds or invokes the backup."""
+        gate_env.set("endpoint", limit=1, timeout=0.1)
+        sem = gate_env.semaphore
+        sem.acquire()  # exhaust; the streaming caller will time out
+
+        service = LlmApiService(endpoint="PRIMARY", presetname="p", max_tokens=16, stream=True)
+        handler = MagicMock()
+        handler.handle_streaming.return_value = iter(["c1"])
+        service._api_handler = handler
+
+        gen = service.get_response_from_llm(prompt="hi")
+
+        with patch.object(LlmApiService, "_build_backup_service") as mock_build:
+            with pytest.raises(TimeoutError, match="LLM call slot"):
+                next(gen)
+
+        mock_build.assert_not_called()
+        handler.handle_streaming.assert_not_called()
+
+        sem.release()
+
+    def test_streaming_gate_disabled_when_limit_zero(self, plain_endpoint, gate_env):
+        """limit=0 in endpoint mode: the streaming path is ungated too."""
+        gate_env.set("endpoint", limit=0, timeout=0.1)
+        assert gate_env.semaphore is None
+
+        service = LlmApiService(endpoint="PLAIN", presetname="p", max_tokens=16, stream=True)
+        handler = MagicMock()
+        handler.handle_streaming.return_value = iter(["c1", "c2"])
+        service._api_handler = handler
+
+        assert list(service.get_response_from_llm(prompt="hi")) == ["c1", "c2"]
 
     def test_gate_released_on_generator_close(self, plain_endpoint, gate_env):
         gate_env.set("endpoint", limit=1)
@@ -409,7 +481,7 @@ class TestEndpointModeStreaming:
 
         def failing_gen():
             if False:
-                yield  # pragma: no cover  — make this a generator
+                yield  # pragma: no cover  (makes this a generator)
             raise ValueError("primary down before first token")
 
         service = LlmApiService(endpoint="PRIMARY", presetname="p", max_tokens=16, stream=True)

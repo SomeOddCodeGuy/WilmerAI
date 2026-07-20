@@ -107,6 +107,51 @@ class TestLLMDispatchServiceCompletions:
             tool_choice=None,
         )
 
+    def test_dispatch_passes_recent_images_via_minimal_conversation(self, mock_context, mocker):
+        """Image-taking completions endpoints (koboldCppGenerateImageSpecific) read
+        per-message images from `conversation`; the dispatch must gather recent
+        images into a minimal conversation or they are silently dropped."""
+        mocker.patch('Middleware.services.llm_dispatch_service.format_system_prompt_with_template',
+                     return_value="formatted_system")
+        mock_context.config = {"systemPrompt": "Sys", "prompt": "Describe the image."}
+        mock_context.messages[-1]["images"] = ["base64-image-data"]
+
+        LLMDispatchService.dispatch(context=mock_context, llm_takes_images=True)
+
+        call_kwargs = mock_context.llm_handler.llm.get_response_from_llm.call_args.kwargs
+        assert call_kwargs["conversation"] == [
+            {"role": "user", "content": "", "images": ["base64-image-data"]}]
+        assert call_kwargs["prompt"] == "Describe the image."
+
+    def test_dispatch_image_window_matches_completions_text_window(self, mock_context, mocker):
+        """The default image lookback must equal the completions text window
+        default (5); an image only 6 messages back would otherwise ride a
+        prompt that no longer contains its text context."""
+        mocker.patch('Middleware.services.llm_dispatch_service.format_system_prompt_with_template',
+                     return_value="formatted_system")
+        mock_context.config = {"systemPrompt": "Sys", "prompt": "Describe the image."}
+        mock_context.messages = (
+            [{"role": "user", "content": "old", "images": ["stale-image"]}]
+            + [{"role": "user", "content": f"filler {i}"} for i in range(5)]
+        )
+
+        LLMDispatchService.dispatch(context=mock_context, llm_takes_images=True)
+
+        call_kwargs = mock_context.llm_handler.llm.get_response_from_llm.call_args.kwargs
+        assert call_kwargs["conversation"] is None
+
+    def test_dispatch_completions_without_images_keeps_conversation_none(self, mock_context, mocker):
+        """With no images in recent messages, the completions path still sends
+        conversation=None even when the endpoint takes images."""
+        mocker.patch('Middleware.services.llm_dispatch_service.format_system_prompt_with_template',
+                     return_value="formatted_system")
+        mock_context.config = {"systemPrompt": "Sys", "prompt": "Hello."}
+
+        LLMDispatchService.dispatch(context=mock_context, llm_takes_images=True)
+
+        call_kwargs = mock_context.llm_handler.llm.get_response_from_llm.call_args.kwargs
+        assert call_kwargs["conversation"] is None
+
     def test_dispatch_uses_last_n_messages_when_prompt_is_absent(self, mock_context, mocker):
         """
         Verifies that when 'prompt' is absent, the service falls back to
@@ -360,6 +405,20 @@ class TestLLMDispatchServiceChat:
         user_msg = conversation[-1]
         assert user_msg["role"] == "user"
         assert "images" not in user_msg
+
+    def test_dispatch_raises_value_error_when_messages_is_none(self, mock_context):
+        """
+        Verifies that dispatching with context.messages=None raises ValueError
+        before any LLM call is made.
+        """
+        mock_context.llm_handler.takes_message_collection = True
+        mock_context.config = {"systemPrompt": "Sys.", "lastMessagesToSendInsteadOfPrompt": 5}
+        mock_context.messages = None
+
+        with pytest.raises(ValueError, match="must not be None"):
+            LLMDispatchService.dispatch(context=mock_context)
+
+        mock_context.llm_handler.llm.get_response_from_llm.assert_not_called()
 
 
 # --- Tests for _apply_image_limit ---
@@ -1043,7 +1102,7 @@ class TestDispatchConsecutiveAssistantNormalization:
 
         call_args = mock_context.llm_handler.llm.get_response_from_llm.call_args
         conversation = call_args[1]["conversation"]
-        # Merged, not inserted — so one assistant message.
+        # Merged, not inserted, so one assistant message.
         # The user message safety net injects the most recent user message
         # from the full conversation since the window had none.
         assistant_msgs = [m for m in conversation if m["role"] == "assistant"]
@@ -1207,7 +1266,7 @@ class TestEnsureUserMessagePresent:
         assert collection[3]["role"] == "tool"
 
     def test_noop_with_empty_collection(self):
-        """Empty collection with user in full — inserts it (degenerate case)."""
+        """Empty collection with user in full: inserts it (degenerate case)."""
         collection = []
         full = [{"role": "user", "content": "hello"}]
         LLMDispatchService._ensure_user_message_present(collection, full)
@@ -1215,7 +1274,7 @@ class TestEnsureUserMessagePresent:
         assert collection[0]["role"] == "user"
 
     def test_noop_with_empty_full_messages(self):
-        """Empty full_messages — no user message to insert."""
+        """Empty full_messages: no user message to insert."""
         collection = [
             {"role": "system", "content": "sys"},
             {"role": "assistant", "content": "hi"},
@@ -1247,7 +1306,7 @@ class TestEnsureUserMessagePresent:
         ]
         full = [{"role": "user", "content": "original"}]
         LLMDispatchService._ensure_user_message_present(collection, full)
-        # Should not insert — synthetic user message already present
+        # Should not insert; synthetic user message already present
         assert len(collection) == 4
 
 
@@ -1706,7 +1765,7 @@ class TestDispatchPreSendClampIntegration:
         assert conversation[0] == {"role": "system", "content": "Sys."}
         user_msg = conversation[-1]
         assert user_msg["role"] == "user"
-        # The authored prompt survives in full -- no head or tail chopped.
+        # The authored prompt survives in full: no head or tail chopped.
         assert user_msg["content"] == big
         assert any("authored prompt" in r.message for r in caplog.records)
 
@@ -1790,15 +1849,40 @@ class TestDispatchPreSendClampIntegration:
         assert sent_prompt == "short prompt"
 
     def test_clamp_disabled_with_mocked_endpoint(self, mock_context):
-        """With a fully-mocked handler (no real endpoint_file dict), the clamp is a
-        no-op: all last-N messages pass through unchanged."""
+        """Even with the clamp enabled in the node config, a fully-mocked handler
+        (endpoint_file is a Mock, not a dict) yields no window budget, so the clamp
+        is a no-op: all last-N messages pass through unchanged."""
         mock_context.llm_handler.takes_message_collection = True
         # Do NOT set endpoint_file/max_tokens to real values -> they are Mocks.
-        mock_context.config = {"systemPrompt": "Sys.", "lastMessagesToSendInsteadOfPrompt": 10}
+        mock_context.config = {"systemPrompt": "Sys.", "lastMessagesToSendInsteadOfPrompt": 10,
+                               "clampPromptToContextWindow": True}
         LLMDispatchService.dispatch(context=mock_context)
         conversation = mock_context.llm_handler.llm.get_response_from_llm.call_args[1]["conversation"]
         assert [m["content"] for m in conversation[1:]] == [
             "Hello, bot.", "Hello, human.", "How are you?", "I am a large language model.", "Tell me a joke."]
+
+    def test_chat_trim_emits_clamp_info_log(self, mock_context, mocker, caplog):
+        """A trimmed chat dispatch emits exactly one INFO line naming the control,
+        the node, the before/after token estimates, and the dropped-message count."""
+        mock_context.llm_handler.takes_message_collection = True
+        self._set_endpoint(mock_context, window=1000, n_predict=100)
+        mock_context.config = {"title": "ClampedNode", "systemPrompt": "Sys.",
+                               "lastMessagesToSendInsteadOfPrompt": 10,
+                               "clampPromptToContextWindow": True}
+        mocker.patch('Middleware.services.llm_dispatch_service.rough_estimate_token_length',
+                     return_value=100)
+        # budget = 1000 - 100 - 100(sys) - 512 = 288; 108/msg keeps 2 of the 5 body
+        # messages. before: system + 5 = 600 tokens/6 msgs; after: 300 tokens/3 msgs.
+        with caplog.at_level("INFO", logger="Middleware.services.llm_dispatch_service"):
+            LLMDispatchService.dispatch(context=mock_context)
+        clamp_logs = [r for r in caplog.records
+                      if r.levelname == "INFO" and "Context-window clamp" in r.getMessage()]
+        assert len(clamp_logs) == 1
+        message = clamp_logs[0].getMessage()
+        assert "clampPromptToContextWindow" in message
+        assert "node 'ClampedNode'" in message
+        assert "from ~600 to ~300" in message
+        assert "dropped the 3 oldest message(s)" in message
 
 
 class TestPromptIntegrityBattery:
@@ -1972,7 +2056,7 @@ class TestPromptIntegrityBattery:
 
 class TestTrimBudgetBoundariesAdversarial:
     """Adversarial boundary tests for the core conversation-trim primitive
-    `_trim_messages_to_token_budget` -- the sacred path. Conversation content is
+    `_trim_messages_to_token_budget`, the sacred path. Conversation content is
     NEVER truncated; whole oldest messages drop; the newest is always kept whole."""
 
     OVERHEAD = _CLAMP_PER_MESSAGE_OVERHEAD_TOKENS  # per-message framing cost (8)
@@ -2062,3 +2146,475 @@ class TestTrimBudgetBoundariesAdversarial:
         LLMDispatchService._clamp_chat_collection_to_budget(collection, 2 * (100 + self.OVERHEAD))
         assert collection[0] == {"role": "system", "content": "SYSTEM RULES"}
         assert [m["content"] for m in collection[1:]] == ["m4", "m5"]
+
+
+# --- Test Suite for appendNativeToolExchange ---
+
+ASSISTANT_TOOL_CALLS = [{
+    "id": "call_1", "type": "function",
+    "function": {"name": "generate_image", "arguments": "{\"prompt\": \"wizard\"}"}
+}]
+
+TOOL_EXCHANGE_MESSAGES = [
+    {"role": "user", "content": "Generate an image."},
+    {"role": "assistant", "content": "", "tool_calls": ASSISTANT_TOOL_CALLS},
+    {"role": "tool", "tool_call_id": "call_1", "content": "{\"status\": \"guide\"}"},
+]
+
+
+class TestExtractTrailingToolExchange:
+    """Tests for the _extract_trailing_tool_exchange() detection helper."""
+
+    def test_basic_exchange_detected(self):
+        start, exchange = LLMDispatchService._extract_trailing_tool_exchange(
+            list(TOOL_EXCHANGE_MESSAGES))
+        assert start == 1
+        assert exchange == TOOL_EXCHANGE_MESSAGES[1:]
+
+    def test_parallel_calls_with_multiple_results(self):
+        messages = [
+            {"role": "user", "content": "Go."},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "a", "arguments": "{}"}},
+                {"id": "c2", "type": "function", "function": {"name": "b", "arguments": "{}"}},
+            ]},
+            {"role": "tool", "tool_call_id": "c1", "content": "r1"},
+            {"role": "tool", "tool_call_id": "c2", "content": "r2"},
+        ]
+        start, exchange = LLMDispatchService._extract_trailing_tool_exchange(messages)
+        assert start == 1
+        assert len(exchange) == 3
+
+    @pytest.mark.parametrize("filler_content", ["", "  ", "Assistant:", None])
+    def test_trailing_filler_assistant_skipped_and_excluded(self, filler_content):
+        messages = list(TOOL_EXCHANGE_MESSAGES) + [
+            {"role": "assistant", "content": filler_content}]
+        start, exchange = LLMDispatchService._extract_trailing_tool_exchange(messages)
+        assert start == 1
+        # Filler is not part of the native exchange.
+        assert exchange == TOOL_EXCHANGE_MESSAGES[1:]
+
+    def test_substantive_trailing_assistant_means_no_exchange(self):
+        # A real assistant reply after the results = the exchange is already answered.
+        messages = list(TOOL_EXCHANGE_MESSAGES) + [
+            {"role": "assistant", "content": "Here is your image."}]
+        start, exchange = LLMDispatchService._extract_trailing_tool_exchange(messages)
+        assert (start, exchange) == (len(messages), [])
+
+    def test_unanswered_tool_calls_turn_means_no_exchange(self):
+        # Ends with the assistant call but no results yet: nothing to deliver.
+        messages = TOOL_EXCHANGE_MESSAGES[:2]
+        start, exchange = LLMDispatchService._extract_trailing_tool_exchange(messages)
+        assert (start, exchange) == (len(messages), [])
+
+    def test_results_without_calling_assistant_means_no_exchange(self):
+        messages = [
+            {"role": "user", "content": "Go."},
+            {"role": "tool", "tool_call_id": "c1", "content": "orphan result"},
+        ]
+        start, exchange = LLMDispatchService._extract_trailing_tool_exchange(messages)
+        assert (start, exchange) == (len(messages), [])
+
+    def test_empty_tool_calls_list_means_no_exchange(self):
+        messages = [
+            {"role": "user", "content": "Go."},
+            {"role": "assistant", "content": "", "tool_calls": []},
+            {"role": "tool", "tool_call_id": "c1", "content": "r"},
+        ]
+        start, exchange = LLMDispatchService._extract_trailing_tool_exchange(messages)
+        assert (start, exchange) == (len(messages), [])
+
+    def test_buried_exchange_not_detected(self):
+        # An exchange followed by a normal user turn is history, not the live exchange.
+        messages = list(TOOL_EXCHANGE_MESSAGES) + [
+            {"role": "assistant", "content": "Done."},
+            {"role": "user", "content": "Thanks. Another question..."},
+        ]
+        start, exchange = LLMDispatchService._extract_trailing_tool_exchange(messages)
+        assert (start, exchange) == (len(messages), [])
+
+    def test_empty_messages(self):
+        assert LLMDispatchService._extract_trailing_tool_exchange([]) == (0, [])
+
+    def test_non_dict_entries_are_safe(self):
+        messages = ["garbage", {"role": "tool", "content": "r"}]
+        start, exchange = LLMDispatchService._extract_trailing_tool_exchange(messages)
+        assert (start, exchange) == (len(messages), [])
+
+
+class TestAppendNativeToolExchangeDispatch:
+    """Dispatch-level behavior of the appendNativeToolExchange node property."""
+
+    def _tool_context(self, mock_context, flag=True, prompt="Do the task: {chat_user_prompt}"):
+        mock_context.llm_handler.takes_message_collection = True
+        mock_context.messages = deepcopy(TOOL_EXCHANGE_MESSAGES)
+        mock_context.config = {
+            "systemPrompt": "System rules.",
+            "prompt": prompt,
+            "appendNativeToolExchange": flag,
+        }
+        return mock_context
+
+    def test_exchange_appended_natively_after_authored_prompt(self, mock_context):
+        ctx = self._tool_context(mock_context)
+        LLMDispatchService.dispatch(context=ctx)
+
+        conversation = ctx.llm_handler.llm.get_response_from_llm.call_args.kwargs["conversation"]
+        assert conversation[0] == {"role": "system", "content": "System rules."}
+        assert conversation[1]["role"] == "user"  # the authored prompt
+        assert conversation[2] == TOOL_EXCHANGE_MESSAGES[1]  # native assistant tool_calls
+        assert conversation[3] == TOOL_EXCHANGE_MESSAGES[2]  # native tool result
+        assert len(conversation) == 4
+
+    def test_variables_render_from_exchange_trimmed_messages(self, mock_context):
+        ctx = self._tool_context(mock_context)
+        seen_message_lists = []
+
+        def spy(prompt, context):
+            seen_message_lists.append(list(context.messages))
+            return prompt
+
+        ctx.workflow_variable_service.apply_variables.side_effect = spy
+        LLMDispatchService.dispatch(context=ctx)
+
+        assert seen_message_lists, "apply_variables was never called"
+        for snapshot in seen_message_lists:
+            assert snapshot == TOOL_EXCHANGE_MESSAGES[:1], \
+                "prompt variables must not see the natively-delivered exchange"
+
+    def test_context_messages_restored_after_dispatch(self, mock_context):
+        ctx = self._tool_context(mock_context)
+        original = ctx.messages
+        LLMDispatchService.dispatch(context=ctx)
+        assert ctx.messages is original
+
+    def test_flag_off_keeps_transcript_only_behavior(self, mock_context):
+        ctx = self._tool_context(mock_context, flag=False)
+        LLMDispatchService.dispatch(context=ctx)
+
+        conversation = ctx.llm_handler.llm.get_response_from_llm.call_args.kwargs["conversation"]
+        assert len(conversation) == 2  # system + authored prompt only
+        assert all("tool_calls" not in msg for msg in conversation)
+
+    def test_inert_on_collection_mode_node(self, mock_context):
+        # No authored prompt -> collection mode already sends native turns; the
+        # flag must not double-deliver or trim.
+        ctx = self._tool_context(mock_context, prompt="")
+        ctx.config["lastMessagesToSendInsteadOfPrompt"] = 10
+        LLMDispatchService.dispatch(context=ctx)
+
+        conversation = ctx.llm_handler.llm.get_response_from_llm.call_args.kwargs["conversation"]
+        # Native exchange present exactly once, via the normal collection path.
+        tool_call_turns = [m for m in conversation if m.get("tool_calls")]
+        assert len(tool_call_turns) == 1
+        assert sum(1 for m in conversation if m.get("role") == "tool") == 1
+
+    def test_inert_on_completions_endpoint(self, mock_context, mocker):
+        ctx = self._tool_context(mock_context)
+        ctx.llm_handler.takes_message_collection = False
+        mocker.patch('Middleware.services.llm_dispatch_service.format_system_prompt_with_template',
+                     return_value="formatted_system")
+        LLMDispatchService.dispatch(context=ctx)
+
+        call_kwargs = ctx.llm_handler.llm.get_response_from_llm.call_args.kwargs
+        # Completions path: no native turns are possible; prompt string only.
+        assert call_kwargs.get("conversation") is None
+
+    def test_inert_when_no_trailing_exchange(self, mock_context):
+        ctx = self._tool_context(mock_context)
+        ctx.messages = deepcopy(TOOL_EXCHANGE_MESSAGES) + [
+            {"role": "assistant", "content": "Here it is."},
+            {"role": "user", "content": "Another request."},
+        ]
+        LLMDispatchService.dispatch(context=ctx)
+
+        conversation = ctx.llm_handler.llm.get_response_from_llm.call_args.kwargs["conversation"]
+        assert len(conversation) == 2  # system + authored prompt only
+
+    def test_composes_with_allow_tools(self, mock_context):
+        ctx = self._tool_context(mock_context)
+        ctx.config["allowTools"] = True
+        ctx.tools = [{"type": "function", "function": {"name": "generate_image"}}]
+        ctx.tool_choice = {"type": "function", "function": {"name": "generate_image"}}
+        LLMDispatchService.dispatch(context=ctx)
+
+        call_kwargs = ctx.llm_handler.llm.get_response_from_llm.call_args.kwargs
+        assert call_kwargs["tools"] == ctx.tools
+        assert call_kwargs["tool_choice"] == ctx.tool_choice
+        assert call_kwargs["conversation"][-1] == TOOL_EXCHANGE_MESSAGES[2]
+
+    def test_endpoint_opt_out_falls_back_to_transcript(self, mock_context):
+        # backendSupportsToolTurns: false on the endpoint config disables the
+        # native append for that backend, so an old model whose template cannot
+        # render tool turns never requires editing every flag-enabled workflow.
+        ctx = self._tool_context(mock_context)
+        ctx.llm_handler.llm.endpoint_file = {"backendSupportsToolTurns": False}
+        LLMDispatchService.dispatch(context=ctx)
+
+        conversation = ctx.llm_handler.llm.get_response_from_llm.call_args.kwargs["conversation"]
+        assert len(conversation) == 2  # system + authored prompt only
+        assert all("tool_calls" not in msg for msg in conversation)
+
+    def test_endpoint_explicit_true_engages(self, mock_context):
+        ctx = self._tool_context(mock_context)
+        ctx.llm_handler.llm.endpoint_file = {"backendSupportsToolTurns": True}
+        LLMDispatchService.dispatch(context=ctx)
+
+        conversation = ctx.llm_handler.llm.get_response_from_llm.call_args.kwargs["conversation"]
+        assert conversation[-1] == TOOL_EXCHANGE_MESSAGES[2]
+
+    def test_endpoint_key_absent_defaults_to_engaged(self, mock_context):
+        ctx = self._tool_context(mock_context)
+        ctx.llm_handler.llm.endpoint_file = {"endpoint": "http://127.0.0.1:9999"}
+        LLMDispatchService.dispatch(context=ctx)
+
+        conversation = ctx.llm_handler.llm.get_response_from_llm.call_args.kwargs["conversation"]
+        assert conversation[-1] == TOOL_EXCHANGE_MESSAGES[2]
+
+
+# --- Test Suite for tool enforcement via structured output (consumer 1) ---
+
+ENFORCE_TOOLS = [{
+    "type": "function",
+    "function": {"name": "generate_image",
+                 "description": "Generate an image.",
+                 "parameters": {"type": "object",
+                                "properties": {"prompt": {"type": "string"}},
+                                "required": ["prompt"]}}}]
+ENFORCE_PIN = {"type": "function", "function": {"name": "generate_image"}}
+VALID_CALL_JSON = '{"name": "generate_image", "arguments": {"prompt": "wizard"}}'
+
+
+class TestToolEnforcementDispatch:
+    """Constrained tool rounds: engagement gating and response conversion."""
+
+    def _enforce_context(self, mock_context, tool_choice=None):
+        mock_context.llm_handler.takes_message_collection = True
+        mock_context.llm_handler.llm.api_type_config = {
+            "structuredOutput": {"field": "response_format", "style": "openaiJsonSchema"}}
+        mock_context.messages = deepcopy(SAMPLE_MESSAGES)
+        mock_context.config = {"systemPrompt": "Sys.", "prompt": "",
+                               "lastMessagesToSendInsteadOfPrompt": 5,
+                               "allowTools": True}
+        mock_context.tools = deepcopy(ENFORCE_TOOLS)
+        mock_context.tool_choice = tool_choice if tool_choice is not None else deepcopy(ENFORCE_PIN)
+        return mock_context
+
+    def test_forced_pin_engages_and_converts(self, mock_context):
+        ctx = self._enforce_context(mock_context)
+        ctx.llm_handler.llm.get_response_from_llm.return_value = VALID_CALL_JSON
+
+        result = LLMDispatchService.dispatch(context=ctx)
+
+        kwargs = ctx.llm_handler.llm.get_response_from_llm.call_args.kwargs
+        assert kwargs["tools"] is None
+        assert kwargs["tool_choice"] is None
+        schema = kwargs["structured_output_schema"]
+        assert schema["properties"]["name"]["const"] == "generate_image"
+        system_msg = kwargs["conversation"][0]
+        assert system_msg["role"] == "system"
+        assert "generate_image" in system_msg["content"]  # textual tool description
+        assert result["finish_reason"] == "tool_calls"
+        assert result["tool_calls"][0]["function"]["name"] == "generate_image"
+
+    def test_required_engages(self, mock_context):
+        ctx = self._enforce_context(mock_context, tool_choice="required")
+        ctx.llm_handler.llm.get_response_from_llm.return_value = VALID_CALL_JSON
+
+        result = LLMDispatchService.dispatch(context=ctx)
+
+        kwargs = ctx.llm_handler.llm.get_response_from_llm.call_args.kwargs
+        assert kwargs["structured_output_schema"] is not None
+        assert result["finish_reason"] == "tool_calls"
+
+    def test_auto_does_not_engage(self, mock_context):
+        ctx = self._enforce_context(mock_context, tool_choice="auto")
+        ctx.llm_handler.llm.get_response_from_llm.return_value = "prose reply"
+
+        result = LLMDispatchService.dispatch(context=ctx)
+
+        kwargs = ctx.llm_handler.llm.get_response_from_llm.call_args.kwargs
+        assert kwargs["tools"] == ENFORCE_TOOLS  # native passthrough untouched
+        assert "structured_output_schema" not in kwargs
+        assert result == "prose reply"
+
+    def test_no_mechanism_does_not_engage(self, mock_context):
+        ctx = self._enforce_context(mock_context)
+        ctx.llm_handler.llm.api_type_config = {"type": "openAIChatCompletion"}
+        ctx.llm_handler.llm.get_response_from_llm.return_value = "prose reply"
+
+        result = LLMDispatchService.dispatch(context=ctx)
+
+        kwargs = ctx.llm_handler.llm.get_response_from_llm.call_args.kwargs
+        assert kwargs["tools"] == ENFORCE_TOOLS
+        assert result == "prose reply"
+
+    def test_unparseable_output_redraws_once_then_converts(self, mock_context):
+        ctx = self._enforce_context(mock_context)
+        ctx.llm_handler.llm.get_response_from_llm.side_effect = [
+            "Hello! How can I help?", VALID_CALL_JSON]
+
+        result = LLMDispatchService.dispatch(context=ctx)
+
+        assert ctx.llm_handler.llm.get_response_from_llm.call_count == 2
+        assert result["finish_reason"] == "tool_calls"
+
+    def test_double_failure_returns_raw_text(self, mock_context):
+        ctx = self._enforce_context(mock_context)
+        ctx.llm_handler.llm.get_response_from_llm.side_effect = [
+            "Hello!", "Hi there!"]
+
+        result = LLMDispatchService.dispatch(context=ctx)
+
+        assert ctx.llm_handler.llm.get_response_from_llm.call_count == 2
+        assert result == "Hi there!"
+
+    def test_native_dict_result_passes_through(self, mock_context):
+        # A backend that natively enforced and parsed returns a dict already.
+        ctx = self._enforce_context(mock_context)
+        native = {"content": "", "tool_calls": [{"id": "x"}], "finish_reason": "tool_calls"}
+        ctx.llm_handler.llm.get_response_from_llm.return_value = native
+
+        assert LLMDispatchService.dispatch(context=ctx) is native
+
+    def test_streaming_buffers_and_emits_tool_call_chunks(self, mock_context):
+        ctx = self._enforce_context(mock_context)
+        half = len(VALID_CALL_JSON) // 2
+
+        def stream():
+            yield {'token': VALID_CALL_JSON[:half], 'finish_reason': None}
+            yield {'token': VALID_CALL_JSON[half:], 'finish_reason': 'stop'}
+        ctx.llm_handler.llm.get_response_from_llm.return_value = stream()
+
+        chunks = list(LLMDispatchService.dispatch(context=ctx))
+
+        assert chunks[0]['tool_calls'][0]['function']['name'] == "generate_image"
+        assert chunks[0]['tool_calls'][0]['index'] == 0
+        assert chunks[-1]['finish_reason'] == 'tool_calls'
+
+    def test_streaming_double_failure_reemits_raw_text(self, mock_context):
+        ctx = self._enforce_context(mock_context)
+
+        def prose_stream(text):
+            def gen():
+                yield {'token': text, 'finish_reason': 'stop'}
+            return gen()
+        ctx.llm_handler.llm.get_response_from_llm.side_effect = [
+            prose_stream("Hello!"), prose_stream("Hi again!")]
+
+        chunks = list(LLMDispatchService.dispatch(context=ctx))
+
+        assert ctx.llm_handler.llm.get_response_from_llm.call_count == 2
+        assert "".join(c.get('token') or '' for c in chunks) == "Hi again!"
+        assert chunks[-1]['finish_reason'] == 'stop'
+
+    def test_streaming_cancelled_round_returns_generator(self, mock_context, mocker):
+        """A cancellation mid-constrained-round must yield a REAL generator on the
+        streaming path: workflows_processor type-gates on isinstance(x, Generator),
+        and a bare iterator (iter(())) would fall into the non-streaming branch
+        and leak the iterator object itself into the SSE body."""
+        from collections.abc import Generator as ABCGenerator
+        ctx = self._enforce_context(mock_context)
+        ctx.request_id = "req-cancel"
+
+        def truncated_stream():
+            yield {'token': '{"name": "generate_im', 'finish_reason': None}
+        ctx.llm_handler.llm.get_response_from_llm.return_value = truncated_stream()
+        mocker.patch(
+            'Middleware.services.cancellation_service.cancellation_service.is_cancelled',
+            return_value=True)
+
+        result = LLMDispatchService.dispatch(context=ctx)
+
+        assert isinstance(result, ABCGenerator)
+        assert list(result) == []
+        # No redraw is attempted for a cancelled request.
+        assert ctx.llm_handler.llm.get_response_from_llm.call_count == 1
+
+    def test_authored_prompt_node_also_engages(self, mock_context):
+        # Consumer 1 is mode-independent on the chat branch: an authored-prompt
+        # responder (e.g. Task.json) gets the same enforcement.
+        ctx = self._enforce_context(mock_context)
+        ctx.config["prompt"] = "Do the task: respond to the conversation."
+        ctx.llm_handler.llm.get_response_from_llm.return_value = VALID_CALL_JSON
+
+        result = LLMDispatchService.dispatch(context=ctx)
+
+        kwargs = ctx.llm_handler.llm.get_response_from_llm.call_args.kwargs
+        assert kwargs["structured_output_schema"] is not None
+        assert result["finish_reason"] == "tool_calls"
+
+
+class TestNodeStructuredOutputDispatch:
+    """Author-declared structuredOutputFile on a node (consumer 2)."""
+
+    def _node_schema_context(self, mock_context):
+        mock_context.llm_handler.takes_message_collection = True
+        mock_context.llm_handler.llm.api_type_config = {
+            "structuredOutput": {"field": "response_format", "style": "openaiJsonSchema"}}
+        mock_context.messages = deepcopy(SAMPLE_MESSAGES)
+        mock_context.config = {"systemPrompt": "Sys.", "prompt": "",
+                               "lastMessagesToSendInsteadOfPrompt": 5,
+                               "structuredOutputFile": "MyShape"}
+        mock_context.tools = None
+        mock_context.tool_choice = None
+        return mock_context
+
+    def test_schema_loaded_and_passed_through(self, mock_context, mocker):
+        ctx = self._node_schema_context(mock_context)
+        schema = {"type": "object", "properties": {"verdict": {"type": "string"}}}
+        loader = mocker.patch(
+            'Middleware.services.llm_dispatch_service.load_structured_output_schema',
+            return_value=schema)
+        ctx.llm_handler.llm.get_response_from_llm.return_value = '{"verdict": "yes"}'
+
+        result = LLMDispatchService.dispatch(context=ctx)
+
+        loader.assert_called_once_with("MyShape")
+        kwargs = ctx.llm_handler.llm.get_response_from_llm.call_args.kwargs
+        assert kwargs["structured_output_schema"] == schema
+        # The node output IS the constrained JSON text; no conversion.
+        assert result == '{"verdict": "yes"}'
+
+    def test_collision_with_tool_enforcement_raises(self, mock_context, mocker):
+        ctx = self._node_schema_context(mock_context)
+        ctx.config["allowTools"] = True
+        ctx.tools = deepcopy(ENFORCE_TOOLS)
+        ctx.tool_choice = deepcopy(ENFORCE_PIN)
+        mocker.patch(
+            'Middleware.services.llm_dispatch_service.load_structured_output_schema')
+
+        with pytest.raises(ValueError, match="structuredOutputFile"):
+            LLMDispatchService.dispatch(context=ctx)
+
+    def test_completions_paradigm_warns_and_ignores(self, mock_context, mocker, caplog):
+        ctx = self._node_schema_context(mock_context)
+        ctx.llm_handler.takes_message_collection = False
+        ctx.config["prompt"] = "Do a thing."
+        loader = mocker.patch(
+            'Middleware.services.llm_dispatch_service.load_structured_output_schema')
+        mocker.patch('Middleware.services.llm_dispatch_service.format_system_prompt_with_template',
+                     return_value="formatted")
+        ctx.llm_handler.llm.get_response_from_llm.return_value = "text"
+
+        with caplog.at_level("WARNING"):
+            LLMDispatchService.dispatch(context=ctx)
+
+        loader.assert_not_called()
+        kwargs = ctx.llm_handler.llm.get_response_from_llm.call_args.kwargs
+        assert "structured_output_schema" not in kwargs
+        assert any("completions" in r.message for r in caplog.records)
+
+    def test_authored_prompt_node_supported(self, mock_context, mocker):
+        ctx = self._node_schema_context(mock_context)
+        ctx.config["prompt"] = "Summarize the conversation as JSON."
+        schema = {"type": "object"}
+        mocker.patch(
+            'Middleware.services.llm_dispatch_service.load_structured_output_schema',
+            return_value=schema)
+        ctx.llm_handler.llm.get_response_from_llm.return_value = '{}'
+
+        LLMDispatchService.dispatch(context=ctx)
+
+        kwargs = ctx.llm_handler.llm.get_response_from_llm.call_args.kwargs
+        assert kwargs["structured_output_schema"] == schema

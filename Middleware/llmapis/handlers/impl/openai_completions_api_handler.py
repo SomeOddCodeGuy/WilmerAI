@@ -29,7 +29,7 @@ class OpenAiCompletionsApiHandler(BaseCompletionsHandler):
 
     def _prepare_payload(self, conversation: Optional[List[Dict[str, str]]], system_prompt: Optional[str],
                          prompt: Optional[str], *, tools: Optional[list] = None,
-                         tool_choice=None) -> Dict:
+                         tool_choice=None, structured_output_schema: Optional[Dict] = None) -> Dict:
         """
         Prepares the OpenAI-specific payload for the API request.
 
@@ -108,8 +108,10 @@ class OpenAiCompletionsApiHandler(BaseCompletionsHandler):
             token = choice.get("text", "")
             finish_reason = choice.get("finish_reason")
             return {'token': token, 'finish_reason': finish_reason}
-        # Add KeyError to the list of caught exceptions
-        except (json.JSONDecodeError, IndexError, KeyError):
+        except (json.JSONDecodeError, IndexError, KeyError, TypeError, AttributeError):
+            # TypeError/AttributeError cover chunks whose JSON parses to a non-dict,
+            # or whose 'choices' entries are not dicts; malformed chunks are skipped,
+            # not fatal to the stream.
             logger.warning(f"Could not parse OpenAI Completions stream data string: {data_str}")
             return None
 
@@ -128,6 +130,7 @@ class OpenAiCompletionsApiHandler(BaseCompletionsHandler):
         """
         try:
             return response_json['choices'][0]['text'] or ""
-        except (KeyError, IndexError):
+        except (KeyError, IndexError, TypeError):
+            # TypeError covers a non-list 'choices' or a non-dict choice entry.
             logger.error(f"Could not find text in OpenAI Completions response: {response_json}")
             return ""

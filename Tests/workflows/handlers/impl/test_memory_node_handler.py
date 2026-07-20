@@ -94,9 +94,79 @@ class TestHandleMethod:
 
         mock_wvs.apply_variables.assert_called_once_with("search for {agent1Output}", base_context)
         mock_mem_service.search_vector_memories.assert_called_once_with(
-            "test-disc-789", "search for keywords", 10, api_key_hash=base_context.api_key_hash
+            "test-disc-789", "search for keywords", 10, api_key_hash=base_context.api_key_hash,
+            bm25_weights=None, use_recency=False, include_dates=False,
+            search_mode="keyword", semantic_query=None, embedding_endpoint_name=None,
+            use_entity_expansion=False, request_id=base_context.request_id
         )
         assert result == "Found memories."
+
+    def test_vector_memory_search_forwards_ranking_options(self, memory_handler, mock_dependencies, base_context):
+        """Tests that bm25Weights, useRecencyScoring, and includeDates reach the memory service."""
+        base_context.config = {
+            "type": "VectorMemorySearch",
+            "input": "keywords",
+            "limit": 30,
+            "bm25Weights": [3.0, 2.0, 2.0, 2.0, 0.5],
+            "useRecencyScoring": True,
+            "includeDates": True
+        }
+        mock_dependencies["workflow_variable_service"].apply_variables.return_value = "keywords"
+        mock_dependencies["memory_service"].search_vector_memories.return_value = "Found."
+
+        result = memory_handler.handle(base_context)
+
+        mock_dependencies["memory_service"].search_vector_memories.assert_called_once_with(
+            "test-disc-789", "keywords", 30, api_key_hash=base_context.api_key_hash,
+            bm25_weights=[3.0, 2.0, 2.0, 2.0, 0.5], use_recency=True, include_dates=True,
+            search_mode="keyword", semantic_query=None, embedding_endpoint_name=None,
+            use_entity_expansion=False, request_id=base_context.request_id
+        )
+        assert result == "Found."
+
+    def test_vector_memory_search_forwards_semantic_options(self, memory_handler, mock_dependencies, base_context):
+        """Tests that searchMode, semanticQuery (variable-resolved), and embeddingEndpointName pass through."""
+        base_context.config = {
+            "type": "VectorMemorySearch",
+            "input": "kw",
+            "searchMode": "hybrid",
+            "semanticQuery": "{agent1Output}",
+            "embeddingEndpointName": "Embedding-Endpoint"
+        }
+        mock_wvs = mock_dependencies["workflow_variable_service"]
+        mock_wvs.apply_variables.side_effect = lambda text, ctx: f"resolved:{text}"
+        mock_dependencies["memory_service"].search_vector_memories.return_value = "Found."
+
+        result = memory_handler.handle(base_context)
+
+        mock_dependencies["memory_service"].search_vector_memories.assert_called_once_with(
+            "test-disc-789", "resolved:kw", 5, api_key_hash=base_context.api_key_hash,
+            bm25_weights=None, use_recency=False, include_dates=False,
+            search_mode="hybrid", semantic_query="resolved:{agent1Output}",
+            embedding_endpoint_name="Embedding-Endpoint",
+            use_entity_expansion=False, request_id=base_context.request_id
+        )
+        assert result == "Found."
+
+    def test_vector_memory_search_forwards_entity_expansion(self, memory_handler, mock_dependencies, base_context):
+        """Tests that useEntityExpansion reaches the memory service."""
+        base_context.config = {
+            "type": "VectorMemorySearch",
+            "input": "kw",
+            "useEntityExpansion": True
+        }
+        mock_dependencies["workflow_variable_service"].apply_variables.return_value = "kw"
+        mock_dependencies["memory_service"].search_vector_memories.return_value = "Found."
+
+        result = memory_handler.handle(base_context)
+
+        mock_dependencies["memory_service"].search_vector_memories.assert_called_once_with(
+            "test-disc-789", "kw", 5, api_key_hash=base_context.api_key_hash,
+            bm25_weights=None, use_recency=False, include_dates=False,
+            search_mode="keyword", semantic_query=None, embedding_endpoint_name=None,
+            use_entity_expansion=True, request_id=base_context.request_id
+        )
+        assert result == "Found."
 
     def test_vector_memory_search_no_discussion_id(self, memory_handler, base_context):
         """Tests 'VectorMemorySearch' node when discussion_id is None."""
@@ -106,6 +176,61 @@ class TestHandleMethod:
         result = memory_handler.handle(base_context)
 
         assert result == "Cannot perform VectorMemorySearch without a discussionId."
+
+    def test_vector_memory_search_default_limit(self, memory_handler, mock_dependencies, base_context):
+        """Tests that 'VectorMemorySearch' defaults the limit to 5 when the config omits it."""
+        base_context.config = {"type": "VectorMemorySearch", "input": "keywords"}
+        mock_wvs = mock_dependencies["workflow_variable_service"]
+        mock_mem_service = mock_dependencies["memory_service"]
+        mock_wvs.apply_variables.return_value = "resolved keywords"
+        mock_mem_service.search_vector_memories.return_value = "results"
+
+        result = memory_handler.handle(base_context)
+
+        mock_mem_service.search_vector_memories.assert_called_once_with(
+            "test-disc-789", "resolved keywords", 5, api_key_hash=None,
+            bm25_weights=None, use_recency=False, include_dates=False,
+            search_mode="keyword", semantic_query=None, embedding_endpoint_name=None,
+            use_entity_expansion=False, request_id=base_context.request_id
+        )
+        assert result == "results"
+
+    def test_chat_summary_memory_gathering_tool(self, memory_handler, mock_dependencies, base_context):
+        """Tests that 'ChatSummaryMemoryGatheringTool' passes exact args and returns the service result."""
+        base_context.config = {"type": "ChatSummaryMemoryGatheringTool", "maxTurnsToPull": 7}
+        base_context.encryption_key = b"enc-key"
+        base_context.api_key_hash = "hash-123"
+        mock_mem_service = mock_dependencies["memory_service"]
+        mock_mem_service.get_chat_summary_memories.return_value = "gathered summary memories"
+
+        result = memory_handler.handle(base_context)
+
+        mock_mem_service.get_chat_summary_memories.assert_called_once_with(
+            base_context.messages, base_context.discussion_id, 7,
+            encryption_key=b"enc-key", api_key_hash="hash-123"
+        )
+        assert result == "gathered summary memories"
+
+    def test_write_current_summary_routes_to_save(self, memory_handler, mocker, base_context):
+        """Tests that 'WriteCurrentSummaryToFileAndReturnIt' routes to _save_summary_to_file."""
+        base_context.config = {"type": "WriteCurrentSummaryToFileAndReturnIt"}
+        mock_save = mocker.patch.object(memory_handler, '_save_summary_to_file', return_value="saved summary")
+
+        result = memory_handler.handle(base_context)
+
+        mock_save.assert_called_once_with(base_context)
+        assert result == "saved summary"
+
+    def test_full_chat_summary_no_discussion_id_returns_none(self, memory_handler, mock_dependencies, base_context):
+        """Tests that 'FullChatSummary' returns None when discussion_id is None."""
+        base_context.config = {"type": "FullChatSummary"}
+        base_context.discussion_id = None
+        mock_rag = mock_dependencies["slow_but_quality_rag_service"]
+
+        result = memory_handler.handle(base_context)
+
+        assert result is None
+        mock_rag.handle_discussion_id_flow.assert_not_called()
 
     def test_conversation_memory(self, memory_handler, mock_dependencies, base_context):
         """Tests that the 'ConversationMemory' node calls the correct parser function."""
@@ -240,10 +365,14 @@ class TestHandleMethod:
         mock_rag.handle_discussion_id_flow.assert_called_once_with(base_context, False)
         assert result == "rag tool ran"
 
-    def test_quality_memory_without_discussion_id(self, memory_handler, mock_dependencies, base_context):
-        """Tests 'QualityMemory' node without a discussion_id, falling back to the stateless parser."""
+    def test_quality_memory_without_discussion_id(self, memory_handler, mock_dependencies, base_context, mocker):
+        """Tests 'QualityMemory' node without a discussion_id, falling back to the stateless
+        parser when a recentMemoryToolWorkflow IS configured (backward compatibility)."""
         base_context.config = {"type": "QualityMemory"}
         base_context.discussion_id = None
+        mocker.patch(
+            "Middleware.utilities.config_utils.get_active_recent_memory_tool_name",
+            return_value="SomeRecentMemoryWorkflow")
         mock_parser = mock_dependencies["handle_recent_memory_parser_func"]
         mock_parser.return_value = "stateless memory parsed"
 
@@ -251,6 +380,24 @@ class TestHandleMethod:
 
         mock_parser.assert_called_once_with(base_context.request_id, None, base_context.messages, api_key=None)
         assert result == "stateless memory parsed"
+
+    def test_quality_memory_without_discussion_id_and_no_fallback_workflow(self, memory_handler, mock_dependencies,
+                                                                           base_context, mocker):
+        """A QualityMemory node with no discussion_id and NO recentMemoryToolWorkflow configured
+        must no-op with a benign message, not attempt to load an empty workflow name
+        ('<folder>/.json'), which crashed the post-responder chain for requests arriving
+        without a [DiscussionId] tag."""
+        base_context.config = {"type": "QualityMemory"}
+        base_context.discussion_id = None
+        mocker.patch(
+            "Middleware.utilities.config_utils.get_active_recent_memory_tool_name",
+            return_value="")
+        mock_parser = mock_dependencies["handle_recent_memory_parser_func"]
+
+        result = memory_handler.handle(base_context)
+
+        mock_parser.assert_not_called()
+        assert result == "No discussionId on this request; memories were not generated."
 
     def test_conversation_memory_no_discussion_id(self, memory_handler, mock_dependencies, base_context):
         """Tests that ConversationMemory returns a fallback when discussion_id is None."""
@@ -291,6 +438,20 @@ class TestHandleMethod:
 
         mock_dependencies["memory_service"].get_latest_memory_chunks_with_hashes_since_last_summary.assert_not_called()
         assert result == "There is not yet a summary file"
+
+    def test_chat_summary_summarizer_with_discussion_id_routes_to_processor(self, memory_handler, mocker,
+                                                                            base_context):
+        """Tests that 'chatSummarySummarizer' with a discussion_id dispatches to the
+        iterative summary processor and returns its result (the internal method is
+        tested separately; this pins the handle() route itself)."""
+        base_context.config = {"type": "chatSummarySummarizer"}
+        mock_process = mocker.patch.object(memory_handler, '_handle_process_chat_summary',
+                                           return_value="updated rolling summary")
+
+        result = memory_handler.handle(base_context)
+
+        mock_process.assert_called_once_with(base_context)
+        assert result == "updated rolling summary"
 
     def test_unhandled_node_type_raises_error(self, memory_handler, base_context):
         """Tests that an unknown node type raises a ValueError."""
@@ -348,6 +509,20 @@ class TestInternalSaveSummaryMethod:
             encryption_key=None
         )
         assert result == "overridden summary"
+
+    def test_save_summary_to_file_no_discussion_id_returns_without_writing(self, memory_handler, mock_dependencies,
+                                                                           base_context):
+        """Without a discussion_id the resolved summary is returned as-is and no
+        file is read or written (stateless degradation, not a crash)."""
+        base_context.config = {"input": "raw {agent1Output}"}
+        base_context.discussion_id = None
+        mock_dependencies["workflow_variable_service"].apply_variables.return_value = "resolved summary"
+
+        result = memory_handler._save_summary_to_file(base_context)
+
+        assert result == "resolved summary"
+        mock_dependencies["read_chunks_mock"].assert_not_called()
+        mock_dependencies["update_chunks_mock"].assert_not_called()
 
     def test_save_summary_to_file_no_input_raises_error(self, memory_handler, base_context):
         """Tests that a ValueError is raised if 'input' is missing from config."""
@@ -431,6 +606,25 @@ class TestInternalProcessChatSummaryMethod:
                                                              last_hash_override="h5")
         assert final_summary == "s3"
 
+    def test_below_min_memories_returns_current_summary_without_dispatch(self, memory_handler, mock_dependencies,
+                                                                          base_context):
+        """With fewer remaining chunks than minMemoriesPerSummary, no LLM call is made."""
+        base_context.config = {
+            "systemPrompt": "Summarize: [LATEST_MEMORIES]", "prompt": "Based on [CHAT_SUMMARY]",
+            "minMemoriesPerSummary": 3, "loopIfMemoriesExceed": 3
+        }
+        mock_mem_service = mock_dependencies["memory_service"]
+        mock_mem_service.get_latest_memory_chunks_with_hashes_since_last_summary.return_value = [
+            ("c1", "h1"), ("c2", "h2")
+        ]
+        mock_mem_service.get_current_summary.return_value = "existing summary"
+
+        result = memory_handler._handle_process_chat_summary(base_context)
+
+        assert result == "existing summary"
+        mock_dependencies["llm_dispatch_service"].dispatch.assert_not_called()
+        mock_dependencies["update_chunks_mock"].assert_not_called()
+
 
 class TestInternalFullChatSummaryMethod:
     def test_manual_config(self, memory_handler, mock_dependencies, base_context):
@@ -494,6 +688,34 @@ class TestInternalFullChatSummaryMethod:
         mock_extract.assert_called_once()
         assert result == "existing up-to-date summary"
 
+    @pytest.mark.parametrize("index, expects_reparse", [
+        (-1, True),  # Negative index forces the re-parse path
+        (1, False),  # Exactly one new memory keeps the existing summary
+    ])
+    def test_index_boundaries(self, memory_handler, mock_dependencies, base_context, index, expects_reparse):
+        """Tests the index boundary that decides between re-parsing and extracting the summary."""
+        base_context.config = {}
+        mock_mem_service = mock_dependencies["memory_service"]
+        mock_extract = mock_dependencies["extract_text_blocks_mock"]
+        mock_parser = mock_dependencies["handle_full_chat_summary_parser_func"]
+
+        mock_mem_service.find_how_many_new_memories_since_last_summary.return_value = index
+        mock_parser.return_value = "reparsed summary"
+        mock_extract.return_value = "extracted summary"
+
+        result = memory_handler._handle_full_chat_summary(base_context)
+
+        if expects_reparse:
+            mock_parser.assert_called_once_with(
+                base_context.request_id, base_context.discussion_id, base_context.messages, api_key=None
+            )
+            mock_extract.assert_not_called()
+            assert result == "reparsed summary"
+        else:
+            mock_parser.assert_not_called()
+            mock_extract.assert_called_once()
+            assert result == "extracted summary"
+
 
 # ########################################
 # ### Integration Scenarios
@@ -532,3 +754,34 @@ class TestMemoryIntegrationScenarios:
         # Assert: FullChatSummary calls the RAG tool AND forces file memory (True).
         # This ensures file-based memory is updated regardless of the global config.
         mock_rag.handle_discussion_id_flow.assert_called_once_with(base_context, force_file_memory=True)
+
+
+# ########################################
+# ### GetCurrentStateDocument Node Tests
+# ########################################
+
+class TestGetCurrentStateDocument:
+    def test_routes_to_memory_service(self, memory_handler, mock_dependencies, base_context):
+        """Tests that GetCurrentStateDocument forwards discussion id, encryption key, and api key hash."""
+        base_context.config = {"type": "GetCurrentStateDocument"}
+        mock_mem_service = mock_dependencies["memory_service"]
+        mock_mem_service.get_current_state_document.return_value = "## Identity\n- A fact"
+
+        result = memory_handler.handle(base_context)
+
+        mock_mem_service.get_current_state_document.assert_called_once_with(
+            "test-disc-789",
+            encryption_key=base_context.encryption_key,
+            api_key_hash=base_context.api_key_hash
+        )
+        assert result == "## Identity\n- A fact"
+
+    def test_no_discussion_id_returns_fallback(self, memory_handler, mock_dependencies, base_context):
+        """Tests the stateless fallback when no discussionId is present."""
+        base_context.config = {"type": "GetCurrentStateDocument"}
+        base_context.discussion_id = None
+
+        result = memory_handler.handle(base_context)
+
+        mock_dependencies["memory_service"].get_current_state_document.assert_not_called()
+        assert result == "No state document has been created yet"

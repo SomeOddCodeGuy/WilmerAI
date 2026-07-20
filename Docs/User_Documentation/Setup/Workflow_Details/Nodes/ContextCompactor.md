@@ -20,7 +20,10 @@ downstream with a `TagTextExtractor` node.
    specified via the `contextCompactorSettingsFile` field in the user config, and the file itself lives in the user's
    workflow folder.
 2. **Lookback Skip:** The last N messages (configured by `lookbackStartTurn`) are skipped before calculating windows.
-   This prevents the node from processing messages that are still actively being written.
+   This prevents the node from processing messages that are still actively being written. Note: the skip only applies
+   when the conversation is longer than `lookbackStartTurn`; a conversation with that many messages or fewer is
+   processed in full. In practice this is harmless: conversations that small produce an empty Old window, so nothing
+   gets compacted.
 3. **Boundary Calculation:** The remaining messages are divided into three sections using token-based windowing. Starting
    from the end and walking backwards, the node allocates `recentContextTokens` worth of messages to the Recent section,
    then `oldContextTokens` worth to the Old section. Everything before the Old section falls into Oldest territory.

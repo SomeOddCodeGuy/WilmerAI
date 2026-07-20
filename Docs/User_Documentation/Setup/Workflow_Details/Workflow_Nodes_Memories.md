@@ -50,7 +50,10 @@ facts or details from the conversation's history. This node requires an active `
   "title": "Search for Relevant Facts",
   "type": "VectorMemorySearch",
   "input": "quarterly revenue;marketing strategy;client onboarding",
-  "limit": 5
+  "limit": 5,
+  "bm25Weights": [3.0, 2.0, 2.0, 2.0, 0.5],
+  "useRecencyScoring": true,
+  "includeDates": true
 }
 ```
 
@@ -61,12 +64,123 @@ facts or details from the conversation's history. This node requires an active `
 * **`input`**: (Required) A string of keywords to search for. Keywords **must** be separated by a semicolon (`;`).
   Supports variables.
 * **`limit`**: (Optional) The maximum number of memory results to return. Defaults to `5`.
+* **`bm25Weights`**: (Optional) A list of exactly five numbers weighting BM25 matches per FTS column, in order:
+  title, summary, entities, key_phrases, memory text. Omitting it preserves the historical equal weighting.
+  `[3.0, 2.0, 2.0, 2.0, 0.5]` is a good starting point that favors curated metadata over incidental body matches.
+* **`useRecencyScoring`**: (Optional) Defaults to `false`. When `true`, ranks are multiplied by a time-decay boost so
+  newer memories outrank stale ones of similar relevance. Recommended for years-long conversations.
+* **`includeDates`**: (Optional) Defaults to `false`. When `true`, each result is prefixed with its creation date
+  (e.g. `[2024-03-15]`) so the LLM can arbitrate between contradictory facts from different eras.
+* **`searchMode`**: (Optional) Defaults to `"keyword"` (the historical BM25 search). `"semantic"` ranks memories by
+  embedding similarity, matching meaning even with zero vocabulary overlap; `"hybrid"` runs both keyword and semantic
+  search and merges them with Reciprocal Rank Fusion. Both require `embeddingEndpointName`, and both degrade
+  gracefully to keyword search when the embeddings endpoint is missing or unreachable.
+* **`semanticQuery`**: (Optional) Raw text to embed as the semantic query. Supports variables. Defaults to the
+  keyword string with semicolons replaced by spaces.
+* **`embeddingEndpointName`**: (Optional) An Endpoints config whose ApiType is an embeddings type
+  (`openAIEmbeddings` / `ollamaEmbeddings`). Required for semantic and hybrid modes. Memories are only searchable
+  semantically once they have embeddings; see the embeddings notes in the Core Features memory guide for how
+  embeddings are written and backfilled.
+* **`useEntityExpansion`**: (Optional) Defaults to `false`. When `true`, entities named in the metadata of the top
+  results (minus any that were already query terms) become the query for a second keyword search pass (a one-hop
+  lookup of everything stored about the entities the first pass surfaced), and a portion of the result slots
+  (roughly a third) is reserved for memories only that second pass found. This bridges facts linked by an entity the query
+  could not name: "what does the user's sister do?" first finds the memory naming the sister as Sarah, and the
+  second pass then finds Sarah's job even though no query keyword appears in it. The expansion pass is pure
+  keyword/BM25, works in every `searchMode`, and requires no embeddings endpoint. Expansion-only hits are appended
+  after the base results.
 
 #### **Actions & Output**
 
 * **Action**: This node **reads** from the vector database (`<id>_vector_memory.db`).
 * **Output**: Returns a single string containing the text of the most relevant memories, separated by `\n\n---\n\n`. If
   no memories are found, it returns a message stating so.
+
+-----
+
+### GetCurrentStateDocument
+
+The **`GetCurrentStateDocument`** node is a fast **retriever** that reads the discussion's state document
+(`state_document.md`) and returns its full text. The state document is a single, continuously updated markdown
+document holding the current, ground-truth state of the conversation's subject matter: a "what is true right now"
+snapshot, as opposed to the historical records kept by the other memory components. It is intended to be injected
+into every response rather than searched. This node requires an active `discussionId`.
+
+See "The State Document" section below for how the document is created and configured.
+
+#### **Complete JSON Example**
+
+```json
+{
+  "title": "Load the current state document",
+  "type": "GetCurrentStateDocument"
+}
+```
+
+#### **Field Rundown**
+
+* **`title`**: (Optional) A descriptive name for the node.
+* **`type`**: (Required) Must be `"GetCurrentStateDocument"`.
+
+#### **Actions & Output**
+
+* **Action**: This node **reads** from the state document file (`state_document.md`) in the discussion folder.
+* **Output**: Returns a single string containing the full document text. If no `discussionId` is available or no
+  document exists yet, returns `"No state document has been created yet"`.
+
+-----
+
+## The State Document
+
+The state document is an optional memory layer maintained by the vector memory pipeline. When enabled, every time the
+`QualityMemory` node stores new vector memories for a chunk of conversation, the newly extracted facts are also merged
+into a single markdown document via a user-defined sub-workflow. The merge workflow receives two scoped inputs:
+
+* `{agent1Input}`: The new facts, as a bullet-point list.
+* `{agent2Input}`: The current state document text (empty on the first run).
+
+The final output of the merge workflow **replaces** the document on disk. The document's structure (its sections and
+what belongs in them) is defined entirely by the prompts of the merge workflow, so the same mechanism serves very
+different use cases: an assistant persona can maintain a profile of the user's life, while a roleplay can maintain
+world state, characters, and active quests.
+
+Because the merge is performed by an LLM, several safety guards protect the document:
+
+* An empty or whitespace-only merge output is rejected and the existing document is kept.
+* An output that shrinks the document below the configured retention ratio is rejected (see
+  `stateDocumentMinRetentionRatio` below). The guard only applies once the document exceeds 500 characters, so small
+  early-conversation documents can settle freely.
+* The previous version is always saved to `state_document.md.bak` before an overwrite, providing a one-step undo.
+* A failed merge never affects vector memory storage, which has already completed by the time the merge runs.
+
+The document lives in the discussion folder as plain, hand-editable markdown. When per-user encryption is active
+(API key present), it is encrypted at rest like the other discussion files.
+
+### Configuration Fields
+
+These fields are added to the `_DiscussionId-MemoryFile-Workflow-Settings.json` file:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `useStateDocument` | bool | `false` | Master toggle. Only takes effect on the vector memory path (`useVectorForQualityMemory` must be `true`). |
+| `stateDocumentWorkflowName` | str | (required if enabled) | The name of the workflow that merges new facts into the document. |
+| `stateDocumentMinRetentionRatio` | float | `0.5` | The merged output must be at least this fraction of the current document's length or it is rejected. Set to `0` to disable the shrink guard. |
+
+### Example Configuration
+
+```json
+{
+  "useVectorForQualityMemory": true,
+  "vectorMemoryWorkflowName": "Memory_Vector_Workflow",
+  "useStateDocument": true,
+  "stateDocumentWorkflowName": "State_Document_Workflow",
+  "stateDocumentMinRetentionRatio": 0.5
+}
+```
+
+A complete working example, including the merge workflow with an assistant-oriented section template and notes on
+adapting it for roleplay, can be found in the `_example_assistant_with_vector_memory` workflow folder
+(`State_Document_Workflow.json`).
 
 -----
 
@@ -275,7 +389,7 @@ on the next pass.
 
 The **`GetCurrentMemoryFromFile`** node is a simple **retriever** that reads all current memory chunks from the
 discussion's long-term memory file (`_memories.json`) and returns them joined together as a single string. It performs
-no updates or searches -- it returns the full contents of the file. The chunks are joined using a configurable
+no updates or searches; it returns the full contents of the file. The chunks are joined using a configurable
 delimiter. This node requires an active `discussionId` to function; without one it returns a fallback message.
 
 #### **Complete JSON Example**

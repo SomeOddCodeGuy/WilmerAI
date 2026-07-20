@@ -1,70 +1,112 @@
-[
-  {
-    "title": "Checking AI's recent memory about this topic",
-    "agentName": "Chat Summary",
-    "type": "FullChatSummary",
-    "isManualConfig": false
-  },
-  {
-    "title": "Recent memory gathering",
-    "agentName": "Recent Memory Gathering Tool",
-    "type": "RecentMemorySummarizerTool",
-    "maxTurnsToPull": 30,
-    "maxSummaryChunksFromFile": 30,
-    "lookbackStart": 25,
-    "customDelimiter": "\n------------\n"
-  },
-  {
-    "title": "Custom File Grabber",
-    "type": "GetCustomFile",
-    "filepath": "{gameTempDir}/gaming_actions.txt",
-    "delimiter": "",
-    "customReturnDelimiter": "\n****************\n"
-  },
-  {
-    "title": "Analyzing the User Input",
-    "agentName": "Analysis Agent Four",
-    "systemPrompt": "You are an expert gaming analyst participating in an online text-based game session with another user via an online chat program. Detailed information about the game can be found below:\n\n<game_instructions>\n{chat_system_prompt}\n</game_instructions>\n\nPlease carefully analyze the latest messages that have come in, to determine exactly what the user is saying or doing. Please pay special attention to any OOC messages. OOC stands for Out of Character, and refers to one gamer speaking directly to another outside the context of their characters. For example, if a human player controls an Orc character, and an AI controls an Elf character, then an OOC message like `(OOC: I think that Elves should be a little more dignified)` is not spoken by the Orc to the Elf, but rather from one player to another \u2014 it has no effect on the story.\n\nIMPORTANT: OOC messages are NOT system messages; they are distinct and separate. They represent direct communication between players.",
-    "prompt": "Please consider the last twenty messages in the game:\n\n<game_session>\n{chat_user_prompt_min_n_max_tokens}\n</game_session>\n\nIn complete sentences, please respond to the following items:\n\nA) Does the latest message contain only in-game content, or was there an OOC message included?\nB) What exactly occurred in the recent messages? If in-game, describe clearly what took place and the meaning of any dialogue. If an OOC message was included, break down what the player meant and what they expect.\nC) Please challenge your answer to B. Is there any chance you misunderstood? Justify why or why not.\nD) Should the upcoming response include an OOC message to the other player? Appropriate times include:\n    - If you are unclear about something in the current game, it is acceptable to use OOC to clarify\n    - If the user sent an OOC message, responding in kind is appropriate\n    - Only if you have something new or novel to add; avoid repeating previous OOC points\n\nPlease follow all of the above instructions now.",
-    "lastMessagesToSendInsteadOfPrompt": 25,
-    "endpointName": "Thinker-Endpoint",
-    "preset": "Thinker-Endpoint",
-    "maxResponseSizeInTokens": 6000,
-    "addUserTurnTemplate": true,
-    "returnToUser": false,
-    "addDiscussionIdTimestampsForLLM": false,
-    "minMessagesInVariable": 20,
-    "maxEstimatedTokensInVariable": 15000
-  },
-  {
-    "title": "Thinking About the Response",
-    "agentName": "Thinking Agent Five",
-    "systemPrompt": "You are an expert gaming specialist participating in an online text-based game session with another user. Detailed information about the game can be found below:\n\n<game_instructions>\n{chat_system_prompt}\n</game_instructions>\n\nAdditionally, special instructions for certain situations may be found here:\n\n<special_instructions>\n{agent3Output}\n</special_instructions>\n\nPlease use this response as a virtual scratchpad to think through the facts of the conversation so far, in order to prepare to respond to the user.\n\nPay close attention to any OOC messages. OOC (Out of Character) are direct player-to-player communications, separate from character actions or dialogue. They do not affect the game world directly but help coordinate expectations and improve gameplay. For example, if a human player controls an Orc character, and an AI controls an Elf character, then an OOC message like `(OOC: I think that Elves should be a little more dignified)` is not spoken by the Orc to the Elf, but rather from one player to another \u2014 it has no effect on the story.",
-    "prompt": "A new message has come in during an ongoing game session. As the session continues, you maintain a rolling summary of key events, stored as 'memory' chunks. See them below if available:\n\n<memories>\n{agent2Output}\n</memories>\n\nThe last twenty messages in the game session are here:\n\n<game_session>\n{chat_user_prompt_min_n_max_tokens}\n</game_session>\n\nThis session has been analyzed; the analysis is here:\n\n<game_analysis>\n{agent4Output}\n</game_analysis>\n\nUsing this response as a scratchpad, think carefully through the following:\n\nA) Reflect on whether the current direction of the game is engaging and balanced. Do you have suggestions to improve the experience for both players?\n\nB) Draft the next in-game response. Keep it engaging, concise (ideally 2 paragraphs or less), and consistent with the established narrative. If needed, include an OOC message to the other player to clarify intent or suggest adjustments. Only include OOC if you\u2019re responding to one or have something new to contribute \u2014 avoid repetition.\n\nC) Review the proposed response for factual accuracy against the memories and messages. Confirm details like item possession, locations, character traits, and prior events. Be critical \u2014 first drafts often contain inconsistencies.\n\nD) Critically assess the response for:\n- Logical coherence: Does the emotional tone match the context?\n- Repetition: Are descriptions, phrases, or reactions reused unnecessarily?\n- Overly positive reactions: Is the character responding happily to something that should provoke concern or hesitation?\n- Character consistency: Is the behavior aligned with the character\u2019s known personality and development?\n\nE) Based on this review, confirm whether any revisions are needed to ensure realism and engagement.\n\nF) Under the heading '# Final Proposed Response', write the complete, corrected response.\n\nPlease follow these instructions now.",
-    "lastMessagesToSendInsteadOfPrompt": 25,
-    "endpointName": "Thinker-Endpoint",
-    "preset": "Thinker-Endpoint",
-    "maxResponseSizeInTokens": 6000,
-    "addUserTurnTemplate": true,
-    "returnToUser": false,
-    "addDiscussionIdTimestampsForLLM": false,
-    "minMessagesInVariable": 20,
-    "maxEstimatedTokensInVariable": 15000
-  },
-  {
-    "title": "Responding to the User",
-    "agentName": "Responder Agent Six",
-    "systemPrompt": "You are an expert gaming specialist participating in an online text-based game with another user. Game details are below:\n\n<game_instructions>\n{chat_system_prompt}\n</game_instructions>\n\nSpecial situational instructions:\n\n<special_instructions>\n{agent3Output}\n</special_instructions>\n\nContinue the game session, prioritizing fun and engagement. Use slow pacing and keep responses short and impactful. Length should match narrative need \u2014 concise is better.\n\nIMPORTANT: Do not write actions or dialogue for the other player\u2019s character.",
-    "prompt": "Please consider the last five messages in the game:\n\n<game_session>\n{chat_user_prompt_min_n_max_tokens}\n</game_session>\n\nYou've already reviewed this and prepared a draft response with notes:\n\n<scratchpad_notes>\n{agent5Output}\n</scratchpad_notes>\n\nUsing the '# Final Proposed Response' section verbatim, if present, continue the game below.\n\n## Game Session\n\n{chat_user_prompt_n_messages}",
-    "lastMessagesToSendInsteadOfPrompt": 25,
-    "endpointName": "Responder-Endpoint",
-    "preset": "Responder-Endpoint",
-    "maxResponseSizeInTokens": 2000,
-    "addUserTurnTemplate": true,
-    "returnToUser": true,
-    "addDiscussionIdTimestampsForLLM": false,
-    "minMessagesInVariable": 10,
-    "maxEstimatedTokensInVariable": 8000,
-    "nMessagesToIncludeInVariable": 1
-  }
-]
+{
+  "nodes": [
+    {
+      "title": "Checking AI's recent memory about this topic",
+      "type": "FullChatSummary",
+      "isManualConfig": false
+    },
+    {
+      "title": "Recent memory gathering",
+      "type": "RecentMemorySummarizerTool",
+      "maxTurnsToPull": 30,
+      "maxSummaryChunksFromFile": 30,
+      "lookbackStart": 25,
+      "customDelimiter": "\n------------\n"
+    },
+    {
+      "title": "Custom File Grabber",
+      "type": "GetCustomFile",
+      "filepath": "{gameTempDir}/character_guidance.txt",
+      "delimiter": "",
+      "customReturnDelimiter": "\n****************\n"
+    },
+    {
+      "title": "Custom File Grabber Four",
+      "type": "GetCustomFile",
+      "filepath": "{gameTempDir}/key_events.md",
+      "delimiter": "",
+      "customReturnDelimiter": "\n****************\n"
+    },
+    {
+      "title": "Context Deeper Analysis Five",
+      "type": "Standard",
+      "endpointName": "Worker-Endpoint",
+      "preset": "Worker-Endpoint",
+      "systemPrompt": "You are a context analysis AI. When given an online text based game between a human user and an LLM, please analyze the current state of the game, and the situation that is occurring, and write a concise synopsis of the current scene, what is happening, and what characters are involved.",
+      "prompt": "Please consider the following instructions from the game:\n\n<game_instructions>\n**--- GAME SYSTEM PROMPT ---**\n\n{chat_system_prompt}\n\n**--- SPECIAL INSTRUCTIONS --**\n{agent3Output}\n</game_instructions>\n\nAnalyze the previous 20 messages from the game:\n\n<messages>\n{chat_user_prompt_min_n_max_tokens}\n</messages>\n\nAdditionally, please see this summary of the gameplay that has occurred up to this point:\n\n<summary>\n{agent1Output}\n</summary>\n\nFinally, here are the key events recorded for this game so far, if any:\n\n<key_events>\n{agent4Output}\n</key_events>\n\nPlease respond with a concise analysis of the current scene: be sure to explain what is happening, who is involved, and why the current situation might be occurring.",
+      "returnToUser": false,
+      "minMessagesInVariable": 20,
+      "maxEstimatedTokensInVariable": 15000,
+      "maxResponseSizeInTokens": 4000
+    },
+    {
+      "title": "Context Deeper Analysis Six",
+      "type": "Standard",
+      "endpointName": "Worker-Endpoint",
+      "preset": "Worker-Endpoint",
+      "systemPrompt": " You are being given information related to an online game that a user is engaged with. The instructions for the game can be found below:\n\n<game_instructions>\n**--- GAME SYSTEM PROMPT ---**\n\n{chat_system_prompt}\n\n**--- SPECIAL INSTRUCTIONS --**\n{agent3Output}\n</game_instructions>\n\nWhen provided with an analysis of the current gameplay scene, and also with the last twenty messages of the gameplay, please extract and concisely summarize the relevant backstory facts from the gameplay <messages> that help explain how the current scene has come to pass. Do not make up facts; only extract what is visible within the gameplay <messages> tags. The facts may include things like explanations of how the characters got to the current location, what the characters were doing prior to being in that location, why the characters are there, why they are doing what they are currently doing, why they feel the way that they feel, etc. Please keep the response concise, and avoid over-explaining.",
+      "prompt": "Analyze the previous 20 messages from the game:\n\n<messages>\n{chat_user_prompt_min_n_max_tokens}\n</messages>\n\nAdditionally, please see this analysis of the current scene:\n\n<analysis>\n{agent5Output}\n</analysis>\n\nAdditionally, please see this summary of the gameplay that has occurred up to this point:\n\n<summary>\n{agent1Output}\n</summary>\n\nFinally, here are the key events recorded for this game so far, if any:\n\n<key_events>\n{agent4Output}\n</key_events>\n\nPlease respond with a list of backstory facts from the gameplay <messages> that help give an understanding of what lead up to the current scene and the events occurring within it.",
+      "returnToUser": false,
+      "maxResponseSizeInTokens": 4000,
+      "minMessagesInVariable": 20,
+      "maxEstimatedTokensInVariable": 15000
+    },
+    {
+      "title": "Fast Context Memory Analysis Seven",
+      "type": "Standard",
+      "endpointName": "Worker-Endpoint",
+      "preset": "Worker-Endpoint",
+      "systemPrompt": "You are a context analysis AI. You are being given information related to an online game that a user is engaged with. The instructions for the game can be found below:\n\n<game_instructions>\n**--- GAME SYSTEM PROMPT ---**\n\n{chat_system_prompt}\n\n**--- SPECIAL INSTRUCTIONS --**\n{agent3Output}\n</game_instructions>\n\nWhen provided with a collection of summarized <memories> generated from the gameplay so far, please extract and concisely summarize the relevant backstory facts found in <memories> that help explain how the current scene came about, without duplicating anything already in <already_summarized_backstory>; only extract the backstory facts from what is found within the <memories> tags. Write this as if it were an addendum to the <already_summarized_backstory>. Please keep the backstory concise, and avoid over-explaining.",
+      "prompt": "Analyze a previous analysis that has been done on the conversation, and can be found here:\n\n<analysis>\n{agent5Output}\n</analysis>\n\nAlso, you can also find a partially summarized backstory here:\n\n<already_summarized_backstory>\n{agent6Output}\n</already_summarized_backstory>\n\nAdditionally, please analyze this list of summarized 'memories' representing the full game up to now:\n\n<memories>\n{agent2Output}\n</memories>\n\nPlease look over the information provided, and extract and concisely summarize from the <memories> section any information that is relevant to the backstory of the current scene.\n\nPlease keep it high level, and avoid interpretation- state only the obvious and verifiable written facts from between the <memories> tags, and do not make up information.\n\n**CRITICAL CONSTRAINT**: If the <memories> section contains the text 'No memories have been generated yet', please respond with that exact text only.",
+      "returnToUser": false,
+      "maxResponseSizeInTokens": 2000
+    },
+    {
+      "title": "Extracting instructions Eight",
+      "type": "Standard",
+      "endpointName": "Worker-Endpoint",
+      "preset": "Worker-Endpoint",
+      "systemPrompt": "You are a text extraction AI. Your job is to look at the system instructions for an online chat between a human and an LLM, and extract which character belongs to the human and which belongs to the LLM.",
+      "prompt": "You are analyzing a chat conversation to extract character information. Review the system instruction and the last five messages below.\n\n<system_instruction>\n{chat_system_prompt}\n</system_instruction>\n\n<chat_messages>\n{chat_user_prompt_last_five}\n</chat_messages>\n\nExtract the following information and place each answer inside the corresponding XML tags:\n\n1. <human_character> - The name of the character representing the human user\n2. <llm_character> - The name of the character representing the AI/LLM\n3. <next_response_character> - The character name that appears at the start of the last message (before the colon). This is who should generate the next response.\n\nOutput format requirements:\n- Provide ONLY the XML output below\n- Include the extracted names inside the tags, not empty tags\n- Do not include any explanations, commentary, or additional text or markdown\n\n<human_character>\n</human_character>\n\n<llm_character>\n</llm_character>\n\n<next_response_character>\n</next_response_character>",
+      "returnToUser": false,
+      "maxResponseSizeInTokens": 2000
+    },
+    {
+      "title": "Extract Human Character Nine",
+      "type": "TagTextExtractor",
+      "tagToExtractFrom": "{agent8Output}",
+      "fieldToExtract": "human_character"
+    },
+    {
+      "title": "Extract LLM Character Ten",
+      "type": "TagTextExtractor",
+      "tagToExtractFrom": "{agent8Output}",
+      "fieldToExtract": "llm_character"
+    },
+    {
+      "title": "Extract Next Response Character Eleven",
+      "type": "TagTextExtractor",
+      "tagToExtractFrom": "{agent8Output}",
+      "fieldToExtract": "next_response_character"
+    },
+    {
+      "title": "Custom File Grabber Twelve",
+      "type": "GetCustomFile",
+      "filepath": "{gameTempDir}/world_info.txt",
+      "delimiter": "",
+      "customReturnDelimiter": "\n****************\n"
+    },
+    {
+      "title": "Responder: Finalizing and Sending the Response Thirteen",
+      "type": "Standard",
+      "endpointName": "Responder-Endpoint",
+      "preset": "Responder-Endpoint",
+      "systemPrompt": "You are an expert Game Master, currently engaged in an online text game with a user. You are responsible for writing the upcoming response for the character {agent11Output}, and have done extensive research in preparation for this response.\n\nCarefully review the information you will be provided to ensure consistency, depth, and a seamless narrative flow. Whenever key events, world details, or memory facts are provided, integrate them naturally into the unfolding story. Respond to any \"Out Of Character\" (OOC:) messages directly and helpfully as the Game Master, then return to the story.\n\nWhen given the list of latest messages, please write the next response in the conversation. Your text will be concatenated to the conversation as is, and sent to the user.",
+      "prompt": "You are engaged in an online text based game with a human user.The instructions for the game can be found below:\n\n<game_instructions>\n**--- GAME SYSTEM PROMPT ---**\n\n{chat_system_prompt}\n\n**--- SPECIAL INSTRUCTIONS --**\n{agent3Output}\n</game_instructions>\n\nA breakdown of facts related to the current scene can be found below:\n\n<relevant_facts>\n{agent5Output}\n</relevant_facts>\n\nA summary of the full story of that game can be found here:\n\n<summary>\n{agent1Output}\n</summary>\n\nYou have read through the gameplay and extracted a list of story facts relevant to the current scene. Those facts can be found here:\n\n<story_facts>\n\n{agent7Output}\n------\n{agent6Output}\n</story_facts>\n\nFinally, here are the key events recorded for this game so far, if any:\n\n<key_events>\n{agent4Output}\n</key_events>\n\nAnd here is static background information about the game's world and setting, if any has been provided:\n\n<world_info>\n{agent12Output}\n</world_info>\n\n**CRITICAL CONSTRAINTS**\n* When writing a response, do not refer to the user as 'you'. Refer to the user's character in third person.\n* When writing a response, do not refer to the NPC character as 'I'. Refer to all characters in the third person.\n* Lengthy responses are acceptable, but ensure with each action the user has an opportunity to make decisions about major actions that occur. Do not perform an action and then resolve the consequences of that action before the user can engage.\n* Do not have characters simply 'shut down', such as giving up and neither speaking nor taking action. This can be a game ending action, as it forces the user to progress the story alone with absolutely no assistance. At no point should a character, when faced with a difficult situation, simply go limp and neither speak nor act.\n* Avoid ending messages with callouts that the user now has a choice. For example, 'She looked at him with her eyes wide; the ball was now in his court' or 'He waited patiently. It was up to TheUser to decide what to do next'. It is unnecessary and becomes repetitive.\n* If the user sent an OOC message, this means 'Out of Character', and is a direct message from the gamer to the Game Master. This communication can go both ways. In the event that the gamer or Game Master have questions or comments, they can use OOC to communicate those and get clarity on where the game is headed. This makes for a smooth and fun session. Take OOC messages into account when deciding the response.\n\nPlease carefully consider all of this information, and continue the game by writing the next response in the game play below, responding for {agent11Output}.\n\n## Gameplay\n\n<gameplay_messages>\n{chat_user_prompt_min_n_max_tokens}\n</gameplay_messages>\n\nWrite the response for {agent10Output}. Never write the response, actions or dialogue for the human user's character, {agent9Output}. When writing the response, be sure to give the user opportunities to respond to dialogue. For example, do not have a character ask a question, and then continue writing more story after that which progresses past the question or statement. The game is more fun when the user is allowed to respond back when directly asked or told something.\n\nPlease continue the conversation now. Do not include the generation prompt (name followed by colon); this is handled by the front end system automatically.",
+      "returnToUser": true,
+      "minMessagesInVariable": 10,
+      "maxEstimatedTokensInVariable": 13000,
+      "maxResponseSizeInTokens": 12000
+    }
+  ]
+}

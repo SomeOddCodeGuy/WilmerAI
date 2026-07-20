@@ -151,21 +151,10 @@ Each User JSON file contains a single object with the following key-value pairs.
 
 -----
 
-##### `defaultParallelProcessWorkflow`
-
-* **Description**: The name of the workflow used for parallel LLM processing. This workflow is used by the memory
-  system to divide large text blocks into chunks and process each chunk concurrently using multiple LLM handlers.
-  If set to an empty string, parallel processing is not used.
-* **Data Type**: `string`
-* **Required**: No
-* **Example**: `"SlowButQualityRagParallelProcessor"`
-
------
-
 ##### `discussionDirectory`
 
 * **Description**: The absolute path to the directory where persistent conversation files (memories, summaries, vector
-  memory databases, etc.) are stored. When unset, WilmerAI falls back to `{PublicDirectory}/DiscussionIds/` -- a
+  memory databases, etc.) are stored. When unset, WilmerAI falls back to `{PublicDirectory}/DiscussionIds/`, a
   *sibling* of `Configs/` under the `Public/` root, never inside `Configs/`. The `--DiscussionDirectory` CLI flag
   overrides this setting. For Windows paths, use double backslashes (`\\`).
 * **Data Type**: `string` (file path)
@@ -183,7 +172,7 @@ Each User JSON file contains a single object with the following key-value pairs.
 
 * **Description**: The absolute path to the directory where the user's SQLite database (`WilmerDb.<username>.sqlite`)
   will be created. This database is used by the `LockingService` for `WorkflowLock` nodes. When unset, WilmerAI falls
-  back to `{PublicDirectory}/SqlLiteDBs/` -- a sibling of `Configs/`, not inside it. The
+  back to `{PublicDirectory}/SqlLiteDBs/` (a sibling of `Configs/`, not inside it). The
   `--UserLevelSqlLiteDirectory` CLI flag overrides this setting.
 * **Data Type**: `string` (file path)
 * **Required**: No
@@ -207,12 +196,12 @@ Each User JSON file contains a single object with the following key-value pairs.
 
 ##### `workflowConfigsSubDirectoryOverride`
 
-* **Description**: Specifies a custom subfolder within `Public/Configs/Workflows/_overrides/` for workflow configurations.
-  When set, workflows are loaded from `_overrides/<override>/` instead of the user's folder. This allows multiple users to
-  share a common set of workflows.
+* **Description**: Specifies a custom subfolder within `Public/Configs/Workflows/` for workflow configurations.
+  When set, workflows are loaded from `Public/Configs/Workflows/<override>/` instead of the folder named after the user.
+  This allows multiple users to share a common set of workflows.
 * **Data Type**: `string`
 * **Required**: No
-* **Example**: `"coding-workflows"` (loads from `_overrides/coding-workflows/`)
+* **Example**: `"coding-workflows"` (loads from `Public/Configs/Workflows/coding-workflows/`)
 
 -----
 
@@ -224,6 +213,18 @@ Each User JSON file contains a single object with the following key-value pairs.
 * **Data Type**: `string`
 * **Required**: No
 * **Example**: `"shared-presets"`
+
+-----
+
+##### `structuredOutputConfigsSubDirectory`
+
+* **Description**: Specifies the subfolder within `Public/Configs/StructuredOutputs/` where this user's
+  structured-output schema files (referenced by the `structuredOutputFile` node property) are looked up. If omitted,
+  defaults to a subfolder named after the user. A schema not found in the subfolder is looked up in the
+  `StructuredOutputs` root, so shared schemas can live at the root.
+* **Data Type**: `string`
+* **Required**: No
+* **Example**: `"shared-schemas"`
 
 -----
 
@@ -291,14 +292,42 @@ Each User JSON file contains a single object with the following key-value pairs.
   user runs. Each key/value becomes a substitution variable usable in any node prompt, system prompt, or path field, and
   a value may itself reference another variable (e.g. `"{Discussion_Id}"`), which resolves on a second substitution
   pass. The intended use is a single source of truth for values that would otherwise be repeated across many workflow
-  files -- for example a base directory for a workflow's on-disk state files, changed in one place instead of in each
+  files: for example, a base directory for a workflow's on-disk state files, changed in one place instead of in each
   workflow. These are the lowest-precedence variables: a built-in (date/time, `Discussion_Id`, the conversation
   variables) or a workflow-level key of the same name always wins, so a custom entry can only fill a name nothing else
   defines and can never shadow a built-in.
 * **Data Type**: `object` (string keys to string values)
 * **Required**: No
 * **Default**: none
-* **Example**: `{ "opencodePlansDir": "./opencode_plans" }`
+* **Example**: `{ "stateFilesDir": "./Public/workflow_state" }`
+
+-----
+
+##### `livenessToolCall`
+
+* **Description**: A harmless tool call that Wilmer injects into a streamed response when the responding workflow
+  node has opted in and the response would otherwise end with no tool call in it. Agentic frontends
+  (OpenCode, Cline, pi, and similar) end their autonomous loop the moment a response arrives without a tool call;
+  if a workflow-driven task still has work left, that ends the run and leaves it waiting on a human. With this
+  configured, Wilmer appends the given tool call and closes the response with `finish_reason: tool_calls`, so the
+  frontend executes the no-op, calls back, and the task keeps moving unattended. The tool named here must be valid
+  for the frontend in use (for example `bash` in pi). Injection only happens for responder nodes that set
+  `"injectLivenessToolCall": true` in their node config: nodes whose turn is always mid-task, such as a status or
+  report turn that produces plain text while the task continues. Responders without the property keep the default
+  contract: a text-only response ends the frontend's loop, which is how a finished task is meant to stop. Only
+  applies to streamed responses in the OpenAI chat completions and Ollama chat formats, which are the formats that
+  carry tool calls.
+
+  Injected turns are one-shot: the model sees the injection exactly once, on the request immediately after it
+  fires, where it appears at the end of the conversation as feedback that the previous reply lacked a tool call.
+  Wilmer strips it out of every later request before any workflow sees it, so the model cannot pick it up as a
+  pattern to repeat. The strip keys on the `[Wilmer]` marker in the call's arguments (which also catches any
+  model-produced copies of the injection), so the configured `arguments` should always include the `[Wilmer]`
+  marker, and the string should be kept short; it only ever appears once per firing in the frontend's transcript.
+* **Data Type**: `object` with a required `toolName` (string) and optional `arguments` (object)
+* **Required**: No
+* **Default**: none (no injection)
+* **Example**: `{ "toolName": "bash", "arguments": { "command": "echo '[Wilmer] No tool call in the last reply; auto-continuing.'" } }`
 
 -----
 
@@ -465,15 +494,13 @@ Here is a fully-commented example user configuration file.
   "conversationMemoryToolWorkflow": "CustomConversationMemoryToolWorkflow",
   // Workflow for retrieving recent conversation turns.
   "recentMemoryToolWorkflow": "RecentMemoryToolWorkflow",
-  // Workflow for parallel LLM processing of large text blocks.
-  "defaultParallelProcessWorkflow": "SlowButQualityRagParallelProcessor",
   // Directory to store all discussion-related files (memories, summaries).
   "discussionDirectory": "D:\\WilmerAI\\Discussions",
   // Directory to store the user's SQLite database for workflow locking.
   "sqlLiteDirectory": "D:\\WilmerAI\\Databases",
   // Subdirectory for this user's LLM endpoint configurations.
   "endpointConfigsSubDirectory": "_shared",
-  // Optional override to use a shared folder for workflow configurations (within _overrides/).
+  // Optional override to use a shared folder (under Workflows/) for workflow configurations.
   "workflowConfigsSubDirectoryOverride": "coding-workflows",
   // Optional override to use a shared folder for generation presets.
   "presetConfigsSubDirectoryOverride": "shared-presets",

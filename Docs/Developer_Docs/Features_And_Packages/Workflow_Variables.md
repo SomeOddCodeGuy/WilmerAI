@@ -1,10 +1,10 @@
 ### **Developer Guide: Workflow Variables**
 
 This document provides a comprehensive guide to using dynamic variables within the WilmerAI workflow system. It details
-the available built-in variables, the Jinja2 templating engine, and the simple process for adding custom
+the available built-in variables, the Jinja2 templating engine, and the process for adding custom
 variables directly from a workflow's JSON configuration.
 
-The system is powered by the **`$WorkflowVariableManager$`**, a service that leverages the central *
+The system is implemented by the **`$WorkflowVariableManager$`**, a service that uses the central *
 *`$ExecutionContext$`** to make a wide range of data available for substitution in prompts and tool arguments.
 
 -----
@@ -95,10 +95,19 @@ boolean property `includeToolCallsInConversation` (default `false`) controls whe
 text.
 
 When enabled, `generate_variables()` preprocesses the messages through `enrich_messages_with_tool_calls()` (in
-`prompt_extraction_utils.py`) before passing them to any conversation variable builder. This function creates a shallow
-copy of the messages list; for each assistant message with `tool_calls`, it creates a new dict with the tool call text
-injected into `content`. Messages without tool calls pass through as-is. The original `context.messages` are never
-mutated.
+`prompt_extraction_utils.py`) before passing them to any conversation variable builder. This function returns a shallow
+copy of the messages list and rewrites two kinds of messages; only messages that need enrichment are copied, everything
+else passes through as-is, and the original `context.messages` are never mutated:
+
+* For each **assistant message with `tool_calls`**, it creates a new dict with the tool call text injected into
+  `content`.
+* For each **`role: "tool"` result message**, it creates a new dict whose `content` is rewritten to
+  `[Tool Result: {name}] {content}`. Because a result usually carries only a `tool_call_id` and not the tool name,
+  the label is recovered from the originating assistant call via an id-based lookup: `_tool_call_label_map()` maps
+  each assistant tool-call `id` to `"{name} {summary}"` (the same argument summary used for `[Tool Call: ...]`, e.g.
+  the file a `read` returned). The fallback chain is: `tool_call_id` match -> the result message's explicit `name`
+  field -> the constant `unknown_tool`. Both the recovered name and the result content are passed through
+  `escape_brackets_in_string()` before injection.
 
 Each tool call is formatted by `format_tool_calls_as_text()` as `[Tool Call: {name}] {summary}`, where the summary is
 produced by `_summarize_tool_arguments()`: it parses the arguments JSON, returns the first string-valued field truncated
@@ -189,7 +198,7 @@ for substitution.
 ### Jinja2 Templating (Advanced)
 
 For more complex logic, like loops or conditionals, you can enable the Jinja2 templating engine by adding
-`"jinja2": true` to your node's configuration. This gives you access to the full power of Jinja2 syntax.
+`"jinja2": true` to your node's configuration. This gives you access to full Jinja2 syntax.
 
 This is especially useful with the `{messages}` variable, which provides the entire conversation history as a list.
 
@@ -208,7 +217,7 @@ This is especially useful with the `{messages}` variable, which provides the ent
 
 ## 3\. How to Add a Custom Variable
 
-Adding a new, reusable variable to a workflow is simple and **requires no code changes**.
+Adding a new, reusable variable to a workflow **requires no code changes**.
 
 #### **Step 1: Add the Variable to the Workflow Config**
 
@@ -240,7 +249,7 @@ system will automatically find and substitute them. **No further steps are neede
 
 ## 4\. How It Works (Under the Hood)
 
-The system is designed to make adding custom variables trivial by isolating the change to the JSON configuration file.
+The system isolates custom variable additions to the JSON configuration file; no code is involved.
 
 1. **`$WorkflowManager$` Loads the Config:** The manager loads the entire workflow JSON file into a
    `workflow_file_config` dictionary.
@@ -264,11 +273,11 @@ As of recent updates, the `endpointName` and `preset` fields support a special f
 - The substituted values are then used to load the LLM handler
 
 **Available Variables for Early Substitution:**
-- `{agent#Input}` - Passed from parent workflows
+- `{agent#Input}`: Passed from parent workflows
 - Custom static variables from workflow JSON top-level
 
 **NOT Available:**
-- `{agent#Output}` - These don't exist until nodes execute
+- `{agent#Output}`: These don't exist until nodes execute
 - Date/time variables (only generated in the full `generate_variables()` method)
 - Conversation history variables (require an LLM handler and full context)
 - `{time_context_summary}` (requires timestamp service and discussion ID)
@@ -294,10 +303,10 @@ if get_separate_conversation_in_variables():
 ```
 
 These two values (`add_role_tags`, `separator`) are then passed as keyword arguments to:
-- `generate_conversation_turn_variables(...)` — which builds the hardcoded-count variables (last_one through last_twenty)
-- `extract_last_n_turns_as_string(...)` — for the `{chat_user_prompt_n_messages}` variable
-- `extract_last_turns_by_estimated_token_limit_as_string(...)` — for the `{chat_user_prompt_estimated_token_limit}` variable
-- `extract_last_turns_with_min_messages_and_token_limit_as_string(...)` — for the `{chat_user_prompt_min_n_max_tokens}` variable
+- `generate_conversation_turn_variables(...)`, which builds the hardcoded-count variables (last_one through last_twenty)
+- `extract_last_n_turns_as_string(...)` for the `{chat_user_prompt_n_messages}` variable
+- `extract_last_turns_by_estimated_token_limit_as_string(...)` for the `{chat_user_prompt_estimated_token_limit}` variable
+- `extract_last_turns_with_min_messages_and_token_limit_as_string(...)` for the `{chat_user_prompt_min_n_max_tokens}` variable
 
 All of these ultimately call `_format_messages_to_string()` in `prompt_extraction_utils.py`, which applies role prefixes
 and joins with the configured separator:
@@ -322,9 +331,9 @@ def _format_messages_to_string(messages, add_role_tags=False, separator='\n'):
 ```
 
 **Key files:**
-- `/Middleware/workflows/managers/workflow_variable_manager.py` — reads settings, passes to builders
-- `/Middleware/utilities/prompt_extraction_utils.py` — `_format_messages_to_string()` and the three `_as_string` functions
-- `/Middleware/utilities/config_utils.py` — `get_separate_conversation_in_variables()`, `get_conversation_separation_delimiter()`
+- `/Middleware/workflows/managers/workflow_variable_manager.py`: reads settings, passes to builders
+- `/Middleware/utilities/prompt_extraction_utils.py`: `_format_messages_to_string()` and the three `_as_string` functions
+- `/Middleware/utilities/config_utils.py`: `get_separate_conversation_in_variables()`, `get_conversation_separation_delimiter()`
 
 **File:** `/Middleware/workflows/managers/workflow_variable_manager.py`
 
@@ -347,7 +356,7 @@ whose contents were previously saved with real braces restored by `return_bracke
 To prevent `str.format()` in `apply_variables()` from misinterpreting these braces as format placeholders (which would
 raise a `ValueError: unmatched '{' in format spec`), `generate_variables()` escapes all string-valued agent outputs and
 inputs using `escape_brackets_in_string()` before adding them to the variables dictionary. This replaces `{`/`}` with
-the `__WILMER_L_CURLY__`/`__WILMER_R_CURLY__` sentinel tokens — the same mechanism used at the gateway for message
+the `__WILMER_L_CURLY__`/`__WILMER_R_CURLY__` sentinel tokens, the same mechanism used at the gateway for message
 content. After `str.format()` completes, `return_brackets_in_string()` restores them to real braces in the final output.
 
 Custom workflow config variables (top-level keys in the JSON file) are intentionally NOT escaped, because they support
@@ -355,6 +364,6 @@ nested variable resolution (e.g., `"my_path": "data/{Discussion_Id}/output.txt"`
 resolved on the second format pass).
 
 **Key files:**
-- `/Middleware/utilities/text_utils.py` — `escape_brackets_in_string()` (forward), `return_brackets_in_string()` (reverse)
-- `/Middleware/workflows/managers/workflow_variable_manager.py` — escaping in `generate_variables()`, restoration in `apply_variables()`
-- `/Middleware/utilities/prompt_extraction_utils.py` — `enrich_messages_with_tool_calls()` also escapes tool call text
+- `/Middleware/utilities/text_utils.py`: `escape_brackets_in_string()` (forward), `return_brackets_in_string()` (reverse)
+- `/Middleware/workflows/managers/workflow_variable_manager.py`: escaping in `generate_variables()`, restoration in `apply_variables()`
+- `/Middleware/utilities/prompt_extraction_utils.py`: `enrich_messages_with_tool_calls()` also escapes tool call text

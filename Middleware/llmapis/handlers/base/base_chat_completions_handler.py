@@ -1,7 +1,7 @@
 # middleware/llmapis/handlers/base/base_chat_completions_handler.py
 import json
 import logging
-from typing import Dict, Optional, List
+from typing import Any, Dict, Optional, List
 
 from Middleware.utilities.sensitive_logging_utils import sensitive_log_lazy, log_prompt_content
 from Middleware.utilities.text_utils import return_brackets
@@ -18,7 +18,7 @@ class BaseChatCompletionsHandler(LlmApiHandler):
 
     def _prepare_payload(self, conversation: Optional[List[Dict[str, str]]], system_prompt: Optional[str],
                          prompt: Optional[str], *, tools: Optional[list] = None,
-                         tool_choice=None) -> Dict:
+                         tool_choice=None, structured_output_schema: Optional[Dict] = None) -> Dict:
         """
         Prepares the final data payload for the API request.
 
@@ -28,6 +28,8 @@ class BaseChatCompletionsHandler(LlmApiHandler):
             prompt (Optional[str]): The latest user prompt.
             tools (Optional[list]): Tool definitions in OpenAI format.
             tool_choice: Tool selection policy.
+            structured_output_schema (Optional[Dict]): JSON schema constraint,
+                attached per the API type's structuredOutput mechanism.
 
         Returns:
             Dict: The payload dictionary ready to be sent to the LLM API.
@@ -46,38 +48,30 @@ class BaseChatCompletionsHandler(LlmApiHandler):
             payload["tools"] = tools
         if tool_choice is not None:
             payload["tool_choice"] = tool_choice
+        self._attach_structured_output(payload, structured_output_schema)
 
         logger.info(f"Payload prepared for {self.__class__.__name__}")
         sensitive_log_lazy(logger, logging.DEBUG, "URL: %s, Payload: %s",
                           lambda: self.base_url, lambda: json.dumps(payload, indent=2))
         return payload
 
-    def _build_messages_from_conversation(self, conversation: Optional[List[Dict[str, str]]],
-                                          system_prompt: Optional[str], prompt: Optional[str]) -> List[Dict[str, str]]:
+    def _apply_prompt_injections(self, corrected_conversation: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Constructs and sanitizes the list of messages from the conversation history, system prompt, and user prompt.
+        Applies the endpoint's prompt-injection options and drops the empty
+        trailing assistant marker.
+
+        Honors ``addTextToStartOfSystem`` / ``addTextToStartOfPrompt`` /
+        ``addTextToStartOfCompletion`` (with ``ensureTextAddedToAssistantWhenChatCompletion``).
+        Shared by the base chat-completions builder and the Ollama-chat override
+        so both API shapes apply these options identically.
 
         Args:
-            conversation (Optional[List[Dict[str, str]]]): The historical conversation, a list of message dictionaries.
-            system_prompt (Optional[str]): The system prompt to guide the LLM's behavior.
-            prompt (Optional[str]): The latest user prompt.
+            corrected_conversation (List[Dict[str, Any]]): The role-corrected
+                conversation; mutated in place and returned.
 
         Returns:
-            List[Dict[str, str]]: The formatted and cleaned list of messages for the API payload.
+            List[Dict[str, Any]]: The conversation with injections applied.
         """
-        if conversation is None:
-            conversation = []
-            if system_prompt:
-                conversation.append({"role": "system", "content": system_prompt})
-            if prompt:
-                conversation.append({"role": "user", "content": prompt})
-
-        corrected_conversation = [
-            {**msg, "role": "system" if msg["role"] == "systemMes" else msg["role"]}
-            for msg in conversation
-        ]
-
-        # Get all config flags and text for prompt modifications
         add_start_system = self.endpoint_config.get("addTextToStartOfSystem", False)
         text_start_system = self.endpoint_config.get("textToAddToStartOfSystem", "")
         add_start_prompt = self.endpoint_config.get("addTextToStartOfPrompt", False)
@@ -118,16 +112,50 @@ class BaseChatCompletionsHandler(LlmApiHandler):
             elif ensure_assistant:
                 # Override is ON: must end with an assistant turn.
                 if corrected_conversation[-1].get("role") == "assistant":
-                    corrected_conversation[-1]["content"] += completion_text
+                    corrected_conversation[-1]["content"] = \
+                        corrected_conversation[-1].get("content", "") + completion_text
                 else:
                     corrected_conversation.append({"role": "assistant", "content": completion_text})
             else:
                 # Override is OFF: append to the content of the very last message.
-                corrected_conversation[-1]["content"] += completion_text
+                corrected_conversation[-1]["content"] = \
+                    corrected_conversation[-1].get("content", "") + completion_text
 
-        if corrected_conversation and corrected_conversation[-1]["role"] == "assistant" and corrected_conversation[-1][
-            "content"] == "":
+        # Drop the empty trailing assistant marker (added by add_missing_assistant),
+        # but never one that carries tool_calls; that is structural data, not filler.
+        if corrected_conversation and corrected_conversation[-1].get("role") == "assistant" \
+                and not corrected_conversation[-1].get("content") \
+                and not corrected_conversation[-1].get("tool_calls"):
             corrected_conversation.pop()
+
+        return corrected_conversation
+
+    def _build_messages_from_conversation(self, conversation: Optional[List[Dict[str, str]]],
+                                          system_prompt: Optional[str], prompt: Optional[str]) -> List[Dict[str, str]]:
+        """
+        Constructs and sanitizes the list of messages from the conversation history, system prompt, and user prompt.
+
+        Args:
+            conversation (Optional[List[Dict[str, str]]]): The historical conversation, a list of message dictionaries.
+            system_prompt (Optional[str]): The system prompt to guide the LLM's behavior.
+            prompt (Optional[str]): The latest user prompt.
+
+        Returns:
+            List[Dict[str, str]]: The formatted and cleaned list of messages for the API payload.
+        """
+        if conversation is None:
+            conversation = []
+            if system_prompt:
+                conversation.append({"role": "system", "content": system_prompt})
+            if prompt:
+                conversation.append({"role": "user", "content": prompt})
+
+        corrected_conversation = [
+            {**msg, "role": "system" if msg["role"] == "systemMes" else msg["role"]}
+            for msg in conversation
+        ]
+
+        corrected_conversation = self._apply_prompt_injections(corrected_conversation)
 
         # Note: Image filtering is handled upstream in llm_api.py based on the llm_takes_images flag.
         # Handlers that support images (OpenAI, Ollama) override this method to process images.

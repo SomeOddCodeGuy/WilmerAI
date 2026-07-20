@@ -18,7 +18,7 @@ strings into dynamic, logic-driven templates that react to the state of the work
 
 * **Conditional Logic:** Use `{% if ... %}` statements to change parts of a prompt based on the output of previous nodes
   or other variables.
-* **Dynamic Loops:** Iterate over lists -- most notably the `{messages}` variable -- using `{% for ... %}` loops to format
+* **Dynamic Loops:** Iterate over lists (most notably the `{messages}` variable) using `{% for ... %}` loops to format
   conversation histories or other collections of data precisely.
 * **Direct Variable Access:** All standard workflow variables (e.g., `{agent1Output}`, `{todays_date_pretty}`) are
   available within the Jinja2 context.
@@ -118,5 +118,5 @@ The logic for handling Jinja2 is centralized within the `WorkflowVariableManager
       and calls `template.render(**variables)`, passing in the dictionary of all available workflow variables.
     * If the flag is `false` or absent, the method falls back to using Python's standard `prompt.format(**variables)`.
 
-This design ensures that the feature is fully self-contained within the variable substitution logic and can be easily
-applied to any node or string field without requiring changes to the node handlers themselves.
+This design keeps the feature fully self-contained within the variable substitution logic; it can be applied to any
+node or string field without requiring changes to the node handlers themselves.

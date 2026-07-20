@@ -1,0 +1,8 @@
+{
+  "modelNameForDisplayOnly": "Embeddings (for semantic memory search; point at a llama.cpp server started with --embedding, or any /v1/embeddings server)",
+  "endpoint": "http://127.0.0.1:8081",
+  "apiTypeConfigFileName": "OpenAI-Embeddings",
+  "modelNameToSendToAPI": "nomic-embed-text",
+  "dontIncludeModel": false,
+  "apiKey": ""
+}

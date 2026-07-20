@@ -7,5 +7,9 @@
   "useVectorForQualityMemory": true,
   "vectorMemoryWorkflowName": "Memory_Vector_Workflow",
   "vectorMemoryChunkEstimatedTokenSize": 1200,
-  "vectorMemoryMaxMessagesBetweenChunks": 8
+  "vectorMemoryMaxMessagesBetweenChunks": 8,
+  "vectorMemoryIndexTopics": true,
+  "useStateDocument": true,
+  "stateDocumentWorkflowName": "State_Document_Workflow",
+  "stateDocumentMinRetentionRatio": 0.5
 }

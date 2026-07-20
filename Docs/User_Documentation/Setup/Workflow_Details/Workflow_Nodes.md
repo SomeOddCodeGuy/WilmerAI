@@ -25,7 +25,7 @@ response.
 | **`systemPrompt`**                          | String  | Yes      | N/A        | The system prompt or initial instruction set for the LLM. Supports variable substitution.                                             |
 | **`prompt`**                                | String  | Yes      | N/A        | The main user-facing prompt. If this is empty, the node will use `lastMessagesToSendInsteadOfPrompt`. Supports variable substitution. |
 | **`lastMessagesToSendInsteadOfPrompt`**     | Integer | No       | `5`        | If `prompt` is empty, this specifies how many recent conversational turns to use as the prompt.                                       |
-| **`lastMessagesToSendInsteadOfPromptMaxTokenSize`** | Integer | No | N/A | Optional token ceiling applied on top of `lastMessagesToSendInsteadOfPrompt` (only used when `prompt` is empty). The selected recent turns are trimmed, newest-first, to fit this estimated-token budget -- useful when individual turns are large (e.g. agentic tool results). When `clampPromptToContextWindow` is on for the node, this value is scaled by the endpoint's `wilmerContextEstimationLevel`. If omitted, only the message count bounds the window. (The context-window clamp, when enabled, largely subsumes this cap.) |
+| **`lastMessagesToSendInsteadOfPromptMaxTokenSize`** | Integer | No | N/A | Optional token ceiling applied on top of `lastMessagesToSendInsteadOfPrompt` (only used when `prompt` is empty). The selected recent turns are trimmed, newest-first, to fit this estimated-token budget, which is useful when individual turns are large (e.g. agentic tool results). When `clampPromptToContextWindow` is on for the node, this value is scaled by the endpoint's `wilmerContextEstimationLevel`. If omitted, only the message count bounds the window. (The context-window clamp, when enabled, largely subsumes this cap.) |
 | **`maxResponseSizeInTokens`**               | Integer/String | No       | `400`      | Overrides the maximum number of tokens the LLM can generate for this node. **Supports LIMITED variables like endpointName.**         |
 | **`maxContextTokenSize`**                   | Integer | No       | `4096`     | Overrides the maximum context window size (in tokens) for this node.                                                                  |
 | **`nMessagesToIncludeInVariable`**           | Integer | No       | `5`        | Controls how many messages are included in the `{chat_user_prompt_n_messages}` and `{templated_user_prompt_n_messages}` variables.    |
@@ -43,13 +43,15 @@ response.
 | **`acceptImages`**                          | Boolean | No       | `false`    | If `true`, images attached to conversation messages are preserved and sent to the LLM backend. The endpoint must support vision/multimodal input. When `false`, images are stripped. If `true` but no images are present, the node behaves as a normal text request. |
 | **`maxImagesToSend`**                       | Integer | No       | `0`        | Only relevant when `acceptImages` is `true`. Limits the number of images sent to the backend, keeping the most recent. `0` means no limit. **Supports LIMITED variables like endpointName.** |
 | **`allowTools`**                            | Boolean | No       | `false`    | If `true`, tool definitions from the frontend request are forwarded to the LLM when this node executes. Tool call responses from the LLM are passed back to the frontend. Should typically only be enabled on the responding node. See [Tool Call Passthrough](Workflow_Features.md#tool-call-passthrough). |
+| **`appendNativeToolExchange`**              | Boolean | No       | `false`    | Authored-prompt nodes only. Delivers the conversation's trailing tool exchange (the assistant `tool_calls` turn the frontend just executed plus its `role: "tool"` results) as native messages after the authored prompt, excluding it from the text transcript, so the model generates from the standard post-tool-result position. Required for reliable multi-round tool loops through authored-prompt nodes. Inert on collection-mode nodes, on completions backends, and on endpoints declaring `backendSupportsToolTurns: false`. See [Delivering the Live Tool Exchange Natively](Workflow_Features.md#delivering-the-live-tool-exchange-natively-appendnativetoolexchange). |
 | **`lowercaseToolCallFunctionNames`**        | Boolean | No       | `false`    | If `true`, tool call function names in LLM responses are lowercased before being sent to the frontend. Fixes local models that produce capitalized names (e.g., `Glob` instead of `glob`). Works for both streaming and non-streaming. See [Lowercasing Tool Call Function Names](Workflow_Features.md#lowercasing-tool-call-function-names). |
+| **`structuredOutputFile`**                  | String  | No       | none       | Name of a JSON Schema file in `Public/Configs/StructuredOutputs/` that grammar-constrains this node's output (the backend must support constrained decoding; declared per API type). The node's output is guaranteed-parseable JSON matching the schema. Describe the desired structure in the prompt too; the model does not see the schema. See [Structured Output](Workflow_Features.md#structured-output-grammar-constrained-responses). |
 | **`mergeConsecutiveAssistantMessages`**     | Boolean | No       | `false`    | If `true`, consecutive assistant messages are merged into one before sending to the LLM. Only applies when `prompt` is empty. Tool-call sequences (assistant -> tool -> assistant) are not affected. See [Consecutive Assistant Message Normalization](Workflow_Features.md#consecutive-assistant-message-normalization). |
 | **`mergeConsecutiveAssistantMessagesDelimiter`** | String | No   | `"\n"`     | Delimiter for joined content when merging consecutive assistant messages. |
 | **`insertUserTurnBetweenAssistantMessages`** | Boolean | No      | `false`    | If `true`, a synthetic user message is inserted between consecutive assistant messages. Alternative to merging. See [Consecutive Assistant Message Normalization](Workflow_Features.md#consecutive-assistant-message-normalization). |
 | **`insertedUserTurnText`**                  | String  | No       | `"Continue."` | Content of the synthetic user message when using insertion. |
 | **`addUserAssistantTags`**                  | Boolean | No       | `false`    | If `true`, prefixes each message in `chat_user_prompt_*` variables with its role (e.g., `User: `, `Assistant: `). Per-node setting. Does not affect `templated_user_prompt_*` variables. |
-| **`includeToolCallsInConversation`**        | Boolean | No       | `false`    | If `true`, injects text summaries of `tool_calls` into assistant message content for conversation history variables. Formatted as `[Tool Call: {name}] {summary}`. |
+| **`includeToolCallsInConversation`**        | Boolean | No       | `false`    | If `true`, injects text summaries of `tool_calls` into assistant message content for conversation history variables (formatted as `[Tool Call: {name}] {summary}`), and prefixes tool result messages with a `[Tool Result: {name}]` label recovered from the originating call. |
 
 #### **Limitations and Key Usage Notes**
 
@@ -277,6 +279,24 @@ This example calls a reusable child workflow to perform a search and summarize t
 
 -----
 
+### **Resumable History Processing: The `ConversationChunkProcessor` Node**
+
+The **`ConversationChunkProcessor` Node** runs a sub-workflow over the conversation in fixed-size chunks of messages,
+tracking how far it has processed with a per-node hash cursor. When a long conversation is resumed under a fresh
+discussion id, it walks the entire backlog in chunks and runs the sub-workflow on each one before the turn's response is
+produced, so a record built from the conversation (an event log, a per-persona tracker) is caught up from history rather
+than starting blind. It shares the `scoped_variables` mechanism of `CustomWorkflow`: the chunk is passed as
+`{agent1Input}` and any `scoped_variables` follow.
+
+Key properties: **`id`** (required, unique, names the cursor file), **`workflowName`** (the per-chunk sub-workflow),
+**`chunkSize`** (messages per chunk, default 10), **`lookbackMessages`** (freshest messages left unprocessed, default
+4), **`cursorDirectory`** (required), and **`returnFile`** (optional; returns a record file's content so a later node can
+read it).
+
+See [The `ConversationChunkProcessor` Node](Nodes/ConversationChunkProcessor.md) for the full reference.
+
+-----
+
 ### **Data Manipulation: The `ArithmeticProcessor` Node**
 
 The **`ArithmeticProcessor`** node performs a basic mathematical calculation. It takes a string expression containing
@@ -449,7 +469,7 @@ I hope this helps.
 ### **Data Manipulation: The `DelimitedChunker` Node**
 
 The **`DelimitedChunker`** node splits a string on a delimiter and returns either the first N or last N chunks, rejoined
-with the same delimiter. It functions like `head` and `tail` for delimited content — useful for trimming long
+with the same delimiter. It functions like `head` and `tail` for delimited content, useful for trimming long
 delimited data such as logs, CSV rows, or section-separated documents.
 
 #### **Properties**
@@ -832,7 +852,7 @@ internal API and feeding the response into a later LLM node). All string fields 
 | **`onError`**      | String  | No       | `"raise"`| `"raise"` aborts the workflow on connection failure or HTTP 4xx/5xx. `"return"` causes the node to emit an error payload (shape matches `outputFormat`) so the workflow can branch on it. |
 | **`proxy`**        | String  | No       | None     | Optional proxy URL routed through both `http` and `https` traffic. Any scheme `requests` supports works: `socks5://`, `socks5h://`, `socks4://`, `http://`, `https://`. Supports variable substitution. An empty string is treated as "no proxy". |
 | **`caBundle`**     | String  | No       | None     | Opt-in. Path to a CA bundle (PEM) used to verify the server's TLS certificate; verification stays ON. Use for HTTPS endpoints behind a private/internal CA (e.g. `mkcert`). Default verification uses the bundled `certifi` roots, NOT the OS keychain. Supports variable substitution; empty string = not set; a non-existent path raises `ValueError`. |
-| **`verify`**       | Boolean | No       | `true`   | Opt-in. `true` (default) verifies against the default `certifi` store. `false` disables TLS verification entirely (logs a warning; vulnerable to MITM — prefer `caBundle`). An explicit `false` takes precedence over `caBundle`. |
+| **`verify`**       | Boolean | No       | `true`   | Opt-in. `true` (default) verifies against the default `certifi` store. `false` disables TLS verification entirely (logs a warning; vulnerable to MITM; prefer `caBundle`). An explicit `false` takes precedence over `caBundle`. |
 | **`allowRedirects`** | Boolean | No     | `true`   | Whether HTTP 3xx redirects are followed. Set `false` to stop a remote redirect from bouncing the request to another host. |
 | **`maxResponseBytes`** | Integer | No   | `10485760` | Body-size cap in bytes (10 MiB). The body is streamed and the read aborts past the cap. Set `0` to disable the cap. |
 
@@ -844,7 +864,7 @@ internal API and feeding the response into a later LLM node). All string fields 
   `PythonModule` node for custom extraction.
 * **Privacy / SSRF.** This node makes outbound HTTP calls to the URLs you configure. Wilmer never adds anything to the
   request beyond what you put in the node config. There is no host/IP allowlist, so treat any `url` built from
-  conversation-derived variables as untrusted input — see the [WebFetch node doc](Nodes/WebFetch.md) for the SSRF
+  conversation-derived variables as untrusted input; see the [WebFetch node doc](Nodes/WebFetch.md) for the SSRF
   warning and the `allowRedirects` control.
 * **TLS.** HTTPS is supported transparently via the `requests` library's certificate verification (always on).
 
@@ -875,7 +895,7 @@ For detailed documentation including the full error-handling matrix, see [WebFet
 The **`CurlCommand`** node invokes the system `curl` binary via `subprocess.Popen` with `shell=False`, streaming its
 output so the response body can be bounded in-process. Arguments are
 supplied as a JSON list (no shell parsing), and each element is variable-substituted before being passed to curl. Use
-this node when you specifically need the `curl` binary itself — for example, to use a curl-only flag or to mirror a
+this node when you specifically need the `curl` binary itself, for example to use a curl-only flag or to mirror a
 shell command exactly. For most HTTP/HTTPS use cases, prefer the [WebFetch Node](#external-tools-the-webfetch-node).
 
 #### **Properties**
@@ -934,8 +954,8 @@ For detailed documentation including the full error-handling matrix and tips on 
 ### **External Tools: The `MCPToolCall` Node**
 
 The **`MCPToolCall`** node invokes a single tool on a named Model Context Protocol (MCP) server, with the tool name
-and arguments fixed by the workflow author. The LLM is not in the loop — this is a deterministic, workflow-driven
-tool call, well-suited for "fetch this specific piece of data" or "perform this specific action" steps.
+and arguments fixed by the workflow author. The LLM is not in the loop; this is a deterministic, workflow-driven
+tool call, suited to "fetch this specific piece of data" or "perform this specific action" steps.
 
 Servers are declared once in `Public/Configs/MCPServers/<name>.json` and referenced by name from the node. All three
 MCP transports are supported: `stdio` (spawns a subprocess), `sse` (Server-Sent Events over HTTP), and
@@ -962,9 +982,9 @@ Each MCP server config under `Public/Configs/MCPServers/` describes one transpor
   ```json
   {
     "transport": "stdio",
-    "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed/directory"],
-    "env": {"NODE_ENV": "production"},
+    "command": "/absolute/path/to/mcp-server-filesystem",
+    "args": ["/path/to/allowed/directory"],
+    "env": {},
     "cwd": null
   }
   ```
@@ -993,7 +1013,7 @@ Each MCP server config under `Public/Configs/MCPServers/` describes one transpor
   connections may be added later.
 * **stdio spawns a subprocess.** The `command` and `args` you configure run on the Wilmer host with the privileges of
   the Wilmer process. Treat them like any other PythonModule-style integration.
-* **Privacy.** Outbound traffic is limited to whatever transport you configure — local subprocess (stdio), or the URL
+* **Privacy.** Outbound traffic is limited to whatever transport you configure: local subprocess (stdio), or the URL
   you wrote down (sse / streamable_http).
 
 #### **Full Syntax Example**

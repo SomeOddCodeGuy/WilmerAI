@@ -4,6 +4,7 @@
 import datetime as real_datetime
 import json
 import math
+import os
 import sqlite3
 import uuid
 from unittest.mock import MagicMock, patch
@@ -14,10 +15,16 @@ import pytest
 from Middleware.utilities.vector_db_utils import (
     MAX_KEYWORDS_FOR_SEARCH,
     _get_db_path,
+    _legacy_vector_db_path,
+    _legacy_vector_db_path_cwd,
     _sanitize_fts5_term,
+    add_embeddings_to_db,
     add_memory_to_vector_db,
     add_vector_check_hash,
+    get_all_embeddings,
     get_db_connection,
+    get_memories_by_ids,
+    get_memories_without_embeddings,
     get_vector_check_hash_history,
     initialize_vector_db,
     search_memories_by_keyword,
@@ -26,6 +33,19 @@ from Middleware.utilities.vector_db_utils import (
 
 # A consistent discussion ID for testing
 TEST_DISCUSSION_ID = "test-discussion-123"
+
+# Memory texts with deliberately unequal relevance for the keyword "dragon".
+# The strong match repeats the term many times in a short text; the weak match
+# mentions it exactly once inside a much longer text.
+STRONG_DRAGON_TEXT = (
+    "The dragon returned. Dragon fire, dragon scales, dragon wings: the dragon was everywhere."
+)
+WEAK_DRAGON_TEXT = (
+    "The travelers spent many weeks crossing the mountains and valleys, trading stories "
+    "with villagers, cataloging herbs and minerals along the road, and only once, near "
+    "the very end of the journey, catching a distant glimpse of a dragon flying far away "
+    "over the northern peaks."
+)
 
 
 # === Fixtures ===
@@ -102,6 +122,63 @@ def populated_memory_db(memory_db_path):
 
     for memory_text, metadata in memories:
         add_memory_to_vector_db(TEST_DISCUSSION_ID, memory_text, metadata)
+
+    return memory_db_path
+
+
+@pytest.fixture
+def relevance_memory_db(memory_db_path):
+    """
+    Fixture with unequal keyword relevance for bm25 ranking tests.
+
+    One memory matches "dragon" strongly (high term frequency across several
+    columns of a short document), one matches weakly (a single mention in a
+    longer document), and three memories do not match at all. The non-matching
+    corpus is required because bm25's IDF component needs contrast: with only
+    two documents in the index, the scores can tie.
+    """
+    add_memory_to_vector_db(
+        TEST_DISCUSSION_ID,
+        STRONG_DRAGON_TEXT,
+        json.dumps(
+            {
+                "title": "Dragon sighting",
+                "summary": "All about the dragon.",
+                "entities": ["Dragon"],
+                "key_phrases": ["dragon fire"],
+            }
+        ),
+    )
+    add_memory_to_vector_db(
+        TEST_DISCUSSION_ID,
+        WEAK_DRAGON_TEXT,
+        json.dumps(
+            {
+                "title": "Travel log",
+                "summary": "A long journey through the mountains.",
+                "entities": ["Travelers"],
+                "key_phrases": ["mountain crossing"],
+            }
+        ),
+    )
+    filler_texts = [
+        "A discussion about baking sourdough bread and yeast starters.",
+        "Notes on repairing the old sailboat hull before summer arrives.",
+        "A summary of quarterly budget planning for the household finances.",
+    ]
+    for i, text in enumerate(filler_texts):
+        add_memory_to_vector_db(
+            TEST_DISCUSSION_ID,
+            text,
+            json.dumps(
+                {
+                    "title": f"Filler {i}",
+                    "summary": text,
+                    "entities": [],
+                    "key_phrases": [],
+                }
+            ),
+        )
 
     return memory_db_path
 
@@ -210,6 +287,75 @@ def test_get_db_path_cwd_legacy_stickiness(mocker, tmp_path):
     result = _get_db_path(TEST_DISCUSSION_ID)
 
     assert result == str(cwd_legacy_db)
+
+
+def test_get_db_path_api_key_hash_skips_legacy_probes(mocker, tmp_path):
+    """
+    When per-user isolation is active (api_key_hash provided), existing legacy
+    databases must NOT be reused; the shared legacy file would bleed one
+    user's vector memories into another's. The isolated new path is returned
+    even though both legacy candidates exist on disk.
+    """
+    discussion_folder = tmp_path / "discussions" / TEST_DISCUSSION_ID
+    discussion_folder.mkdir(parents=True)
+    legacy_db = tmp_path / "Public" / f"{TEST_DISCUSSION_ID}_vector_memory.db"
+    legacy_db.parent.mkdir(parents=True)
+    legacy_db.write_bytes(b"")
+    cwd_legacy_db = tmp_path / "cwd" / "Public" / f"{TEST_DISCUSSION_ID}_vector_memory.db"
+    cwd_legacy_db.parent.mkdir(parents=True)
+    cwd_legacy_db.write_bytes(b"")
+
+    mock_folder = mocker.patch(
+        "Middleware.utilities.vector_db_utils.config_utils.get_discussion_folder_path",
+        return_value=str(discussion_folder),
+    )
+    mocker.patch(
+        "Middleware.utilities.vector_db_utils._legacy_vector_db_path",
+        return_value=str(legacy_db),
+    )
+    mocker.patch(
+        "Middleware.utilities.vector_db_utils._legacy_vector_db_path_cwd",
+        return_value=str(cwd_legacy_db),
+    )
+
+    result = _get_db_path(TEST_DISCUSSION_ID, api_key_hash="abc123")
+
+    assert result == str(discussion_folder / "vector_memory.db")
+    assert result != str(legacy_db)
+    assert result != str(cwd_legacy_db)
+    mock_folder.assert_called_once_with(TEST_DISCUSSION_ID, api_key_hash="abc123")
+
+
+def test_legacy_vector_db_path_naming_contract(mocker):
+    """
+    Pins the project-root legacy path format:
+    {project_root}/Public/{discussion_id}_vector_memory.db
+    """
+    fake_root = os.path.join(os.sep, "fake", "project_root")
+    mocker.patch(
+        "Middleware.utilities.vector_db_utils.config_utils.get_project_root_directory_path",
+        return_value=fake_root,
+    )
+
+    result = _legacy_vector_db_path(TEST_DISCUSSION_ID)
+
+    assert result == os.path.join(fake_root, "Public", f"{TEST_DISCUSSION_ID}_vector_memory.db")
+
+
+def test_legacy_vector_db_path_cwd_naming_contract(mocker):
+    """
+    Pins the cwd-relative legacy path format:
+    {cwd}/Public/{discussion_id}_vector_memory.db
+    """
+    fake_cwd = os.path.join(os.sep, "fake", "cwd")
+    mocker.patch(
+        "Middleware.utilities.vector_db_utils.os.getcwd",
+        return_value=fake_cwd,
+    )
+
+    result = _legacy_vector_db_path_cwd(TEST_DISCUSSION_ID)
+
+    assert result == os.path.join(fake_cwd, "Public", f"{TEST_DISCUSSION_ID}_vector_memory.db")
 
 
 @pytest.mark.parametrize(
@@ -509,9 +655,89 @@ def test_add_memory_with_various_metadata(memory_db_path):
     assert fts_row["key_phrases"] == ""  # Missing should be empty string
 
 
-def test_add_memory_with_invalid_json_rollback(memory_db_path, mocker):
+def test_add_memory_topics_not_indexed_by_default(memory_db_path):
     """
-    Tests that an invalid JSON causes a rollback, ensuring no data is inserted into either table.
+    Tests that the 'topics' metadata stays out of the FTS index when index_topics
+    is omitted, preserving the historical indexing exactly.
+    """
+    metadata_str = json.dumps(
+        {
+            "title": "Game night",
+            "summary": "Priya plays a halfling rogue.",
+            "entities": ["Priya"],
+            "key_phrases": ["halfling rogue"],
+            "topics": ["Dungeons and Dragons"],
+        }
+    )
+    add_memory_to_vector_db(TEST_DISCUSSION_ID, "Priya plays a halfling rogue.", metadata_str)
+
+    conn = sqlite3.connect(memory_db_path, uri=True)
+    conn.row_factory = sqlite3.Row
+    fts_row = conn.execute("SELECT * FROM memories_fts").fetchone()
+    conn.close()
+
+    assert fts_row["key_phrases"] == "halfling rogue"
+    results = search_memories_by_keyword(TEST_DISCUSSION_ID, "Dungeons and Dragons")
+    assert results == []
+
+
+def test_add_memory_index_topics_folds_into_key_phrases(memory_db_path):
+    """
+    Tests that index_topics=True makes topic terms keyword-searchable via the
+    key_phrases FTS column, without altering the stored metadata.
+    """
+    metadata_str = json.dumps(
+        {
+            "title": "Game night",
+            "summary": "Priya plays a halfling rogue.",
+            "entities": ["Priya"],
+            "key_phrases": ["halfling rogue"],
+            "topics": ["Dungeons and Dragons", "tabletop games"],
+        }
+    )
+    add_memory_to_vector_db(TEST_DISCUSSION_ID, "Priya plays a halfling rogue.", metadata_str,
+                            index_topics=True)
+
+    conn = sqlite3.connect(memory_db_path, uri=True)
+    conn.row_factory = sqlite3.Row
+    fts_row = conn.execute("SELECT * FROM memories_fts").fetchone()
+    mem_row = conn.execute("SELECT * FROM memories").fetchone()
+    conn.close()
+
+    assert fts_row["key_phrases"] == "halfling rogue Dungeons and Dragons tabletop games"
+    # The ground-truth metadata is untouched; only the FTS index gains the terms.
+    assert mem_row["metadata_json"] == metadata_str
+    results = search_memories_by_keyword(TEST_DISCUSSION_ID, "Dungeons and Dragons")
+    assert len(results) == 1
+    assert results[0]["memory_text"] == "Priya plays a halfling rogue."
+
+
+def test_add_memory_index_topics_without_topics_is_harmless(memory_db_path):
+    """
+    Tests that index_topics=True with no 'topics' key leaves key_phrases as-is.
+    """
+    metadata_str = json.dumps(
+        {
+            "title": "T",
+            "summary": "S",
+            "entities": [],
+            "key_phrases": ["only phrase"],
+        }
+    )
+    add_memory_to_vector_db(TEST_DISCUSSION_ID, "S", metadata_str, index_topics=True)
+
+    conn = sqlite3.connect(memory_db_path, uri=True)
+    conn.row_factory = sqlite3.Row
+    fts_row = conn.execute("SELECT * FROM memories_fts").fetchone()
+    conn.close()
+
+    assert fts_row["key_phrases"] == "only phrase"
+
+
+def test_add_memory_with_invalid_json_fails_fast_no_writes(memory_db_path, mocker):
+    """
+    Tests that invalid metadata JSON fails fast: the JSON is parsed before any
+    database write begins, so no transaction opens and no data lands in either table.
     """
     mock_logger = mocker.patch("Middleware.utilities.vector_db_utils.logger.error")
     invalid_json = '{"title": "Test Title", "summary": }'  # Malformed JSON
@@ -521,7 +747,7 @@ def test_add_memory_with_invalid_json_rollback(memory_db_path, mocker):
     # Check that the specific JSON error was logged
     assert any("Failed to parse metadata JSON" in call[0][0] for call in mock_logger.call_args_list)
 
-    # Verify transaction rollback: no data should exist in either table
+    # Verify nothing was written: no data should exist in either table
     conn = sqlite3.connect(memory_db_path, uri=True)
     count_mem = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
     count_fts = conn.execute("SELECT COUNT(*) FROM memories_fts").fetchone()[0]
@@ -584,11 +810,41 @@ def test_search_memories_by_keyword_basic(populated_memory_db):
     # Test searching for a keyword that appears in key_phrases of multiple memories
     results = search_memories_by_keyword(TEST_DISCUSSION_ID, "language", limit=5)
     assert len(results) == 2
-    # BM25 ranking might vary, but both should be present. SQLite FTS5 rank is ordered DESC (lower is better).
-    assert results[0]["rank"] <= results[1]["rank"]
+    # Both memories mention "language" exactly once in the same column, so their
+    # bm25 scores can legitimately tie; strict ordering is pinned by
+    # test_search_memories_by_keyword_relevance_ordering. Here we pin only that
+    # bm25 rank values are negative scores (more negative = more relevant).
+    assert all(r["rank"] < 0 for r in results)
     texts = [r["memory_text"] for r in results]
     assert any("Python programming" in text for text in texts)
     assert any("SQL databases" in text for text in texts)
+
+
+def test_search_memories_by_keyword_relevance_ordering(relevance_memory_db):
+    """
+    Pins the corrected bm25 ordering: SQLite FTS5 bm25 scores are negative
+    (more negative = more relevant), so 'ORDER BY rank ASC' must return the
+    strongest match first, not last.
+    """
+    results = search_memories_by_keyword(TEST_DISCUSSION_ID, "dragon", limit=5)
+
+    assert len(results) == 2
+    assert results[0]["memory_text"] == STRONG_DRAGON_TEXT
+    assert results[1]["memory_text"] == WEAK_DRAGON_TEXT
+    # The stronger match must have the strictly smaller (more negative) rank.
+    assert results[0]["rank"] < results[1]["rank"]
+    assert all(r["rank"] < 0 for r in results)
+
+
+def test_search_memories_by_keyword_relevance_survives_limit(relevance_memory_db):
+    """
+    With limit=1 the single surviving row must be the strongest match. Under
+    the old 'ORDER BY rank DESC' bug the weak match would have been returned.
+    """
+    results = search_memories_by_keyword(TEST_DISCUSSION_ID, "dragon", limit=1)
+
+    assert len(results) == 1
+    assert results[0]["memory_text"] == STRONG_DRAGON_TEXT
 
 
 def test_search_memories_by_keyword_multi(populated_memory_db):
@@ -622,19 +878,36 @@ def test_search_memories_by_keyword_edge_cases(populated_memory_db):
     assert results == []
 
 
-def test_search_memories_keyword_limit_warning(populated_memory_db, mocker):
+def test_search_memories_keyword_limit_warning(memory_db_path, mocker):
     """
-    Tests that a warning is logged and the query is truncated when too many keywords are provided.
+    Tests truncation semantics for oversized keyword lists: a warning is
+    logged, a memory matching only a keyword past the truncation boundary
+    (keyword #61+) is not returned, while a memory matching keyword #1 is.
     """
     mock_logger = mocker.patch("Middleware.utilities.vector_db_utils.logger.warning")
+
+    kept_text = "This memory mentions keyword0 explicitly."
+    dropped_text = f"This memory mentions keyword{MAX_KEYWORDS_FOR_SEARCH} explicitly."
+
+    def make_metadata(title):
+        return json.dumps({"title": title, "summary": "", "entities": [], "key_phrases": []})
+
+    # Matches the first keyword ("keyword0"), so it survives truncation.
+    add_memory_to_vector_db(TEST_DISCUSSION_ID, kept_text, make_metadata("Kept"))
+    # Matches only the 61st keyword (index MAX_KEYWORDS_FOR_SEARCH), which is truncated away.
+    add_memory_to_vector_db(TEST_DISCUSSION_ID, dropped_text, make_metadata("Dropped"))
 
     # Create a search query exceeding the limit
     num_keywords = MAX_KEYWORDS_FOR_SEARCH + 5
     keywords = [f"keyword{i}" for i in range(num_keywords)]
     search_query = ";".join(keywords)
 
-    # Execution should proceed without crashing
-    search_memories_by_keyword(TEST_DISCUSSION_ID, search_query, limit=5)
+    results = search_memories_by_keyword(TEST_DISCUSSION_ID, search_query, limit=5)
+
+    # Only the memory matching a keyword inside the truncated window is returned.
+    texts = [r["memory_text"] for r in results]
+    assert kept_text in texts
+    assert dropped_text not in texts
 
     # Check that the warning was logged correctly
     mock_logger.assert_called_once()
@@ -830,3 +1103,330 @@ def test_vector_check_hash_timestamps(memory_db_path, mocker):
     assert stored_times[0] == time1
     assert stored_times[1] == time2
     assert stored_times[2] == time3
+
+
+# --- Ranking Option Tests (bm25_weights / use_recency) ---
+
+def _insert_memory_with_date(db_uri, memory_text, metadata, date_added):
+    """Inserts a memory with a controlled date_added, mirroring the production insert shape."""
+    conn = sqlite3.connect(db_uri, uri=True)
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            'INSERT INTO memories (discussion_id, memory_text, date_added, metadata_json) VALUES (?, ?, ?, ?)',
+            (TEST_DISCUSSION_ID, memory_text, date_added, json.dumps(metadata)))
+        memory_id = cur.lastrowid
+        cur.execute(
+            'INSERT INTO memories_fts (rowid, title, summary, entities, key_phrases, memory_text_unweighted) '
+            'VALUES (?, ?, ?, ?, ?, ?)',
+            (memory_id, metadata.get('title', ''), metadata.get('summary', ''),
+             ' '.join(metadata.get('entities', [])), ' '.join(metadata.get('key_phrases', [])),
+             memory_text))
+        conn.commit()
+        return memory_id
+    finally:
+        conn.close()
+
+
+def test_search_bm25_weights_zero_out_columns(memory_db_path):
+    """
+    Tests that per-column weights change ranking deterministically: zeroing a
+    column removes its contribution entirely, so the memory matching only in
+    the zeroed column falls behind the one matching in the weighted column.
+    """
+    now_iso = real_datetime.datetime.now(real_datetime.timezone.utc).isoformat()
+    title_only_id = _insert_memory_with_date(
+        memory_db_path, "A neutral body of text with no special terms.",
+        {"title": "Phoenix sighting", "summary": "s", "entities": [], "key_phrases": []},
+        now_iso)
+    text_only_id = _insert_memory_with_date(
+        memory_db_path, "The phoenix rose. Phoenix feathers and phoenix fire everywhere.",
+        {"title": "Neutral title", "summary": "s", "entities": [], "key_phrases": []},
+        now_iso)
+
+    # Only memory_text counts: the text-only match must rank first.
+    rows = search_memories_by_keyword(TEST_DISCUSSION_ID, "phoenix",
+                                      bm25_weights=[0.0, 0.0, 0.0, 0.0, 1.0])
+    assert [r['id'] for r in rows] == [text_only_id, title_only_id]
+
+    # Only title counts: the title-only match must rank first.
+    rows = search_memories_by_keyword(TEST_DISCUSSION_ID, "phoenix",
+                                      bm25_weights=[1.0, 0.0, 0.0, 0.0, 0.0])
+    assert [r['id'] for r in rows] == [title_only_id, text_only_id]
+
+
+def test_search_invalid_bm25_weights_ignored_with_warning(memory_db_path, mocker):
+    """Tests that malformed weights are logged and ignored, not fatal."""
+    now_iso = real_datetime.datetime.now(real_datetime.timezone.utc).isoformat()
+    _insert_memory_with_date(
+        memory_db_path, "A memory about a phoenix.",
+        {"title": "t", "summary": "s", "entities": [], "key_phrases": []}, now_iso)
+    mock_warn = mocker.patch("Middleware.utilities.vector_db_utils.logger.warning")
+
+    rows = search_memories_by_keyword(TEST_DISCUSSION_ID, "phoenix", bm25_weights=[1.0, 2.0])
+
+    assert len(rows) == 1
+    mock_warn.assert_called_once()
+    assert "bm25_weights" in mock_warn.call_args[0][0]
+
+
+def test_search_bool_bm25_weight_ignored_with_warning(memory_db_path, mocker):
+    """A bool sneaks past a naive numeric check (bool subclasses int); the
+    validation must reject it like any other malformed weights list."""
+    now_iso = real_datetime.datetime.now(real_datetime.timezone.utc).isoformat()
+    _insert_memory_with_date(
+        memory_db_path, "A memory about a phoenix.",
+        {"title": "t", "summary": "s", "entities": [], "key_phrases": []}, now_iso)
+    mock_warn = mocker.patch("Middleware.utilities.vector_db_utils.logger.warning")
+
+    rows = search_memories_by_keyword(TEST_DISCUSSION_ID, "phoenix",
+                                      bm25_weights=[True, 1.0, 1.0, 1.0, 1.0])
+
+    assert len(rows) == 1
+    mock_warn.assert_called_once()
+    assert "bm25_weights" in mock_warn.call_args[0][0]
+
+
+def test_search_recency_boost_flips_stale_stronger_match(memory_db_path):
+    """
+    Tests the recency boost end to end: an old memory with a stronger BM25 match
+    outranks a fresh weaker one under pure BM25, but the fresh memory wins once
+    use_recency multiplies in the time-decay boost (~2.5x for new vs ~1.0x for
+    a years-old memory, larger than the term-frequency advantage).
+    """
+    old_iso = "2019-01-01T00:00:00+00:00"
+    new_iso = real_datetime.datetime.now(real_datetime.timezone.utc).isoformat()
+    old_strong_id = _insert_memory_with_date(
+        memory_db_path, "The griffin attacked. The griffin was enormous and fearsome.",
+        {"title": "t1", "summary": "s", "entities": [], "key_phrases": []}, old_iso)
+    new_weak_id = _insert_memory_with_date(
+        memory_db_path, "A griffin was mentioned briefly during the conversation today.",
+        {"title": "t2", "summary": "s", "entities": [], "key_phrases": []}, new_iso)
+
+    plain = search_memories_by_keyword(TEST_DISCUSSION_ID, "griffin")
+    assert [r['id'] for r in plain] == [old_strong_id, new_weak_id]
+
+    boosted = search_memories_by_keyword(TEST_DISCUSSION_ID, "griffin", use_recency=True)
+    assert [r['id'] for r in boosted] == [new_weak_id, old_strong_id]
+
+
+def test_search_weights_and_recency_combined_ordering(memory_db_path):
+    """
+    Combined mode must bind the WEIGHTED rank into ORDER BY, not the FTS5
+    'rank' alias (which SQLite resolves to the equal-weight default inside an
+    expression): with the text column zeroed, an old title-only match must beat
+    a fresh text-only match no matter how large the fresh row's recency boost.
+    """
+    old_iso = "2019-01-01T00:00:00+00:00"
+    new_iso = real_datetime.datetime.now(real_datetime.timezone.utc).isoformat()
+    title_old_id = _insert_memory_with_date(
+        memory_db_path, "A neutral body of text with no special terms.",
+        {"title": "Phoenix sighting", "summary": "s", "entities": [], "key_phrases": []},
+        old_iso)
+    text_new_id = _insert_memory_with_date(
+        memory_db_path, "The phoenix rose. Phoenix feathers and phoenix fire everywhere.",
+        {"title": "Neutral title", "summary": "s", "entities": [], "key_phrases": []},
+        new_iso)
+
+    rows = search_memories_by_keyword(TEST_DISCUSSION_ID, "phoenix",
+                                      bm25_weights=[1.0, 0.0, 0.0, 0.0, 0.0],
+                                      use_recency=True)
+
+    assert [r['id'] for r in rows] == [title_old_id, text_new_id]
+
+
+# --- Embedding Storage Tests ---
+
+def _blob(values):
+    """Packs floats into the float32 blob format used by the embedding store."""
+    from array import array
+    return array('f', values).tobytes()
+
+
+def test_initialize_creates_memory_embeddings_table(memory_db_path):
+    """Tests that init adds the embeddings table (including to pre-embedding DBs on re-open)."""
+    conn = sqlite3.connect(memory_db_path, uri=True)
+    count = conn.execute(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memory_embeddings'"
+    ).fetchone()[0]
+    conn.close()
+
+    assert count == 1
+
+
+def test_add_memory_returns_new_id(memory_db_path):
+    """Tests that add_memory_to_vector_db returns the inserted row id."""
+    metadata = json.dumps({"title": "t", "summary": "s", "entities": [], "key_phrases": []})
+
+    first_id = add_memory_to_vector_db(TEST_DISCUSSION_ID, "first", metadata)
+    second_id = add_memory_to_vector_db(TEST_DISCUSSION_ID, "second", metadata)
+
+    assert first_id == 1
+    assert second_id == 2
+
+
+def test_add_memory_returns_none_on_bad_metadata(memory_db_path):
+    """Tests that a metadata parse failure returns None instead of an id."""
+    assert add_memory_to_vector_db(TEST_DISCUSSION_ID, "text", "{not json") is None
+
+
+def test_embeddings_roundtrip(memory_db_path):
+    """Tests storing and retrieving embedding blobs for a model."""
+    stored = add_embeddings_to_db(
+        TEST_DISCUSSION_ID, [(1, _blob([1.0, 0.0])), (2, _blob([0.0, 1.0]))], "model-a")
+
+    assert stored == 2
+    pairs = get_all_embeddings(TEST_DISCUSSION_ID, "model-a")
+    assert sorted(pair[0] for pair in pairs) == [1, 2]
+    assert dict(pairs)[1] == _blob([1.0, 0.0])
+    conn = sqlite3.connect(memory_db_path, uri=True)
+    dims = [row[0] for row in conn.execute("SELECT dim FROM memory_embeddings ORDER BY memory_id")]
+    conn.close()
+    assert dims == [2, 2]
+
+
+def test_embeddings_models_coexist_and_replace_within_model(memory_db_path):
+    """
+    Tests the (memory_id, model) primary key semantics: same-model re-embeds
+    replace the row, while other models' vectors are untouched. This is the
+    guarantee that switching embedding models never destroys previous work.
+    """
+    add_embeddings_to_db(TEST_DISCUSSION_ID, [(1, _blob([1.0, 0.0]))], "model-a")
+    add_embeddings_to_db(TEST_DISCUSSION_ID, [(1, _blob([0.5, 0.5]))], "model-b")
+    add_embeddings_to_db(TEST_DISCUSSION_ID, [(1, _blob([0.0, 1.0]))], "model-a")
+
+    model_a = get_all_embeddings(TEST_DISCUSSION_ID, "model-a")
+    model_b = get_all_embeddings(TEST_DISCUSSION_ID, "model-b")
+
+    assert model_a == [(1, _blob([0.0, 1.0]))]
+    assert model_b == [(1, _blob([0.5, 0.5]))]
+
+
+def test_add_embeddings_empty_list_is_no_op(memory_db_path):
+    assert add_embeddings_to_db(TEST_DISCUSSION_ID, [], "model-a") == 0
+
+
+def test_get_memories_without_embeddings(memory_db_path):
+    """Tests the lazy-backfill query: only un-embedded memories, oldest first, limited."""
+    metadata = json.dumps({"title": "t", "summary": "s", "entities": [], "key_phrases": []})
+    for text in ("one", "two", "three"):
+        add_memory_to_vector_db(TEST_DISCUSSION_ID, text, metadata)
+    add_embeddings_to_db(TEST_DISCUSSION_ID, [(2, _blob([1.0]))], "model-a")
+
+    rows = get_memories_without_embeddings(TEST_DISCUSSION_ID, "model-a", limit=10)
+    assert [(row['id'], row['memory_text']) for row in rows] == [(1, "one"), (3, "three")]
+
+    # A different model has no embeddings at all, so everything is a candidate.
+    rows_b = get_memories_without_embeddings(TEST_DISCUSSION_ID, "model-b", limit=2)
+    assert [row['id'] for row in rows_b] == [1, 2]
+
+
+def test_get_memories_by_ids_preserves_order_and_skips_missing(memory_db_path):
+    metadata = json.dumps({"title": "t", "summary": "s", "entities": [], "key_phrases": []})
+    for text in ("one", "two", "three"):
+        add_memory_to_vector_db(TEST_DISCUSSION_ID, text, metadata)
+
+    rows = get_memories_by_ids(TEST_DISCUSSION_ID, [3, 99, 1])
+
+    assert [(row['id'], row['memory_text']) for row in rows] == [(3, "three"), (1, "one")]
+
+
+def test_get_memories_by_ids_empty_input(memory_db_path):
+    assert get_memories_by_ids(TEST_DISCUSSION_ID, []) == []
+
+
+# --- Embedding-store error paths ---
+# The embedding tier is best-effort by design: every failure must degrade to an
+# empty result / zero count rather than raising into the workflow, and
+# connections must be closed (or rolled back) on the way out.
+
+def test_add_embeddings_connection_error(mocker):
+    """A failed connection returns 0 rows written and logs the failure."""
+    mocker.patch("Middleware.utilities.vector_db_utils.get_db_connection", return_value=None)
+    mock_logger = mocker.patch("Middleware.utilities.vector_db_utils.logger.error")
+
+    written = add_embeddings_to_db(TEST_DISCUSSION_ID, [(1, _blob([1.0]))], "model-a")
+
+    assert written == 0
+    mock_logger.assert_called_once()
+    assert "Failed to add embeddings" in mock_logger.call_args[0][0]
+
+
+def test_add_embeddings_execution_error_rolls_back(mocker):
+    """A write failure rolls back, never commits, closes, and reports 0 rows."""
+    mock_conn = MagicMock(spec=sqlite3.Connection)
+    mock_conn.executemany.side_effect = sqlite3.Error("write failed")
+    mocker.patch("Middleware.utilities.vector_db_utils.get_db_connection", return_value=mock_conn)
+    mock_logger = mocker.patch("Middleware.utilities.vector_db_utils.logger.error")
+
+    written = add_embeddings_to_db(TEST_DISCUSSION_ID, [(1, _blob([1.0]))], "model-a")
+
+    assert written == 0
+    mock_logger.assert_called_once()
+    assert "Failed to add embeddings" in mock_logger.call_args[0][0]
+    mock_conn.rollback.assert_called_once()
+    mock_conn.commit.assert_not_called()
+    mock_conn.close.assert_called_once()
+
+
+def test_get_all_embeddings_connection_error(mocker):
+    mocker.patch("Middleware.utilities.vector_db_utils.get_db_connection", return_value=None)
+
+    assert get_all_embeddings(TEST_DISCUSSION_ID, "model-a") == []
+
+
+def test_get_all_embeddings_query_error(mocker):
+    """A query failure returns [] (semantic search then degrades to keyword)."""
+    mock_conn = MagicMock(spec=sqlite3.Connection)
+    mock_conn.execute.side_effect = sqlite3.Error("query failed")
+    mocker.patch("Middleware.utilities.vector_db_utils.get_db_connection", return_value=mock_conn)
+    mock_logger = mocker.patch("Middleware.utilities.vector_db_utils.logger.error")
+
+    result = get_all_embeddings(TEST_DISCUSSION_ID, "model-a")
+
+    assert result == []
+    mock_logger.assert_called_once()
+    assert "Failed to get embeddings" in mock_logger.call_args[0][0]
+    mock_conn.close.assert_called_once()
+
+
+def test_get_memories_without_embeddings_connection_error(mocker):
+    mocker.patch("Middleware.utilities.vector_db_utils.get_db_connection", return_value=None)
+
+    assert get_memories_without_embeddings(TEST_DISCUSSION_ID, "model-a") == []
+
+
+def test_get_memories_without_embeddings_query_error(mocker):
+    """A query failure returns [] so the lazy backfill silently skips a cycle."""
+    mock_conn = MagicMock(spec=sqlite3.Connection)
+    mock_conn.execute.side_effect = sqlite3.Error("query failed")
+    mocker.patch("Middleware.utilities.vector_db_utils.get_db_connection", return_value=mock_conn)
+    mock_logger = mocker.patch("Middleware.utilities.vector_db_utils.logger.error")
+
+    result = get_memories_without_embeddings(TEST_DISCUSSION_ID, "model-a")
+
+    assert result == []
+    mock_logger.assert_called_once()
+    assert "Failed to get un-embedded memories" in mock_logger.call_args[0][0]
+    mock_conn.close.assert_called_once()
+
+
+def test_get_memories_by_ids_connection_error(mocker):
+    mocker.patch("Middleware.utilities.vector_db_utils.get_db_connection", return_value=None)
+
+    assert get_memories_by_ids(TEST_DISCUSSION_ID, [1, 2]) == []
+
+
+def test_get_memories_by_ids_query_error(mocker):
+    """A fetch failure returns [] rather than dropping the whole search."""
+    mock_conn = MagicMock(spec=sqlite3.Connection)
+    mock_conn.execute.side_effect = sqlite3.Error("query failed")
+    mocker.patch("Middleware.utilities.vector_db_utils.get_db_connection", return_value=mock_conn)
+    mock_logger = mocker.patch("Middleware.utilities.vector_db_utils.logger.error")
+
+    result = get_memories_by_ids(TEST_DISCUSSION_ID, [1, 2])
+
+    assert result == []
+    mock_logger.assert_called_once()
+    assert "Failed to get memories by ids" in mock_logger.call_args[0][0]
+    mock_conn.close.assert_called_once()

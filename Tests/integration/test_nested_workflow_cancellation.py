@@ -4,15 +4,19 @@
 End-to-end integration tests for request cancellation with nested workflows.
 
 These tests verify that cancellation signals correctly terminate both parent
-and child workflows in a nested workflow scenario.
+and child workflows in a nested workflow scenario. The core propagation test
+drives the real machinery (WorkflowManager -> WorkflowProcessor ->
+SubWorkflowHandler -> nested WorkflowManager), mocking only workflow-config
+loading and the LLM dispatch layer.
 """
 
 import pytest
-from unittest.mock import MagicMock, patch, Mock
+from unittest.mock import MagicMock
 
-from Middleware.workflows.managers.workflow_manager import WorkflowManager
 from Middleware.exceptions.early_termination_exception import EarlyTerminationException
 from Middleware.services.cancellation_service import cancellation_service
+from Middleware.workflows.managers.workflow_manager import WorkflowManager
+from Middleware.workflows.processors.workflows_processor import WorkflowProcessor
 
 
 @pytest.fixture
@@ -26,159 +30,129 @@ def setup_cancellation_service():
 
 
 @pytest.fixture
-def mock_workflow_environment(mocker):
-    """Mock the environment for workflow execution."""
-    # Mock file system and config loading
-    mocker.patch('os.path.exists', return_value=True)
-    mocker.patch('json.load', return_value={
-        "nodes": [
-            {"type": "Standard", "returnToUser": True}
-        ]
-    })
+def real_workflow_environment(mocker):
+    """
+    Wires WorkflowManager to run the real sub-workflow machinery hermetically:
+    workflow configs are served from an in-memory registry instead of disk,
+    services that would touch disk or real user config are mocked, and the LLM
+    dispatch layer is the only mocked execution surface. StandardNodeHandler
+    and SubWorkflowHandler remain real so the true nested path is exercised.
+    """
+    workflow_configs = {}
 
-    # Mock config utilities (correct module path)
-    mocker.patch('Middleware.utilities.config_utils.get_current_username',
-                 return_value='test_user')
-    mocker.patch('Middleware.utilities.config_utils.get_user_config',
-                 return_value={})
+    # Serve workflow configs from the in-memory registry. The path finder
+    # returns the workflow name itself as the "path"; json.load resolves the
+    # config for whichever "file" was opened last.
+    mocker.patch(
+        'Middleware.workflows.managers.workflow_manager.default_get_workflow_path',
+        side_effect=lambda name, **kwargs: name
+    )
+    mock_file_open = mocker.patch('builtins.open', mocker.mock_open(read_data='{}'))
+    mocker.patch('json.load',
+                 side_effect=lambda f: workflow_configs[mock_file_open.call_args[0][0]])
 
-    # Mock LLM handler service
-    mock_llm_service = MagicMock()
-    mock_llm_handler = MagicMock()
-    mock_llm_service.load_model_from_config.return_value = mock_llm_handler
-    mocker.patch('Middleware.workflows.managers.workflow_manager.LlmHandlerService',
-                 return_value=mock_llm_service)
-
-    # Mock internal services used by WorkflowProcessor
+    # Services that would touch disk or the real user config.
+    mocker.patch('Middleware.workflows.managers.workflow_manager.LlmHandlerService')
+    mocker.patch('Middleware.workflows.managers.workflow_manager.LockingService')
     mocker.patch('Middleware.workflows.processors.workflows_processor.LockingService')
     mocker.patch('Middleware.workflows.processors.workflows_processor.TimestampService')
+    mocker.patch('Middleware.workflows.processors.workflows_processor.get_chat_template_name',
+                 return_value='chatml')
+    mocker.patch('Middleware.workflows.managers.workflow_variable_manager.get_chat_template_name',
+                 return_value='chatml')
+    mocker.patch('Middleware.workflows.managers.workflow_variable_manager.MemoryService')
+    mocker.patch('Middleware.workflows.managers.workflow_variable_manager.TimestampService')
 
-    # Mock node handlers
+    # Handlers not exercised by these tests are stubbed at construction time.
+    for handler_cls in ('MemoryNodeHandler', 'ToolNodeHandler', 'SpecializedNodeHandler',
+                        'ContextCompactorHandler', 'WebFetchHandler', 'CurlCommandHandler',
+                        'MCPToolCallHandler'):
+        mocker.patch(f'Middleware.workflows.managers.workflow_manager.{handler_cls}')
+
+    # The LLM dispatch layer is mocked; everything above it is real.
+    mock_dispatch_service = mocker.patch(
+        'Middleware.workflows.handlers.impl.standard_node_handler.LLMDispatchService')
+
     return {
-        'llm_service': mock_llm_service,
-        'llm_handler': mock_llm_handler
+        'workflow_configs': workflow_configs,
+        'dispatch': mock_dispatch_service.dispatch,
     }
+
+
+def make_processor(node_handlers, configs, request_id, workflow_id):
+    """Builds a WorkflowProcessor with the boilerplate arguments used by the
+    hand-wired multi-level tests below."""
+    return WorkflowProcessor(
+        node_handlers=node_handlers,
+        llm_handler_service=MagicMock(),
+        workflow_variable_service=MagicMock(),
+        workflow_config_name=workflow_id,
+        workflow_file_config={'nodes': configs},
+        configs=configs,
+        request_id=request_id,
+        workflow_id=workflow_id,
+        discussion_id="discussion_123",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        non_responder_flag=None,
+        first_node_system_prompt_override=None,
+        first_node_prompt_override=None,
+        scoped_inputs=None
+    )
 
 
 class TestNestedWorkflowCancellation:
     """Integration tests for nested workflow cancellation."""
 
-    @patch('Middleware.workflows.managers.workflow_manager.open', create=True)
     def test_parent_workflow_cancellation_terminates_child(
-            self, mock_open, mock_workflow_environment, setup_cancellation_service):
+            self, real_workflow_environment, setup_cancellation_service):
         """
-        Test that cancelling a parent workflow also terminates the child workflow.
-
-        Scenario:
-        - Parent workflow starts
-        - Parent workflow spawns child workflow
-        - Cancellation signal arrives
-        - Both parent and child should terminate
+        Drives the REAL nested path: a parent workflow's CustomWorkflow node is
+        handled by the real SubWorkflowHandler, which spawns a real nested
+        WorkflowManager/WorkflowProcessor for the child. A cancellation raised
+        while the child's first LLM node runs must stop the child's remaining
+        node AND the parent's follow-up node, and the request_id must have
+        propagated into the child's dispatch calls.
         """
         request_id = "test_nested_cancel_123"
 
-        # Configure mock file reading for parent workflow
-        parent_workflow_config = {
-            "nodes": [
-                {
-                    "type": "CustomWorkflow",
-                    "workflowName": "child_workflow",
-                    "returnToUser": True
-                }
-            ]
-        }
+        real_workflow_environment['workflow_configs'].update({
+            "parent_workflow": {"nodes": [
+                {"type": "CustomWorkflow", "workflowName": "child_workflow", "title": "Run Child"},
+                {"type": "Standard", "title": "parent-after-child", "returnToUser": True},
+            ]},
+            "child_workflow": {"nodes": [
+                {"type": "Standard", "title": "child-node-1"},
+                {"type": "Standard", "title": "child-node-2"},
+            ]},
+        })
 
-        # Configure mock file reading for child workflow
-        child_workflow_config = {
-            "nodes": [
-                {"type": "Standard", "returnToUser": True},
-                {"type": "Standard", "returnToUser": False},
-            ]
-        }
+        dispatched = []
 
-        execution_log = {'parent_nodes': 0, 'child_nodes': 0}
+        def fake_dispatch(context, llm_takes_images, max_images):
+            dispatched.append((context.config.get("title"), context.request_id))
+            # Simulate the operator cancelling the request while the child
+            # workflow is executing its first LLM node.
+            if context.config.get("title") == "child-node-1":
+                cancellation_service.request_cancellation(context.request_id)
+            return "LLM output"
 
-        def mock_standard_handler(context):
-            """Track execution and simulate work."""
-            # Determine if this is parent or child based on workflow config
-            if context.workflow_config.get('nodes') == parent_workflow_config['nodes']:
-                execution_log['parent_nodes'] += 1
-            else:
-                execution_log['child_nodes'] += 1
+        real_workflow_environment['dispatch'].side_effect = fake_dispatch
 
-                # Cancel after first child node
-                if execution_log['child_nodes'] == 1:
-                    cancellation_service.request_cancellation(request_id)
+        manager = WorkflowManager(workflow_config_name="parent_workflow")
 
-            return "output"
-
-        def mock_custom_workflow_handler(context):
-            """Simulate nested workflow execution."""
-            # This would normally call WorkflowManager.run_custom_workflow
-            # For testing, we'll manually create and execute a child processor
-            from Middleware.workflows.processors.workflows_processor import WorkflowProcessor
-
-            child_processor = WorkflowProcessor(
-                node_handlers=context.node_handlers,
-                llm_handler_service=MagicMock(),
-                workflow_variable_service=context.workflow_variable_service,
-                workflow_config_name="child_workflow",
-                workflow_file_config=child_workflow_config,
-                configs=child_workflow_config['nodes'],
-                request_id=context.request_id,  # Same request_id for nested workflow
-                workflow_id="child_workflow_id",
-                discussion_id=context.discussion_id,
-                messages=context.messages,
-                stream=context.stream,
-                non_responder_flag=None,
-                first_node_system_prompt_override=None,
-                first_node_prompt_override=None,
-                scoped_inputs=None
-            )
-
-            # Execute child workflow - should raise EarlyTerminationException
-            return list(child_processor.execute())
-
-        # Create node handlers
-        node_handlers = {
-            'Standard': MagicMock(handle=mock_standard_handler),
-            'CustomWorkflow': MagicMock(handle=mock_custom_workflow_handler),
-        }
-        node_handlers['CustomWorkflow'].workflow_manager = MagicMock()
-
-        # Mock file contents
-        mock_file = MagicMock()
-        mock_file.__enter__.return_value.read.return_value = str(parent_workflow_config)
-        mock_open.return_value = mock_file
-
-        # Execute the parent workflow
         with pytest.raises(EarlyTerminationException):
-            from Middleware.workflows.processors.workflows_processor import WorkflowProcessor
-
-            processor = WorkflowProcessor(
-                node_handlers=node_handlers,
-                llm_handler_service=mock_workflow_environment['llm_service'],
-                workflow_variable_service=MagicMock(),
-                workflow_config_name="parent_workflow",
-                workflow_file_config=parent_workflow_config,
-                configs=parent_workflow_config['nodes'],
+            manager.run_workflow(
+                messages=[{"role": "user", "content": "hello"}],
                 request_id=request_id,
-                workflow_id="parent_workflow_id",
-                discussion_id="discussion_123",
-                messages=[{"role": "user", "content": "test"}],
+                discussionId="disc-nested",
                 stream=False,
-                non_responder_flag=None,
-                first_node_system_prompt_override=None,
-                first_node_prompt_override=None,
-                scoped_inputs=None
             )
 
-            list(processor.execute())
-
-        # Verify that child workflow started but was cancelled
-        assert execution_log['child_nodes'] == 1, "Child workflow should have executed one node before cancellation"
-
-        # Verify cancellation was acknowledged
+        # The request_id propagated into the child workflow's dispatch, and
+        # ONLY the first child node ran: the child's second node and the
+        # parent's follow-up node were both stopped by the cancellation.
+        assert dispatched == [("child-node-1", request_id)]
         assert not cancellation_service.is_cancelled(request_id), "Cancellation should be acknowledged"
 
     def test_child_workflow_cancellation_propagates_to_parent(self, mocker, setup_cancellation_service):
@@ -186,10 +160,11 @@ class TestNestedWorkflowCancellation:
         Test that a cancellation in a child workflow propagates up to the parent.
 
         Scenario:
-        - Parent workflow starts
+        - Parent workflow starts and executes its first node
         - Parent spawns child workflow
-        - Child workflow gets cancelled
-        - Both should terminate gracefully
+        - Child's first node triggers a cancellation
+        - The child stops before its remaining nodes; the parent stops before
+          its remaining nodes
         """
         request_id = "test_child_cancel_456"
 
@@ -206,7 +181,7 @@ class TestNestedWorkflowCancellation:
         child_config = [
             {"type": "Standard"},
             {"type": "Standard"},
-            {"type": "Standard", "returnToUser": True}  # Add a third node to ensure cancellation is checked
+            {"type": "Standard", "returnToUser": True}
         ]
 
         execution_log = []
@@ -214,36 +189,15 @@ class TestNestedWorkflowCancellation:
         def mock_standard(context):
             wf_id = context.workflow_id
             execution_log.append(('standard', wf_id))
-            # Count only Standard nodes with child_id (not child_start entries)
-            child_standard_count = len([x for x in execution_log if x == ('standard', 'child_id')])
-            # Cancel after first child Standard node executes
-            if wf_id == "child_id" and child_standard_count == 1:
-                # We just executed the first child Standard node, cancel now
+            # Cancel as soon as the first child Standard node executes
+            if wf_id == "child_id":
                 cancellation_service.request_cancellation(request_id)
             return "output"
 
         def mock_custom_workflow(context):
-            from Middleware.workflows.processors.workflows_processor import WorkflowProcessor
-
-            child_processor = WorkflowProcessor(
-                node_handlers=context.node_handlers,
-                llm_handler_service=MagicMock(),
-                workflow_variable_service=context.workflow_variable_service,
-                workflow_config_name="child_workflow",
-                workflow_file_config={'nodes': child_config},
-                configs=child_config,
-                request_id=context.request_id,
-                workflow_id="child_id",
-                discussion_id=context.discussion_id,
-                messages=context.messages,
-                stream=context.stream,
-                non_responder_flag=None,
-                first_node_system_prompt_override=None,
-                first_node_prompt_override=None,
-                scoped_inputs=None
-            )
-
             execution_log.append(('child_start', 'child_id'))
+            child_processor = make_processor(context.node_handlers, child_config,
+                                             context.request_id, "child_id")
             return list(child_processor.execute())
 
         node_handlers = {
@@ -252,43 +206,27 @@ class TestNestedWorkflowCancellation:
         }
         node_handlers['CustomWorkflow'].workflow_manager = MagicMock()
 
-        from Middleware.workflows.processors.workflows_processor import WorkflowProcessor
-
-        processor = WorkflowProcessor(
-            node_handlers=node_handlers,
-            llm_handler_service=MagicMock(),
-            workflow_variable_service=MagicMock(),
-            workflow_config_name="parent_workflow",
-            workflow_file_config={'nodes': parent_config},
-            configs=parent_config,
-            request_id=request_id,
-            workflow_id="parent_id",
-            discussion_id="discussion_456",
-            messages=[{"role": "user", "content": "test"}],
-            stream=False,
-            non_responder_flag=None,
-            first_node_system_prompt_override=None,
-            first_node_prompt_override=None,
-            scoped_inputs=None
-        )
+        processor = make_processor(node_handlers, parent_config, request_id, "parent_id")
 
         # Should raise EarlyTerminationException when child is cancelled
         with pytest.raises(EarlyTerminationException):
             list(processor.execute())
 
-        # Verify execution flow
-        assert len(execution_log) >= 2, f"Should have executed parent node and started child. Got: {execution_log}"
+        # Exact flow: parent's first node ran, the child started, the child's
+        # first node ran and cancelled, then nothing else at either level.
+        assert execution_log == [
+            ('standard', 'parent_id'),
+            ('child_start', 'child_id'),
+            ('standard', 'child_id'),
+        ]
         assert not cancellation_service.is_cancelled(request_id), "Cancellation should be acknowledged"
 
     def test_multiple_nested_levels_cancellation(self, mocker, setup_cancellation_service):
         """
         Test cancellation with multiple levels of nesting (grandparent -> parent -> child).
 
-        Scenario:
-        - Grandparent workflow
-        - Spawns parent workflow
-        - Parent spawns child workflow
-        - Cancellation should terminate all levels
+        The cancellation is triggered from inside the DEEPEST child's first
+        node, and must stop every remaining node at all three levels.
         """
         request_id = "test_multi_level_789"
 
@@ -298,87 +236,53 @@ class TestNestedWorkflowCancellation:
 
         execution_log = []
 
+        # Each level has a follow-up node after its nesting/first node so we can
+        # prove that NO further node ran at ANY level after the cancellation.
+        child_config = [
+            {"type": "Standard", "title": "child-node-1"},
+            {"type": "Standard", "title": "child-node-2", "returnToUser": True},
+        ]
+        parent_config = [
+            {"type": "CustomWorkflow", "workflowName": "child"},
+            {"type": "Standard", "title": "parent-after", "returnToUser": True},
+        ]
+        grandparent_config = [
+            {"type": "CustomWorkflow", "workflowName": "parent"},
+            {"type": "Standard", "title": "grandparent-after", "returnToUser": True},
+        ]
+
         def mock_standard(context):
-            execution_log.append(f"{context.workflow_id}")
+            execution_log.append(f"standard:{context.workflow_id}:{context.config.get('title')}")
+            # Cancel from inside the deepest child's first node.
+            if context.workflow_id == "child" and context.config.get("title") == "child-node-1":
+                cancellation_service.request_cancellation(request_id)
             return "output"
 
-        def create_nested_handler(child_configs, child_name):
-            def handler(context):
-                from Middleware.workflows.processors.workflows_processor import WorkflowProcessor
-
-                execution_log.append(f"entering_{child_name}")
-
-                # Cancel after entering second level
-                if child_name == "parent" and "entering_parent" in execution_log:
-                    cancellation_service.request_cancellation(request_id)
-
-                processor = WorkflowProcessor(
-                    node_handlers=context.node_handlers,
-                    llm_handler_service=MagicMock(),
-                    workflow_variable_service=context.workflow_variable_service,
-                    workflow_config_name=child_name,
-                    workflow_file_config={'nodes': child_configs},
-                    configs=child_configs,
-                    request_id=context.request_id,
-                    workflow_id=child_name,
-                    discussion_id=context.discussion_id,
-                    messages=context.messages,
-                    stream=context.stream,
-                    non_responder_flag=None,
-                    first_node_system_prompt_override=None,
-                    first_node_prompt_override=None,
-                    scoped_inputs=None
-                )
-
-                return list(processor.execute())
-
-            return handler
-
-        child_config = [{"type": "Standard", "returnToUser": True}]
-        parent_config = [{"type": "CustomWorkflow", "workflowName": "child", "returnToUser": True}]
-        grandparent_config = [{"type": "CustomWorkflow", "workflowName": "parent", "returnToUser": True}]
+        def dynamic_custom_handler(context):
+            workflow_name = context.config.get('workflowName')
+            execution_log.append(f"entering:{workflow_name}")
+            configs = parent_config if workflow_name == 'parent' else child_config
+            nested = make_processor(context.node_handlers, configs,
+                                    context.request_id, workflow_name)
+            return list(nested.execute())
 
         node_handlers = {
             'Standard': MagicMock(handle=mock_standard),
-            'CustomWorkflow': MagicMock()
+            'CustomWorkflow': MagicMock(handle=dynamic_custom_handler)
         }
         node_handlers['CustomWorkflow'].workflow_manager = MagicMock()
 
-        # Need to dynamically assign the correct handler based on config
-        def dynamic_custom_handler(context):
-            workflow_name = context.config.get('workflowName')
-            if workflow_name == 'parent':
-                return create_nested_handler(parent_config, 'parent')(context)
-            elif workflow_name == 'child':
-                return create_nested_handler(child_config, 'child')(context)
-            return "output"
-
-        node_handlers['CustomWorkflow'].handle = dynamic_custom_handler
-
-        from Middleware.workflows.processors.workflows_processor import WorkflowProcessor
-
-        processor = WorkflowProcessor(
-            node_handlers=node_handlers,
-            llm_handler_service=MagicMock(),
-            workflow_variable_service=MagicMock(),
-            workflow_config_name="grandparent",
-            workflow_file_config={'nodes': grandparent_config},
-            configs=grandparent_config,
-            request_id=request_id,
-            workflow_id="grandparent",
-            discussion_id="discussion_789",
-            messages=[{"role": "user", "content": "test"}],
-            stream=False,
-            non_responder_flag=None,
-            first_node_system_prompt_override=None,
-            first_node_prompt_override=None,
-            scoped_inputs=None
-        )
+        processor = make_processor(node_handlers, grandparent_config, request_id, "grandparent")
 
         with pytest.raises(EarlyTerminationException):
             list(processor.execute())
 
-        # Should have entered grandparent and parent before cancellation
-        assert "entering_parent" in execution_log
-        assert not cancellation_service.is_cancelled(request_id)
-
+        # The full expected sequence: descend into parent, descend into child,
+        # run the deepest node (which cancels), and then NOTHING further at
+        # any level (no child-node-2, no parent-after, no grandparent-after).
+        assert execution_log == [
+            "entering:parent",
+            "entering:child",
+            "standard:child:child-node-1",
+        ]
+        assert not cancellation_service.is_cancelled(request_id), "Cancellation should be acknowledged"

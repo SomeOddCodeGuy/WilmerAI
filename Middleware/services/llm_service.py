@@ -112,6 +112,6 @@ class LlmHandlerService:
             config_file = get_endpoint_config(config_name)
             return self.initialize_llm_handler(config_file, preset, config_name, stream, truncate_length, max_tokens,
                                                addGenerationPrompt)
-        except Exception as e:
-            logger.error(f"Error loading model from config.")
+        except Exception:
+            logger.error("Error loading model from config.")
             raise

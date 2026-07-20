@@ -169,6 +169,8 @@ This is a catalog of available node types, validated against the `WorkflowManage
 * **`Conditional`**: Evaluates a logical expression (with `AND`/`OR` operators) and returns `"TRUE"` or `"FALSE"`.
 * **`JsonExtractor`**: Extracts a specific field from a JSON string. Automatically handles markdown code block wrappers.
 * **`TagTextExtractor`**: Extracts content from XML/HTML-style tags (e.g., `<answer>...</answer>`) within a text string.
+* **`DelimitedChunker`**: Splits a string on a delimiter and returns the first or last N chunks, rejoined with the
+  same delimiter, like `head`/`tail` for delimited content.
 * **`ContextCompactor`**: Compacts conversation history into two rolling summaries (Old and Oldest) returned as
   XML-tagged text. Works independently from the memory system by directly summarizing raw conversation messages with
   recency awareness.
@@ -183,13 +185,15 @@ This is a catalog of available node types, validated against the `WorkflowManage
 
 * **`QualityMemory`**: The primary node for creating and updating long-term vector and file-based memories. It runs in
   the background and produces no direct output.
-* **`VectorMemorySearch`**: Performs a semantic search against the vector memory database to retrieve relevant
-  information (RAG).
+* **`VectorMemorySearch`**: Searches the vector memory database to retrieve relevant information (RAG). Uses keyword
+  full-text search by default, with optional embedding-based semantic or hybrid modes via `searchMode`.
 * **`FullChatSummary`**: Retrieves the single "rolling summary" of the entire conversation.
 * **`RecentMemorySummarizerTool`**: Retrieves a summary of the most recent memory chunks.
 * **`ChatSummaryMemoryGatheringTool`**: Gathers memories related to the chat summary.
 * **`GetCurrentSummaryFromFile`**: Loads the current chat summary directly from its file.
 * **`WriteCurrentSummaryToFileAndReturnIt`**: Updates the summary file and outputs the new summary.
+* **`GetCurrentStateDocument`**: A fast retriever that returns the contents of the discussion's `state_document.md`,
+  or "No state document has been created yet" when none exists.
 * **Other Memory Nodes**: `ConversationMemory`, `RecentMemory`, `chatSummarySummarizer`, `GetCurrentMemoryFromFile`.
 
 #### Specialized Data & Search Nodes
@@ -199,6 +203,13 @@ This is a catalog of available node types, validated against the `WorkflowManage
 * **`SlowButQualityRAG`**: A tool-based node for performing a specific RAG process.
 * **`ConversationalKeywordSearchPerformerTool`**: Performs keyword search on conversations.
 * **`MemoryKeywordSearchPerformerTool`**: Performs keyword search on memories.
+
+#### External Integration Nodes
+
+* **`WebFetch`**: Issues an HTTP/HTTPS request to a configured URL via the `requests` library and returns the
+  response as text, parsed JSON, a status/headers/body envelope, or HTML stripped to visible text.
+* **`CurlCommand`**: Runs the system `curl` binary with a JSON list of arguments (no shell) and returns its output.
+* **`MCPToolCall`**: Invokes a single tool on a named MCP server registered under `Public/Configs/MCPServers/`.
 
 -----
 
@@ -210,7 +221,7 @@ be used in any valid string field.
 It is important to note that the only user defined variables that exist are the constants, which can be added to the top
 of the workflow, above the Nodes array. It is not possible for a user to create new variables with their own unique
 names. If the user decides that they want a dynamically assigned variable called `{last_user_who_spoke}`, which is not a
-defined variable within the Wilmer system- that will not work. At best, they could assign it as a constant.
+defined variable within the Wilmer system, that will not work. At best, they could assign it as a constant.
 
 #### Variable Templating Engine
 
@@ -293,7 +304,7 @@ nodes and non-responding nodes. Responding nodes are the only nodes that respect
 front-end, and will always return their output directly to the user. Most nodes could be a responder.
 
 What determines if a node is a responder is generally that the node is the very last in the main workflow. So workflows
-that generate child workflows via custom workflow nodes- the last node in a child node is not guaranteed to be a
+that generate child workflows via custom workflow nodes: the last node in a child node is not guaranteed to be a
 responder. For example, consider the below workflow:
 
 * Node 1: Analyze user context (determine what the user wants)
@@ -303,11 +314,11 @@ responder. For example, consider the below workflow:
     * Node 3-2: Summarize Wikipedia results
 * Node 4: Takes the output of Node 3, and continues the conversation with the user.
 
-In the above example- Node 3-2, the final node of `search_wikipedia` is NOT a responder. Why? Because even though
+In the above example, Node 3-2, the final node of `search_wikipedia` is NOT a responder. Why? Because even though
 it is the last node in that workflow, that workflow was not the last node in the main, calling, workflow. The
 real responding node is Node 4 of the main workflow.
 
-Alternatively- if Node 4 did not exist, Node 3-2 would automatically be the responding node, since it is the last
+Alternatively, if Node 4 did not exist, Node 3-2 would automatically be the responding node, since it is the last
 node that will run in the main workflow, even if it exists in a child workflow.
 
 All of this occurs automatically, without the `returnToUser` flag set. That flag can be left at false, or removed
@@ -321,7 +332,7 @@ not send its response to the user; that work will simply be lost.
 **In the vast majority of cases, you do not need to include returnToUser on any node, and do not need to set it to
 true. That field was specifically created for a very niche use-case where the user would want to have work continue
 after a response was sent, such as the lengthy process of generating memories, while a workflow lock node allows the
-user to continue talking to the LLM in the meantime. As such- do not use this unless you are CERTAIN you need it.**
+user to continue talking to the LLM in the meantime. As such, do not use this unless you are CERTAIN you need it.**
 
 #### Important note about `allowTools`
 
@@ -329,7 +340,16 @@ The `allowTools` boolean on `Standard` nodes controls whether tool definitions f
 to the backend LLM. Like `returnToUser`, this property only makes sense on the responding node. When `allowTools` is
 `true`, the LLM may respond with tool calls instead of text content, and WilmerAI passes those tool calls back to the
 frontend. Enabling it on non-responding nodes has no useful effect because tool call responses from internal nodes have
-no path back to the frontend. If the frontend request does not include tool definitions, this flag has no effect.
+no path back to the frontend. It is also actively risky on non-responders: if the model emits a tool call during an
+internal step (a reasoner, a summarizer), that node's output becomes a tool-call payload instead of the text the rest
+of the workflow expects. If the frontend request does not include tool definitions, this flag has no effect.
+
+How the node delivers the conversation matters for multi-round tool flows. A node that uses an authored `prompt`
+(embedding the conversation as text via variables) sends the backend a single user message; earlier tool calls and
+their results arrive inside that text rather than as native tool messages, which degrades a model's willingness to
+emit real tool calls on the round after a tool result. For those nodes, set `appendNativeToolExchange` (see
+Workflow_Features.md, Tool Call Passthrough) so the live tool exchange is delivered natively after the authored
+prompt. Collection-mode nodes (no `prompt`) already send native tool history and do not need it.
 
 When using local models that produce capitalized tool call function names (e.g., `Glob` instead of `glob`), set
 `"lowercaseToolCallFunctionNames": true` on the same responding node to normalize the casing before it reaches the

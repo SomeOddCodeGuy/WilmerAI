@@ -6,6 +6,36 @@ import pytest
 
 from Middleware.common import instance_global_variables
 from Middleware.utilities import config_utils
+from Middleware.utilities.config_utils import (
+    _expand_user_path,
+    _is_safe_flat_config_name,
+    load_mcp_server_config,
+    try_get_endpoint_config,
+)
+
+# Names that must never be allowed to index a file inside Public/Configs:
+# traversal, nested paths (POSIX and Windows separators), a Windows drive
+# colon, the current/parent directory, the empty string, and non-str input.
+# Shared by the traversal-gate tests (merged in from the former
+# test_config_utils_hardening.py) and the workflow-folder traversal tests.
+UNSAFE_CONFIG_NAMES = [
+    '../evil',
+    'a/b',
+    'a\\b',
+    'C:x',
+    '.',
+    '..',
+    '',
+    None,
+    123,
+]
+
+SAFE_CONFIG_NAMES = [
+    'endpoint',
+    'my-server_2',
+    'name.with.dots',
+    'UPPERCASE',
+]
 
 
 @pytest.fixture
@@ -55,21 +85,28 @@ class TestConfigUtils:
 
     def test_get_project_root_directory_path(self, mocker):
         """
-        Verifies that the project root path is correctly calculated by navigating up
-        from the current file's location.
+        Verifies that the project root path is calculated by navigating up exactly
+        three levels from the module file. Only os.path.abspath is mocked (to pin
+        the input); the REAL os.path.dirname runs, so climbing one level too few
+        or too many is caught rather than mirrored by a mocked side_effect list.
         """
         mocker.patch('os.path.abspath', return_value='/root/Middleware/utilities/config_utils.py')
-        mock_dirname = mocker.patch('os.path.dirname')
-        mock_dirname.side_effect = [
-            '/root/Middleware/utilities',  # dirname of abspath
-            '/root/Middleware',  # dirname of util_dir
-            '/root'  # dirname of middleware_dir
-        ]
 
         result = config_utils.get_project_root_directory_path()
 
         assert result == '/root'
-        assert mock_dirname.call_count == 3
+
+    def test_get_project_root_directory_path_real_root_contains_middleware(self):
+        """
+        Unmocked invariant: the returned root must be the directory that actually
+        contains the Middleware package on disk (i.e. the function climbed to the
+        right level of the real installation, not one short or one deep).
+        """
+        result = config_utils.get_project_root_directory_path()
+
+        assert os.path.isabs(result)
+        assert os.path.isfile(
+            os.path.join(result, 'Middleware', 'utilities', 'config_utils.py'))
 
     def test_load_config(self, mocker):
         """
@@ -156,16 +193,18 @@ class TestConfigUtils:
 
     def test_get_root_config_directory_from_project_root(self, mocker):
         """
-        Verifies that the config directory is calculated relative to the project root
-        when the global variable is not set.
+        Verifies that with neither --ConfigDirectory nor --PublicDirectory set,
+        the config directory resolves to {project_root}/Public/Configs. The REAL
+        os.path.join runs (only the project-root lookup is mocked), so a wrong or
+        missing path segment is caught rather than echoed back by a mocked join.
         """
         instance_global_variables.CONFIG_DIRECTORY = None
+        instance_global_variables.PUBLIC_DIRECTORY = None
         mocker.patch('Middleware.utilities.config_utils.get_project_root_directory_path', return_value='/proj')
-        mocker.patch('os.path.join', return_value='/proj/Public/Configs')
 
         path = config_utils.get_root_config_directory()
 
-        assert path == '/proj/Public/Configs'
+        assert path == os.path.join('/proj', 'Public', 'Configs')
 
     def test_get_root_config_directory_empty_string_falls_back_to_public(self, mocker):
         """An empty-string CONFIG_DIRECTORY must fall back to {public}/Configs, not return ''.
@@ -514,7 +553,7 @@ class TestConfigUtils:
         mocker.patch('Middleware.utilities.config_utils.get_config_value',
                      return_value=mock_user_config['workflowConfigsSubDirectoryOverride'])
 
-        expected = os.path.join('_overrides', 'shared_workflows')
+        expected = 'shared_workflows'
         assert config_utils.get_workflow_subdirectory_override() == expected
 
     def test_get_workflow_subdirectory_override_fallback(self, mocker):
@@ -543,11 +582,11 @@ class TestConfigUtils:
         """
         mocker.patch('Middleware.utilities.config_utils.get_root_config_directory', return_value='/fake/config')
         mocker.patch('Middleware.utilities.config_utils.get_workflow_subdirectory_override',
-                     return_value=os.path.join('_overrides', 'shared_workflows'))
+                     return_value='shared_workflows')
 
         path = config_utils.get_workflow_path('MyWorkflow')
 
-        expected = os.path.join('/fake/config', 'Workflows', '_overrides', 'shared_workflows', 'MyWorkflow.json')
+        expected = os.path.join('/fake/config', 'Workflows', 'shared_workflows', 'MyWorkflow.json')
         assert path == expected
 
     def test_get_workflow_path_fallback_to_username(self, mocker):
@@ -574,12 +613,12 @@ class TestConfigUtils:
 
     def test_get_workflow_subdirectory_override_whitespace_only(self, mocker):
         """
-        Tests that a whitespace-only override is treated as truthy and used within _overrides.
+        Tests that a whitespace-only override is treated as truthy and used as-is.
         This documents current behavior where whitespace strings are not stripped.
         """
         mocker.patch('Middleware.utilities.config_utils.get_config_value', return_value='   ')
 
-        expected = os.path.join('_overrides', '   ')
+        expected = '   '
         assert config_utils.get_workflow_subdirectory_override() == expected
 
     def test_get_workflow_subdirectory_override_with_special_characters(self, mocker):
@@ -589,7 +628,7 @@ class TestConfigUtils:
         """
         mocker.patch('Middleware.utilities.config_utils.get_config_value', return_value='my-workflows_v2.0')
 
-        expected = os.path.join('_overrides', 'my-workflows_v2.0')
+        expected = 'my-workflows_v2.0'
         assert config_utils.get_workflow_subdirectory_override() == expected
 
     def test_get_workflow_path_with_path_traversal_characters(self, mocker):
@@ -599,11 +638,11 @@ class TestConfigUtils:
         """
         mocker.patch('Middleware.utilities.config_utils.get_root_config_directory', return_value='/fake/config')
         mocker.patch('Middleware.utilities.config_utils.get_workflow_subdirectory_override',
-                     return_value=os.path.join('_overrides', '../parent_folder'))
+                     return_value='../parent_folder')
 
         path = config_utils.get_workflow_path('MyWorkflow')
 
-        expected = os.path.join('/fake/config', 'Workflows', '_overrides', '../parent_folder', 'MyWorkflow.json')
+        expected = os.path.join('/fake/config', 'Workflows', '../parent_folder', 'MyWorkflow.json')
         assert path == expected
 
     def test_get_workflow_path_with_empty_string_node_override(self, mocker):
@@ -612,11 +651,11 @@ class TestConfigUtils:
         """
         mocker.patch('Middleware.utilities.config_utils.get_root_config_directory', return_value='/fake/config')
         mocker.patch('Middleware.utilities.config_utils.get_workflow_subdirectory_override',
-                     return_value=os.path.join('_overrides', 'shared_workflows'))
+                     return_value='shared_workflows')
 
         path = config_utils.get_workflow_path('MyWorkflow', user_folder_override='')
 
-        expected = os.path.join('/fake/config', 'Workflows', '_overrides', 'shared_workflows', 'MyWorkflow.json')
+        expected = os.path.join('/fake/config', 'Workflows', 'shared_workflows', 'MyWorkflow.json')
         assert path == expected
 
     def test_get_workflow_path_with_absolute_workflow_name(self, mocker):
@@ -639,7 +678,7 @@ class TestConfigUtils:
         """
         mocker.patch('Middleware.utilities.config_utils.get_root_config_directory', return_value='/fake/config')
         mocker.patch('Middleware.utilities.config_utils.get_workflow_subdirectory_override',
-                     return_value=os.path.join('_overrides', 'user_config_override'))
+                     return_value='user_config_override')
 
         path = config_utils.get_workflow_path('MyWorkflow', user_folder_override='node_override')
 
@@ -652,7 +691,7 @@ class TestConfigUtils:
         """
         mocker.patch('Middleware.utilities.config_utils.get_config_value', return_value='workflows-日本語')
 
-        expected = os.path.join('_overrides', 'workflows-日本語')
+        expected = 'workflows-日本語'
         assert config_utils.get_workflow_subdirectory_override() == expected
 
     def test_get_workflow_path_with_very_long_override(self, mocker):
@@ -662,11 +701,11 @@ class TestConfigUtils:
         long_name = 'a' * 500
         mocker.patch('Middleware.utilities.config_utils.get_root_config_directory', return_value='/fake/config')
         mocker.patch('Middleware.utilities.config_utils.get_workflow_subdirectory_override',
-                     return_value=os.path.join('_overrides', long_name))
+                     return_value=long_name)
 
         path = config_utils.get_workflow_path('MyWorkflow')
 
-        expected = os.path.join('/fake/config', 'Workflows', '_overrides', long_name, 'MyWorkflow.json')
+        expected = os.path.join('/fake/config', 'Workflows', long_name, 'MyWorkflow.json')
         assert path == expected
 
     def test_get_shared_workflows_folder_default(self, mocker):
@@ -700,8 +739,8 @@ class TestConfigUtils:
         """
         workflows_dir = tmp_path / 'Workflows' / '_shared'
         workflows_dir.mkdir(parents=True)
-        (workflows_dir / 'coding-workflow').mkdir()  # Folder - should be included
-        (workflows_dir / 'general-workflow').mkdir()  # Folder - should be included
+        (workflows_dir / 'coding-workflow').mkdir()  # Folder: should be included
+        (workflows_dir / 'general-workflow').mkdir()  # Folder: should be included
         (workflows_dir / '_hidden-folder').mkdir()  # Should be excluded (starts with _)
         (workflows_dir / 'SomeFile.json').write_text('{}')  # Should be excluded (not a folder)
 
@@ -842,6 +881,34 @@ class TestGetDiscussionCondensationTrackerFilePath:
 
         mock_get_path.assert_called_once_with('disc123', 'condensation_tracker', api_key_hash=None)
         assert result == '/mock/discussions/disc123/condensation_tracker.json'
+
+
+class TestGetDiscussionStateDocumentFilePath:
+    """Tests for the get_discussion_state_document_file_path function."""
+
+    def test_returns_markdown_path_inside_discussion_folder(self, mocker):
+        """Tests that the state document path is the discussion folder plus state_document.md."""
+        mock_folder = mocker.patch(
+            'Middleware.utilities.config_utils.get_discussion_folder_path',
+            return_value='/mock/discussions/disc123'
+        )
+
+        result = config_utils.get_discussion_state_document_file_path('disc123')
+
+        mock_folder.assert_called_once_with('disc123', api_key_hash=None)
+        assert result == os.path.join('/mock/discussions/disc123', 'state_document.md')
+
+    def test_forwards_api_key_hash(self, mocker):
+        """Tests that the api_key_hash is forwarded to the folder resolver."""
+        mock_folder = mocker.patch(
+            'Middleware.utilities.config_utils.get_discussion_folder_path',
+            return_value='/mock/discussions/hash/disc123'
+        )
+
+        result = config_utils.get_discussion_state_document_file_path('disc123', api_key_hash='abcd1234')
+
+        mock_folder.assert_called_once_with('disc123', api_key_hash='abcd1234')
+        assert result == os.path.join('/mock/discussions/hash/disc123', 'state_document.md')
 
 
 class TestGetDiscussionVisionResponsesFilePath:
@@ -1274,3 +1341,482 @@ class TestIsContextClampEnabled:
         # Callers gate on identity in places; ensure a genuine bool comes back.
         assert config_utils.is_context_clamp_enabled({"clampPromptToContextWindow": "true"}, {}) is True
         assert config_utils.is_context_clamp_enabled({}, {}) is False
+
+
+class TestGetLivenessToolCall:
+    """Tests for get_liveness_tool_call, the user-level liveness guard config."""
+
+    def test_returns_valid_config(self, mocker):
+        config = {"toolName": "bash", "arguments": {"command": "echo continuing"}}
+        mocker.patch('Middleware.utilities.config_utils.get_config_value', return_value=config)
+        assert config_utils.get_liveness_tool_call() == config
+
+    def test_returns_none_when_unset(self, mocker):
+        mocker.patch('Middleware.utilities.config_utils.get_config_value', return_value=None)
+        assert config_utils.get_liveness_tool_call() is None
+
+    def test_returns_none_for_non_dict(self, mocker):
+        mocker.patch('Middleware.utilities.config_utils.get_config_value', return_value="bash")
+        assert config_utils.get_liveness_tool_call() is None
+
+    def test_returns_none_for_missing_tool_name(self, mocker):
+        mocker.patch('Middleware.utilities.config_utils.get_config_value',
+                     return_value={"arguments": {"command": "echo hi"}})
+        assert config_utils.get_liveness_tool_call() is None
+
+    def test_returns_none_for_blank_tool_name(self, mocker):
+        mocker.patch('Middleware.utilities.config_utils.get_config_value',
+                     return_value={"toolName": "   "})
+        assert config_utils.get_liveness_tool_call() is None
+
+    @pytest.mark.parametrize("bad_tool_name", [123, 1.5, True, None, ["bash"], {"name": "bash"}],
+                             ids=["int", "float", "bool", "none", "list", "dict"])
+    def test_returns_none_for_non_string_tool_name(self, mocker, bad_tool_name):
+        """A non-string toolName is malformed and must disable the feature (None),
+        not raise: without the isinstance guard, .strip() on a non-str would
+        crash the response path this setting is documented never to break."""
+        mocker.patch('Middleware.utilities.config_utils.get_config_value',
+                     return_value={"toolName": bad_tool_name})
+        assert config_utils.get_liveness_tool_call() is None
+
+
+class TestWorkflowExistsInSharedFolderTraversal:
+    """The shared-workflow folder name comes from the request model field and
+    selects which workflow (including PythonModule/CurlCommand nodes) runs, so a
+    traversal/absolute name must be rejected by the gate BEFORE any filesystem
+    lookup. Removing that gate would reopen a path-escape; these tests fail if it
+    is bypassed."""
+
+    @pytest.mark.parametrize("unsafe_name", UNSAFE_CONFIG_NAMES)
+    def test_unsafe_folder_name_returns_false_without_touching_fs(self, mocker, unsafe_name):
+        # If the gate is short-circuiting, os.path.isdir is never consulted; a
+        # regression that dropped the gate would reach it. Assert it is not called.
+        mock_isdir = mocker.patch('os.path.isdir')
+        mocker.patch('Middleware.utilities.config_utils.get_root_config_directory',
+                     return_value='/cfg')
+        mocker.patch('Middleware.utilities.config_utils.get_shared_workflows_folder',
+                     return_value='_shared')
+
+        assert config_utils.workflow_exists_in_shared_folder(unsafe_name) is False
+        mock_isdir.assert_not_called()
+
+    def test_safe_name_reaches_isdir(self, mocker):
+        """Positive control: a plain name passes the gate and the folder check runs."""
+        mock_isdir = mocker.patch('os.path.isdir', return_value=True)
+        mocker.patch('Middleware.utilities.config_utils.get_root_config_directory',
+                     return_value='/cfg')
+        mocker.patch('Middleware.utilities.config_utils.get_shared_workflows_folder',
+                     return_value='_shared')
+
+        assert config_utils.workflow_exists_in_shared_folder('coding') is True
+        mock_isdir.assert_called_once_with(os.path.join('/cfg', 'Workflows', '_shared', 'coding'))
+
+
+class TestDiscussionIdTraversalRejection:
+    """A discussion_id is normally sanitized at extraction, but any caller that
+    builds one elsewhere must not be able to escape the discussions root (or a
+    per-api-key isolation subdir) via a separator, drive colon, or '..'. Both the
+    folder builder and the file builder must reject it, and must do so before any
+    filesystem access."""
+
+    UNSAFE_IDS = ['../evil', 'a/b', 'a\\b', 'C:x', '.', '..']
+
+    @pytest.mark.parametrize("bad_id", UNSAFE_IDS)
+    def test_folder_path_rejects_unsafe_id(self, mocker, bad_id):
+        makedirs = mocker.patch('os.makedirs')
+        with pytest.raises(ValueError, match="path-unsafe"):
+            config_utils.get_discussion_folder_path(bad_id)
+        makedirs.assert_not_called()
+
+    @pytest.mark.parametrize("bad_id", UNSAFE_IDS)
+    def test_file_path_rejects_unsafe_id(self, mocker, bad_id):
+        makedirs = mocker.patch('os.makedirs')
+        with pytest.raises(ValueError, match="path-unsafe"):
+            config_utils.get_discussion_file_path(bad_id, 'memories')
+        makedirs.assert_not_called()
+
+    @pytest.mark.parametrize("bad_id", UNSAFE_IDS)
+    def test_unsafe_id_rejected_even_with_api_key_hash(self, mocker, bad_id):
+        # The per-user isolation subdir must not be an escape vector either.
+        makedirs = mocker.patch('os.makedirs')
+        with pytest.raises(ValueError, match="path-unsafe"):
+            config_utils.get_discussion_file_path(bad_id, 'memories', api_key_hash='abcd1234')
+        makedirs.assert_not_called()
+
+
+# A user config populated so the REAL get_config_value key lookup runs. Mocking
+# get_user_config (not get_config_value) pins the exact config-key string each
+# getter reads; a key typo in the source would flip these to None and fail.
+_FULL_USER_CONFIG = {
+    "port": 5099,
+    "customWorkflowOverride": True,
+    "customWorkflow": "MyFlow",
+    "discussionIdMemoryFileWorkflowSettings": "DiscSettings",
+    "chatPromptTemplateName": "tmpl",
+    "categorizationWorkflow": "cat",
+    "conversationMemoryToolWorkflow": "conv",
+    "recentMemoryToolWorkflow": "recent",
+    "fileMemoryToolWorkflow": "filemem",
+    "chatSummaryToolWorkflow": "summary",
+    "contextCompactorSettingsFile": "compactor",
+    "endpointConfigsSubDirectory": "ep_sub",
+}
+
+
+class TestConfigKeyGetters:
+    """Pins the exact config-key string every simple pass-through getter reads by
+    running the real get_config_value lookup against a populated user config."""
+
+    @pytest.mark.parametrize("getter_name,expected", [
+        ("get_application_port", 5099),
+        ("get_custom_workflow_is_active", True),
+        ("get_active_custom_workflow_name", "MyFlow"),
+        ("get_discussion_id_workflow_name", "DiscSettings"),
+        ("get_chat_template_name", "tmpl"),
+        ("get_active_categorization_workflow_name", "cat"),
+        ("get_active_conversational_memory_tool_name", "conv"),
+        ("get_active_recent_memory_tool_name", "recent"),
+        ("get_file_memory_tool_name", "filemem"),
+        ("get_chat_summary_tool_workflow_name", "summary"),
+        ("get_context_compactor_settings_name", "compactor"),
+        ("get_endpoint_subdirectory", "ep_sub"),
+    ])
+    def test_getter_reads_expected_key(self, mocker, getter_name, expected):
+        mocker.patch('Middleware.utilities.config_utils.get_user_config',
+                     return_value=dict(_FULL_USER_CONFIG))
+        assert getattr(config_utils, getter_name)() == expected
+
+    def test_endpoint_subdirectory_defaults_to_empty_string_when_absent(self, mocker):
+        mocker.patch('Middleware.utilities.config_utils.get_user_config', return_value={})
+        assert config_utils.get_endpoint_subdirectory() == ""
+
+
+class TestBooleanGetterCoercionAndDefaults:
+    """Boolean/default getters have real logic (coercion + fall-through defaults)
+    beyond a raw read; pin each one against the real key lookup."""
+
+    def _patch_user_config(self, mocker, cfg):
+        mocker.patch('Middleware.utilities.config_utils.get_user_config', return_value=cfg)
+
+    @pytest.mark.parametrize("value,expected", [
+        (True, True),
+        (False, False),
+        ("anything-nonempty", True),  # plain bool() coercion, unlike the clamp getter
+        (0, False),
+    ])
+    def test_allow_shared_workflows_bool_coercion(self, mocker, value, expected):
+        self._patch_user_config(mocker, {"allowSharedWorkflows": value})
+        assert config_utils.get_allow_shared_workflows() is expected
+
+    def test_allow_shared_workflows_absent_defaults_false(self, mocker):
+        self._patch_user_config(mocker, {})
+        assert config_utils.get_allow_shared_workflows() is False
+
+    @pytest.mark.parametrize("value,expected", [
+        (True, True), (False, False), ("x", True), (0, False),
+    ])
+    def test_intercept_openwebui_bool_coercion(self, mocker, value, expected):
+        self._patch_user_config(mocker, {"interceptOpenWebUIToolRequests": value})
+        assert config_utils.get_intercept_openwebui_tool_requests() is expected
+
+    def test_intercept_openwebui_absent_defaults_false(self, mocker):
+        self._patch_user_config(mocker, {})
+        assert config_utils.get_intercept_openwebui_tool_requests() is False
+
+    def test_separate_conversation_default_false(self, mocker):
+        self._patch_user_config(mocker, {})
+        assert config_utils.get_separate_conversation_in_variables() is False
+
+    def test_separate_conversation_present_true(self, mocker):
+        self._patch_user_config(mocker, {"separateConversationInVariables": True})
+        assert config_utils.get_separate_conversation_in_variables() is True
+
+    def test_conversation_delimiter_default_newline(self, mocker):
+        self._patch_user_config(mocker, {})
+        assert config_utils.get_conversation_separation_delimiter() == "\n"
+
+    def test_conversation_delimiter_present(self, mocker):
+        self._patch_user_config(mocker, {"conversationSeparationDelimiter": " | "})
+        assert config_utils.get_conversation_separation_delimiter() == " | "
+
+    def test_chat_complete_add_user_assistant_present(self, mocker):
+        self._patch_user_config(mocker, {"chatCompleteAddUserAssistant": True})
+        assert config_utils.get_is_chat_complete_add_user_assistant() is True
+
+    def test_chat_complete_add_user_assistant_missing_raises(self, mocker):
+        # No default: the key is a hard requirement, absence must raise (not
+        # silently return None/False).
+        self._patch_user_config(mocker, {})
+        with pytest.raises(KeyError):
+            config_utils.get_is_chat_complete_add_user_assistant()
+
+    def test_chat_complete_add_missing_assistant_present(self, mocker):
+        self._patch_user_config(mocker, {"chatCompletionAddMissingAssistantGenerator": False})
+        assert config_utils.get_is_chat_complete_add_missing_assistant() is False
+
+    def test_chat_complete_add_missing_assistant_missing_raises(self, mocker):
+        self._patch_user_config(mocker, {})
+        with pytest.raises(KeyError):
+            config_utils.get_is_chat_complete_add_missing_assistant()
+
+
+class TestConfigPathBuilders:
+    """Pins path construction for the Public/Configs builders. Real os.path.join
+    runs (only get_root_config_directory / lookups are mocked), so a wrong
+    directory segment or a dropped subdirectory level is caught."""
+
+    def test_get_config_path(self, mocker):
+        mocker.patch('Middleware.utilities.config_utils.get_root_config_directory',
+                     return_value='/cfg')
+        result = config_utils.get_config_path('Routing', 'main_routing')
+        assert result == os.path.join('/cfg', 'Routing', 'main_routing.json')
+
+    def test_get_config_with_subdirectory_single_level(self, mocker):
+        mocker.patch('Middleware.utilities.config_utils.get_root_config_directory',
+                     return_value='/cfg')
+        result = config_utils.get_config_with_subdirectory('Presets', 'OpenAiApis', 'p1')
+        assert result == os.path.join('/cfg', 'Presets', 'OpenAiApis', 'p1.json')
+
+    def test_get_config_with_subdirectory_two_level(self, mocker):
+        mocker.patch('Middleware.utilities.config_utils.get_root_config_directory',
+                     return_value='/cfg')
+        result = config_utils.get_config_with_subdirectory('Presets', 'OpenAiApis', 'p1',
+                                                           secondary_subdirectory='alice')
+        assert result == os.path.join('/cfg', 'Presets', 'OpenAiApis', 'alice', 'p1.json')
+
+    def test_get_openai_preset_path_without_subdirectory(self, mocker):
+        mocker.patch('Middleware.utilities.config_utils.get_root_config_directory',
+                     return_value='/cfg')
+        result = config_utils.get_openai_preset_path('preset1')
+        assert result == os.path.join('/cfg', 'Presets', 'OpenAiCompatibleApis', 'preset1.json')
+
+    def test_get_openai_preset_path_with_subdirectory(self, mocker):
+        mocker.patch('Middleware.utilities.config_utils.get_root_config_directory',
+                     return_value='/cfg')
+        mocker.patch('Middleware.utilities.config_utils.get_preset_subdirectory_override',
+                     return_value='alice')
+        result = config_utils.get_openai_preset_path('preset1', use_subdirectory=True)
+        assert result == os.path.join('/cfg', 'Presets', 'OpenAiCompatibleApis', 'alice', 'preset1.json')
+
+    def test_get_categories_config_loads_from_routing(self, mocker):
+        mocker.patch('Middleware.utilities.config_utils.get_config_value',
+                     return_value='main_routing')
+        mocker.patch('Middleware.utilities.config_utils.get_root_config_directory',
+                     return_value='/cfg')
+        mock_load = mocker.patch('Middleware.utilities.config_utils.load_config',
+                                 return_value={"cats": []})
+
+        result = config_utils.get_categories_config()
+
+        assert result == {"cats": []}
+        mock_load.assert_called_once_with(os.path.join('/cfg', 'Routing', 'main_routing.json'))
+
+    def test_get_api_type_config_loads_from_apitypes(self, mocker):
+        mocker.patch('Middleware.utilities.config_utils.get_root_config_directory',
+                     return_value='/cfg')
+        mock_load = mocker.patch('Middleware.utilities.config_utils.load_config',
+                                 return_value={"type": "openai"})
+
+        result = config_utils.get_api_type_config('OpenAI')
+
+        assert result == {"type": "openai"}
+        mock_load.assert_called_once_with(os.path.join('/cfg', 'ApiTypes', 'OpenAI.json'))
+
+    def test_get_endpoint_config_uses_subdirectory(self, mocker):
+        mocker.patch('Middleware.utilities.config_utils.get_endpoint_subdirectory',
+                     return_value='sub')
+        mocker.patch('Middleware.utilities.config_utils.get_root_config_directory',
+                     return_value='/cfg')
+        mock_load = mocker.patch('Middleware.utilities.config_utils.load_config',
+                                 return_value={"endpoint": "http://x"})
+
+        result = config_utils.get_endpoint_config('my_endpoint')
+
+        assert result == {"endpoint": "http://x"}
+        mock_load.assert_called_once_with(
+            os.path.join('/cfg', 'Endpoints', 'sub', 'my_endpoint.json'))
+
+    def test_get_template_config_path(self, mocker):
+        mocker.patch('Middleware.utilities.config_utils.get_root_config_directory',
+                     return_value='/cfg')
+        result = config_utils.get_template_config_path('llama3')
+        assert result == os.path.join('/cfg', 'PromptTemplates', 'llama3.json')
+
+    def test_get_discussion_id_workflow_path_delegates(self, mocker):
+        mocker.patch('Middleware.utilities.config_utils.get_discussion_id_workflow_name',
+                     return_value='DiscWorkflow')
+        mock_wf = mocker.patch('Middleware.utilities.config_utils.get_workflow_path',
+                               return_value='/cfg/Workflows/user/DiscWorkflow.json')
+
+        result = config_utils.get_discussion_id_workflow_path()
+
+        mock_wf.assert_called_once_with('DiscWorkflow')
+        assert result == '/cfg/Workflows/user/DiscWorkflow.json'
+
+    def test_get_context_compactor_settings_path_delegates(self, mocker):
+        mocker.patch('Middleware.utilities.config_utils.get_context_compactor_settings_name',
+                     return_value='CompactorSettings')
+        mock_wf = mocker.patch('Middleware.utilities.config_utils.get_workflow_path',
+                               return_value='/cfg/Workflows/user/CompactorSettings.json')
+
+        result = config_utils.get_context_compactor_settings_path()
+
+        mock_wf.assert_called_once_with('CompactorSettings')
+        assert result == '/cfg/Workflows/user/CompactorSettings.json'
+
+
+# ###############################################################
+# Merged in from the former test_config_utils_hardening.py
+# (2026-07-18). These were split out only while this file was
+# under active modification; that settling point has arrived, so
+# they now live here. Verbatim move; no assertions changed.
+# Security/contract tests for path-traversal rejection
+# (_is_safe_flat_config_name, load_mcp_server_config,
+# try_get_endpoint_config) and leading-~ expansion (_expand_user_path).
+# ###############################################################
+
+class TestIsSafeFlatConfigName:
+    """Direct tests for the _is_safe_flat_config_name traversal gate."""
+
+    @pytest.mark.parametrize("unsafe_name", UNSAFE_CONFIG_NAMES)
+    def test_unsafe_names_rejected(self, unsafe_name):
+        assert _is_safe_flat_config_name(unsafe_name) is False
+
+    @pytest.mark.parametrize("safe_name", SAFE_CONFIG_NAMES)
+    def test_safe_names_accepted(self, safe_name):
+        assert _is_safe_flat_config_name(safe_name) is True
+
+
+class TestLoadMcpServerConfigHardening:
+    """Traversal rejection tests for load_mcp_server_config."""
+
+    @pytest.mark.parametrize("unsafe_name", UNSAFE_CONFIG_NAMES)
+    def test_unsafe_server_name_raises_value_error(self, mocker, unsafe_name):
+        """
+        An unsafe server name must raise ValueError before any file access:
+        load_config must never be reached with a traversal-capable name.
+        """
+        mock_load = mocker.patch('Middleware.utilities.config_utils.load_config')
+
+        with pytest.raises(ValueError, match="Invalid MCP server name"):
+            load_mcp_server_config(unsafe_name)
+
+        mock_load.assert_not_called()
+
+    def test_safe_server_name_resolves_under_mcpservers(self, mocker):
+        """Positive control: a plain name passes the gate and loads from MCPServers."""
+        mock_get_path = mocker.patch(
+            'Middleware.utilities.config_utils.get_config_path',
+            return_value='/fake/Configs/MCPServers/my-server.json')
+        mock_load = mocker.patch(
+            'Middleware.utilities.config_utils.load_config',
+            return_value={"transport": "stdio"})
+
+        result = load_mcp_server_config('my-server')
+
+        assert result == {"transport": "stdio"}
+        mock_get_path.assert_called_once_with('MCPServers', 'my-server')
+        mock_load.assert_called_once_with('/fake/Configs/MCPServers/my-server.json')
+
+
+class TestTryGetEndpointConfigHardening:
+    """Tests for try_get_endpoint_config's safety gate and probe semantics."""
+
+    @pytest.mark.parametrize("unsafe_name", UNSAFE_CONFIG_NAMES)
+    def test_unsafe_endpoint_name_returns_none(self, mocker, unsafe_name):
+        """
+        An unsafe endpoint name is reported as "not an endpoint" (None) without
+        ever resolving a path or touching the filesystem.
+        """
+        mock_subdir = mocker.patch(
+            'Middleware.utilities.config_utils.get_endpoint_subdirectory')
+
+        assert try_get_endpoint_config(unsafe_name) is None
+
+        mock_subdir.assert_not_called()
+
+    def test_missing_endpoint_file_returns_none(self, mocker):
+        """A safe name whose config file does not exist is reported as None."""
+        mocker.patch('Middleware.utilities.config_utils.get_endpoint_subdirectory',
+                     return_value='sub')
+        mocker.patch('Middleware.utilities.config_utils.get_endpoint_config_path',
+                     return_value='/fake/Configs/Endpoints/sub/missing.json')
+        mocker.patch('os.path.exists', return_value=False)
+
+        assert try_get_endpoint_config('missing') is None
+
+    def test_existing_endpoint_file_returns_parsed_dict(self, mocker, tmp_path):
+        """A safe name whose config file exists is loaded and parsed as JSON."""
+        endpoint_data = {
+            "endpoint": "http://localhost:5000",
+            "apiTypeConfigFileName": "OpenAI",
+        }
+        endpoint_file = tmp_path / "myendpoint.json"
+        endpoint_file.write_text(json.dumps(endpoint_data))
+
+        mocker.patch('Middleware.utilities.config_utils.get_endpoint_subdirectory',
+                     return_value='')
+        mock_get_path = mocker.patch(
+            'Middleware.utilities.config_utils.get_endpoint_config_path',
+            return_value=str(endpoint_file))
+
+        result = try_get_endpoint_config('myendpoint')
+
+        assert result == endpoint_data
+        mock_get_path.assert_called_once_with('', 'myendpoint')
+
+
+class TestExpandUserPath:
+    """Tests for _expand_user_path and its use in directory-root resolution."""
+
+    @pytest.fixture(autouse=True)
+    def reset_globals(self):
+        """Resets directory-override globals after each test to ensure isolation."""
+        original_config_dir = instance_global_variables.CONFIG_DIRECTORY
+        original_public_dir = instance_global_variables.PUBLIC_DIRECTORY
+        yield
+        instance_global_variables.CONFIG_DIRECTORY = original_config_dir
+        instance_global_variables.PUBLIC_DIRECTORY = original_public_dir
+
+    @pytest.mark.parametrize("falsy_value", [None, ''])
+    def test_falsy_values_pass_through_unchanged(self, falsy_value):
+        assert _expand_user_path(falsy_value) == falsy_value
+
+    def test_path_without_tilde_passes_through_unchanged(self):
+        assert _expand_user_path('/abs/path') == '/abs/path'
+        assert _expand_user_path('relative/path') == 'relative/path'
+
+    def test_tilde_path_delegates_to_expanduser(self):
+        assert _expand_user_path('~/cfg') == os.path.expanduser('~/cfg')
+
+    def test_config_directory_override_expands_tilde(self, mocker):
+        """
+        A '~/cfg' --ConfigDirectory override must resolve through
+        os.path.expanduser rather than becoming a literal '~' folder.
+        """
+        instance_global_variables.CONFIG_DIRECTORY = '~/cfg'
+        instance_global_variables.PUBLIC_DIRECTORY = None
+        mocker.patch('os.path.expanduser',
+                     side_effect=lambda p: '/home/tester' + p[1:] if p.startswith('~') else p)
+
+        assert config_utils.get_root_config_directory() == '/home/tester/cfg'
+
+    def test_public_directory_override_expands_tilde(self, mocker):
+        """
+        A '~/pub' --PublicDirectory override is expanded before 'Configs' is
+        joined onto it, so the whole derived tree lives under the real home.
+        """
+        instance_global_variables.CONFIG_DIRECTORY = None
+        instance_global_variables.PUBLIC_DIRECTORY = '~/pub'
+        mocker.patch('os.path.expanduser',
+                     side_effect=lambda p: '/home/tester' + p[1:] if p.startswith('~') else p)
+
+        result = config_utils.get_root_config_directory()
+
+        assert result == os.path.join('/home/tester/pub', 'Configs')
+
+    def test_absolute_config_directory_override_is_untouched(self):
+        """An absolute override has no '~' and must come back byte-for-byte."""
+        instance_global_variables.CONFIG_DIRECTORY = '/srv/wilmer/configs'
+
+        assert config_utils.get_root_config_directory() == '/srv/wilmer/configs'

@@ -5,5 +5,8 @@ from flask import Flask
 # It is instantiated here to prevent circular dependencies.
 app = Flask(__name__)
 
-# Ensure jsonify handles unicode correctly without escaping them unnecessarily
-app.config['JSON_AS_ASCII'] = False
+# Ensure jsonify handles unicode correctly without escaping it unnecessarily.
+# The legacy JSON_AS_ASCII config key was removed in Flask 2.3; the setting now
+# lives on the app's JSON provider, so set it there or non-streaming responses
+# still emit \uXXXX escapes.
+app.json.ensure_ascii = False

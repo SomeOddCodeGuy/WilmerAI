@@ -1,0 +1,8 @@
+{
+  "modelNameForDisplayOnly": "Embeddings example: Ollama native /api/embed. Pull an embedding model first (e.g. 'ollama pull nomic-embed-text'). Only the fields shown here apply to embeddings endpoints; presets and prompt templates are not used.",
+  "endpoint": "http://127.0.0.1:11434",
+  "apiTypeConfigFileName": "Ollama-Embeddings",
+  "modelNameToSendToAPI": "nomic-embed-text",
+  "dontIncludeModel": false,
+  "apiKey": ""
+}

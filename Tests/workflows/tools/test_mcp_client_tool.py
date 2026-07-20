@@ -3,6 +3,7 @@
 import asyncio
 import json
 from contextlib import asynccontextmanager
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -59,6 +60,17 @@ def test_call_tool_malformed_config_raises_mcp_error(mocker):
     )
     with pytest.raises(MCPToolCallError, match="could not be loaded"):
         MCPClient().call_tool("broken-server", "tool", {})
+
+
+def test_call_tool_unreadable_config_raises_mcp_error(mocker):
+    """A config file that exists but cannot be read (OSError) is wrapped as
+    MCPToolCallError, same as a malformed one."""
+    mocker.patch(
+        "Middleware.workflows.tools.mcp_client_tool.load_mcp_server_config",
+        side_effect=OSError("permission denied"),
+    )
+    with pytest.raises(MCPToolCallError, match="could not be loaded"):
+        MCPClient().call_tool("locked-server", "tool", {})
 
 
 def test_call_tool_loads_config_by_name(mocker):
@@ -145,9 +157,10 @@ def test_call_tool_rejects_path_separators_in_server_name(mocker):
     mock_load = mocker.patch(
         "Middleware.workflows.tools.mcp_client_tool.load_mcp_server_config",
     )
-    # Includes "C:evil"/"C:" — Windows drive-relative names that escape MCPServers/
-    # because os.path.join(dir, "C:evil.json") returns "C:evil.json".
-    for bad_name in ("../secrets", "dir/server", "dir\\server", "..", "C:evil", "C:"):
+    # Includes "C:evil"/"C:", the Windows drive-relative names that escape MCPServers/
+    # because os.path.join(dir, "C:evil.json") returns "C:evil.json". "." and ".."
+    # are the current/parent dir names the guard rejects by membership.
+    for bad_name in ("../secrets", "dir/server", "dir\\server", ".", "..", "C:evil", "C:"):
         with pytest.raises(MCPToolCallError, match="path separators"):
             MCPClient().call_tool(bad_name, "tool", {})
     mock_load.assert_not_called()
@@ -306,11 +319,8 @@ def test_flatten_content_falls_back_to_model_dump():
 def test_flatten_content_falls_back_to_str_when_no_model_dump():
     plain = SimpleNamespace(text=None)
     out = _flatten_content([plain])
-    # Without text and without model_dump, we expect str(item) — which contains
-    # the namespace's repr. The exact text isn't load-bearing; just that it's
-    # produced (not empty and not raising).
-    assert isinstance(out, str)
-    assert out != ""
+    # Without text and without model_dump, the block contributes exactly str(item).
+    assert out == str(plain)
 
 
 # ---------------------------------------------------------------------------
@@ -325,9 +335,10 @@ def test_flatten_content_falls_back_to_str_when_no_model_dump():
 
 class _FakeSession:
     """Drop-in stand-in for `mcp.ClientSession` exercising the same async-context-manager
-    + initialize + call_tool surface our code calls."""
+    + initialize + call_tool surface our code calls. The most recent instance is kept on
+    the class so tests can assert what actually reached session.call_tool."""
 
-    last_init: bool = False
+    last_instance = None
 
     def __init__(self, read_stream, write_stream):
         self.read_stream = read_stream
@@ -339,6 +350,7 @@ class _FakeSession:
             content=[SimpleNamespace(text="hi")],
             isError=False,
         )
+        _FakeSession.last_instance = self
 
     async def __aenter__(self):
         return self
@@ -348,9 +360,9 @@ class _FakeSession:
 
     async def initialize(self):
         self.initialized = True
-        _FakeSession.last_init = True
 
     async def call_tool(self, name, arguments=None, read_timeout_seconds=None):
+        assert self.initialized, "call_tool called before initialize()"
         self.call_args = {
             "name": name,
             "arguments": arguments,
@@ -402,6 +414,7 @@ def test_run_tool_call_stdio_constructs_params_and_calls_tool(mocker):
         "cwd": "/tmp",
     }
 
+    _FakeSession.last_instance = None
     result = asyncio.run(mcp_client_tool._run_tool_call(
         server_config, "srv", "ping", {"x": 1}, timeout=12.0
     ))
@@ -412,6 +425,13 @@ def test_run_tool_call_stdio_constructs_params_and_calls_tool(mocker):
     assert params.command == "echo"
     assert params.args == ["hello"]
     assert params.env == {"FOO": "1"}
+    assert params.cwd == "/tmp"
+    # The session received the exact tool name, arguments, and read timeout.
+    assert _FakeSession.last_instance.call_args == {
+        "name": "ping",
+        "arguments": {"x": 1},
+        "read_timeout_seconds": timedelta(seconds=12.0),
+    }
 
 
 def test_run_tool_call_sse_passes_url_headers_timeout(mocker):
@@ -430,6 +450,7 @@ def test_run_tool_call_sse_passes_url_headers_timeout(mocker):
         "headers": {"Authorization": "Bearer abc"},
     }
 
+    _FakeSession.last_instance = None
     result = asyncio.run(mcp_client_tool._run_tool_call(
         server_config, "srv", "ping", {}, timeout=7.5
     ))
@@ -438,6 +459,11 @@ def test_run_tool_call_sse_passes_url_headers_timeout(mocker):
     assert record["args"][0] == "http://localhost:5050/sse"
     assert record["kwargs"]["headers"] == {"Authorization": "Bearer abc"}
     assert record["kwargs"]["timeout"] == 7.5
+    assert _FakeSession.last_instance.call_args == {
+        "name": "ping",
+        "arguments": {},
+        "read_timeout_seconds": timedelta(seconds=7.5),
+    }
 
 
 def test_run_tool_call_sse_missing_url_raises(mocker):
@@ -464,6 +490,7 @@ def test_run_tool_call_streamable_http_passes_url_headers_timeout(mocker):
         "headers": {"X-Auth": "token"},
     }
 
+    _FakeSession.last_instance = None
     result = asyncio.run(mcp_client_tool._run_tool_call(
         server_config, "srv", "ping", {}, timeout=15.0
     ))
@@ -472,6 +499,11 @@ def test_run_tool_call_streamable_http_passes_url_headers_timeout(mocker):
     assert record["args"][0] == "http://localhost:5050/mcp"
     assert record["kwargs"]["headers"] == {"X-Auth": "token"}
     assert record["kwargs"]["timeout"] == 15.0
+    assert _FakeSession.last_instance.call_args == {
+        "name": "ping",
+        "arguments": {},
+        "read_timeout_seconds": timedelta(seconds=15.0),
+    }
 
 
 def test_run_tool_call_streamable_http_missing_url_raises():

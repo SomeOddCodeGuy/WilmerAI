@@ -5,9 +5,12 @@ from copy import deepcopy
 from typing import List, Dict
 
 from Middleware.utilities.config_utils import load_template_from_json
-from Middleware.utilities.prompt_extraction_utils import separate_messages
-from Middleware.utilities.prompt_extraction_utils import template
-from Middleware.utilities.text_utils import rough_estimate_token_length
+from Middleware.utilities.prompt_extraction_utils import (
+    extract_last_turns_by_estimated_token_limit,
+    extract_last_turns_with_min_messages_and_token_limit,
+    separate_messages,
+    template,
+)
 
 TAG_PATTERN = re.compile('|'.join(map(re.escape, template.values())))
 
@@ -140,7 +143,7 @@ def format_user_turn_with_template(user_turn: str, template_file_name: str, isCh
     Returns:
         str: The formatted user turn.
     """
-    if (isChatCompletion):
+    if isChatCompletion:
         return strip_tags(user_turn)
 
     prompt_template = load_template_from_json(template_file_name)
@@ -163,7 +166,7 @@ def format_assistant_turn_with_template(assistant_turn: str, template_file_name:
     Returns:
         str: The formatted user turn.
     """
-    if (isChatCompletion):
+    if isChatCompletion:
         return strip_tags(assistant_turn)
 
     prompt_template = load_template_from_json(template_file_name)
@@ -185,7 +188,7 @@ def format_system_prompt_with_template(system_prompt: str, template_file_name: s
     Returns:
         str: The formatted system prompt.
     """
-    if (isChatCompletion):
+    if isChatCompletion:
         return strip_tags(system_prompt)
 
     prompt_template = load_template_from_json(template_file_name)
@@ -208,7 +211,7 @@ def add_assistant_end_token_to_user_turn(user_turn: str, template_file_name: str
     Returns:
         str: The user turn with the assistant's end token appended.
     """
-    if (isChatCompletion):
+    if isChatCompletion:
         return strip_tags(user_turn)
 
     prompt_template = load_template_from_json(template_file_name)
@@ -261,40 +264,6 @@ def format_templated_system_prompt(prompt: str, llm_handler, prompt_template_fil
                                               isChatCompletion=llm_handler.takes_message_collection)
 
 
-def reduce_messages_to_fit_token_limit(system_prompt: str, messages: List[Dict[str, str]], max_tokens: int) -> List[
-    Dict[str, str]]:
-    """
-    Reduces a list of messages to fit within a maximum token limit.
-
-    This function processes messages in reverse order, accumulating token
-    estimates until the specified maximum token limit is reached. It ensures
-    that full messages are included without exceeding the token limit, and the
-    system prompt is always included in the token count.
-
-    Args:
-        system_prompt (str): The system prompt to be prepended to the messages.
-        messages (List[Dict[str, str]]): The list of messages.
-        max_tokens (int): The maximum number of tokens allowed.
-
-    Returns:
-        List[Dict[str, str]]: The list of messages that fit within the
-            token limit.
-    """
-    current_token_count = rough_estimate_token_length(system_prompt)
-    fitting_messages = []
-
-    for message in reversed(messages):
-        message_token_count = rough_estimate_token_length(message['content'])
-
-        if current_token_count + message_token_count <= max_tokens:
-            fitting_messages.append(message)
-            current_token_count += message_token_count
-        else:
-            break
-
-    return list(reversed(fitting_messages))
-
-
 def get_formatted_last_n_turns_as_string(messages: List[Dict[str, str]], n: int, template_file_name: str,
                                          isChatCompletion: bool) -> str:
     """
@@ -316,7 +285,7 @@ def get_formatted_last_n_turns_as_string(messages: List[Dict[str, str]], n: int,
     """
 
     filtered_messages = [message for message in messages if message["role"] != "system"]
-    trimmed_messages = deepcopy(filtered_messages[-n:])
+    trimmed_messages = filtered_messages[-n:]
     return_message = format_messages_with_template(trimmed_messages, template_file_name, isChatCompletion)
     return ''.join([message["content"] for message in return_message])
 
@@ -328,11 +297,9 @@ def get_formatted_last_turns_by_estimated_token_limit_as_string(messages: List[D
     Retrieves and formats recent messages that fit within an estimated token
     budget as a single concatenated string.
 
-    This function filters out ``images`` and ``system`` roles, then iterates
-    from the most recent message backwards, accumulating estimated token counts.
-    It stops when adding the next message would exceed the limit, but always
-    includes at least one message. The selected messages are then formatted
-    using the LLM's chat template.
+    This function drops all ``system`` messages, selects recent messages via
+    ``extract_last_turns_by_estimated_token_limit`` (always at least one), and
+    formats the selection using the LLM's chat template.
 
     Args:
         messages (List[Dict[str, str]]): A list of messages with 'role' and
@@ -347,27 +314,10 @@ def get_formatted_last_turns_by_estimated_token_limit_as_string(messages: List[D
         str: A single string with the selected messages concatenated and
             formatted.
     """
-    filtered_messages = [message for message in messages if message["role"] != "system"]
-
-    if not filtered_messages:
+    selected = extract_last_turns_by_estimated_token_limit(messages, token_limit, include_sysmes=False)
+    if not selected:
         return ""
-
-    accumulated_tokens = 0
-    selected = []
-
-    for message in reversed(filtered_messages):
-        message_tokens = rough_estimate_token_length(message.get("content") or "")
-        if not selected:
-            selected.append(message)
-            accumulated_tokens += message_tokens
-        elif accumulated_tokens + message_tokens <= token_limit:
-            selected.append(message)
-            accumulated_tokens += message_tokens
-        else:
-            break
-
-    trimmed_messages = deepcopy(list(reversed(selected)))
-    return_message = format_messages_with_template(trimmed_messages, template_file_name, isChatCompletion)
+    return_message = format_messages_with_template(selected, template_file_name, isChatCompletion)
     return ''.join([message["content"] for message in return_message])
 
 
@@ -380,11 +330,10 @@ def get_formatted_last_turns_with_min_messages_and_token_limit_as_string(message
     Retrieves and formats recent messages with a minimum count floor and token
     budget ceiling as a single concatenated string.
 
-    This function filters out ``images`` and ``system`` roles, always includes
-    at least ``min_messages`` messages from the end of the conversation, then
-    continues adding older messages as long as the cumulative estimated token
-    count does not exceed ``token_limit``.  The selected messages are then
-    formatted using the LLM's chat template.
+    This function drops all ``system`` messages, selects recent messages via
+    ``extract_last_turns_with_min_messages_and_token_limit`` (at least
+    ``min_messages``, expanding up to ``token_limit``), and formats the
+    selection using the LLM's chat template.
 
     Args:
         messages (List[Dict[str, str]]): A list of messages with 'role' and
@@ -405,31 +354,10 @@ def get_formatted_last_turns_with_min_messages_and_token_limit_as_string(message
         str: A single string with the selected messages concatenated and
             formatted.
     """
-    filtered_messages = [message for message in messages if message["role"] != "system"]
-
-    if not filtered_messages:
+    selected = extract_last_turns_with_min_messages_and_token_limit(
+        messages, min_messages, token_limit, include_sysmes=False,
+        budget_overrides_min=budget_overrides_min)
+    if not selected:
         return ""
-
-    accumulated_tokens = 0
-    selected = []
-
-    for message in reversed(filtered_messages):
-        message_tokens = rough_estimate_token_length(message.get("content") or "")
-        if len(selected) < min_messages:
-            # Hard count floor by default; yields to the token budget when
-            # budget_overrides_min is set (context-window clamp on), always keeping
-            # at least the most-recent message. Mirrors
-            # extract_last_turns_with_min_messages_and_token_limit.
-            if budget_overrides_min and selected and accumulated_tokens + message_tokens > token_limit:
-                break
-            selected.append(message)
-            accumulated_tokens += message_tokens
-        elif accumulated_tokens + message_tokens <= token_limit:
-            selected.append(message)
-            accumulated_tokens += message_tokens
-        else:
-            break
-
-    trimmed_messages = deepcopy(list(reversed(selected)))
-    return_message = format_messages_with_template(trimmed_messages, template_file_name, isChatCompletion)
+    return_message = format_messages_with_template(selected, template_file_name, isChatCompletion)
     return ''.join([message["content"] for message in return_message])

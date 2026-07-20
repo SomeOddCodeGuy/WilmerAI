@@ -15,13 +15,13 @@ when an API key is present. Encryption requires an additional configuration sett
 ### Enabling Data Isolation
 
 To enable per-user data isolation, configure your front-end application to send an `Authorization: Bearer <key>` header
-with every request to WilmerAI. The key can be any non-empty string -- it does not need to match any specific format or
+with every request to WilmerAI. The key can be any non-empty string; it does not need to match any specific format or
 be registered anywhere in WilmerAI's configuration. This causes all discussion files to be stored in a subdirectory
 derived from a hash of the API key.
 
 ### Enabling Encryption
 
-Data isolation alone does not encrypt files -- they remain plaintext JSON, just stored in separate directories. To also
+Data isolation alone does not encrypt files; they remain plaintext JSON, just stored in separate directories. To also
 encrypt files at rest, add the following setting to your user configuration file (under
 `Public/Configs/Users/<username>.json`):
 
@@ -111,7 +111,7 @@ API key is present. See the [Log Redaction Without Encryption](#log-redaction-wi
 ### Files That Are NOT Encrypted
 
 - **SQLite databases**: The vector memory database and the workflow locking database remain unencrypted. Encrypting
-  SQLite at rest is non-trivial -- it typically requires compiling against SQLCipher (a third-party encrypted SQLite
+  SQLite at rest is non-trivial: it typically requires compiling against SQLCipher (a third-party encrypted SQLite
   fork), which introduces native build dependencies and complicates cross-platform distribution. This is a known
   limitation. In practice, vector embeddings do not directly expose conversation text, but the workflow locking
   database may contain discussion IDs.
@@ -158,7 +158,7 @@ New layout with API key isolation:
 This migration is fully backwards compatible. When WilmerAI looks for a discussion file, it first checks for the
 new nested path. If that file does not exist, it checks for a legacy flat file at the old path. If a legacy file is
 found, it is read from the old location. New files and updated files are always written to the new nested location.
-No manual migration is required -- old files will continue to be read until they are naturally superseded.
+No manual migration is required; old files will continue to be read until they are naturally superseded.
 
 -----
 
@@ -208,7 +208,7 @@ add the following to your user configuration file (`Public/Configs/Users/<userna
 }
 ```
 
-When this is set to `true`, all requests -- whether or not they include an API key -- have their sensitive log
+When this is set to `true`, all requests, whether or not they include an API key, have their sensitive log
 output redacted. Prompts, LLM responses, and payload data are replaced with `[Redacted]` markers in both terminal
 and file logs. This setting operates independently of `encryptUsingApiKey`: you can use either, both, or neither.
 

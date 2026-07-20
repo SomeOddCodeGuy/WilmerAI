@@ -83,6 +83,84 @@ class TestOllamaChatHandler:
         assert payload["messages"] == mock_messages
         assert payload["options"] == mock_handler_config["gen_input"]
 
+    def test_prepare_payload_exact_options_dict(self, mock_handler_config, mocker):
+        """
+        Asserts the exact contents of the payload and its nested 'options' dict,
+        including the injected max-tokens and context-truncation fields.
+        """
+        mocker.patch("Middleware.llmapis.handlers.base.base_api_transport.get_connect_timeout", return_value=30)
+        config = dict(mock_handler_config)
+        config["gen_input"] = {"temperature": 0.7, "top_p": 0.9}
+        config["api_type_config"] = {
+            "maxNewTokensPropertyName": "num_predict",
+            "truncateLengthPropertyName": "num_ctx",
+        }
+        config["endpoint_config"] = {"maxContextTokenSize": 4096}
+        handler = OllamaChatHandler(**config, stream=False)
+        mock_messages = [{"role": "user", "content": "Hello"}]
+        mocker.patch.object(handler, '_build_messages_from_conversation', return_value=mock_messages)
+
+        payload = handler._prepare_payload(conversation=[], system_prompt=None, prompt="Hello")
+
+        assert payload == {
+            "model": "llama3:latest",
+            "messages": mock_messages,
+            "options": {
+                "temperature": 0.7,
+                "top_p": 0.9,
+                "num_predict": 512,
+                "num_ctx": 4096,
+            },
+            "stream": False,
+        }
+
+    def test_prepare_payload_realistic_config_keeps_stream_out_of_options(self, mock_handler_config, mocker):
+        """With the shipped config (streamPropertyName: "stream"), the injected stream
+        key must not leak into 'options'; non-streaming sets stream only top-level."""
+        mocker.patch("Middleware.llmapis.handlers.base.base_api_transport.get_connect_timeout", return_value=30)
+        config = dict(mock_handler_config)
+        config["gen_input"] = {"temperature": 0.7, "top_p": 0.9}
+        config["api_type_config"] = {
+            "maxNewTokensPropertyName": "num_predict",
+            "truncateLengthPropertyName": "num_ctx",
+            "streamPropertyName": "stream",
+        }
+        config["endpoint_config"] = {"maxContextTokenSize": 4096}
+        handler = OllamaChatHandler(**config, stream=False)
+        mock_messages = [{"role": "user", "content": "Hello"}]
+        mocker.patch.object(handler, '_build_messages_from_conversation', return_value=mock_messages)
+
+        payload = handler._prepare_payload(conversation=[], system_prompt=None, prompt="Hello")
+
+        assert payload == {
+            "model": "llama3:latest",
+            "messages": mock_messages,
+            "options": {
+                "temperature": 0.7,
+                "top_p": 0.9,
+                "num_predict": 512,
+                "num_ctx": 4096,
+            },
+            "stream": False,
+        }
+
+    def test_prepare_payload_realistic_config_streaming_no_stream_anywhere(self, mock_handler_config, mocker):
+        """Streaming with the shipped config: no 'stream' key top-level (API default)
+        and none inside 'options'."""
+        mocker.patch("Middleware.llmapis.handlers.base.base_api_transport.get_connect_timeout", return_value=30)
+        config = dict(mock_handler_config)
+        config["gen_input"] = {"temperature": 0.7}
+        config["api_type_config"] = {"streamPropertyName": "stream",
+                                     "maxNewTokensPropertyName": "num_predict"}
+        handler = OllamaChatHandler(**config, stream=True)
+        mocker.patch.object(handler, '_build_messages_from_conversation',
+                            return_value=[{"role": "user", "content": "Hi"}])
+
+        payload = handler._prepare_payload(conversation=[], system_prompt=None, prompt="Hi")
+
+        assert "stream" not in payload
+        assert "stream" not in payload["options"]
+
     @pytest.mark.parametrize("data_str, expected_output", [
         # Standard token chunk
         (json.dumps({
@@ -111,10 +189,14 @@ class TestOllamaChatHandler:
     @pytest.mark.parametrize("data_str", [
         "",  # Empty string
         "{'invalid': 'json'}",  # Invalid JSON format that will raise a decode error
+        "123",  # JSON that parses to a non-dict
+        json.dumps({"message": 5}),  # Non-dict 'message' value
+        json.dumps({"message": {"tool_calls": 5}}),  # Non-iterable tool_calls
     ])
     def test_process_stream_data_unparsable(self, mock_handler_config, data_str):
         """
-        Ensures that unparsable or empty stream data correctly returns None.
+        Ensures that unparsable, empty, or wrongly-shaped stream data correctly
+        returns None instead of escaping as TypeError/AttributeError.
         """
         handler = OllamaChatHandler(**mock_handler_config, stream=True)
         result = handler._process_stream_data(data_str)
@@ -158,6 +240,7 @@ class TestOllamaChatHandler:
         {"message": {}},  # 'message' object is empty
         {"wrong_key": "value"},  # Missing 'message' key entirely
         {"message": {"content": None}},  # 'content' key is None
+        {"message": "not-a-dict"},  # Non-dict 'message' value
     ])
     def test_parse_non_stream_response_key_error(self, mock_handler_config, response_json):
         """
@@ -207,6 +290,41 @@ class TestBuildMessagesFromConversation:
         assert "images" not in result[0]
         assert "images" not in result[1]
 
+    def test_add_text_to_start_of_system_applied(self, mock_handler_config):
+        """The ollamaApiChat handler must honor addTextToStartOfSystem like the base
+        chat builder does (regression: the override previously skipped injections)."""
+        config = {**mock_handler_config,
+                  "endpoint_config": {"addTextToStartOfSystem": True,
+                                      "textToAddToStartOfSystem": "[PREFIX] "}}
+        handler = OllamaChatHandler(**config, stream=False)
+        conversation = [{"role": "system", "content": "You are an assistant."},
+                        {"role": "user", "content": "Hi"}]
+        result = handler._build_messages_from_conversation(conversation, None, None)
+        assert result[0]["content"] == "[PREFIX] You are an assistant."
+
+    def test_add_completion_text_applied(self, mock_handler_config):
+        """addTextToStartOfCompletion must be appended for ollamaApiChat too."""
+        config = {**mock_handler_config,
+                  "endpoint_config": {"addTextToStartOfCompletion": True,
+                                      "textToAddToStartOfCompletion": " /no_think"}}
+        handler = OllamaChatHandler(**config, stream=False)
+        conversation = [{"role": "user", "content": "Final prompt"}]
+        result = handler._build_messages_from_conversation(conversation, None, None)
+        assert result[-1]["content"].endswith(" /no_think")
+
+    def test_injection_and_images_coexist(self, mock_handler_config):
+        """Injections and per-message image handling both apply in one pass."""
+        config = {**mock_handler_config,
+                  "endpoint_config": {"addTextToStartOfSystem": True,
+                                      "textToAddToStartOfSystem": "[SYS] "}}
+        handler = OllamaChatHandler(**config, stream=False)
+        conversation = [{"role": "system", "content": "Base."},
+                        {"role": "user", "content": "Look", "images": ["data:image/png;base64,ABC"]}]
+        result = handler._build_messages_from_conversation(conversation, None, None)
+        assert result[0]["content"] == "[SYS] Base."
+        # Image normalization (data-URI prefix stripped) still occurred.
+        assert result[1]["images"] == ["ABC"]
+
     def test_systemmes_role_corrected_with_images(self, mock_handler_config):
         """The systemMes -> system role correction preserves the images key."""
         handler = OllamaChatHandler(**mock_handler_config, stream=False)
@@ -232,6 +350,107 @@ class TestBuildMessagesFromConversation:
         assert result[0]["images"] == ["user_img"]
         assert "images" not in result[1]
         assert "images" not in result[2]
+
+    def test_data_uri_prefix_stripped_from_user_images(self, mock_handler_config):
+        """
+        Data URIs on user messages are converted to the raw base64 that the
+        Ollama API expects, while assistant-message images are stripped entirely.
+        """
+        handler = OllamaChatHandler(**mock_handler_config, stream=False)
+        conversation = [
+            {"role": "user", "content": "Look", "images": ["data:image/png;base64,XXX"]},
+            {"role": "assistant", "content": "I see", "images": ["data:image/png;base64,YYY"]},
+        ]
+        result = handler._build_messages_from_conversation(conversation, None, None)
+
+        assert result[0]["images"] == ["XXX"]
+        assert "images" not in result[1]
+
+    def test_raw_base64_user_images_left_unchanged(self, mock_handler_config):
+        """Images without a data URI prefix pass through untouched."""
+        handler = OllamaChatHandler(**mock_handler_config, stream=False)
+        conversation = [
+            {"role": "user", "content": "Look", "images": ["rawbase64data"]},
+        ]
+        result = handler._build_messages_from_conversation(conversation, None, None)
+
+        assert result[0]["images"] == ["rawbase64data"]
+
+    def test_trailing_empty_assistant_message_removed(self, mock_handler_config):
+        """A trailing assistant message with empty content is dropped from the list."""
+        handler = OllamaChatHandler(**mock_handler_config, stream=False)
+        conversation = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": ""},
+        ]
+        result = handler._build_messages_from_conversation(conversation, None, None)
+
+        assert result == [{"role": "user", "content": "Hello"}]
+
+    def test_trailing_empty_assistant_with_tool_calls_kept(self, mock_handler_config):
+        """A trailing assistant message with empty content but tool_calls is the
+        model's tool invocation, not the add_missing_assistant filler, and must
+        not be dropped."""
+        handler = OllamaChatHandler(**mock_handler_config, stream=False)
+        conversation = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "",
+             "tool_calls": [{"id": "call_1", "type": "function",
+                             "function": {"name": "calc", "arguments": "{}"}}]},
+        ]
+        result = handler._build_messages_from_conversation(conversation, None, None)
+
+        assert len(result) == 2
+        assert result[-1]["tool_calls"][0]["id"] == "call_1"
+
+    def test_trailing_assistant_message_with_content_kept(self, mock_handler_config):
+        """A trailing assistant message that has content is preserved."""
+        handler = OllamaChatHandler(**mock_handler_config, stream=False)
+        conversation = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there"},
+        ]
+        result = handler._build_messages_from_conversation(conversation, None, None)
+
+        assert result == [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there"},
+        ]
+
+    def test_conversation_none_builds_from_system_and_prompt(self, mock_handler_config):
+        """
+        When conversation is None, the message list is constructed from the
+        system_prompt and prompt arguments.
+        """
+        handler = OllamaChatHandler(**mock_handler_config, stream=False)
+
+        result = handler._build_messages_from_conversation(None, "You are a bot.", "Hello!")
+
+        assert result == [
+            {"role": "system", "content": "You are a bot."},
+            {"role": "user", "content": "Hello!"},
+        ]
+
+    def test_conversation_none_with_prompt_only(self, mock_handler_config):
+        """When conversation is None and only a prompt is given, no system message is added."""
+        handler = OllamaChatHandler(**mock_handler_config, stream=False)
+
+        result = handler._build_messages_from_conversation(None, None, "Hello!")
+
+        assert result == [{"role": "user", "content": "Hello!"}]
+
+    def test_wilmer_curly_sentinels_restored(self, mock_handler_config):
+        """The Ollama override calls return_brackets itself (it does not share the
+        base builder's call), so the WILMER curly sentinels must be restored to
+        literal braces in this path too."""
+        handler = OllamaChatHandler(**mock_handler_config, stream=False)
+        conversation = [
+            {"role": "user",
+             "content": "Print __WILMER_L_CURLY__x__WILMER_R_CURLY__ please"},
+        ]
+        result = handler._build_messages_from_conversation(conversation, None, None)
+
+        assert result[0]["content"] == "Print {x} please"
 
 
 class TestProcessStreamDataToolCalls:
@@ -310,6 +529,26 @@ class TestProcessStreamDataToolCalls:
         assert result['tool_calls'][1]['index'] == 1
         assert result['tool_calls'][1]['function']['name'] == 'func_b'
 
+    def test_stream_tool_calls_in_separate_chunks_get_distinct_indices(self, mock_handler_config):
+        """Indices must continue across chunks within one stream: index-keyed
+        delta accumulation (ours and OpenAI clients') would otherwise merge two
+        distinct calls arriving in separate chunks into one garbled call."""
+        handler = OllamaChatHandler(**mock_handler_config, stream=True)
+
+        first = handler._process_stream_data(json.dumps({
+            "message": {"role": "assistant", "content": "",
+                        "tool_calls": [{"function": {"name": "func_a", "arguments": {"x": 1}}}]},
+            "done": False
+        }))
+        second = handler._process_stream_data(json.dumps({
+            "message": {"role": "assistant", "content": "",
+                        "tool_calls": [{"function": {"name": "func_b", "arguments": {"y": 2}}}]},
+            "done": False
+        }))
+
+        assert first['tool_calls'][0]['index'] == 0
+        assert second['tool_calls'][0]['index'] == 1
+
     def test_stream_tool_calls_with_empty_arguments(self, mock_handler_config, mocker):
         """
         Empty arguments dict should become '{}' JSON string.
@@ -332,6 +571,45 @@ class TestProcessStreamDataToolCalls:
         })
         result = handler._process_stream_data(data_str)
         assert result['tool_calls'][0]['function']['arguments'] == '{}'
+
+    def test_stream_done_chunk_with_tool_calls(self, mock_handler_config, mocker):
+        """
+        A single chunk carrying both 'done': true and tool_calls should yield
+        finish_reason 'stop' AND the converted tool calls together.
+        """
+        fake_hex = "0011223344556677889900aa"
+        mock_uuid = mocker.MagicMock()
+        mock_uuid.hex = fake_hex
+        mocker.patch("Middleware.llmapis.handlers.impl.ollama_chat_api_handler.uuid.uuid4",
+                     return_value=mock_uuid)
+
+        handler = OllamaChatHandler(**mock_handler_config, stream=True)
+        data_str = json.dumps({
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": {"city": "London"}
+                    }
+                }]
+            },
+            "done": True
+        })
+        result = handler._process_stream_data(data_str)
+
+        assert result['finish_reason'] == 'stop'
+        assert result['token'] == ''
+        assert result['tool_calls'] == [{
+            "index": 0,
+            "id": f"call_{fake_hex[:24]}",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": json.dumps({"city": "London"})
+            }
+        }]
 
     def test_stream_no_tool_calls_no_key(self, mock_handler_config):
         """

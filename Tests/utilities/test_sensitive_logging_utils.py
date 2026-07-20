@@ -23,17 +23,22 @@ from Middleware.utilities.sensitive_logging_utils import (
 
 @pytest.fixture(autouse=True)
 def _clean_context():
-    """Ensure each test starts with a clean encryption context."""
+    """Ensure each test starts with a clean encryption context, and detach any
+    mock handlers left on the process-persistent named test loggers."""
     clear_encryption_context()
     yield
     clear_encryption_context()
+    for logger_name in list(logging.Logger.manager.loggerDict):
+        if logger_name.startswith("test.sensitive."):
+            logging.getLogger(logger_name).handlers.clear()
 
 
-def _make_logger():
-    """Return a logger with a mock handler to inspect emitted records."""
-    mock_logger = logging.getLogger(f"test.sensitive.{id(object())}")
+def _make_logger(name):
+    """Return a real logger with a mock handler to inspect emitted records."""
+    mock_logger = logging.getLogger(f"test.sensitive.{name}")
     mock_logger.handlers.clear()
     mock_logger.setLevel(logging.DEBUG)
+    mock_logger.propagate = False
     handler = MagicMock(spec=logging.Handler)
     handler.level = logging.DEBUG
     mock_logger.addHandler(handler)
@@ -192,6 +197,38 @@ class TestSensitiveLogLazy:
         mock_logger = MagicMock(spec=logging.Logger)
         sensitive_log_lazy(mock_logger, logging.DEBUG, "Simple message")
         mock_logger.log.assert_called_once_with(logging.DEBUG, "Simple message")
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: real logger, formatted record inspection
+# ---------------------------------------------------------------------------
+
+class TestEndToEndFormattedRecords:
+    """Drives sensitive_log through a real logging.Logger and formats the
+    emitted LogRecord, proving redaction survives the actual logging pipeline
+    (level filtering, record creation, formatting) rather than just the call
+    signature on a mocked logger."""
+
+    def test_formatted_record_contains_no_secret_when_active(self):
+        set_encryption_context(True)
+        logger, handler = _make_logger("e2e_redacted")
+        sensitive_log(logger, logging.INFO, "User prompt: %s", "TOP-SECRET-PAYLOAD")
+
+        handler.handle.assert_called_once()
+        record = handler.handle.call_args[0][0]
+        formatted = logging.Formatter("%(levelname)s %(name)s %(message)s").format(record)
+        assert "TOP-SECRET-PAYLOAD" not in formatted
+        assert "User prompt" not in formatted
+        assert _REDACTION_MARKER in formatted
+
+    def test_formatted_record_contains_message_when_inactive(self):
+        logger, handler = _make_logger("e2e_plain")
+        sensitive_log(logger, logging.INFO, "User prompt: %s", "visible-payload")
+
+        handler.handle.assert_called_once()
+        record = handler.handle.call_args[0][0]
+        formatted = logging.Formatter("%(message)s").format(record)
+        assert formatted == "User prompt: visible-payload"
 
 
 # ---------------------------------------------------------------------------

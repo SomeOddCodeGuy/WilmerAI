@@ -12,6 +12,10 @@ Covers:
 - Visited set threads through the chain
 - is_busy_flag and close() lifecycle across failovers
 - Logging output on each hop
+- _classify_backup_host egress classification (with DNS fully mocked)
+
+All DNS resolution is blocked by an autouse fixture; no test here may reach
+the network.
 """
 
 import json
@@ -22,7 +26,7 @@ import pytest
 import requests
 
 from Middleware.llmapis.handlers.base.base_llm_api_handler import LlmApiHandler
-from Middleware.llmapis.llm_api import LlmApiService
+from Middleware.llmapis.llm_api import LlmApiService, _classify_backup_host
 
 
 PRIMARY_CONFIG = {
@@ -77,6 +81,23 @@ def _make_config_resolver(configs_by_name):
         return configs_by_name[name]
 
     return _resolver
+
+
+@pytest.fixture(autouse=True)
+def _no_real_dns(mocker):
+    """
+    Hermeticity guard: unit tests must never perform real DNS lookups.
+
+    Several fixtures use hostname endpoints (http://backup:1234 etc.) and
+    _build_backup_service resolves hostnames to classify egress. By default
+    getaddrinfo raises gaierror (classifying as 'unknown'); tests that need a
+    specific resolution re-patch it in their own body, which runs after this
+    fixture and therefore overrides it.
+    """
+    mocker.patch(
+        "Middleware.llmapis.llm_api.socket.getaddrinfo",
+        side_effect=socket.gaierror("unit tests must not resolve DNS"),
+    )
 
 
 @pytest.fixture
@@ -343,6 +364,37 @@ class TestFailoverEgressGuard:
 
 
 # ----------------------------------------------------------------------------
+# _classify_backup_host classification rules
+# ----------------------------------------------------------------------------
+
+class TestClassifyBackupHost:
+    @pytest.mark.parametrize("url,resolved_ips,expected", [
+        # Mixed private+public resolution: any public address means failover would
+        # ship the prompt off-machine, so the conservative answer is 'remote'.
+        ("http://mixed.example.com:443", ["10.0.0.5", "8.8.8.8"], "remote"),
+        # A *.localhost suffix is local by definition (no DNS needed).
+        ("http://foo.localhost:8080", None, "local"),
+        # An unparsable URL (unterminated IPv6 bracket) cannot be classified.
+        ("http://[bad", None, "unknown"),
+        # An IPv4-mapped IPv6 literal is unwrapped before the v4 rules apply,
+        # so ::ffff:192.168.1.1 classifies as the private 192.168.1.1.
+        ("http://[::ffff:192.168.1.1]:8080", None, "local"),
+    ])
+    def test_classification(self, mocker, url, resolved_ips, expected):
+        if resolved_ips is not None:
+            mocker.patch(
+                "Middleware.llmapis.llm_api.socket.getaddrinfo",
+                return_value=[(0, 0, 0, "", (ip, 0)) for ip in resolved_ips],
+            )
+        assert _classify_backup_host(url) == expected
+
+    def test_dot_localhost_suffix_does_not_resolve_dns(self, mocker):
+        gai = mocker.patch("Middleware.llmapis.llm_api.socket.getaddrinfo")
+        assert _classify_backup_host("http://foo.localhost:8080") == "local"
+        gai.assert_not_called()
+
+
+# ----------------------------------------------------------------------------
 # suppress_retries threading
 # ----------------------------------------------------------------------------
 
@@ -476,11 +528,19 @@ class TestNonStreamingFailover:
         service._api_handler = primary_handler
 
         backup_service = MagicMock(spec=LlmApiService)
-        backup_service.get_response_from_llm.return_value = "ok"
+
+        def backup_call(**kwargs):
+            # Ordering: the primary handler must already be closed at the moment
+            # the backup is invoked, not merely by the end of the request.
+            assert primary_handler.close.called
+            return "ok"
+
+        backup_service.get_response_from_llm.side_effect = backup_call
         with patch.object(LlmApiService, "_build_backup_service", return_value=backup_service):
-            service.get_response_from_llm(prompt="hi")
+            assert service.get_response_from_llm(prompt="hi") == "ok"
 
         primary_handler.close.assert_called_once()
+        backup_service.get_response_from_llm.assert_called_once()
 
     def test_failover_passes_original_conversation_not_mutated_copy(self, single_chain):
         service = LlmApiService(endpoint="PRIMARY", presetname="p", max_tokens=128, stream=False)
@@ -511,13 +571,14 @@ class TestNonStreamingFailover:
         tool_choice = "auto"
         with patch.object(LlmApiService, "_build_backup_service", return_value=backup_service):
             service.get_response_from_llm(
-                system_prompt="sys", prompt="hi",
+                system_prompt="sys", prompt="hi", llm_takes_images=True,
                 request_id="rid-1", tools=tools, tool_choice=tool_choice,
             )
 
         call_kwargs = backup_service.get_response_from_llm.call_args.kwargs
         assert call_kwargs["system_prompt"] == "sys"
         assert call_kwargs["prompt"] == "hi"
+        assert call_kwargs["llm_takes_images"] is True
         assert call_kwargs["request_id"] == "rid-1"
         assert call_kwargs["tools"] is tools
         assert call_kwargs["tool_choice"] == "auto"
@@ -547,7 +608,7 @@ class TestStreamingFailover:
 
         def failing_gen():
             raise requests.exceptions.ConnectionError("cannot reach primary")
-            yield  # pragma: no cover - unreachable, keeps this a generator
+            yield  # pragma: no cover (unreachable; keeps this a generator)
 
         primary_handler = MagicMock()
         primary_handler.handle_streaming.return_value = failing_gen()
@@ -768,9 +829,12 @@ class TestCycleDetection:
             with pytest.raises(RuntimeError) as exc_info:
                 service.get_response_from_llm(prompt="hi")
 
-            # Cycle error should name at least one endpoint in the chain.
+            # The error must name the offending backup ('A' is re-entered after
+            # A -> B), list the visited chain deterministically, and point the
+            # user at the config field to fix.
             msg = str(exc_info.value)
-            assert "A" in msg
+            assert "backup 'A'" in msg
+            assert "visited endpoints: A, B" in msg
             assert "backupEndpointName" in msg
 
     def test_build_backup_service_detects_cycle_directly(self, direct_cycle):
@@ -920,7 +984,8 @@ class _ConcreteHandler(LlmApiHandler):
     def _get_api_endpoint_url(self):
         return "http://x"
 
-    def _prepare_payload(self, conversation, system_prompt, prompt, *, tools=None, tool_choice=None):
+    def _prepare_payload(self, conversation, system_prompt, prompt, *, tools=None, tool_choice=None,
+                         structured_output_schema=None):
         return {}
 
     def _process_stream_data(self, data_str):

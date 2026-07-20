@@ -19,7 +19,7 @@ class BaseCompletionsHandler(LlmApiHandler):
 
     def _prepare_payload(self, conversation: Optional[List[Dict[str, str]]], system_prompt: Optional[str],
                          prompt: Optional[str], *, tools: Optional[list] = None,
-                         tool_choice=None) -> Dict:
+                         tool_choice=None, structured_output_schema: Optional[Dict] = None) -> Dict:
         """
         Prepares the final data payload for the API request.
 
@@ -79,8 +79,4 @@ class BaseCompletionsHandler(LlmApiHandler):
 
         # The logic from LlmApiService for adding text to the start of prompts has already run
         full_prompt = (system_prompt + prompt).strip()
-        full_prompt = return_brackets_in_string(full_prompt)
-        full_prompt = full_prompt.strip()
-
-        # Logging was moved to _prepare_payload to show the final prompt
-        return full_prompt
+        return return_brackets_in_string(full_prompt)

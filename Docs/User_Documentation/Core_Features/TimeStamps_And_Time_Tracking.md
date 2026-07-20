@@ -72,7 +72,7 @@ system solves this with a placeholder mechanism.
     * **Default Logic (`useGroupChatTimestampLogic: false`):** The placeholder is resolved on the **next user turn**.
       When the user sends their next message, `track_message_timestamps` is called. It retrieves the placeholder
       timestamp, applies it to the previous assistant message (whose full content is now known), and assigns a new,
-      current timestamp to the incoming user message. This is the most robust method for standard one-on-one chats.
+      current timestamp to the incoming user message. This is the most reliable method for standard one-on-one chats.
 
     * **Group Chat Logic (`useGroupChatTimestampLogic: true`):** The timestamp is committed **immediately** after the
       assistant's response is fully generated. The system calls `commit_assistant_response`, which calculates the hash

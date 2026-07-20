@@ -190,6 +190,16 @@ def test_non_positive_timeout_raises(curl_handler):
         curl_handler.handle(context)
 
 
+def test_boolean_timeout_raises(curl_handler, mocker):
+    """A boolean timeout is rejected even though bool is an int subclass."""
+    mock_popen = _patch_popen(mocker, _fake(stdout="ok"))
+    context = _make_context({"type": "CurlCommand", "args": ["http://x"], "timeout": True})
+
+    with pytest.raises(ValueError, match="timeout"):
+        curl_handler.handle(context)
+    mock_popen.assert_not_called()
+
+
 def test_numeric_string_timeout_is_coerced(curl_handler, mocker):
     """A numeric string timeout is coerced to a number and forwarded to proc.wait."""
     fake = _fake(stdout="")
@@ -282,9 +292,47 @@ def test_timeout_returns_message_when_on_error_return(curl_handler, mocker):
     })
 
     result = curl_handler.handle(context)
-    assert "timed out" in result
+    assert result == "curl timed out after 2 seconds"
     # On timeout the handler kills the process so it cannot linger.
     assert fake.killed is True
+
+
+def test_timeout_full_format_envelope_with_partial_output(curl_handler, mocker):
+    """A timeout with onError=return and outputFormat=full yields the JSON envelope:
+    null returncode, the timeout error message, and whatever partial output curl
+    produced before it was killed."""
+    fake = _fake(stdout="partial data", stderr="still trying", hang=True)
+    _patch_popen(mocker, fake)
+    context = _make_context({
+        "type": "CurlCommand",
+        "args": ["http://x"],
+        "timeout": 2,
+        "onError": "return",
+        "outputFormat": "full",
+    })
+
+    parsed = json.loads(curl_handler.handle(context))
+
+    assert parsed["returncode"] is None
+    assert parsed["error"] == "curl timed out after 2 seconds"
+    assert parsed["stdout"] == "partial data"
+    assert parsed["stderr"] == "still trying"
+    assert fake.killed is True
+
+
+def test_nonzero_exit_returns_partial_stdout_with_default_format(curl_handler, mocker):
+    """A non-zero exit with onError=return and the default (stdout) format returns
+    the partial stdout curl produced, not an error message."""
+    _patch_popen(mocker, _fake(stdout="partial body", stderr="connect refused", returncode=7))
+    context = _make_context({
+        "type": "CurlCommand",
+        "args": ["http://x"],
+        "onError": "return",
+    })
+
+    result = curl_handler.handle(context)
+
+    assert result == "partial body"
 
 
 def test_curl_not_installed_raises(curl_handler, mocker):
@@ -388,6 +436,16 @@ def test_max_response_bytes_must_be_int(curl_handler):
     context = _make_context({"type": "CurlCommand", "args": ["http://x"], "maxResponseBytes": "big"})
     with pytest.raises(ValueError, match="maxResponseBytes"):
         curl_handler.handle(context)
+
+
+def test_boolean_max_response_bytes_raises(curl_handler, mocker):
+    """A boolean cap is rejected even though bool is an int subclass."""
+    mock_popen = _patch_popen(mocker, _fake(stdout="ok"))
+    context = _make_context({"type": "CurlCommand", "args": ["http://x"], "maxResponseBytes": True})
+
+    with pytest.raises(ValueError, match="maxResponseBytes"):
+        curl_handler.handle(context)
+    mock_popen.assert_not_called()
 
 
 def test_body_within_cap_is_streamed_and_returned(curl_handler, mocker):
@@ -583,7 +641,7 @@ def test_scheme_injection_blocks_other_non_http_schemes(curl_handler, mocker):
 
 
 def test_http_scheme_substitution_allowed(curl_handler, mocker):
-    """An injected http(s) scheme is fine — that is the normal use of the node."""
+    """An injected http(s) scheme is fine; that is the normal use of the node."""
     sub_map = {"{url}": "https://example.com/data"}
     curl_handler.workflow_variable_service.apply_variables.side_effect = (
         lambda t, c: sub_map.get(t, t)
@@ -784,6 +842,79 @@ def test_allowed_hosts_permits_listed_host(curl_handler, mocker):
     assert "--max-redirs" in mock_popen.call_args.args[0]
 
 
+def test_allowed_hosts_matching_is_case_insensitive(curl_handler, mocker):
+    """Doc contract: URL args must target a listed host case-insensitively; a
+    mixed-case URL host and a mixed-case allowlist entry still match."""
+    mock_popen = _patch_popen(mocker, _fake(stdout="ok"))
+    context = _make_context({
+        "type": "CurlCommand",
+        "args": ["http://EXAMPLE.COM/data"],
+        "allowedHosts": ["Example.Com"],
+    })
+
+    assert curl_handler.handle(context) == "ok"
+    mock_popen.assert_called_once()
+
+
+def test_allowed_hosts_entries_support_variable_substitution(curl_handler, mocker):
+    """Doc contract: allowlist entries are variable-substituted. The resolved entry
+    permits its host and everything else stays rejected."""
+    sub_map = {"{allowedHost}": "trusted.example.com"}
+    curl_handler.workflow_variable_service.apply_variables.side_effect = (
+        lambda t, c: sub_map.get(t, t)
+    )
+    mock_popen = _patch_popen(mocker, _fake(stdout="ok"))
+
+    allowed_context = _make_context({
+        "type": "CurlCommand",
+        "args": ["http://trusted.example.com/data"],
+        "allowedHosts": ["{allowedHost}"],
+    })
+    assert curl_handler.handle(allowed_context) == "ok"
+
+    denied_context = _make_context({
+        "type": "CurlCommand",
+        "args": ["http://other.example.com/data"],
+        "allowedHosts": ["{allowedHost}"],
+    })
+    with pytest.raises(ValueError, match="disallowed address"):
+        curl_handler.handle(denied_context)
+    # Only the allowed invocation spawned curl.
+    mock_popen.assert_called_once()
+
+
+def test_combined_guards_reject_allowlisted_private_address(curl_handler, mocker):
+    """Doc contract: allowedHosts and blockPrivateAddresses are additive; an
+    allowlisted host that is a private address is still rejected."""
+    mock_popen = _patch_popen(mocker, _fake(stdout="ok"))
+    context = _make_context({
+        "type": "CurlCommand",
+        "args": ["http://127.0.0.1/status"],
+        "allowedHosts": ["127.0.0.1"],
+        "blockPrivateAddresses": True,
+    })
+
+    with pytest.raises(ValueError, match="disallowed address"):
+        curl_handler.handle(context)
+    mock_popen.assert_not_called()
+
+
+def test_url_option_without_value_does_not_crash_guard(curl_handler, mocker):
+    """A trailing `--url` with no following value must not crash the guard's arg walk;
+    with no URL to validate, curl is still invoked (curl itself will error out)."""
+    mock_popen = _patch_popen(mocker, _fake(stdout="", stderr="curl: no URL specified", returncode=2))
+    context = _make_context({
+        "type": "CurlCommand",
+        "args": ["--url"],
+        "blockPrivateAddresses": True,
+        "onError": "return",
+    })
+
+    curl_handler.handle(context)
+
+    mock_popen.assert_called_once()
+
+
 def test_allowed_hosts_must_be_list(curl_handler):
     context = _make_context({
         "type": "CurlCommand",
@@ -910,3 +1041,76 @@ def test_address_guard_skips_non_http_scheme_literal(curl_handler, mocker):
 
     assert curl_handler.handle(context) == "ok"
     mock_popen.assert_called_once()
+
+
+# --- Reader-thread edges (stdout/stderr stream handling) ---
+
+def test_read_diagnostic_truncates_over_cap_stderr_without_abort():
+    """stderr larger than the cap is drained to EOF but only `cap` bytes are kept and
+    the box is flagged truncated. Unlike the body reader, nothing is killed."""
+    box = {}
+    stream = _FakeStream([b"0123456789", b"abcdef"])
+
+    CurlCommandHandler._read_diagnostic(stream, 4, box)
+
+    assert box["data"] == b"0123"
+    assert box["truncated"] is True
+
+
+def test_read_diagnostic_unbounded_when_cap_disabled():
+    """cap<=0 (maxResponseBytes disabled) keeps the full stderr stream."""
+    box = {}
+    stream = _FakeStream([b"abc", b"def"])
+
+    CurlCommandHandler._read_diagnostic(stream, 0, box)
+
+    assert box["data"] == b"abcdef"
+    assert box["truncated"] is False
+
+
+def test_read_body_keeps_partial_when_pipe_tears_down():
+    """A pipe torn down mid-read (the process was killed) must not raise from the
+    reader thread; whatever was captured before the teardown is kept."""
+
+    class _TearingStream:
+        def __init__(self):
+            self.reads = 0
+
+        def read(self, size=-1):
+            self.reads += 1
+            if self.reads == 1:
+                return b"partial"
+            raise ValueError("read of closed file")
+
+    class _Proc:
+        def __init__(self):
+            self.stdout = _TearingStream()
+            self.killed = False
+
+        def kill(self):
+            self.killed = True
+
+    proc = _Proc()
+    box = {}
+
+    CurlCommandHandler._read_body(proc, 1024, box)
+
+    assert box["data"] == b"partial"
+    assert box["truncated"] is False
+    assert proc.killed is False
+
+
+def test_close_stream_swallows_close_errors_and_none():
+    """Closing an already-torn-down pipe must not raise; None is a no-op; a healthy
+    stream is actually closed."""
+
+    class _ExplodingStream:
+        def close(self):
+            raise OSError("already closed")
+
+    CurlCommandHandler._close_stream(_ExplodingStream())  # must not raise
+    CurlCommandHandler._close_stream(None)  # must not raise
+
+    healthy = _FakeStream([])
+    CurlCommandHandler._close_stream(healthy)
+    assert healthy.closed is True

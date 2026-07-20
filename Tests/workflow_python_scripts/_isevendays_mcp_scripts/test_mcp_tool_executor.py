@@ -157,6 +157,32 @@ def test_invoke_no_tool_call_returns_assistant_message():
     assert result == {"response": "Hi there!", "has_tool_call": False}
 
 
+def test_invoke_empty_execution_map_returns_execution_error_envelope():
+    """
+    Tests that an empty dict tool_execution_map passes the None guard (no
+    MCPConfigurationError), and a detected tool call then produces the
+    execution_error envelope: has_tool_call True but no tool_results.
+    """
+    assistant_content = (
+        '{"tool_calls": [{"name": "get_current_time", "parameters": {"timezone": "UTC"}}]}'
+    )
+    result = Invoke(
+        messages=[
+            {"role": "user", "content": "what time is it?"},
+            {"role": "assistant", "content": assistant_content},
+        ],
+        mcpo_url=MCPO_URL,
+        tool_execution_map={},
+    )
+    assert result == {
+        "response": assistant_content,
+        "has_tool_call": True,
+        "tool_results": [],
+        "error": "Tool calls found, but no tool_execution_map provided to execute them.",
+        "status": "execution_error",
+    }
+
+
 def test_invoke_executes_detected_tool_call(mocker):
     """
     Tests the full happy path: a tool call in the last assistant message is
@@ -391,6 +417,27 @@ def test_perform_http_request_http_error_returns_error(mocker):
     result = _perform_http_request("post", f"{MCPO_URL}/time/current", {}, {})
     assert result["status"] == "error"
     assert "Tool execution failed" in result["error"]
+
+
+def test_perform_http_request_omits_body_for_get(mocker):
+    """
+    Tests that body params are only sent for POST/PUT/PATCH: a GET request
+    passes json=None even when body_params were supplied, while query params
+    still go through.
+    """
+    mock_response = mocker.MagicMock()
+    mock_response.json.return_value = {"ok": True}
+    mock_request = mocker.patch(
+        "Public.workflow_python_scripts._isevendays_mcp_scripts.mcp_tool_executor.requests.request",
+        return_value=mock_response,
+    )
+
+    result = _perform_http_request("get", f"{MCPO_URL}/x", {"q": "1"}, {"stray": "body"})
+
+    assert result == {"ok": True}
+    _, kwargs = mock_request.call_args
+    assert kwargs["json"] is None
+    assert kwargs["params"] == {"q": "1"}
 
 
 def test_perform_http_request_rejects_unsupported_method():

@@ -107,6 +107,37 @@ def test_search_passes_max_iterations_when_provided(mock_get_user_config, mock_r
     )
 
 
+def test_search_short_timeout_clamps_connect_phase(mock_get_user_config, mock_requests_post):
+    # The connect timeout is min(5, timeout_seconds); with timeout_seconds=2 the
+    # connect phase is clamped down to 2 rather than the 5-second default.
+    mock_get_user_config.return_value = {'useOfflineResearcherApi': True}
+    mock_requests_post.return_value = Mock(status_code=200, json=lambda: {"status": "answered"})
+
+    client = OfflineResearcherApiClient()
+    client.search("anything", mode="quick", timeout_seconds=2)
+
+    mock_requests_post.assert_called_once_with(
+        "http://127.0.0.1:8890/search",
+        json={"query": "anything", "mode": "quick"},
+        timeout=(2, 2),
+    )
+
+
+def test_search_without_timeout_passes_none(mock_get_user_config, mock_requests_post):
+    # When no timeout_seconds is given, no timeout tuple is synthesized at all.
+    mock_get_user_config.return_value = {'useOfflineResearcherApi': True}
+    mock_requests_post.return_value = Mock(status_code=200, json=lambda: {"status": "answered"})
+
+    client = OfflineResearcherApiClient()
+    client.search("anything", mode="quick")
+
+    mock_requests_post.assert_called_once_with(
+        "http://127.0.0.1:8890/search",
+        json={"query": "anything", "mode": "quick"},
+        timeout=None,
+    )
+
+
 def test_search_handles_timeout(mock_get_user_config, mock_requests_post):
     mock_get_user_config.return_value = {'useOfflineResearcherApi': True}
     mock_requests_post.side_effect = requests.exceptions.Timeout("slow")

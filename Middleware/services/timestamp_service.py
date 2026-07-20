@@ -337,11 +337,7 @@ class TimestampService:
         timestamp_file_path = get_discussion_timestamp_file_path(discussion_id, api_key_hash=api_key_hash)
         timestamps_data = load_timestamp_file(timestamp_file_path, encryption_key=encryption_key)
 
-        data_to_process = timestamps_data
-        if timestamps_data and (PLACEHOLDER_HASH in timestamps_data):
-            data_to_process = timestamps_data.copy()
-            data_to_process.pop(PLACEHOLDER_HASH, None)
-
+        data_to_process = {k: v for k, v in timestamps_data.items() if k != PLACEHOLDER_HASH}
         if not data_to_process:
             return ""
 

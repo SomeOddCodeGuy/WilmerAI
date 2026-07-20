@@ -4,8 +4,8 @@ This document provides a comprehensive overview of the WilmerAI unit testing sui
 quality, prevent regressions, and make development more predictable. All new code should be accompanied by corresponding
 unit tests.
 
-Our testing suite is built on the **pytest** framework, a popular choice in the Python ecosystem. We use it
-alongside plugins for mocking (`pytest-mock`) and code coverage (`pytest-cov`).
+The testing suite is built on the **pytest** framework, used alongside plugins for mocking (`pytest-mock`) and
+code coverage (`pytest-cov`).
 
 -----
 
@@ -20,7 +20,7 @@ The testing requirements are defined in `requirements-test.txt` in the project r
 **`requirements-test.txt`**
 
 ```
-pytest==9.0.3
+pytest==9.1.1
 pytest-mock==3.15.1
 pytest-cov==7.1.0
 ```
@@ -66,28 +66,45 @@ WilmerAI
 │   │   ├── test_concurrency_middleware.py
 │   │   └── test_workflow_gateway.py
 │   ├── common/
-│   │   └── test_instance_global_variables.py
+│   │   ├── test_instance_global_variables.py
+│   │   └── test_launch_arguments.py
 │   ├── integration/
 │   │   └── test_nested_workflow_cancellation.py
 │   ├── llmapis/
+│   │   ├── conftest.py
 │   │   ├── handlers/
 │   │   │   ├── base/
 │   │   │   │   ├── test_base_chat_completions_handler.py
 │   │   │   │   └── test_base_llm_api_handler_cancellation.py
 │   │   │   └── impl/
 │   │   │       ├── test_llmapis_claude_api_handler.py
+│   │   │       ├── test_llmapis_embedding_api_handler.py
 │   │   │       ├── test_llmapis_koboldcpp_api_handler.py
 │   │   │       ├── test_llmapis_ollama_chat_api_handler.py
 │   │   │       ├── test_llmapis_ollama_generate_api_handler.py
 │   │   │       ├── test_llmapis_openai_chat_handler.py
 │   │   │       └── test_llmapis_openai_completions_api_handler.py
+│   │   ├── test_endpoint_preset_resolution.py
 │   │   ├── test_llm_api.py
 │   │   ├── test_llm_api_concurrency_gate.py
-│   │   └── test_llm_api_failover.py
+│   │   ├── test_llm_api_embedding_guard.py
+│   │   ├── test_llm_api_failover.py
+│   │   └── test_sampler_translation.py
+│   ├── manager/
+│   │   ├── conftest.py
+│   │   ├── test_configs_repo.py
+│   │   ├── test_connectivity.py
+│   │   ├── test_doctor.py
+│   │   ├── test_inspection.py
+│   │   ├── test_manager_app.py
+│   │   ├── test_registry.py
+│   │   ├── test_samplers.py
+│   │   └── test_stamping.py
 │   ├── models/
 │   │   └── test_llm_handler.py
 │   ├── services/
 │   │   ├── test_cancellation_service.py
+│   │   ├── test_embedding_service.py
 │   │   ├── test_llm_dispatch_service.py
 │   │   ├── test_llm_service.py
 │   │   ├── test_locking_service.py
@@ -99,19 +116,29 @@ WilmerAI
 │   │   └── test_rekey_encrypted_files.py
 │   ├── utilities/
 │   │   ├── test_config_utils.py
+│   │   ├── test_config_utils_hardening.py
 │   │   ├── test_datetime_utils.py
+│   │   ├── test_encryption_utils.py
 │   │   ├── test_file_utils.py
 │   │   ├── test_hashing_utils.py
 │   │   ├── test_network_security_utils.py
 │   │   ├── test_prompt_extraction_utils.py
-│   │   ├── test_prompt_manipulation_utils.py
 │   │   ├── test_prompt_template_utils.py
 │   │   ├── test_search_utils.py
-│   │   ├── test_encryption_utils.py
 │   │   ├── test_sensitive_logging_utils.py
 │   │   ├── test_streaming_utils.py
 │   │   ├── test_text_utils.py
-│   │   └── test_vector_db_utils.py
+│   │   ├── test_vector_db_utils.py
+│   │   └── test_vector_math_utils.py
+│   ├── workflow_python_scripts/
+│   │   └── _isevendays_mcp_scripts/
+│   │       ├── test_ensure_system_prompt.py
+│   │       ├── test_mcp_prompt_utils.py
+│   │       ├── test_mcp_service_discoverer.py
+│   │       ├── test_mcp_tool_executor.py
+│   │       ├── test_mcp_workflow_integration.py
+│   │       ├── test_sanitize_llm_response.py
+│   │       └── test_workflow_utils.py
 │   ├── workflows/
 │   │   ├── handlers/
 │   │   │   └── impl/
@@ -207,7 +234,7 @@ Here is a summary of what each test file is responsible for.
 
 * **`test_workflow_gateway.py`**
 
-    * **Purpose**: To test the crucial bridge between the API layer and the workflow engine.
+    * **Purpose**: To test the bridge between the API layer and the workflow engine.
     * **Strategy**: It tests the main routing function, `handle_user_prompt`, ensuring it correctly chooses between a
       custom workflow and the standard prompt categorization service.
 
@@ -348,7 +375,7 @@ Here is a summary of what each test file is responsible for.
       by server name, result flattening (structured vs. text content), error wrapping into `MCPToolCallError`, the
       `asyncio.wait_for` timeout bound on a hung handshake, and rejection of path separators (and a `:` drive-letter
       prefix) in the server name. The transport-dispatch tests bare-`import mcp` (no `importorskip`), so they require
-      the pinned `mcp` package (`mcp==1.27.2`, a hard dependency in `requirements.txt`) to be installed — absent it they
+      the pinned `mcp` package (`mcp==1.28.1`, a hard dependency in `requirements.txt`) to be installed; absent it they
       error rather than skip.
 
 ### **`tests/utilities/`**
@@ -402,8 +429,8 @@ Here is a summary of what each test file is responsible for.
 
 * **`test_mcp_tool_call_handler.py`**
 
-    * **Purpose**: To test the `MCPToolCall` node's config validation and delegation to `call_mcp_tool`.
-    * **Strategy**: Mocks `call_mcp_tool` (no real MCP/subprocess) and asserts required-field and enum validation,
+    * **Purpose**: To test the `MCPToolCall` node's config validation and delegation to `MCPClient.call_tool`.
+    * **Strategy**: Mocks `MCPClient.call_tool` (no real MCP/subprocess) and asserts required-field and enum validation,
       timeout validation, nested-argument variable substitution, the `onError` raise/return branches, and streaming
       pass-through.
 

@@ -61,6 +61,19 @@ def _hermetic_user_config(mocker):
     mocker.patch('Middleware.workflows.managers.workflow_variable_manager.get_user_config', return_value={})
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_timestamp_service(mocker):
+    """Keep the real TimestampService off the filesystem: with a discussion_id set and
+    no prompt, generate_variables calls get_time_context_summary, which resolves the
+    discussion timestamp file path and creates the discussion folder on disk. Tests
+    that care about the service replace manager.timestamp_service with their own mock,
+    which overrides this class-level patch."""
+    mocker.patch(
+        'Middleware.services.timestamp_service.TimestampService.get_time_context_summary',
+        return_value=''
+    )
+
+
 # --- userWideWorkflowVariables: user-config shared variables (single source of truth) ---
 
 def test_workflow_variables_from_user_config_resolve(mocker, mock_context):
@@ -337,6 +350,30 @@ def test_generate_variables_integration(mocker, mock_context):
 
     mock_ts_service.get_time_context_summary.assert_called_once_with("test_discussion_123", encryption_key=None, api_key_hash=None)
 
+def test_time_context_summary_skipped_when_prompt_does_not_reference_it(mock_context):
+    """
+    When a prompt is supplied that never references {time_context_summary},
+    the variable resolves to '' and the TimestampService is never consulted.
+    When the prompt does reference it, the service is called.
+    """
+    manager = WorkflowVariableManager()
+    manager.timestamp_service = MagicMock()
+    mock_context.messages = []  # skip conversation-variable generation
+
+    variables = manager.generate_variables(mock_context, prompt="Hello {Discussion_Id}")
+
+    assert variables['time_context_summary'] == ''
+    manager.timestamp_service.get_time_context_summary.assert_not_called()
+
+    # Sanity check of the opposite branch: a prompt that references the
+    # variable does trigger the service.
+    manager.timestamp_service.get_time_context_summary.return_value = "time summary"
+    variables = manager.generate_variables(mock_context, prompt="Context: {time_context_summary}")
+
+    assert variables['time_context_summary'] == "time summary"
+    manager.timestamp_service.get_time_context_summary.assert_called_once_with(
+        "test_discussion_123", encryption_key=None, api_key_hash=None)
+
 def test_apply_variables_standard_format(mocker, mock_context):
     """
     Tests variable substitution using standard Python string.format().
@@ -531,7 +568,7 @@ class TestApplyEarlyVariables:
 
         result = manager.apply_early_variables(prompt, agent_inputs=agent_inputs)
 
-        assert result == "Present/{missingVariable}"  # Partial substitution - substitutes what it can
+        assert result == "Present/{missingVariable}"  # Partial substitution: substitutes what it can
         mock_logger.assert_called_once()
         assert "Variables not available for early substitution" in mock_logger.call_args[0][0]
 
@@ -566,6 +603,9 @@ class TestApplyEarlyVariables:
         # Should handle the valid variable and return original for invalid parts
         mock_logger.assert_called()
         assert "Error during early variable substitution" in mock_logger.call_args[0][0]
+        # Graceful-return contract: on a formatting error the prompt is
+        # returned completely unchanged, not partially substituted.
+        assert result == prompt
 
     def test_apply_early_variables_complex_template_pattern(self):
         """Tests a complex real-world pattern with multiple variables."""
@@ -701,9 +741,9 @@ class TestDiscussionIdAndDateVariables:
         assert 'Discussion_Id' in variables
         assert variables['Discussion_Id'] == ''
 
-    def test_generate_variables_includes_yyyy_mm_dd(self, mocker, mock_context):
-        """Tests that YYYY_MM_DD variable is generated in the correct format."""
-        from datetime import datetime
+    def test_generate_variables_includes_all_date_time_variables(self, mocker, mock_context):
+        """Tests every documented date/time variable (see Workflow_Variables.md),
+        including the leading-zero strip applied to current_time_12h."""
         mock_datetime = mocker.patch('Middleware.workflows.managers.workflow_variable_manager.datetime')
         mock_now = MagicMock()
         mock_now.strftime.side_effect = lambda fmt: {
@@ -730,8 +770,15 @@ class TestDiscussionIdAndDateVariables:
 
         variables = manager.generate_variables(mock_context)
 
-        assert 'YYYY_MM_DD' in variables
+        assert variables['todays_date_pretty'] == 'December 07, 2025'
+        assert variables['todays_date_iso'] == '2025-12-07'
         assert variables['YYYY_MM_DD'] == '2025_12_07'
+        # The 12-hour clock strips the leading zero: '03:30 PM' -> '3:30 PM'.
+        assert variables['current_time_12h'] == '3:30 PM'
+        assert variables['current_time_24h'] == '15:30'
+        assert variables['current_month_full'] == 'December'
+        assert variables['current_day_of_week'] == 'Sunday'
+        assert variables['current_day_of_month'] == '07'
 
     def test_apply_variables_with_discussion_id_in_filepath(self, mocker, mock_context):
         """Tests that Discussion_Id can be substituted in a filepath-like string."""
@@ -1596,10 +1643,6 @@ class TestConfigEdgeCases:
         # Use real extraction functions but mock rough_estimate_token_length
         mocker.patch(
             'Middleware.utilities.prompt_extraction_utils.rough_estimate_token_length',
-            return_value=10
-        )
-        mocker.patch(
-            'Middleware.utilities.prompt_template_utils.rough_estimate_token_length',
             return_value=10
         )
         mocker.patch(
@@ -2550,7 +2593,7 @@ class TestBracketEscaping_FileRoundTrip:
         variables_step2 = manager.generate_variables(mock_context)
         assert "__WILMER_L_CURLY__" in variables_step2["agent2Output"]
 
-        # Step 3: Next node uses agent2Output — should get the original JSON back.
+        # Step 3: Next node uses agent2Output; it should get the original JSON back.
         final_result = manager.apply_variables("Loaded: {agent2Output}", mock_context)
         assert final_result == f"Loaded: {json_content}"
 
@@ -2656,7 +2699,7 @@ class TestBracketEscaping_NoDoubleMangle:
         that returned raw gateway-escaped content), they should be restored exactly
         once, not double-processed."""
         manager = WorkflowVariableManager()
-        # This value already has sentinels — perhaps from a node that read message
+        # This value already has sentinels, perhaps from a node that read message
         # content without restoring it first.
         sentinel_content = "data: __WILMER_L_CURLY__x__WILMER_R_CURLY__"
 
@@ -2741,7 +2784,7 @@ class TestBracketEscaping_EdgeCases:
     def test_workflow_config_variable_with_nested_reference_still_resolves(self, mocker, mock_context):
         """Workflow config values intentionally support nested variable references.
         A config value like 'path/{Discussion_Id}/file' must have {Discussion_Id}
-        resolved on the second format pass — it must NOT be sentinel-escaped."""
+        resolved on the second format pass; it must NOT be sentinel-escaped."""
         manager = WorkflowVariableManager()
         mocker.patch.object(manager, 'generate_variables', return_value={
             "my_path": "data/{Discussion_Id}/output.txt",
@@ -3017,7 +3060,7 @@ class TestCountVariableTokenAwareness:
 class TestTokenVariableWindowCap:
     """Adversarial tests: the token-budget variables (estimatedTokensToIncludeInVariable,
     maxEstimatedTokensInVariable) are capped at the node's window budget when the clamp
-    is on -- scaled THEN capped, gated on the clamp, never touching counts, the window
+    is on: scaled THEN capped, gated on the clamp, never touching counts, the window
     value, or the authored prompt. budget = (window - response)*level - headroom(512).
     These exist to catch a regression before a user does."""
 
@@ -3214,8 +3257,8 @@ class TestTokenVariableWindowCap:
         # budget instead of overflowing it. budget 388; 8*100=800 would overflow, so
         # only the newest messages that fit are kept (m27,m28,m29 = 300 <= 388). Whole
         # messages are dropped, conversation content is never truncated. (Pre-fix the
-        # floor was honored whole and the authored prompt 400'd at the backend -- the
-        # re-opened categorizer/planner context-overflow crash.)
+        # floor was honored whole and the authored prompt 400'd at the backend; that was
+        # the re-opened categorizer/planner context-overflow crash.)
         v = self._e2e(mocker, mock_context, prompt="{chat_user_prompt_min_n_max_tokens}",
                       config={'maxEstimatedTokensInVariable': 100000, 'minMessagesInVariable': 8},
                       window=1000, n_predict=100)
@@ -3255,3 +3298,67 @@ class TestTokenVariableWindowCap:
         assert "m27" in rendered and "m29" in rendered   # bounded conversation present
         assert "m26" not in rendered                      # older messages dropped to fit
 
+
+
+class TestNestedGatedVariableResolution:
+    """The second resolution pass must also resolve variables whose GROUPS are
+    gated on a prompt substring. A workflow-level variable's VALUE referencing a
+    gated conversation variable (e.g. {chat_user_prompt_last_one}) is invisible
+    to the gates on the first pass; the variables must be re-generated against
+    the partially resolved string, or the placeholder silently reaches the LLM.
+    """
+
+    @pytest.fixture
+    def hermetic_config(self, mocker):
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_separate_conversation_in_variables',
+            return_value=False)
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_conversation_separation_delimiter',
+            return_value='\n')
+        mocker.patch('Middleware.utilities.config_utils.get_user_config', return_value={})
+        mocker.patch('Middleware.workflows.managers.workflow_variable_manager.get_user_config',
+                     return_value={})
+        mocker.patch(
+            'Middleware.services.timestamp_service.TimestampService.get_time_context_summary',
+            return_value='')
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_chat_template_name',
+            return_value='chat_template.json')
+        # Make templated formatting inert so no template file is read from disk.
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.get_formatted_last_n_turns_as_string',
+            side_effect=lambda msgs, n, **kw: 'T')
+        mocker.patch(
+            'Middleware.workflows.managers.workflow_variable_manager.format_system_prompts',
+            return_value={'chat_system_prompt': 'S', 'templated_system_prompt': 'S',
+                          'templated_user_prompt_without_system': 'U',
+                          'chat_user_prompt_without_system': 'U'})
+
+    def _context(self):
+        context = MagicMock(spec=ExecutionContext)
+        context.config = {"jinja2": False}
+        # Workflow-level reusable fragment whose VALUE references a conversation variable.
+        context.workflow_config = {
+            "recent_turn_fragment": "Latest user turn: {chat_user_prompt_last_one}",
+            "nodes": [],
+        }
+        context.discussion_id = "disc"
+        context.messages = [{"role": "user", "content": "Hello there"}]
+        handler = MagicMock()
+        handler.prompt_template_file_name = "test_template.json"
+        handler.takes_message_collection = True
+        context.llm_handler = handler
+        context.agent_outputs = {}
+        context.agent_inputs = {}
+        context.api_key = None
+        context.encryption_key = None
+        context.api_key_hash = None
+        return context
+
+    def test_nested_reference_to_gated_turn_variable_resolves(self, hermetic_config):
+        manager = WorkflowVariableManager()
+        result = manager.apply_variables("{recent_turn_fragment}", self._context())
+        assert "{chat_user_prompt_last_one}" not in result, (
+            f"Nested gated variable left unresolved: {result!r}"
+        )

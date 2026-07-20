@@ -18,6 +18,7 @@
     "insertedUserTurnText": "Continue.",
     "acceptImages": true,
     "maxImagesToSend": 5,
-    "allowTools": true
+    "allowTools": true,
+    "appendNativeToolExchange": true
   }
 ]

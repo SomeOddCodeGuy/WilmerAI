@@ -16,13 +16,9 @@ def stream_static_content(content: str) -> Generator[Dict[str, Any], None, None]
     to simulate a stream. This preserves all original formatting like newlines.
     This mimics the raw output format of an LLM API handler.
     """
-    # Use re.split to split by whitespace while keeping the delimiters (whitespace).
-    # This ensures that newlines, tabs, and multiple spaces are preserved.
+    # The capture group makes re.split keep the whitespace delimiters, so
+    # newlines, tabs, and multiple spaces survive the round trip.
     tokens = re.split(r'(\s+)', content)
-
-    if not tokens:
-        yield {'token': '', 'finish_reason': 'stop'}
-        return
 
     # 50 words/second (20 ms per word) produces a perceptible character-by-character
     # effect without being so slow that it becomes annoying. The exact value is a
@@ -30,16 +26,23 @@ def stream_static_content(content: str) -> Generator[Dict[str, Any], None, None]
     words_per_second = 50
     delay = 1.0 / words_per_second
 
+    # Cap the total artificial delay. A large static payload (a big WebFetch or
+    # CurlCommand body, a long StringConcatenator result) would otherwise sleep
+    # 20 ms per word with no bound (a ~10 MiB body is hours) and pin the serving
+    # thread the whole time. Once the budget is spent, the remainder streams with
+    # no delay; normal-sized responses are unaffected.
+    max_total_delay_seconds = 5.0
+    elapsed_delay = 0.0
+
     for token in tokens:
-        # Don't process empty strings that can result from re.split
+        # re.split can produce empty strings at the edges; skip them.
         if token:
             # Only sleep for actual words, not for whitespace, to make the stream feel natural.
-            if not token.isspace():
+            if not token.isspace() and elapsed_delay < max_total_delay_seconds:
                 time.sleep(delay)
-            # Yield the token (which could be a word or whitespace like ' ' or '\n\n')
+                elapsed_delay += delay
             yield {'token': token, 'finish_reason': None}
 
-    # Signal the end of the stream
     yield {'token': '', 'finish_reason': 'stop'}
 
 
@@ -102,10 +105,15 @@ class StreamingThinkRemover:
         # - expectOnlyClosing: assumes the response begins inside a think block (no opening
         #   tag will appear); discard everything until the closing tag is found, then yield
         #   everything after it.
-        # - Standard: look for an opening tag within the grace-period window.  If found,
-        #   enter think-block mode and suppress output until the closing tag.  If the buffer
-        #   grows past the grace period without an opening tag, disable further checks and
-        #   pass all content through unchanged.
+        # - Standard: look for an opening tag that STARTS within the grace-period window
+        #   (0-based index <= openingTagGracePeriod).  If found, enter think-block mode and
+        #   suppress output until the closing tag; once the block closes, all further checks
+        #   are disabled so at most one block is removed.  The buffer is held until
+        #   openingTagGracePeriod + len(startThinkTag) characters have accumulated, so a tag
+        #   that starts inside the window but is split across deltas is still caught; only
+        #   past that point can no qualifying tag appear, and checks are disabled with all
+        #   content passed through unchanged.  This keeps the outcome identical to the
+        #   non-streaming remove_thinking_from_text regardless of chunking.
         if self.expect_only_closing:
             if self._thinking_handled:
                 content_to_yield = self._buffer
@@ -126,6 +134,9 @@ class StreamingThinkRemover:
                         logger.debug("Closing think tag found. Resuming normal stream output.")
                         self._in_think_block = False
                         self._consumed_open_tag = ""
+                        # Only one think block is ever removed; disable further tag checks
+                        # so later tags pass through, matching remove_thinking_from_text.
+                        self._opening_tag_check_complete = True
                         self._buffer = self._buffer[match.end():]  # type: ignore
                     else:
                         break
@@ -150,7 +161,12 @@ class StreamingThinkRemover:
                             content_to_yield += self._buffer
                             self._buffer = ""
                             break
-                    elif len(self._buffer) > self.opening_tag_window and not self._opening_tag_check_complete:
+                    elif (len(self._buffer) >= self.opening_tag_window + len(self.start_think_tag)
+                          and not self._opening_tag_check_complete):
+                        # A qualifying tag must start at index <= opening_tag_window, so it is
+                        # fully contained once the buffer reaches window + len(tag) characters.
+                        # Giving up any earlier would let chunk boundaries split a qualifying
+                        # tag across the window edge and change the outcome.
                         logger.debug(
                             f"Grace period of {self.opening_tag_window} chars exceeded without finding opening tag.")
                         self._opening_tag_check_complete = True
@@ -229,9 +245,12 @@ def remove_thinking_from_text(text: str, endpoint_config: Dict) -> str:
             return text
     else:
         open_tag_re = re.compile(re.escape(start_think_tag), re.IGNORECASE)
-        open_match = open_tag_re.search(text, 0, min(len(text), grace_period))
-        if not open_match:
-            logger.debug("Non-streaming: No opening tag found in grace period. Returning original text.")
+        # The tag qualifies if it STARTS within the grace window (0-based index
+        # <= grace_period); it does not need to END inside the window. This matches
+        # StreamingThinkRemover so both paths produce identical output.
+        open_match = open_tag_re.search(text)
+        if not open_match or open_match.start() > grace_period:
+            logger.debug("Non-streaming: No opening tag starting within grace period. Returning original text.")
             return text
 
         close_match = close_tag_re.search(text, open_match.end())  # type: ignore
@@ -243,27 +262,28 @@ def remove_thinking_from_text(text: str, endpoint_config: Dict) -> str:
         return text[:open_match.start()] + text[close_match.end():]  # type: ignore
 
 
-def post_process_llm_output(text: str, endpoint_config: Dict, workflow_node_config: Dict) -> str:
+def strip_leading_response_prefixes(content: str, workflow_node_config: Dict, endpoint_config: Dict,
+                                    remove_assistant: bool) -> str:
     """
-    Cleans and formats a complete, non-streamed LLM output string.
+    Strips the configured leading prefixes from the start of an LLM response.
 
-    This function applies a series of sequential cleaning rules, such as removing
-    thinking tags, custom prefixes, and standard boilerplate text.
+    Applies, in priority order: workflow-level custom text, endpoint-level
+    custom text, the discussion timestamp placeholder, and the "Assistant:"
+    prefix. Shared by the streaming buffer processor and the non-streaming
+    post-processor so the two stripping paths cannot drift.
 
     Args:
-        text (str): The raw, complete LLM response.
-        endpoint_config (Dict): The configuration for the LLM endpoint.
+        content (str): The response text to strip (a complete response or the
+            streaming prefix buffer after reconstruction).
         workflow_node_config (Dict): The configuration for the specific workflow node.
+        endpoint_config (Dict): The configuration for the LLM endpoint.
+        remove_assistant (bool): Whether to strip a leading "Assistant:" prefix;
+            callers pass the add-user-assistant AND add-missing-assistant flags.
 
     Returns:
-        str: The cleaned and formatted output text.
+        str: The content with all matching leading prefixes removed.
     """
-    from Middleware.api import api_helpers
-    from Middleware.utilities.config_utils import get_is_chat_complete_add_user_assistant, \
-        get_is_chat_complete_add_missing_assistant
-
-    processed_text = remove_thinking_from_text(text, endpoint_config)
-    content = processed_text.lstrip()
+    content = content.lstrip()
 
     if workflow_node_config.get("removeCustomTextFromResponseStart", False):
         custom_texts = workflow_node_config.get("responseStartTextToRemove", [])
@@ -294,10 +314,35 @@ def post_process_llm_output(text: str, endpoint_config: Dict, workflow_node_conf
         elif content.startswith(timestamp_text):
             content = content[len(timestamp_text):].lstrip()
 
-    should_remove_assistant = (get_is_chat_complete_add_user_assistant() and
-                               get_is_chat_complete_add_missing_assistant())
-    if should_remove_assistant and content.startswith("Assistant:"):
-        content = api_helpers.remove_assistant_prefix(content)
+    if remove_assistant and content.startswith("Assistant:"):
+        content = content[len("Assistant:"):].lstrip()
+
+    return content
+
+
+def post_process_llm_output(text: str, endpoint_config: Dict, workflow_node_config: Dict) -> str:
+    """
+    Cleans and formats a complete, non-streamed LLM output string.
+
+    This function applies a series of sequential cleaning rules, such as removing
+    thinking tags, custom prefixes, and standard boilerplate text.
+
+    Args:
+        text (str): The raw, complete LLM response.
+        endpoint_config (Dict): The configuration for the LLM endpoint.
+        workflow_node_config (Dict): The configuration for the specific workflow node.
+
+    Returns:
+        str: The cleaned and formatted output text.
+    """
+    from Middleware.utilities.config_utils import get_is_chat_complete_add_user_assistant, \
+        get_is_chat_complete_add_missing_assistant
+
+    processed_text = remove_thinking_from_text(text, endpoint_config)
+    remove_assistant = (get_is_chat_complete_add_user_assistant() and
+                        get_is_chat_complete_add_missing_assistant())
+    content = strip_leading_response_prefixes(processed_text, workflow_node_config, endpoint_config,
+                                              remove_assistant)
 
     sensitive_log(logger, logging.INFO, "--- POST-CLEANING TEXT ---\n%s\n-------------------------", content)
 

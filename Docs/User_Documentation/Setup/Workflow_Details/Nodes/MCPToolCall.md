@@ -1,7 +1,7 @@
 ## The `MCPToolCall` Node
 
 The `MCPToolCall` node invokes a single tool on a Model Context Protocol (MCP) server. The server, tool name, and
-arguments are all decided by the workflow author — the LLM is not in the loop. This node is the deterministic
+arguments are all decided by the workflow author; the LLM is not in the loop. This node is the deterministic
 primitive for MCP tool use; for many common patterns (fetch this file, query this database, call this API exposed by
 an MCP server) it is the only piece you need.
 
@@ -39,9 +39,10 @@ covered by this node.
 
     * A human-readable name for the node, used in logging.
 
-* `"agentName"`: **(String, Required)**
+* `"agentName"`: **(String, Optional)**
 
-    * The output variable name. The node's return value becomes `{agentName}` for downstream nodes.
+    * A fallback display name used in logs when `title` is not set. It does not create a named output variable;
+      the node's return value is available to later nodes only positionally, as `{agent#Output}`.
 
 * `"server"`: **(String, Required)**
 
@@ -60,8 +61,8 @@ covered by this node.
 
 * `"timeout"`: **(Number, Optional, default `30`)**
 
-    * Overall per-call timeout in seconds. Bounds the whole operation — transport connect, the `initialize`
-      handshake, and the tool call — via `asyncio.wait_for`, so a server that connects but never completes the
+    * Overall per-call timeout in seconds. Bounds the whole operation (transport connect, the `initialize`
+      handshake, and the tool call) via `asyncio.wait_for`, so a server that connects but never completes the
       handshake cannot block the worker.
 
 * `"onError"`: **(String, Optional, default `"raise"`)**
@@ -81,18 +82,22 @@ that.
 
 #### **stdio (spawns a subprocess)**
 
-Use this when the MCP server is a local binary that speaks MCP over stdin/stdout. The classic example is the
-`@modelcontextprotocol/server-filesystem` Node package.
+Use this when the MCP server is a local binary that speaks MCP over stdin/stdout. A common example is the
+`@modelcontextprotocol/server-filesystem` Node package, installed locally and run by its path.
 
 ```json
 {
   "transport": "stdio",
-  "command": "npx",
-  "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed/directory"],
-  "env": {"NODE_ENV": "production"},
+  "command": "/absolute/path/to/mcp-server-filesystem",
+  "args": ["/path/to/allowed/directory"],
+  "env": {},
   "cwd": null
 }
 ```
+
+This form runs a pre-installed server and downloads nothing at run time. If you prefer a zero-install quickstart,
+`"command": "npx"` with `"args": ["-y", "@modelcontextprotocol/server-filesystem", "..."]` has `npx` fetch and run
+the server on demand instead.
 
 Fields:
 
@@ -146,7 +151,6 @@ The following fields support variable substitution:
 You can reference any of Wilmer's standard variables:
 
 * Other agent outputs: `{agent1Output}`, `{agent2Output}`, ...
-* Named agents: `{MyAgent}` (matching an earlier node's `agentName`)
 * Built-in variables: `{Discussion_Id}`, `{YYYY_MM_DD}`, `{userInput}`, etc.
 * Custom workflow variables.
 

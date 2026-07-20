@@ -34,7 +34,20 @@ The node's logic is a multi-step process orchestrated by an internal tool:
 5. **Memory Generation**: If the threshold is met, it generates the memory summary by either executing a dedicated
    sub-workflow or making a direct LLM call.
 6. **Persistence**: The newly generated memory is saved to the appropriate storage (`.db` or `.json`), and the "last
-   processed" marker is updated for the next run.
+   processed" marker is updated for the next run. On the vector path, if `vectorMemoryIndexTopics` is enabled in the
+   discussion settings, the metadata's `topics` list is folded into the searchable index (the key_phrases column) as
+   the memory is written, so keyword searches can match a memory by its conversation-level topic (e.g. the campaign,
+   project, or event a fact belongs to) even when the memory text never restates it. Defaults to off, which indexes
+   exactly what was indexed historically.
+7. **Embedding Storage (Optional, vector path only)**: If `embeddingEndpointName` is set in the discussion
+   settings, the newly stored memories are embedded and saved for semantic search, along with a small backfill
+   batch of older un-embedded memories (`embeddingBackfillBatchSize`, default 20). Best-effort: a failed or
+   unreachable embeddings endpoint is logged and skipped, and the memories remain fully searchable by keyword.
+8. **State Document Update (Optional, vector path only)**: If `useStateDocument` is enabled in the discussion
+   settings, the newly stored facts are then merged into the discussion's state document (`state_document.md`) by
+   running the workflow named in `stateDocumentWorkflowName`. This step is best-effort: a failed merge is logged and
+   skipped, and never affects the memories that were just stored. See "The State Document" in
+   `Workflow_Nodes_Memories.md` for details.
 
 -----
 

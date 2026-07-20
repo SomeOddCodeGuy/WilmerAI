@@ -7,7 +7,8 @@ from Middleware.workflows.models.execution_context import ExecutionContext
 
 
 # Helper to create a consistent, mockable ExecutionContext for tests
-def create_mock_context(config, stream=False, agent_outputs=None, agent_inputs=None):
+def create_mock_context(config, stream=False, agent_outputs=None, agent_inputs=None, tools=None, tool_choice=None,
+                        api_key=None):
     """Creates a mock ExecutionContext for testing."""
     return ExecutionContext(
         request_id="test_req_id",
@@ -18,6 +19,9 @@ def create_mock_context(config, stream=False, agent_outputs=None, agent_inputs=N
         stream=stream,
         agent_outputs=agent_outputs or {},
         agent_inputs=agent_inputs or {},
+        tools=tools,
+        tool_choice=tool_choice,
+        api_key=api_key,
     )
 
 
@@ -256,6 +260,26 @@ def test_prepare_overrides_prefers_new_keys_over_legacy(sub_workflow_handler, mo
     ])
 
 
+def test_prepare_overrides_mixes_new_and_legacy_keys_per_axis(sub_workflow_handler, mock_variable_service):
+    """Verify a new-style system key and a legacy prompt key are honored independently."""
+    config = {
+        "firstNodeSystemPromptOverride": "new_system",
+        "promptOverride": "legacy_prompt"
+    }
+    context = create_mock_context(config)
+
+    mock_variable_service.apply_variables.side_effect = ["resolved_new_system", "resolved_legacy_prompt"]
+
+    system_prompt, prompt, _, _ = sub_workflow_handler._prepare_workflow_overrides(context)
+
+    assert system_prompt == "resolved_new_system"
+    assert prompt == "resolved_legacy_prompt"
+    mock_variable_service.apply_variables.assert_has_calls([
+        call("new_system", context),
+        call("legacy_prompt", context)
+    ])
+
+
 # ----------------------------------------
 # Tests for handle_custom_workflow()
 # ----------------------------------------
@@ -323,6 +347,29 @@ def test_handle_custom_workflow_without_folder_override(mocker, sub_workflow_han
     call_args = mock_workflow_manager.run_custom_workflow.call_args
     assert call_args.kwargs['workflow_user_folder_override'] is None
     assert call_args.kwargs['non_responder'] is True
+
+
+def test_handle_custom_workflow_forwards_tools_tool_choice_and_api_key(mocker, sub_workflow_handler,
+                                                                       mock_workflow_manager):
+    """Verify populated tools, tool_choice, and api_key on the context reach run_custom_workflow."""
+    mocker.patch.object(sub_workflow_handler, '_prepare_workflow_overrides',
+                        return_value=(None, None, True, False))
+    mocker.patch.object(sub_workflow_handler, '_prepare_scoped_inputs', return_value=[])
+
+    tools = [{"type": "function", "function": {"name": "get_weather"}}]
+    context = create_mock_context(
+        {"workflowName": "ToolWorkflow"},
+        tools=tools,
+        tool_choice="auto",
+        api_key="sk-test-key"
+    )
+
+    sub_workflow_handler.handle_custom_workflow(context)
+
+    call_args = mock_workflow_manager.run_custom_workflow.call_args
+    assert call_args.kwargs['tools'] is tools
+    assert call_args.kwargs['tool_choice'] == "auto"
+    assert call_args.kwargs['api_key'] == "sk-test-key"
 
 
 # ----------------------------------------
@@ -592,9 +639,92 @@ def test_handle_conditional_ignores_default_content_when_match_found(mocker, sub
         assert call_obj.args[0] != "This should be ignored."
 
 
+def test_handle_conditional_default_content_takes_precedence_over_default_workflow(sub_workflow_handler,
+                                                                                   mock_variable_service,
+                                                                                   mock_workflow_manager):
+    """
+    Verify 'UseDefaultContentInsteadOfWorkflow' wins over a 'default' workflow entry when no key matches.
+    """
+    def apply_vars_side_effect(value, context):
+        if value == "{some_variable}":
+            return "unmatched_route"
+        return value
+
+    mock_variable_service.apply_variables.side_effect = apply_vars_side_effect
+
+    config = {
+        "conditionalKey": "{some_variable}",
+        "conditionalWorkflows": {
+            "route_a": "WorkflowA",
+            "default": "DefaultWorkflow"
+        },
+        "UseDefaultContentInsteadOfWorkflow": "Static default content."
+    }
+    context = create_mock_context(config, stream=False)
+
+    result = sub_workflow_handler.handle_conditional_custom_workflow(context)
+
+    assert result == "Static default content."
+    mock_workflow_manager.run_custom_workflow.assert_not_called()
+
+
+def test_handle_conditional_empty_string_default_content_is_a_noop_not_a_fallthrough(sub_workflow_handler,
+                                                                                     mock_variable_service,
+                                                                                     mock_workflow_manager):
+    """
+    Documented no-op idiom: '"UseDefaultContentInsteadOfWorkflow": ""' must return the empty
+    content on an unmatched key, NOT fall through to the 'default' workflow. This pins the
+    `is not None` check; a truthiness check would silently run DefaultWorkflow instead.
+    """
+    def apply_vars_side_effect(value, context):
+        if value == "{some_variable}":
+            return "unmatched_route"
+        return value
+
+    mock_variable_service.apply_variables.side_effect = apply_vars_side_effect
+
+    config = {
+        "conditionalKey": "{some_variable}",
+        "conditionalWorkflows": {
+            "route_a": "WorkflowA",
+            "default": "DefaultWorkflow"
+        },
+        "UseDefaultContentInsteadOfWorkflow": ""
+    }
+    context = create_mock_context(config, stream=False)
+
+    result = sub_workflow_handler.handle_conditional_custom_workflow(context)
+
+    assert result == ""
+    mock_workflow_manager.run_custom_workflow.assert_not_called()
+
+
 # -------------------------------------------------------------------------
 # END: Tests for 'UseDefaultContentInsteadOfWorkflow' feature
 # -------------------------------------------------------------------------
+
+
+def test_handle_conditional_streaming_matched_workflow_forwards_streaming_flags(sub_workflow_handler,
+                                                                                mock_workflow_manager,
+                                                                                mock_variable_service):
+    """Verify a matched conditional workflow with stream=True forwards non_responder=None and is_streaming=True."""
+    mock_variable_service.apply_variables.side_effect = lambda s, ctx: "route_a" if s == "{var}" else s
+
+    config = {
+        "type": "ConditionalCustomWorkflow",
+        "conditionalKey": "{var}",
+        "conditionalWorkflows": {"route_a": "WorkflowA"}
+    }
+    context = create_mock_context(config, stream=True)
+    mock_workflow_manager.run_custom_workflow.return_value = "streamed_result"
+
+    result = sub_workflow_handler.handle(context)
+
+    assert result == "streamed_result"
+    call_args = mock_workflow_manager.run_custom_workflow.call_args
+    assert call_args.kwargs['workflow_name'] == "WorkflowA"
+    assert call_args.kwargs['non_responder'] is None
+    assert call_args.kwargs['is_streaming'] is True
 
 # ----------------------------------------
 # Integration tests

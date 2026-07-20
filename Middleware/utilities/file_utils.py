@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Dict, List, Tuple, Union, Optional
@@ -10,16 +11,38 @@ from typing import Dict, List, Tuple, Union, Optional
 logger = logging.getLogger(__name__)
 
 
+def resolve_file_path(path_str: str) -> str:
+    """
+    Normalizes a raw file path string, expanding a leading ``~``/``~user`` to the home directory.
+
+    This is the single, shared way any code should turn a config- or workflow-derived path string
+    into something usable for ``os.path.exists``, ``open``, or a ``Path``, so a value that is
+    *written* one way and *read/existence-checked* another can never diverge on ``~`` expansion.
+    (That divergence, a path written to the real home but looked up as a literal ``~`` directory,
+    is exactly what made a bypassing caller cold-start and re-process on every run.) Any code
+    doing its own file I/O on a path that may contain ``~`` should call this rather than reaching
+    for ``os.path.expanduser``/``Path`` directly.
+
+    ``os.path.expanduser`` is used rather than ``Path.expanduser`` because it returns the string
+    unchanged when no home directory can be resolved instead of raising ``RuntimeError``, preserving
+    the literal behavior in home-less environments. A path without a leading ``~`` is returned
+    untouched, so absolute and relative paths are unaffected.
+
+    Args:
+        path_str (str): The raw file path, which may begin with ``~``.
+
+    Returns:
+        str: The path with any leading ``~`` expanded to the home directory.
+    """
+    return os.path.expanduser(path_str) if path_str else path_str
+
+
 def _to_path(path_str: str) -> Path:
     """
-    Builds a Path from a string, expanding a leading ``~`` to the user's home.
+    Builds a ``Path`` from a string via :func:`resolve_file_path` (expanding a leading ``~``).
 
-    Centralizes path construction so every file the module reads or writes honors
-    ``~``/``~user`` prefixes consistently. ``os.path.expanduser`` is used rather
-    than ``Path.expanduser`` because it returns the string unchanged when no home
-    directory can be resolved instead of raising ``RuntimeError``, preserving the
-    prior literal behavior in home-less environments. A path without a leading
-    ``~`` is returned untouched, so absolute and relative paths are unaffected.
+    Centralizes path construction so every file this module reads or writes honors ``~``/``~user``
+    prefixes consistently. A path without a leading ``~`` is returned untouched.
 
     Args:
         path_str (str): The raw file path, which may begin with ``~``.
@@ -27,7 +50,7 @@ def _to_path(path_str: str) -> Path:
     Returns:
         Path: The path with any leading ``~`` expanded to the home directory.
     """
-    return Path(os.path.expanduser(path_str))
+    return Path(resolve_file_path(path_str))
 
 
 def _resolve_case_insensitive_path(path_str: str) -> Optional[Path]:
@@ -52,8 +75,7 @@ def _resolve_case_insensitive_path(path_str: str) -> Optional[Path]:
     if not parent_dir.exists():
         return None
     entries = {p.name.lower(): p for p in parent_dir.iterdir()}
-    matched_path = entries.get(target_filename.lower())
-    return matched_path if matched_path else None
+    return entries.get(target_filename.lower())
 
 
 def _read_json_file(file_path: Path, encryption_key: Optional[bytes] = None):
@@ -80,15 +102,44 @@ def _read_json_file(file_path: Path, encryption_key: Optional[bytes] = None):
             decrypted = decrypt_bytes(raw, encryption_key)
             return json.loads(decrypted.decode('utf-8'))
         except (InvalidToken, ValueError, UnicodeDecodeError):
-            # Decryption failed — file is likely plaintext (migration scenario)
+            # Decryption failed; file is likely plaintext (migration scenario)
             logger.warning("Encrypted read failed for %s, falling back to plaintext.", file_path)
 
     try:
         with file_path.open() as f:
             return json.load(f)
     except json.JSONDecodeError as e:
-        logger.error("File is neither valid encrypted data nor valid JSON: %s — %s", file_path, e)
+        logger.error("File is neither valid encrypted data nor valid JSON: %s: %s", file_path, e)
         raise
+
+
+def _atomic_write_bytes(file_path: Path, data: bytes) -> None:
+    """
+    Writes bytes to a file atomically (temp file in the target directory,
+    fsync, then rename) so a crash mid-write cannot corrupt the target file.
+
+    Args:
+        file_path (Path): The target file path. Its parent must already exist.
+        data (bytes): The bytes to write.
+    """
+    tmp_fd = None
+    tmp_path = None
+    try:
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=str(file_path.parent), suffix='.tmp')
+        os.write(tmp_fd, data)
+        os.fsync(tmp_fd)
+        os.close(tmp_fd)
+        tmp_fd = None
+        os.replace(tmp_path, str(file_path))
+        tmp_path = None
+    finally:
+        if tmp_fd is not None:
+            os.close(tmp_fd)
+        if tmp_path is not None:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
 
 def _write_json_file(file_path: Path, data, encryption_key: Optional[bytes] = None) -> None:
@@ -104,30 +155,11 @@ def _write_json_file(file_path: Path, data, encryption_key: Optional[bytes] = No
         encryption_key (Optional[bytes]): Fernet key for encryption.
     """
     json_bytes = json.dumps(data, indent=4).encode('utf-8')
+    if encryption_key:
+        from Middleware.utilities.encryption_utils import encrypt_bytes
+        json_bytes = encrypt_bytes(json_bytes, encryption_key)
     file_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_fd = None
-    tmp_path = None
-    try:
-        tmp_fd, tmp_path = tempfile.mkstemp(dir=str(file_path.parent), suffix='.tmp')
-        if encryption_key:
-            from Middleware.utilities.encryption_utils import encrypt_bytes
-            encrypted = encrypt_bytes(json_bytes, encryption_key)
-            os.write(tmp_fd, encrypted)
-        else:
-            os.write(tmp_fd, json_bytes)
-        os.fsync(tmp_fd)
-        os.close(tmp_fd)
-        tmp_fd = None
-        os.replace(tmp_path, str(file_path))
-        tmp_path = None
-    finally:
-        if tmp_fd is not None:
-            os.close(tmp_fd)
-        if tmp_path is not None:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+    _atomic_write_bytes(file_path, json_bytes)
 
 
 def ensure_json_file_exists(
@@ -146,13 +178,14 @@ def ensure_json_file_exists(
         filepath (str): The path to the JSON file.
         initial_data (Union[List, None]): Optional initial data to populate the
             file if it needs to be created. Defaults to an empty list.
+        encryption_key (Optional[bytes]): Fernet key for transparent
+            encryption/decryption.
 
     Returns:
         List: The contents of the JSON file as a list.
     """
     resolved_path = _resolve_case_insensitive_path(filepath)
 
-    # If the file exists, load and return it.
     if resolved_path and resolved_path.exists():
         data = _read_json_file(resolved_path, encryption_key)
         if not isinstance(data, list):
@@ -162,9 +195,6 @@ def ensure_json_file_exists(
             )
         return data
 
-    # If the file does not exist, create it.
-    # Use the original filepath string to create the new file.
-    # Ensure parent directory exists.
     target_path = _to_path(filepath)
     target_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -191,11 +221,7 @@ def read_chunks_with_hashes(filepath: str, encryption_key: Optional[bytes] = Non
         List[Tuple[str, str]]: A list of tuples, each containing a text block
             and its corresponding hash.
     """
-    file_path = _resolve_case_insensitive_path(filepath)
-    data_loaded = ensure_json_file_exists(
-        str(file_path) if file_path else filepath,
-        encryption_key=encryption_key
-    )
+    data_loaded = ensure_json_file_exists(filepath, encryption_key=encryption_key)
     return [(item['text_block'], item['hash']) for item in data_loaded]
 
 
@@ -222,14 +248,10 @@ def write_chunks_with_hashes(
     Returns:
         None
     """
-    file_path = _resolve_case_insensitive_path(filepath)
-    existing_data = ensure_json_file_exists(
-        str(file_path) if file_path else filepath,
-        encryption_key=encryption_key
-    )
+    existing_data = ensure_json_file_exists(filepath, encryption_key=encryption_key)
     new_data = [{'text_block': tb, 'hash': hc} for tb, hc in chunks_with_hashes]
     combined_data = new_data if overwrite else existing_data + new_data
-    target = file_path or _to_path(filepath)
+    target = _resolve_case_insensitive_path(filepath) or _to_path(filepath)
     _write_json_file(target, combined_data, encryption_key)
 
 
@@ -260,25 +282,6 @@ def update_chunks_with_hashes(
         write_chunks_with_hashes(chunks_with_hashes, filepath, overwrite=True, encryption_key=encryption_key)
     else:
         write_chunks_with_hashes(chunks_with_hashes, filepath, encryption_key=encryption_key)
-
-
-def get_logger_filename() -> str:
-    """
-    Constructs and returns the full path to the Wilmer logging file.
-
-    The path is determined relative to the location of this script,
-    navigating up the directory tree to the project root and then to
-    the 'logs' directory.
-
-    Returns:
-        str: The full path string for the Wilmer log file.
-    """
-    util_dir = os.path.dirname(os.path.abspath(__file__))
-    middleware_dir = os.path.dirname(util_dir)
-    project_dir = os.path.dirname(middleware_dir)
-    logs_path = os.path.join(project_dir, "logs", "wilmerai.log")
-    resolved_path = _resolve_case_insensitive_path(logs_path)
-    return str(resolved_path) if resolved_path else logs_path
 
 
 def load_timestamp_file(filepath: str, encryption_key: Optional[bytes] = None) -> Dict[str, str]:
@@ -371,7 +374,7 @@ def load_custom_file(
         if not content:
             return "No additional information added"
         if head_count is not None or tail_count is not None:
-            separator = chunk_delimiter if chunk_delimiter else "\n"
+            separator = chunk_delimiter or "\n"
             parts = content.split(separator)
             if tail_count is not None:
                 # Only a positive count keeps chunks; 0 yields none and a negative
@@ -468,7 +471,8 @@ def write_vision_responses(filepath: str, data: Dict, encryption_key: Optional[b
     _write_json_file(file_path, data, encryption_key)
 
 
-def save_custom_file(filepath: str, content: str, mode: str = "overwrite") -> None:
+def save_custom_file(filepath: str, content: str, mode: str = "overwrite",
+                     find: Optional[str] = None) -> Optional[int]:
     """
     Saves content to a text file using atomic write, creating parent directories
     if they don't exist.
@@ -478,40 +482,141 @@ def save_custom_file(filepath: str, content: str, mode: str = "overwrite") -> No
 
     Args:
         filepath (str): The path where the file will be saved.
-        content (str): The string content to write to the file.
-        mode (str): "overwrite" (default) replaces the file. "append" adds
-            content to the end of the existing file (read-modify-write so the
-            write stays atomic); a missing file is created.
+        content (str): The string content to write. Ignored when mode is "remove" or "trim".
+        mode (str): One of:
+            - "overwrite" (default): replace the whole file.
+            - "append": add content to the end of the existing file
+              (read-modify-write so the write stays atomic); a missing file is created.
+            - "replace": swap every occurrence of ``find`` for ``content`` in an
+              existing file, leaving all other text untouched. This is the surgical
+              alternative to a full rewrite: a caller can update one entry without
+              regenerating (and risking the loss of) the rest of the document.
+            - "remove": delete every line that contains ``find`` from an existing file.
+            - "trim": delete every blank or whitespace-only line from an existing file, leaving the
+              real content lines intact (needs neither ``content`` nor ``find``). Useful for tidying
+              a line-per-entry log that a model has salted with stray blank lines.
+        find (Optional[str]): The target text for "replace"/"remove". Required for those two modes;
+            not used by "trim".
+
+    Returns:
+        Optional[int]: For "replace"/"remove"/"trim", the number of changes made
+            (occurrences replaced, or lines removed); 0 when nothing matched.
+            None for "overwrite"/"append".
 
     Raises:
+        ValueError: If mode is "replace"/"remove" without a non-empty ``find``.
         IOError: If there is an issue writing to the file.
     """
     file_path = _to_path(filepath)
+
+    if mode in ("replace", "remove", "trim"):
+        # Surgical edits act on an existing file only. A missing file, or a target that is not
+        # present/matched, is a no-op that reports zero changes rather than creating or rewriting
+        # anything, so a maintainer workflow can safely attempt an edit every turn and branch on
+        # whether it actually landed.
+        if mode in ("replace", "remove") and not find:
+            raise ValueError(f"save_custom_file: mode '{mode}' requires a non-empty 'find' value")
+        if not file_path.exists():
+            return 0
+        original = file_path.read_text(encoding='utf-8')
+        if mode == "replace":
+            change_count = original.count(find)
+            if change_count == 0:
+                return 0
+            new_content = original.replace(find, content)
+        elif mode == "remove":  # drop whole lines containing the target text
+            lines = original.splitlines(keepends=True)
+            kept_lines = [line for line in lines if find not in line]
+            change_count = len(lines) - len(kept_lines)
+            if change_count == 0:
+                return 0
+            new_content = "".join(kept_lines)
+        else:  # "trim": drop blank / whitespace-only lines, leaving the real content intact
+            lines = original.splitlines(keepends=True)
+            kept_lines = [line for line in lines if line.strip()]
+            change_count = len(lines) - len(kept_lines)
+            if change_count == 0:
+                return 0
+            new_content = "".join(kept_lines)
+        try:
+            _atomic_write_bytes(file_path, new_content.encode('utf-8'))
+        except Exception as e:
+            raise IOError(f"Could not write to file at {filepath}") from e
+        return change_count
+
     file_path.parent.mkdir(parents=True, exist_ok=True)
     if mode == "append" and file_path.exists():
         # Read-modify-write so the atomic replace below is preserved. Let a read
         # failure propagate rather than swallowing it: silently writing only the new
         # content would overwrite (not append to) the existing file and lose its prior
-        # contents -- the opposite of what "append" promises.
+        # contents, the opposite of what "append" promises.
         content = file_path.read_text(encoding='utf-8') + content
-    content_bytes = content.encode('utf-8')
-    tmp_fd = None
-    tmp_path = None
     try:
-        tmp_fd, tmp_path = tempfile.mkstemp(dir=str(file_path.parent), suffix='.tmp')
-        os.write(tmp_fd, content_bytes)
-        os.fsync(tmp_fd)
-        os.close(tmp_fd)
-        tmp_fd = None
-        os.replace(tmp_path, str(file_path))
-        tmp_path = None
+        _atomic_write_bytes(file_path, content.encode('utf-8'))
     except Exception as e:
         raise IOError(f"Could not write to file at {filepath}") from e
-    finally:
-        if tmp_fd is not None:
-            os.close(tmp_fd)
-        if tmp_path is not None:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+    return None
+
+
+def read_plain_text_file(filepath: str, encryption_key: Optional[bytes] = None) -> str:
+    """
+    Reads a plain-text (e.g. markdown) file, transparently decrypting if needed.
+
+    Mirrors the encrypted-then-plaintext fallback behavior of ``_read_json_file``:
+    when an encryption_key is provided the file is first treated as encrypted
+    binary data; if decryption fails the content is returned as plaintext
+    (migration scenario, or a user hand-edited the file while encryption was
+    enabled).
+
+    Args:
+        filepath (str): The path of the file to read.
+        encryption_key (Optional[bytes]): Fernet key for decryption.
+
+    Returns:
+        str: The file's text content, or an empty string if the file does not exist.
+    """
+    file_path = _to_path(filepath)
+    if not file_path.exists():
+        return ''
+
+    if encryption_key:
+        try:
+            from cryptography.fernet import InvalidToken
+            from Middleware.utilities.encryption_utils import decrypt_bytes
+            raw = file_path.read_bytes()
+            return decrypt_bytes(raw, encryption_key).decode('utf-8')
+        except (InvalidToken, ValueError, UnicodeDecodeError):
+            logger.warning("Encrypted read failed for %s, falling back to plaintext.", file_path)
+
+    return file_path.read_text(encoding='utf-8')
+
+
+def write_plain_text_file(filepath: str, content: str, encryption_key: Optional[bytes] = None,
+                          backup_suffix: Optional[str] = None) -> None:
+    """
+    Writes a plain-text file atomically, with an optional pre-write backup.
+
+    When ``backup_suffix`` is provided and the target file already exists, the
+    existing file is first copied to ``{filepath}{backup_suffix}`` so the
+    previous version survives one overwrite. If the backup copy fails, the
+    exception propagates and the write is never attempted, guaranteeing the
+    current content cannot be lost.
+
+    Args:
+        filepath (str): The target file path.
+        content (str): The text content to write.
+        encryption_key (Optional[bytes]): Fernet key for encryption.
+        backup_suffix (Optional[str]): Suffix for the pre-write backup copy
+            (e.g. '.bak'). None disables the backup.
+    """
+    file_path = _to_path(filepath)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if backup_suffix and file_path.exists():
+        shutil.copy2(str(file_path), str(file_path) + backup_suffix)
+
+    data = content.encode('utf-8')
+    if encryption_key:
+        from Middleware.utilities.encryption_utils import encrypt_bytes
+        data = encrypt_bytes(data, encryption_key)
+    _atomic_write_bytes(file_path, data)

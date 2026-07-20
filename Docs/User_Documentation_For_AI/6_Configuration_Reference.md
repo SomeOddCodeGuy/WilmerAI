@@ -39,14 +39,13 @@ These reference workflow filenames used internally by the memory system.
 | `chatSummaryToolWorkflow` | string | Workflow for rolling chat summary generation. |
 | `conversationMemoryToolWorkflow` | string | Workflow for chunked memory creation. |
 | `recentMemoryToolWorkflow` | string | Workflow for recent memory retrieval. |
-| `defaultParallelProcessWorkflow` | string | Workflow for parallel text processing. Empty string to disable. |
 
 ### Directories
 
 | Field | Type | Description |
 |---|---|---|
-| `discussionDirectory` | string | Absolute path where discussion files (memories, summaries, vector DBs) are stored. Optional -- defaults to `{PublicDirectory}/DiscussionIds/` (a sibling of `Configs/`, not inside it). Overridable by the `--DiscussionDirectory` CLI flag. |
-| `sqlLiteDirectory` | string | Absolute path for the per-user SQLite database (workflow locks). Optional -- defaults to `{PublicDirectory}/SqlLiteDBs/`. Overridable by the `--UserLevelSqlLiteDirectory` CLI flag. |
+| `discussionDirectory` | string | Absolute path where discussion files (memories, summaries, vector DBs) are stored. Optional; defaults to `{PublicDirectory}/DiscussionIds/` (a sibling of `Configs/`, not inside it). Overridable by the `--DiscussionDirectory` CLI flag. |
+| `sqlLiteDirectory` | string | Absolute path for the per-user SQLite database (workflow locks). Optional; defaults to `{PublicDirectory}/SqlLiteDBs/`. Overridable by the `--UserLevelSqlLiteDirectory` CLI flag. |
 
 Path resolution for all three runtime-data directories follows the same order: CLI flag > user config setting >
 `{PublicDirectory}/<default-subdir>/`. When `--PublicDirectory` is not set, every default resolves to a subfolder
@@ -63,8 +62,9 @@ root) is used in place if found; no automatic migration is performed.
 | Field | Type | Description |
 |---|---|---|
 | `endpointConfigsSubDirectory` | string | Subfolder within `Endpoints/` for this user's endpoint configs. |
-| `workflowConfigsSubDirectoryOverride` | string | Load workflows from `_overrides/<value>/` instead of user folder. |
+| `workflowConfigsSubDirectoryOverride` | string | Load workflows from `Workflows/<value>/` instead of the user folder. |
 | `presetConfigsSubDirectoryOverride` | string | Custom subfolder within `Presets/<ApiType>/` for presets. |
+| `structuredOutputConfigsSubDirectory` | string | Custom subfolder within `StructuredOutputs/` for `structuredOutputFile` schemas. Default: username; root fallback. |
 | `sharedWorkflowsSubDirectoryOverride` | string | Custom folder name instead of `_shared` for shared workflows. Default: `"_shared"`. |
 
 ### Prompt Template Settings
@@ -87,15 +87,16 @@ root) is used in place if found; no automatic migration is performed.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `useOfflineWikiApi` | bool | -- | Enable offline Wikipedia nodes. |
-| `offlineWikiApiHost` | string | -- | Wikipedia API host (e.g., `"127.0.0.1"`). |
-| `offlineWikiApiPort` | int | -- | Wikipedia API port (e.g., `5728`). |
+| `useOfflineWikiApi` | bool | none | Enable offline Wikipedia nodes. |
+| `offlineWikiApiHost` | string | none | Wikipedia API host (e.g., `"127.0.0.1"`). |
+| `offlineWikiApiPort` | int | none | Wikipedia API port (e.g., `5728`). |
 | `useFileLogging` | bool | false | Write logs to file (single-user fallback; use `--file-logging` in multi-user). |
 | `allowSharedWorkflows` | bool | false | List `_shared/` workflow folders in models API endpoints. |
 | `encryptUsingApiKey` | bool | false | Encrypt discussion files using the `Authorization: Bearer` key. |
 | `redactLogOutput` | bool | false | Redact user content from all log output. |
 | `interceptOpenWebUIToolRequests` | bool | false | Intercept OpenWebUI tool-selection requests with empty response. |
-| `contextCompactorSettingsFile` | string | -- | Settings file for ContextCompactor node (in workflow folder). |
+| `livenessToolCall` | object | none | `{ "toolName": "...", "arguments": {...} }`; `toolName` required, `arguments` optional. When set, Wilmer injects this harmless no-op tool call into a streamed response from a responder node with `"injectLivenessToolCall": true` in its node config when the response would otherwise end with no tool call (closing with `finish_reason: tool_calls` so agentic frontends call back instead of ending the run). Setting it also enables ingestion-side cleanup: buried liveness machinery turns are stripped, and runs of 3+ identical tool-call exchanges are collapsed to one with a note appended to the kept result. Users without this setting never have their conversations rewritten. The `arguments` should include the `[Wilmer]` marker. |
+| `contextCompactorSettingsFile` | string | none | Settings file for ContextCompactor node (in workflow folder). |
 | `connectTimeoutInSeconds` | int | 30 | TCP connection timeout for LLM endpoints. |
 | `clampPromptToContextWindow` | bool | false | User-level default for the context-window clamp (see Endpoint Config). A node or endpoint setting overrides it; absent here means each endpoint/node decides, defaulting off. The shipped user configs set this `true`. |
 
@@ -143,6 +144,7 @@ Optional; both default to "no change". The clamp trims the **conversation only**
 | `addTextToStartOfCompletion` | bool | Enable seeding the assistant's response. |
 | `textToAddToStartOfCompletion` | string | Text to seed (e.g., `"<think>"`). |
 | `ensureTextAddedToAssistantWhenChatCompletion` | bool | If true, create a new assistant message for the seed text instead of appending to last message. |
+| `backendSupportsToolTurns` | bool | Default `true`. Set `false` when the model's chat template cannot render native tool turns; `appendNativeToolExchange` nodes then fall back to text-transcript delivery for this endpoint. |
 
 ### Response Cleaning
 
@@ -153,7 +155,7 @@ Applied in order: think tag removal, custom prefix removal, whitespace trimming.
 | `removeThinking` | bool | Enable think block removal. |
 | `startThinkTag` | string | Opening tag (e.g., `"<think>"`). Case-insensitive. |
 | `endThinkTag` | string | Closing tag (e.g., `"</think>"`). Case-insensitive. |
-| `openingTagGracePeriod` | int | Characters to scan at response start for the opening tag. |
+| `openingTagGracePeriod` | int | Window (chars) at response start in which the opening tag must begin. Default 100. |
 | `expectOnlyClosingThinkTag` | bool | Discard all text until `endThinkTag` is found (for models that omit the opening tag). |
 | `removeCustomTextFromResponseStartEndpointWide` | bool | Enable prefix removal. |
 | `responseStartTextToRemoveEndpointWide` | array | List of strings; first match at response start is removed. |
@@ -170,11 +172,12 @@ property names to what the backend API expects.
 
 | Field | Type | Description |
 |---|---|---|
-| `type` | string | **Critical.** Selects the internal handler. Valid values: `"openAIChatCompletion"`, `"openAIV1Completion"`, `"claudeMessages"`, `"koboldCppGenerate"`, `"ollamaApiChat"`, `"ollamaApiGenerate"`. |
+| `type` | string | **Critical.** Selects the internal handler. Valid values: `"openAIChatCompletion"`, `"openAIV1Completion"`, `"claudeMessages"`, `"koboldCppGenerate"`, `"ollamaApiChat"`, `"ollamaApiGenerate"`. Embeddings-only values (endpoint cannot generate text): `"openAIEmbeddings"`, `"ollamaEmbeddings"`. |
 | `presetType` | string | Subfolder in `Presets/` to load generation params from (e.g., `"Ollama"`, `"OpenAiCompatibleApis"`). |
 | `truncateLengthPropertyName` | string/null | API key name for max context size (e.g., `"max_context_length"`). Null if not applicable. |
 | `maxNewTokensPropertyName` | string | API key name for max response tokens (e.g., `"max_tokens"`, `"num_predict"`, `"max_length"`). |
 | `streamPropertyName` | string | API key name for streaming flag (usually `"stream"`). |
+| `structuredOutput` | object | Optional, declarative. `{"field": <payload key, dotted for nesting>, "style": "openaiJsonSchema"\|"raw"}`. E.g. `{"field":"response_format","style":"openaiJsonSchema"}` (llama.cpp/LM Studio/vLLM/OpenAI), `{"field":"format","style":"raw"}` (Ollama), `{"field":"structured_outputs.json","style":"raw"}` (vLLM native). Omit for backends without support (e.g. mlx-lm). Enables tool enforcement and `structuredOutputFile`. |
 
 ### Pre-defined ApiTypes
 
@@ -189,6 +192,13 @@ property names to what the backend API expects.
 | `LlamaCppServer` | Llama.cpp chat completions |
 | `Text-Generation-WebUI` | Text Generation WebUI chat completions |
 | `mlx-lm` | Apple MLX model server |
+| `OpenAI-Embeddings` | Embeddings via `/v1/embeddings` (OpenAI, llama.cpp `--embedding`, compatible servers) |
+| `Ollama-Embeddings` | Embeddings via Ollama `/api/embed` (e.g. `nomic-embed-text`) |
+
+**Embeddings endpoints**: an Endpoints file referencing an embeddings ApiType only needs `endpoint`,
+`apiTypeConfigFileName`, `modelNameToSendToAPI`, and optionally `apiKey`. No preset, prompt template, or
+generation fields apply. Referenced by `embeddingEndpointName` (memory settings file and/or the
+`VectorMemorySearch` node) to enable semantic/hybrid memory search.
 
 ---
 
@@ -297,7 +307,7 @@ Example (Llama 3):
 }
 ```
 
-The built-in `_chatonly` template uses only newlines -- suitable for models without special tokens.
+The built-in `_chatonly` template uses only newlines, suitable for models without special tokens.
 
 ---
 
@@ -328,6 +338,12 @@ Configures the memory system per-discussion.
 | `vectorMemoryMaxResponseSizeInTokens` | Max tokens for vector memory. |
 | `vectorMemoryChunkEstimatedTokenSize` | Token threshold for triggering vector memory creation. |
 | `vectorMemoryMaxMessagesBetweenChunks` | Message count threshold for vector memory. |
+| `vectorMemoryIndexTopics` | Optional, default false. Write-time topic indexing: folds the memory metadata's `topics` list into the searchable index (the key_phrases column) as each memory is written, so keyword searches can match a memory by its conversation-level topic (e.g. the campaign, project, or event a fact belongs to) even when the memory text never restates it. Off indexes exactly what was indexed historically. |
+| `embeddingEndpointName` | Optional. Embeddings endpoint (ApiType `openAIEmbeddings`/`ollamaEmbeddings`). When set, new vector memories are embedded on write, enabling `searchMode: semantic`/`hybrid` on `VectorMemorySearch`. |
+| `embeddingBackfillBatchSize` | Optional, default 20. Older un-embedded memories embedded per processed chunk (a single memory pass may process several chunks; lazy backfill). 0 disables. Bulk alternative: `Scripts/backfill_embeddings.py`. |
+| `useStateDocument` | Optional, default false. Vector path only: merge newly stored facts into `state_document.md` via a sub-workflow. |
+| `stateDocumentWorkflowName` | Required if `useStateDocument`. Merge workflow; receives new facts as `{agent1Input}`, current document as `{agent2Input}`; output replaces the document. |
+| `stateDocumentMinRetentionRatio` | Optional, default 0.5. Shrink guard: merge output smaller than this fraction of the current document is rejected. 0 disables. |
 
 ### File-Based Memory Config
 
@@ -373,7 +389,7 @@ endpoints, presets, and thresholds.
 **Location:** `Public/Configs/Workflows/<username>/<contextCompactorSettingsFile>.json`
 
 Referenced by the `contextCompactorSettingsFile` field in the user config. This is a **separate file** from
-the memory settings -- the ContextCompactor is independent of the memory system.
+the memory settings; the ContextCompactor is independent of the memory system.
 
 ### Settings
 
@@ -449,7 +465,7 @@ Each file defines one MCP server. The base filename (without `.json`) is the val
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `transport` | string | Yes | `"stdio"`. |
-| `command` | string | Yes | Binary to execute (e.g., `"npx"`). |
+| `command` | string | Yes | Binary to execute (e.g., a path to a locally installed MCP server; `"npx"` also works but fetches the package on demand). |
 | `args` | array | No | Command-line arguments (default `[]`). |
 | `env` | object | No | Environment variables for the subprocess. When omitted, the subprocess gets a minimal default environment from the MCP SDK (not Wilmer's full environment). |
 | `cwd` | string | No | Working directory for the subprocess. |

@@ -55,6 +55,20 @@ def test_load_default_prompt_missing_file_returns_fallback(tmp_path):
     assert "You are an assistant with access to various tools." in result
 
 
+def test_load_default_prompt_read_error_returns_fallback(mocker, tmp_path):
+    """
+    Tests that an IO error while reading an existing prompt file yields the
+    built-in fallback prompt instead of raising.
+    """
+    prompt_file = tmp_path / "default_tool_prompt.txt"
+    prompt_file.write_text("real prompt")
+    mocker.patch("builtins.open", side_effect=OSError("permission denied"))
+
+    result = load_default_prompt(str(prompt_file))
+
+    assert "You are an assistant with access to various tools." in result
+
+
 # ---------------------------------------------------------------------------
 # Invoke (prompt injection + discovery orchestration)
 # ---------------------------------------------------------------------------
@@ -113,6 +127,38 @@ def test_invoke_enhances_existing_system_prompt(mock_discoverer, tmp_path):
     assert "Available Tools:" in result["messages"][0]["content"]
 
 
+def test_invoke_skips_enhancement_when_prompt_already_sufficient(mock_discoverer, tmp_path):
+    """
+    Tests the already-sufficient skip: with an empty discovered tools map and
+    an existing system prompt that already carries both the 'Available Tools:'
+    and '<required_format>' markers, the prompt is left completely unchanged.
+    """
+    # Arrange
+    mock_discoverer.return_value.discover_mcp_tools.return_value = {}
+    sufficient_prompt = (
+        "You are concise.\n\n"
+        "Available Tools:\n(previously injected tool list)\n\n"
+        "<required_format>respond with a tool_calls JSON object</required_format>"
+    )
+    messages = [
+        {"role": "system", "content": sufficient_prompt},
+        {"role": "user", "content": "hi"},
+    ]
+
+    # Act
+    result = Invoke(
+        messages,
+        default_prompt_path=str(tmp_path / "unused.txt"),
+        user_identified_services="none",
+    )
+
+    # Assert: Content untouched, no extra system message, empty tools map returned.
+    assert result["messages"][0]["content"] == sufficient_prompt
+    assert result["chat_system_prompt"] == sufficient_prompt
+    assert len([m for m in result["messages"] if m["role"] == "system"]) == 1
+    assert result["discovered_tools_map"] == {}
+
+
 def test_invoke_treats_none_services_as_no_discovery(mock_discoverer, tmp_path):
     """
     Tests that the literal extractor output 'none' results in no services
@@ -155,6 +201,30 @@ def test_invoke_parses_stringified_messages(mock_discoverer, tmp_path):
     # Assert: Parsed list with the system prompt prepended.
     assert result["messages"][0]["role"] == "system"
     assert result["messages"][1] == {"role": "user", "content": "what time is it?"}
+
+
+def test_invoke_unparseable_messages_string_treated_as_empty(mock_discoverer, tmp_path):
+    """
+    Tests that a messages string that looks like a list but cannot be parsed
+    falls back to an empty message list, and Invoke still produces a single
+    system message with the default prompt rather than raising.
+    """
+    # Arrange
+    prompt_file = tmp_path / "default_tool_prompt.txt"
+    prompt_file.write_text("Base prompt.")
+
+    # Act: Bracketed but syntactically invalid, so ast.literal_eval fails.
+    result = Invoke(
+        "[{'role': 'user', broken]",
+        default_prompt_path=str(prompt_file),
+        user_identified_services="none",
+    )
+
+    # Assert: Only the injected system prompt remains.
+    assert len(result["messages"]) == 1
+    assert result["messages"][0]["role"] == "system"
+    assert result["messages"][0]["content"].startswith("Base prompt.")
+    assert result["chat_system_prompt"] == result["messages"][0]["content"]
 
 
 def test_invoke_aggregates_generator_service_list(mock_discoverer, tmp_path):

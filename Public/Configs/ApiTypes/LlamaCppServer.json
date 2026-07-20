@@ -6,6 +6,10 @@
   "maxNewTokensPropertyName": "n_predict",
   "streamPropertyName": "stream",
   "supportsChatTemplateKwargs": true,
+  "structuredOutput": {
+    "field": "response_format",
+    "style": "openaiJsonSchema"
+  },
   "thinking": {
     "location": "chat_template_kwargs",
     "field": "enable_thinking",

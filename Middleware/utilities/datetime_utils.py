@@ -1,9 +1,8 @@
 # /Middleware/utilities/datetime_utils.py
 
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, Tuple
 
-# Define the standard format string
 TIMESTAMP_FORMAT = "%A, %Y-%m-%d %H:%M:%S"
 
 
@@ -39,7 +38,7 @@ def format_datetime_to_ts(dt_obj: datetime) -> str:
     return "(" + dt_obj.strftime(TIMESTAMP_FORMAT) + ")"
 
 
-def _calculate_relative_time(base_time: datetime) -> (int, int, int):
+def _calculate_relative_time(base_time: datetime) -> Tuple[int, int, int]:
     """
     Calculates the time difference and returns days, hours, and minutes.
 
@@ -50,6 +49,12 @@ def _calculate_relative_time(base_time: datetime) -> (int, int, int):
         tuple[int, int, int]: A tuple containing days, hours, and minutes.
     """
     delta = datetime.now() - base_time
+    # A future timestamp (client clock skew) produces a negative timedelta, which
+    # Python normalizes to negative days with positive seconds (e.g. -1 day,
+    # 86100s) and would format as a nonsense "23 hours, 55 minutes". Treat any
+    # future time as "now".
+    if delta.total_seconds() < 0:
+        return 0, 0, 0
     days = delta.days
     hours, remainder = divmod(delta.seconds, 3600)
     minutes, _ = divmod(remainder, 60)

@@ -1,5 +1,20 @@
 import pytest
 
+_HANDLER = 'Middleware.api.handlers.impl.ollama_api_handler'
+
+
+@pytest.fixture(autouse=True)
+def isolate_user_config(mocker):
+    """Pin the per-user config reads to benign defaults so these endpoint tests
+    cannot be broken (or silently repurposed) by edits to the repo's
+    Public/Configs user files, which the handler would otherwise read for the
+    _current-user.json user. Tests that need other values re-patch locally."""
+    mocker.patch(f'{_HANDLER}.get_is_chat_complete_add_user_assistant', return_value=False)
+    mocker.patch(f'{_HANDLER}.get_is_chat_complete_add_missing_assistant', return_value=False)
+    mocker.patch(f'{_HANDLER}.get_encrypt_using_api_key', return_value=False)
+    mocker.patch(f'{_HANDLER}.get_redact_log_output', return_value=False)
+    mocker.patch(f'{_HANDLER}.check_openwebui_tool_request', return_value=None)
+
 
 def test_eventlet_path_runs_post_return_nodes_to_completion(app, mocker):
     """Direct test of the Ollama Eventlet streaming path (ISS-035 + ISS-026).
@@ -10,6 +25,7 @@ def test_eventlet_path_runs_post_return_nodes_to_completion(app, mocker):
     the post-return node runs. Under the old behavior the post-return node would never execute.
     """
     eventlet = pytest.importorskip("eventlet")
+    from Middleware.api.handlers.base import base_streaming
     from Middleware.api.handlers.impl import ollama_api_handler as h
 
     executed = []
@@ -24,7 +40,9 @@ def test_eventlet_path_runs_post_return_nodes_to_completion(app, mocker):
     mocker.patch.object(h, 'handle_user_prompt', return_value=stream_generator())
 
     with app.test_request_context('/api/chat'):
-        response = h._stream_with_eventlet_optimized('req-evt', [{"role": "user", "content": "hi"}], True)
+        response = base_streaming.stream_with_eventlet_optimized(
+            h._CHAT_STREAMING_CONFIG, h.handle_user_prompt,
+            'req-evt', [{"role": "user", "content": "hi"}], True)
         client_chunks = list(response.response)
 
     for _ in range(200):
@@ -605,3 +623,207 @@ def test_generate_missing_model_error(client):
     assert response.status_code == 400
     assert "error" in response.json
     assert "'model' field is required" in response.json["error"]
+
+
+def test_chat_invalid_json_returns_400(client):
+    """POST /api/chat with an unparsable body is a 400, not a crash."""
+    response = client.post('/api/chat', data='not valid json', content_type='application/json')
+    assert response.status_code == 400
+    assert "Invalid JSON" in response.json["error"]
+
+
+def test_chat_missing_model_returns_400(client, mocker):
+    """POST /api/chat requires both 'model' and 'messages'."""
+    mock_handle_prompt = mocker.patch(f'{_HANDLER}.handle_user_prompt')
+
+    response = client.post('/api/chat', json={"messages": [{"role": "user", "content": "hi"}]})
+
+    assert response.status_code == 400
+    assert "required" in response.json["error"]
+    mock_handle_prompt.assert_not_called()
+
+
+def test_chat_missing_messages_returns_400(client, mocker):
+    """POST /api/chat without 'messages' is rejected before dispatch."""
+    mock_handle_prompt = mocker.patch(f'{_HANDLER}.handle_user_prompt')
+
+    response = client.post('/api/chat', json={"model": "test-model"})
+
+    assert response.status_code == 400
+    assert "required" in response.json["error"]
+    mock_handle_prompt.assert_not_called()
+
+
+def test_chat_message_missing_role_returns_400(client, mocker):
+    """Each /api/chat message must carry a 'role'."""
+    mock_handle_prompt = mocker.patch(f'{_HANDLER}.handle_user_prompt')
+
+    payload = {"model": "test-model", "messages": [{"content": "hi"}], "stream": False}
+    response = client.post('/api/chat', json=payload)
+
+    assert response.status_code == 400
+    assert "role" in response.json["error"]
+    mock_handle_prompt.assert_not_called()
+
+
+def test_chat_message_missing_content_and_tool_calls_returns_400(client, mocker):
+    """A message with neither 'content' nor 'tool_calls' is a 400."""
+    mock_handle_prompt = mocker.patch(f'{_HANDLER}.handle_user_prompt')
+
+    payload = {"model": "test-model", "messages": [{"role": "user"}], "stream": False}
+    response = client.post('/api/chat', json=payload)
+
+    assert response.status_code == 400
+    assert "content" in response.json["error"]
+    mock_handle_prompt.assert_not_called()
+
+
+def test_chat_stream_string_false_is_non_streaming(client, mocker):
+    """Ollama clients may send stream as the string "false"; it must be coerced
+    to the non-streaming path (a truthy non-empty string would otherwise stream)."""
+    mock_handle_prompt = mocker.patch(f'{_HANDLER}.handle_user_prompt', return_value="resp")
+    mock_builder = mocker.patch(f'{_HANDLER}.response_builder')
+    mock_builder.build_ollama_chat_response.return_value = {"message": {"content": "resp"}}
+
+    payload = {"model": "test-model", "messages": [{"role": "user", "content": "hi"}],
+               "stream": "false"}
+    response = client.post('/api/chat', json=payload)
+
+    assert response.status_code == 200
+    assert 'application/json' in response.content_type
+    # Positional stream argument reached the gateway as False.
+    assert mock_handle_prompt.call_args[0][2] is False
+    mock_builder.build_ollama_chat_response.assert_called_once()
+
+
+def test_chat_stream_string_true_is_streaming(client, mocker):
+    """The string "true" must select the streaming path."""
+
+    def stream_generator():
+        yield '{"message":{"role":"assistant","content":""},"done": true}\n'
+
+    mock_handle_prompt = mocker.patch(f'{_HANDLER}.handle_user_prompt',
+                                      return_value=stream_generator())
+
+    payload = {"model": "test-model", "messages": [{"role": "user", "content": "hi"}],
+               "stream": "true"}
+    response = client.post('/api/chat', json=payload)
+
+    assert response.status_code == 200
+    assert 'application/x-ndjson' in response.content_type
+
+
+def test_generate_combines_system_and_prompt(client, mocker):
+    """/api/generate prepends the 'system' field to the prompt before parsing."""
+    mock_handle_prompt = mocker.patch(f'{_HANDLER}.handle_user_prompt', return_value="")
+    mock_builder = mocker.patch(f'{_HANDLER}.response_builder')
+    mock_builder.build_ollama_generate_response.return_value = {"response": ""}
+
+    payload = {"model": "test-model", "system": "SYS ", "prompt": "hello", "stream": False}
+    client.post('/api/generate', json=payload)
+
+    called_messages = mock_handle_prompt.call_args[0][1]
+    assert called_messages == [{"role": "user", "content": "SYS hello"}]
+
+
+def test_generate_images_without_user_message_creates_one(client, mocker):
+    """Images on a prompt that parses to no user message must not be silently
+    dropped; a user message is created to carry them."""
+    mock_handle_prompt = mocker.patch(f'{_HANDLER}.handle_user_prompt', return_value="")
+    mock_builder = mocker.patch(f'{_HANDLER}.response_builder')
+    mock_builder.build_ollama_generate_response.return_value = {"response": ""}
+
+    payload = {"model": "llava-model", "prompt": "", "images": ["b64data"], "stream": False}
+    client.post('/api/generate', json=payload)
+
+    called_messages = mock_handle_prompt.call_args[0][1]
+    assert called_messages == [{"role": "user", "content": "", "images": ["b64data"]}]
+
+
+def test_chat_non_streaming_dict_result_builds_tool_call_response(client, mocker):
+    """A dict result from the gateway (tool-call surface) must be unpacked into
+    full_text + tool_calls for the Ollama chat response builder, with the model
+    name resolved through api_helpers.get_model_name()."""
+    tool_calls = [{"function": {"name": "lookup", "arguments": {"q": "x"}}}]
+    mocker.patch(f'{_HANDLER}.handle_user_prompt',
+                 return_value={"content": "the answer", "tool_calls": tool_calls})
+    mocker.patch('Middleware.api.api_helpers.get_model_name', return_value='alice:wf')
+    mock_builder = mocker.patch(f'{_HANDLER}.response_builder')
+    mock_builder.build_ollama_chat_response.return_value = {"message": {"content": "the answer"}}
+
+    payload = {"model": "test-model", "messages": [{"role": "user", "content": "hi"}],
+               "stream": False}
+    response = client.post('/api/chat', json=payload)
+
+    assert response.status_code == 200
+    kwargs = mock_builder.build_ollama_chat_response.call_args[1]
+    assert kwargs["full_text"] == "the answer"
+    assert kwargs["tool_calls"] == tool_calls
+    assert kwargs["model_name"] == "alice:wf"
+    assert isinstance(kwargs["request_id"], str)
+
+
+def test_generate_non_streaming_uses_model_name_from_helpers(client, mocker):
+    """The non-streaming /api/generate response reports the model as
+    api_helpers.get_model_name() (username:workflow when an override is active)."""
+    mocker.patch(f'{_HANDLER}.handle_user_prompt', return_value="resp")
+    mocker.patch('Middleware.api.api_helpers.get_model_name', return_value='alice:wf')
+    mock_builder = mocker.patch(f'{_HANDLER}.response_builder')
+    mock_builder.build_ollama_generate_response.return_value = {"response": "resp"}
+
+    response = client.post('/api/generate',
+                           json={"model": "test-model", "prompt": "hi", "stream": False})
+
+    assert response.status_code == 200
+    args, kwargs = mock_builder.build_ollama_generate_response.call_args
+    assert args[0] == "resp"
+    assert kwargs["model"] == "alice:wf"
+    assert isinstance(kwargs["request_id"], str)
+
+
+def test_chat_preserves_images_and_tool_fields_per_message(client, mocker):
+    """/api/chat must carry per-message images and the tool-call fields
+    (tool_calls, tool_call_id, name) through into the internal format."""
+    mock_handle_prompt = mocker.patch(f'{_HANDLER}.handle_user_prompt', return_value="ok")
+    mock_builder = mocker.patch(f'{_HANDLER}.response_builder')
+    mock_builder.build_ollama_chat_response.return_value = {"message": {"content": "ok"}}
+
+    tool_calls = [{"function": {"name": "get_weather", "arguments": {"city": "Oslo"}}}]
+    payload = {
+        "model": "test-model",
+        "messages": [
+            {"role": "user", "content": "look", "images": ["imgdata"]},
+            {"role": "assistant", "tool_calls": tool_calls},
+            {"role": "tool", "content": "12C", "tool_call_id": "call_1", "name": "get_weather"},
+        ],
+        "stream": False,
+    }
+    response = client.post('/api/chat', json=payload)
+
+    assert response.status_code == 200
+    called_messages = mock_handle_prompt.call_args[0][1]
+    assert called_messages[0] == {"role": "user", "content": "look", "images": ["imgdata"]}
+    assert called_messages[1] == {"role": "assistant", "content": "", "tool_calls": tool_calls}
+    assert called_messages[2] == {"role": "tool", "content": "12C",
+                                  "tool_call_id": "call_1", "name": "get_weather"}
+
+
+class TestOllamaStreamingConfigShapes:
+    """/api/chat and /api/generate use different chunk shapes; each route's
+    heartbeat must be parseable as a chunk of ITS protocol."""
+
+    def test_chat_heartbeat_is_message_shaped(self):
+        import json
+        from Middleware.api.handlers.impl.ollama_api_handler import _CHAT_STREAMING_CONFIG
+        heartbeat = json.loads(_CHAT_STREAMING_CONFIG.heartbeat_message)
+        assert heartbeat["message"] == {"role": "assistant", "content": ""}
+        assert heartbeat["done"] is False
+        assert "response" not in heartbeat
+
+    def test_generate_heartbeat_is_response_shaped(self):
+        import json
+        from Middleware.api.handlers.impl.ollama_api_handler import _GENERATE_STREAMING_CONFIG
+        heartbeat = json.loads(_GENERATE_STREAMING_CONFIG.heartbeat_message)
+        assert heartbeat["response"] == ""
+        assert heartbeat["done"] is False
+        assert "message" not in heartbeat

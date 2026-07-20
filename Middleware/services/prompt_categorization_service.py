@@ -1,13 +1,16 @@
 # /Middleware/services/prompt_categorization_service.py
 
 import json
+import logging
 import string
 from typing import List, Dict, Union, Generator
 
 from Middleware.utilities.config_utils import get_active_categorization_workflow_name, get_categories_config, \
     get_max_categorization_attempts
 from Middleware.utilities.sensitive_logging_utils import log_prompt_content
-from Middleware.workflows.managers.workflow_manager import WorkflowManager, logger
+from Middleware.workflows.managers.workflow_manager import WorkflowManager
+
+logger = logging.getLogger(__name__)
 
 
 class PromptCategorizationService:
@@ -180,22 +183,20 @@ class PromptCategorizationService:
         category_data = self._initialize_categories()
         workflow_manager = self._configure_workflow_manager(category_data)
         max_attempts = get_max_categorization_attempts()
-        attempts = 0
 
-        while attempts < max_attempts:
+        for _ in range(max_attempts):
             workflow_result = workflow_manager.run_workflow(
                 messages=messages,
                 request_id=request_id,
                 nonResponder=True,
                 stream=False
             )
-            raw_category_output = workflow_result
 
-            if raw_category_output is None:
-                logger.warning("Categorization workflow returned None. Assigning empty string.")
+            if workflow_result is None:
+                logger.warning("Categorization workflow returned None. Defaulting category to UNKNOWN.")
                 category = "UNKNOWN"
             else:
-                category = raw_category_output.strip()
+                category = workflow_result.strip()
 
             log_prompt_content(logger, "Output from the LLM", category)
             logger.debug(self.categories)
@@ -205,7 +206,6 @@ class PromptCategorizationService:
 
             if matched_category is not None:
                 return matched_category
-            attempts += 1
 
         return "UNKNOWN"
 

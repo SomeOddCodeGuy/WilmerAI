@@ -70,16 +70,16 @@ Each `chat_user_prompt_*` variable has a `templated_user_prompt_*` counterpart t
 | `{Discussion_Id}` | Current conversation identifier. Empty string if none. |
 | `{time_context_summary}` | Natural language summary of conversation timeline. |
 
-**Do NOT use `{current_chat_summary}`** -- it is defined but never populated. Use `GetCurrentSummaryFromFile` node instead.
+**Do NOT use `{current_chat_summary}`**; it is defined but never populated. Use `GetCurrentSummaryFromFile` node instead.
 
 ## Special Placeholders (no curly braces)
 
 These are replaced within specific node types, not by the general variable system:
 
-- `[TextChunk]` -- text block in memory generation workflows
-- `[IMAGE_BLOCK]` -- image description in `ImageProcessor.message`
-- `[Memory_file]`, `[Full_Memory_file]`, `[Chat_Summary]` -- memory file content in memory workflows
-- `[LATEST_MEMORIES]`, `[CHAT_SUMMARY]` -- used by `chatSummarySummarizer`
+- `[TextChunk]`: text block in memory generation workflows
+- `[IMAGE_BLOCK]`: image description in `ImageProcessor.message`
+- `[Memory_file]`, `[Full_Memory_file]`, `[Chat_Summary]`: memory file content in memory workflows
+- `[LATEST_MEMORIES]`, `[CHAT_SUMMARY]`: used by `chatSummarySummarizer`
 
 ## Important: User-Defined Variables Are Limited
 

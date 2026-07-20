@@ -200,6 +200,77 @@ class TestPreparePayload:
         # All messages should be in the messages array
         assert len(payload["messages"]) == 3
 
+    def test_warns_when_first_message_is_not_user(self, claude_handler, mocker):
+        """
+        Claude requires the messages array to start with a 'user' message. The
+        handler cannot repair this, but it must log a warning so a misconfigured
+        workflow is diagnosable; the messages are passed through unchanged.
+        """
+        mock_logger_warning = mocker.patch.object(
+            logging.getLogger('Middleware.llmapis.handlers.impl.claude_api_handler'), 'warning')
+        conversation = [
+            {"role": "assistant", "content": "I begin."},
+            {"role": "user", "content": "Odd, but continue."}
+        ]
+        payload = claude_handler._prepare_payload(conversation=conversation, system_prompt=None, prompt=None)
+
+        assert payload["messages"] == conversation
+        warning_calls = [str(call) for call in mock_logger_warning.call_args_list]
+        assert any("requires messages to start with a 'user' message" in call for call in warning_calls)
+
+    def test_unsupported_gen_input_param_filtered_with_warning(self, claude_handler, mocker):
+        """
+        Tests that a gen_input key Claude does not support (e.g. repeat_penalty)
+        is removed from the payload and a warning is logged.
+        """
+        mock_logger_warning = mocker.patch.object(
+            logging.getLogger('Middleware.llmapis.handlers.impl.claude_api_handler'), 'warning')
+        claude_handler.gen_input["repeat_penalty"] = 1.1
+
+        conversation = [{"role": "user", "content": "Hi!"}]
+        payload = claude_handler._prepare_payload(conversation=conversation, system_prompt=None, prompt=None)
+
+        assert "repeat_penalty" not in payload
+        # Supported parameters survive the filter
+        assert payload["temperature"] == 0.7
+        assert payload["top_p"] == 0.9
+
+        warning_calls = [str(call) for call in mock_logger_warning.call_args_list]
+        assert any("Removing unsupported Claude API parameters" in call and "repeat_penalty" in call
+                   for call in warning_calls)
+
+    def test_prefill_trailing_whitespace_stripped(self, claude_handler):
+        """
+        Tests that a trailing assistant (prefill) message ending in whitespace has
+        the whitespace stripped, since Claude rejects prefill with trailing whitespace.
+        """
+        conversation = [
+            {"role": "user", "content": "Give me JSON"},
+            {"role": "assistant", "content": "Here is the JSON:   "}
+        ]
+        payload = claude_handler._prepare_payload(conversation=conversation, system_prompt=None, prompt=None)
+
+        assert payload["messages"] == [
+            {"role": "user", "content": "Give me JSON"},
+            {"role": "assistant", "content": "Here is the JSON:"}
+        ]
+
+    def test_prefill_non_empty_trailing_assistant_preserved(self, claude_handler):
+        """
+        Tests that a non-empty trailing assistant message without trailing whitespace
+        is preserved untouched as a prefill.
+        """
+        conversation = [
+            {"role": "user", "content": "Reply with a JSON object"},
+            {"role": "assistant", "content": "{\"key\":"}
+        ]
+        payload = claude_handler._prepare_payload(conversation=conversation, system_prompt=None, prompt=None)
+
+        assert payload["messages"] == [
+            {"role": "user", "content": "Reply with a JSON object"},
+            {"role": "assistant", "content": "{\"key\":"}
+        ]
+
 
 class TestParseNonStreamResponse:
     """
@@ -256,6 +327,20 @@ class TestParseNonStreamResponse:
         mock_logger_error.assert_called_once()
         assert f"Could not find content in Claude response: {response_json}" in mock_logger_error.call_args[0][0]
 
+    def test_non_dict_content_blocks_return_empty(self, claude_handler, mocker):
+        """
+        Tests that content blocks which are not dicts (malformed response) are
+        logged and produce an empty string instead of escaping as AttributeError.
+        """
+        mock_logger_error = mocker.patch.object(
+            logging.getLogger('Middleware.llmapis.handlers.impl.claude_api_handler'), 'error')
+
+        response_json = {'content': ["not-a-dict"]}
+        result = claude_handler._parse_non_stream_response(response_json)
+
+        assert result == ""
+        mock_logger_error.assert_called_once()
+
 
 class TestProcessStreamData:
     """
@@ -292,6 +377,14 @@ class TestProcessStreamData:
         result = claude_handler._process_stream_data("not json")
         assert result is None
         mock_logger_warning.assert_called_once()
+
+    def test_non_dict_json_is_skipped_not_fatal(self, claude_handler, mocker):
+        """Tests that a data line whose JSON parses to a non-dict is warned and skipped."""
+        mock_logger_warning = mocker.patch.object(
+            logging.getLogger('Middleware.llmapis.handlers.impl.claude_api_handler'), 'warning')
+        assert claude_handler._process_stream_data("123") is None
+        assert claude_handler._process_stream_data('[1, 2]') is None
+        assert mock_logger_warning.call_count == 2
 
     def test_unrecognized_event_type_returns_none(self, claude_handler):
         """Tests that unrecognized event types (ping, message_start) return None."""
@@ -379,6 +472,24 @@ class TestProcessStreamData:
         })
         result = claude_handler._process_stream_data(data_str)
         assert result == {'token': '', 'finish_reason': 'tool_calls'}
+
+    @pytest.mark.parametrize(
+        "event",
+        [
+            {"type": "message_delta", "delta": {}},
+            {"type": "message_delta", "delta": {"stop_reason": None}},
+            {"type": "content_block_delta", "delta": {"type": "citations_delta", "citation": {}}},
+            {"type": "content_block_delta", "delta": {}},
+        ],
+        ids=["message_delta_no_stop_reason", "message_delta_null_stop_reason",
+             "content_block_delta_unknown_type", "content_block_delta_no_type"]
+    )
+    def test_events_without_actionable_data_return_none(self, claude_handler, event):
+        """
+        Tests that message_delta events without a stop_reason and
+        content_block_delta events with an unknown delta type return None.
+        """
+        assert claude_handler._process_stream_data(json.dumps(event)) is None
 
     def test_full_tool_call_sequence(self, claude_handler):
         """Tests a complete tool call streaming sequence end-to-end."""
@@ -497,6 +608,32 @@ class TestProcessSingleImageSource:
             "source": {
                 "type": "url",
                 "url": "http://example.local/photo.jpg",
+            }
+        }
+
+    def test_raw_base64_real_png_detected_via_pil(self):
+        """
+        A raw base64 string containing a real PNG is sniffed by PIL and the
+        media_type is set to image/png rather than the image/jpeg fallback.
+        """
+        import base64
+        import io
+
+        from PIL import Image
+
+        buffer = io.BytesIO()
+        Image.new("RGB", (16, 16), color=(120, 30, 200)).save(buffer, format="PNG")
+        source = base64.b64encode(buffer.getvalue()).decode("ascii")
+        # Precondition: must pass the raw-base64 structural gate (len >= 100, % 4 == 0)
+        assert len(source) >= 100 and len(source) % 4 == 0
+
+        result = ClaudeApiHandler._process_single_image_source(source)
+        assert result == {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": source,
             }
         }
 
@@ -885,6 +1022,17 @@ class TestConvertToolChoiceToClaudeFormat:
         result = ClaudeApiHandler._convert_tool_choice_to_claude_format("unknown_value")
         assert result is None
 
+    @pytest.mark.parametrize("choice", [
+        {"type": "function", "function": {}},
+        {"type": "function"},
+        {"type": "function", "function": {"name": ""}},
+    ], ids=["empty_function", "missing_function", "empty_name"])
+    def test_dict_without_function_name_returns_none(self, choice):
+        """A dict tool_choice lacking a usable function name cannot be mapped to
+        Claude's {'type': 'tool', 'name': ...} form and must return None (so no
+        malformed tool_choice is sent)."""
+        assert ClaudeApiHandler._convert_tool_choice_to_claude_format(choice) is None
+
 
 class TestPreparePayloadWithTools:
     """Tests for ClaudeApiHandler._prepare_payload() with tools and tool_choice."""
@@ -906,14 +1054,13 @@ class TestPreparePayloadWithTools:
         )
         assert "tools" in payload
         assert len(payload["tools"]) == 1
-        assert payload["tools"][0]["name"] == "get_weather"
-        assert payload["tools"][0]["description"] == "Get weather"
-        assert payload["tools"][0]["input_schema"] == {
-            "type": "object", "properties": {"city": {"type": "string"}}
+        # Exact equality: the converted tool must have exactly the Claude-format
+        # keys, with no OpenAI wrapper keys ('type', 'function') remaining.
+        assert payload["tools"][0] == {
+            "name": "get_weather",
+            "description": "Get weather",
+            "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}}
         }
-        # Should NOT have the OpenAI wrapper keys
-        assert "type" not in payload["tools"][0] or payload["tools"][0].get("type") != "function"
-        assert "function" not in payload["tools"][0]
 
     def test_tool_choice_converted_and_included(self, claude_handler):
         """tool_choice='auto' appears in payload as {'type': 'auto'}."""
@@ -935,6 +1082,19 @@ class TestPreparePayloadWithTools:
             tools=tools, tool_choice=None
         )
         assert "tools" in payload
+        assert "tool_choice" not in payload
+
+    def test_tool_choice_string_none_omits_tools_entirely(self, claude_handler):
+        """A string tool_choice of 'none' forbids tool use; Claude has no 'none', so
+        both tools and tool_choice must be omitted (otherwise Claude defaults to auto
+        and could call a forbidden tool)."""
+        conversation = [{"role": "user", "content": "Help me"}]
+        tools = [{"type": "function", "function": {"name": "helper", "description": "Help"}}]
+        payload = claude_handler._prepare_payload(
+            conversation=conversation, system_prompt=None, prompt=None,
+            tools=tools, tool_choice="none"
+        )
+        assert "tools" not in payload
         assert "tool_choice" not in payload
 
     def test_no_tools_no_tool_keys_in_payload(self, claude_handler):
@@ -1045,6 +1205,19 @@ class TestParseNonStreamResponseToolCalls:
         result = claude_handler._parse_non_stream_response(response_json)
         assert result["finish_reason"] == "end_turn"
 
+    def test_tool_use_missing_stop_reason_defaults_to_tool_calls(self, claude_handler):
+        """A response with tool_use blocks but no stop_reason key still reports
+        finish_reason 'tool_calls' (the tool_use default), so callers always see
+        the tool-call signal."""
+        response_json = {
+            "content": [
+                {"type": "tool_use", "id": "tu_1", "name": "f", "input": {"a": 1}}
+            ]
+        }
+        result = claude_handler._parse_non_stream_response(response_json)
+        assert result["finish_reason"] == "tool_calls"
+        assert result["tool_calls"][0]["id"] == "tu_1"
+
 
 class TestProcessStreamDataToolCalls:
     """
@@ -1150,3 +1323,299 @@ class TestProcessStreamDataToolCalls:
         assert r4["tool_calls"][0]["id"] == "toolu_mixed"
         assert r4["tool_calls"][0]["function"]["name"] == "lookup"
         assert r4["token"] == ""
+
+
+class TestToolRoundTripConversion:
+    """OpenAI-format tool turns (assistant tool_calls / role "tool") must be
+    converted to Claude's tool_use / tool_result blocks; the Messages API
+    rejects the OpenAI shapes with a 400, which broke the second request of
+    every tool loop pointed at a Claude endpoint."""
+
+    def _tool_conversation(self):
+        return [
+            {"role": "user", "content": "What's the weather in Tokyo?"},
+            {"role": "assistant", "content": "",
+             "tool_calls": [{"id": "call_1", "type": "function",
+                             "function": {"name": "get_weather", "arguments": '{"city": "Tokyo"}'}}]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "22C, sunny"},
+            {"role": "user", "content": "Thanks, and Osaka?"},
+        ]
+
+    def test_no_tool_role_or_openai_keys_reach_claude(self, claude_handler):
+        payload = claude_handler._prepare_payload(
+            conversation=self._tool_conversation(), system_prompt=None, prompt=None)
+        roles = {m.get("role") for m in payload["messages"]}
+        assert "tool" not in roles
+        assert not any("tool_calls" in m or "tool_call_id" in m for m in payload["messages"])
+
+    def test_assistant_tool_calls_become_tool_use_blocks(self, claude_handler):
+        payload = claude_handler._prepare_payload(
+            conversation=self._tool_conversation(), system_prompt=None, prompt=None)
+        assistant = payload["messages"][1]
+        assert assistant["role"] == "assistant"
+        assert assistant["content"] == [
+            {"type": "tool_use", "id": "call_1", "name": "get_weather",
+             "input": {"city": "Tokyo"}}
+        ]
+
+    def test_tool_result_and_followup_user_merge_into_one_user_turn(self, claude_handler):
+        payload = claude_handler._prepare_payload(
+            conversation=self._tool_conversation(), system_prompt=None, prompt=None)
+        messages = payload["messages"]
+        assert len(messages) == 3
+        final_user = messages[2]
+        assert final_user["role"] == "user"
+        assert final_user["content"][0] == {
+            "type": "tool_result", "tool_use_id": "call_1", "content": "22C, sunny"}
+        assert final_user["content"][1] == {"type": "text", "text": "Thanks, and Osaka?"}
+
+    def test_assistant_text_precedes_tool_use_block(self, claude_handler):
+        conversation = [
+            {"role": "user", "content": "Weather?"},
+            {"role": "assistant", "content": "Let me check.",
+             "tool_calls": [{"id": "call_1", "type": "function",
+                             "function": {"name": "get_weather", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "sunny"},
+        ]
+        payload = claude_handler._prepare_payload(conversation=conversation, system_prompt=None, prompt=None)
+        assistant = payload["messages"][1]
+        assert assistant["content"][0] == {"type": "text", "text": "Let me check."}
+        assert assistant["content"][1]["type"] == "tool_use"
+
+    def test_multiple_tool_results_merge_into_one_user_turn(self, claude_handler):
+        conversation = [
+            {"role": "user", "content": "Weather in two cities?"},
+            {"role": "assistant", "content": "",
+             "tool_calls": [
+                 {"id": "call_1", "type": "function",
+                  "function": {"name": "get_weather", "arguments": '{"city": "Tokyo"}'}},
+                 {"id": "call_2", "type": "function",
+                  "function": {"name": "get_weather", "arguments": '{"city": "Osaka"}'}},
+             ]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "22C"},
+            {"role": "tool", "tool_call_id": "call_2", "content": "25C"},
+        ]
+        payload = claude_handler._prepare_payload(conversation=conversation, system_prompt=None, prompt=None)
+        messages = payload["messages"]
+        assert len(messages) == 3
+        assert [b["type"] for b in messages[1]["content"]] == ["tool_use", "tool_use"]
+        result_blocks = messages[2]["content"]
+        assert [b["tool_use_id"] for b in result_blocks] == ["call_1", "call_2"]
+
+    def test_interleaved_tool_user_tool_keeps_results_leading_the_turn(self, claude_handler):
+        """A tool -> user -> tool interleave merges into one user turn, and the
+        late tool_result must be inserted before the merged text block, since
+        Anthropic rejects user turns whose tool_result blocks do not lead."""
+        conversation = [
+            {"role": "user", "content": "Weather in two cities?"},
+            {"role": "assistant", "content": "",
+             "tool_calls": [
+                 {"id": "call_1", "type": "function",
+                  "function": {"name": "get_weather", "arguments": '{"city": "Tokyo"}'}},
+                 {"id": "call_2", "type": "function",
+                  "function": {"name": "get_weather", "arguments": '{"city": "Osaka"}'}},
+             ]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "22C"},
+            {"role": "user", "content": "Hurry up please."},
+            {"role": "tool", "tool_call_id": "call_2", "content": "25C"},
+        ]
+        payload = claude_handler._prepare_payload(conversation=conversation, system_prompt=None, prompt=None)
+        merged_turn = payload["messages"][2]
+        assert merged_turn["role"] == "user"
+        assert [b["type"] for b in merged_turn["content"]] == ["tool_result", "tool_result", "text"]
+        assert [b.get("tool_use_id") for b in merged_turn["content"][:2]] == ["call_1", "call_2"]
+
+    def test_unparseable_arguments_degrade_to_empty_input(self, claude_handler):
+        conversation = [
+            {"role": "user", "content": "Go"},
+            {"role": "assistant", "content": "",
+             "tool_calls": [{"id": "call_1", "type": "function",
+                             "function": {"name": "broken", "arguments": '{"unterminated'}}]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "r"},
+        ]
+        payload = claude_handler._prepare_payload(conversation=conversation, system_prompt=None, prompt=None)
+        tool_use = payload["messages"][1]["content"][0]
+        assert tool_use["input"] == {}
+
+    def test_dict_arguments_accepted_as_is(self, claude_handler):
+        conversation = [
+            {"role": "user", "content": "Go"},
+            {"role": "assistant", "content": "",
+             "tool_calls": [{"id": "call_1", "type": "function",
+                             "function": {"name": "calc", "arguments": {"x": 1}}}]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "2"},
+        ]
+        payload = claude_handler._prepare_payload(conversation=conversation, system_prompt=None, prompt=None)
+        assert payload["messages"][1]["content"][0]["input"] == {"x": 1}
+
+    def test_conversation_without_tools_unchanged(self, claude_handler):
+        conversation = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there"},
+            {"role": "user", "content": "How are you?"},
+        ]
+        payload = claude_handler._prepare_payload(conversation=conversation, system_prompt=None, prompt=None)
+        assert payload["messages"] == conversation
+
+    def test_prefill_check_skips_block_list_content(self, claude_handler):
+        """A trailing assistant turn holding tool_use blocks is not a prefill and
+        must not crash the trailing-whitespace validation."""
+        conversation = [
+            {"role": "user", "content": "Go"},
+            {"role": "assistant", "content": "",
+             "tool_calls": [{"id": "call_1", "type": "function",
+                             "function": {"name": "calc", "arguments": "{}"}}]},
+        ]
+        payload = claude_handler._prepare_payload(conversation=conversation, system_prompt=None, prompt=None)
+        assert payload["messages"][-1]["content"][0]["type"] == "tool_use"
+
+    @pytest.mark.parametrize("residue", [[], None], ids=["empty_list", "none"])
+    def test_assistant_empty_tool_calls_key_stripped(self, claude_handler, residue):
+        """Some OpenAI-format clients emit 'tool_calls': [] (or null) on every
+        assistant turn. There is nothing to convert, but Claude rejects unknown
+        message fields with a 400, so the key must be stripped, not passed
+        through (regression: it previously leaked to the API)."""
+        conversation = [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello", "tool_calls": residue},
+            {"role": "user", "content": "again"},
+        ]
+        payload = claude_handler._prepare_payload(conversation=conversation, system_prompt=None, prompt=None)
+        assert payload["messages"] == [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+            {"role": "user", "content": "again"},
+        ]
+
+    def test_non_dict_tool_call_entries_skipped(self, claude_handler):
+        """A malformed non-dict entry inside tool_calls is skipped; the valid
+        entries are still converted to tool_use blocks."""
+        conversation = [
+            {"role": "user", "content": "Go"},
+            {"role": "assistant", "content": "",
+             "tool_calls": ["garbage-entry",
+                            {"id": "call_ok", "type": "function",
+                             "function": {"name": "calc", "arguments": '{"x": 1}'}}]},
+            {"role": "tool", "tool_call_id": "call_ok", "content": "2"},
+        ]
+        payload = claude_handler._prepare_payload(conversation=conversation, system_prompt=None, prompt=None)
+        assistant_blocks = payload["messages"][1]["content"]
+        assert assistant_blocks == [
+            {"type": "tool_use", "id": "call_ok", "name": "calc", "input": {"x": 1}}
+        ]
+
+    def test_assistant_block_list_content_preserved_before_tool_use(self):
+        """Defensive branch (direct call): an assistant message whose content is
+        already a block list keeps those blocks, with tool_use blocks appended
+        after them. Unreachable via _prepare_payload today (raw list content
+        crashes return_brackets in the base builder first), so pinned directly."""
+        messages = [
+            {"role": "user", "content": "Go"},
+            {"role": "assistant",
+             "content": [{"type": "text", "text": "Thinking done."}],
+             "tool_calls": [{"id": "call_1", "type": "function",
+                             "function": {"name": "calc", "arguments": "{}"}}]},
+        ]
+        converted = ClaudeApiHandler._convert_tool_messages_for_claude(messages)
+        assistant_blocks = converted[1]["content"]
+        assert assistant_blocks[0] == {"type": "text", "text": "Thinking done."}
+        assert assistant_blocks[1]["type"] == "tool_use"
+        assert assistant_blocks[1]["id"] == "call_1"
+
+    def test_tool_call_missing_id_gets_synthetic_id(self, claude_handler):
+        """A tool_call without an id gets a deterministic synthetic id
+        (toolcall_<message_index>_<call_index>) so the tool_use block is valid."""
+        conversation = [
+            {"role": "user", "content": "Go"},
+            {"role": "assistant", "content": "",
+             "tool_calls": [{"type": "function",
+                             "function": {"name": "calc", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "x", "content": "r"},
+        ]
+        payload = claude_handler._prepare_payload(conversation=conversation, system_prompt=None, prompt=None)
+        tool_use = payload["messages"][1]["content"][0]
+        assert tool_use["id"] == "toolcall_1_0"
+
+    def test_tool_message_missing_tool_call_id_becomes_unknown(self, claude_handler):
+        """A role 'tool' message without a tool_call_id still converts, with the
+        tool_use_id degraded to 'unknown' rather than crashing or leaking None."""
+        conversation = [
+            {"role": "user", "content": "Go"},
+            {"role": "assistant", "content": "",
+             "tool_calls": [{"id": "call_1", "type": "function",
+                             "function": {"name": "calc", "arguments": "{}"}}]},
+            {"role": "tool", "content": "result-without-id"},
+        ]
+        payload = claude_handler._prepare_payload(conversation=conversation, system_prompt=None, prompt=None)
+        result_block = payload["messages"][2]["content"][0]
+        assert result_block == {"type": "tool_result", "tool_use_id": "unknown",
+                                "content": "result-without-id"}
+
+    @pytest.mark.parametrize("raw_content, expected", [
+        (123, "123"),
+        (None, ""),
+    ], ids=["int_content", "none_content"])
+    def test_tool_message_non_string_content_stringified(self, raw_content, expected):
+        """Defensive branch (direct call): non-string tool result content is
+        stringified (None becomes empty) because Claude tool_result content must
+        be a string. Unreachable via _prepare_payload today (non-string content
+        crashes return_brackets in the base builder first), so pinned directly."""
+        messages = [
+            {"role": "user", "content": "Go"},
+            {"role": "assistant", "content": "",
+             "tool_calls": [{"id": "call_1", "type": "function",
+                             "function": {"name": "calc", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "call_1", "content": raw_content},
+        ]
+        converted = ClaudeApiHandler._convert_tool_messages_for_claude(messages)
+        result_block = converted[2]["content"][0]
+        assert result_block["content"] == expected
+
+    def test_user_image_message_after_tool_results_merges_into_tool_result_turn(self, claude_handler):
+        """End-to-end reachable path for the list-content user merge: a user
+        message carrying images right after tool results has its content turned
+        into blocks by the image builder, and those blocks are extended into the
+        tool_result user turn (tool_result blocks must lead the turn)."""
+        conversation = [
+            {"role": "user", "content": "Go"},
+            {"role": "assistant", "content": "",
+             "tool_calls": [{"id": "call_1", "type": "function",
+                             "function": {"name": "calc", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "42"},
+            {"role": "user", "content": "And this image?",
+             "images": ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="]},
+        ]
+        payload = claude_handler._prepare_payload(conversation=conversation, system_prompt=None, prompt=None)
+        merged_turn = payload["messages"][2]
+        assert merged_turn["role"] == "user"
+        assert merged_turn["content"][0] == {
+            "type": "tool_result", "tool_use_id": "call_1", "content": "42"}
+        # The image builder produced [image, text] blocks; both merged after the result.
+        assert merged_turn["content"][1]["type"] == "image"
+        assert merged_turn["content"][1]["source"]["media_type"] == "image/png"
+        assert merged_turn["content"][2] == {"type": "text", "text": "And this image?"}
+        assert len(payload["messages"]) == 3
+
+    @pytest.mark.parametrize("bad_arguments", ['[1, 2]', '"just a string"', '   '],
+                             ids=["json_array", "json_string", "whitespace_only"])
+    def test_non_object_arguments_degrade_to_empty_input(self, claude_handler, bad_arguments):
+        """Arguments that are valid JSON but not an object (or blank) degrade to
+        an empty input dict, because Claude rejects non-object tool_use input."""
+        conversation = [
+            {"role": "user", "content": "Go"},
+            {"role": "assistant", "content": "",
+             "tool_calls": [{"id": "call_1", "type": "function",
+                             "function": {"name": "calc", "arguments": bad_arguments}}]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "r"},
+        ]
+        payload = claude_handler._prepare_payload(conversation=conversation, system_prompt=None, prompt=None)
+        assert payload["messages"][1]["content"][0]["input"] == {}
+
+    def test_non_dict_message_passes_through_direct_call(self):
+        """Defensive branch of the static converter: a non-dict message entry is
+        passed through untouched. Unreachable via _prepare_payload (the base
+        builder's role-correction dict-splat would raise first), so it is pinned
+        via a direct call."""
+        messages = ["stray-string", {"role": "user", "content": "hi"}]
+        converted = ClaudeApiHandler._convert_tool_messages_for_claude(messages)
+        assert converted == ["stray-string", {"role": "user", "content": "hi"}]

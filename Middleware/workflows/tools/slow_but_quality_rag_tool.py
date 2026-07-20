@@ -4,15 +4,19 @@ import os
 import re
 import threading
 from copy import deepcopy
-from typing import List, Dict, Any
+from dataclasses import replace as dc_replace
+from typing import List, Dict, Any, Optional
 
+from Middleware.services.embedding_service import EmbeddingService
 from Middleware.services.llm_service import LlmHandlerService
 from Middleware.services.memory_service import MemoryService
-from Middleware.utilities import vector_db_utils
+from Middleware.utilities import vector_db_utils, vector_math_utils
 from Middleware.utilities.config_utils import get_discussion_memory_file_path, get_endpoint_config, load_config, \
-    get_discussion_id_workflow_path, get_discussion_condensation_tracker_file_path, get_estimation_level_multiplier
+    get_discussion_id_workflow_path, get_discussion_condensation_tracker_file_path, get_estimation_level_multiplier, \
+    get_discussion_state_document_file_path
 from Middleware.utilities.file_utils import read_chunks_with_hashes, \
-    update_chunks_with_hashes, read_condensation_tracker, write_condensation_tracker
+    update_chunks_with_hashes, read_condensation_tracker, write_condensation_tracker, \
+    read_plain_text_file, write_plain_text_file
 from Middleware.utilities.hashing_utils import extract_text_blocks_from_hashed_chunks, find_last_matching_hash_message, \
     chunk_messages_with_hashes, hash_single_message
 from Middleware.utilities.prompt_extraction_utils import extract_last_n_turns
@@ -31,7 +35,7 @@ _MAX_CONDENSATION_LOCKS = 500
 # Bounded wait (seconds) for the per-discussion condensation lock. Generous on purpose:
 # a concurrent request condensing a large memory file can legitimately hold the lock for
 # minutes, and the bound only exists to stop a permanently-stuck holder from hanging the
-# (often post-returnToUser) memory node — and its reader greenlet — for the life of the
+# (often post-returnToUser) memory node, and its reader greenlet, for the life of the
 # process. Override per workflow with 'condensationLockTimeoutSeconds'; set it to 0 (or
 # negative) to wait indefinitely (the original, unbounded behavior).
 _DEFAULT_CONDENSATION_LOCK_TIMEOUT_SECONDS = 600
@@ -90,7 +94,7 @@ class SlowButQualityRAGTool:
                 logger.error(f"Failed to decode extracted JSON string: {json_str}. Error: {e}")
                 return None
         else:
-            logger.warning(f"Could not find a JSON block or object in the LLM output.")
+            logger.warning("Could not find a JSON block or object in the LLM output.")
             return None
 
     def generate_and_store_vector_memories(self, hashed_chunks: List[tuple], config: Dict,
@@ -131,10 +135,7 @@ JSON Output:"""
                 endpoint_data.get("maxContextTokenSize", 4096), max_tokens
             )
 
-        # Create a temporary context for the specific LLM handler needed for this task
-        temp_llm_context = deepcopy(context)
-        temp_llm_context.llm_handler = llm_handler
-        temp_llm_context.config = config  # Ensure the correct node config is used
+        temp_llm_context = dc_replace(context, llm_handler=llm_handler, config=config)
 
         total_memories_stored = 0
 
@@ -170,32 +171,201 @@ JSON Output:"""
                     memories_to_process = parsed_json
 
                 successful_adds = 0
+                stored_summaries = []
+                stored_id_text_pairs = []
                 for memory_metadata in memories_to_process:
                     if isinstance(memory_metadata, dict):
                         required_keys = ['title', 'summary', 'entities', 'key_phrases']
                         if all(k in memory_metadata for k in required_keys):
                             memory_summary = memory_metadata['summary']
-                            vector_db_utils.add_memory_to_vector_db(
+                            memory_id = vector_db_utils.add_memory_to_vector_db(
                                 context.discussion_id,
                                 memory_summary,
                                 json.dumps(memory_metadata),
                                 api_key_hash=context.api_key_hash,
+                                index_topics=bool(config.get('vectorMemoryIndexTopics', False)),
                             )
-                            successful_adds += 1
+                            if memory_id is not None:
+                                successful_adds += 1
+                                stored_summaries.append(memory_summary)
+                                stored_id_text_pairs.append((memory_id, memory_summary))
 
                 if successful_adds > 0:
                     # Write the hash immediately after successfully storing memories for this chunk
-                    # This makes the process resumable - if interrupted, we can pick up from the last hash
+                    # This makes the process resumable: if interrupted, we can pick up from the last hash
                     vector_db_utils.add_vector_check_hash(
                         context.discussion_id, chunk_hash, api_key_hash=context.api_key_hash
                     )
                     logger.info(
                         f"Successfully generated and stored {successful_adds} vector memory/memories for discussion {context.discussion_id}. Hash logged for resumability.")
                     total_memories_stored += successful_adds
+                    # Both run after the hash log on purpose: a failure in either must
+                    # not cause this chunk's facts to be re-extracted (and duplicated in
+                    # the vector DB) on the next pass. The facts stay searchable either way.
+                    self._store_embeddings_for_new_memories(config, context, stored_id_text_pairs)
+                    self._update_state_document(config, context, stored_summaries)
+                elif memories_to_process:
+                    logger.error(
+                        "Vector DB rejected all %d parsed memory/memories for this chunk; "
+                        "hash not logged, chunk will be retried on the next pass.",
+                        len(memories_to_process))
                 else:
-                    logger.error(f"Received empty response from LLM/workflow for vector memory generation.")
+                    logger.error("Received empty response from LLM/workflow for vector memory generation.")
 
         return total_memories_stored
+
+    def _store_embeddings_for_new_memories(self, config: Dict, context: ExecutionContext,
+                                           id_text_pairs: List[tuple]) -> None:
+        """
+        Embeds newly stored vector memories, plus a lazy backfill batch.
+
+        Runs only when 'embeddingEndpointName' is set in the discussion ID
+        workflow settings. In addition to the just-stored memories, up to
+        'embeddingBackfillBatchSize' (default 20) older memories that lack an
+        embedding for the endpoint's model are embedded in the same call, so a
+        pre-embedding database heals gradually with no bulk migration.
+
+        Best-effort by design: any failure is logged and swallowed. Memories
+        without embeddings remain fully searchable via BM25, and hybrid search
+        degrades gracefully, so a down embeddings endpoint costs nothing but
+        semantic coverage.
+
+        Args:
+            config (Dict): The discussion ID workflow settings dictionary.
+            context (ExecutionContext): The current workflow execution context.
+            id_text_pairs (List[tuple]): (memory_id, memory_text) pairs for the
+                memories just stored in this chunk.
+        """
+        endpoint_name = config.get('embeddingEndpointName')
+        if not endpoint_name:
+            return
+
+        service = None
+        try:
+            service = EmbeddingService(endpoint_name)
+            pairs = list(id_text_pairs)
+
+            backfill_limit = config.get('embeddingBackfillBatchSize', 20)
+            if not isinstance(backfill_limit, int) or isinstance(backfill_limit, bool):
+                logger.warning(
+                    "embeddingBackfillBatchSize must be an integer (0 disables backfill). "
+                    "Ignoring: %r", backfill_limit)
+                backfill_limit = 0
+            if backfill_limit > 0:
+                known_ids = {memory_id for memory_id, _ in pairs}
+                backlog = vector_db_utils.get_memories_without_embeddings(
+                    context.discussion_id, service.model_name, limit=backfill_limit,
+                    api_key_hash=context.api_key_hash)
+                pairs.extend((row['id'], row['memory_text']) for row in backlog
+                             if row['id'] not in known_ids)
+
+            if not pairs:
+                return
+
+            vectors = service.get_embeddings([text for _, text in pairs],
+                                             request_id=context.request_id)
+            if not vectors:
+                logger.error("Embeddings endpoint '%s' returned no vectors; skipping embedding storage.",
+                             endpoint_name)
+                return
+
+            blobs = [(memory_id, vector_math_utils.vector_to_blob(vector))
+                     for (memory_id, _), vector in zip(pairs, vectors)]
+            stored = vector_db_utils.add_embeddings_to_db(
+                context.discussion_id, blobs, service.model_name,
+                api_key_hash=context.api_key_hash)
+            logger.info("Stored %d embedding(s) for discussion %s (model '%s').",
+                        stored, context.discussion_id, service.model_name)
+        except Exception as e:
+            logger.error("Failed to store embeddings for discussion '%s': %s",
+                         context.discussion_id, e, exc_info=True)
+        finally:
+            if service:
+                service.close()
+
+    # Only guard against a shrink when the existing document has meaningful size;
+    # small documents legitimately fluctuate while the early conversation settles.
+    STATE_DOCUMENT_SHRINK_GUARD_FLOOR_CHARS = 500
+
+    def _update_state_document(self, config: Dict, context: ExecutionContext,
+                               new_memory_texts: List[str]) -> None:
+        """
+        Merges newly created vector memories into the discussion's state document.
+
+        Runs the sub-workflow named by 'stateDocumentWorkflowName' with two scoped
+        inputs: the new memory texts (agent1Input) and the current state document
+        (agent2Input). The workflow's final output replaces the document on disk.
+        The update is best-effort: any failure is logged and swallowed so that
+        vector memory storage, which has already succeeded and been hash-logged,
+        is never affected.
+
+        Safety guards protect the existing document from a misbehaving LLM:
+        an empty output is rejected; an output that shrinks the document below
+        'stateDocumentMinRetentionRatio' (default 0.5) of its previous size is
+        rejected; and the previous version is copied to 'state_document.md.bak'
+        before every overwrite.
+
+        Args:
+            config (Dict): The discussion ID workflow settings dictionary.
+            context (ExecutionContext): The current workflow execution context.
+            new_memory_texts (List[str]): The memory summaries just stored for one chunk.
+        """
+        if not config.get('useStateDocument', False):
+            return
+        workflow_name = config.get('stateDocumentWorkflowName')
+        if not workflow_name:
+            logger.error(
+                "useStateDocument is true but no stateDocumentWorkflowName is configured; "
+                "skipping state document update.")
+            return
+        if not new_memory_texts:
+            return
+
+        try:
+            filepath = get_discussion_state_document_file_path(
+                context.discussion_id, api_key_hash=context.api_key_hash)
+            current_document = read_plain_text_file(filepath, encryption_key=context.encryption_key)
+
+            new_facts = '\n'.join(f'- {text}' for text in new_memory_texts)
+            scoped_inputs = [new_facts, current_document]
+
+            updated_document = context.workflow_manager.run_custom_workflow(
+                workflow_name=workflow_name,
+                request_id=context.request_id,
+                discussion_id=context.discussion_id,
+                messages=context.messages,
+                non_responder=True,
+                scoped_inputs=scoped_inputs,
+                api_key=context.api_key
+            )
+
+            if not updated_document or not str(updated_document).strip():
+                logger.error(
+                    "State document workflow '%s' returned empty output; keeping existing document.",
+                    workflow_name)
+                return
+
+            updated_document = str(updated_document).strip()
+
+            retention_ratio = config.get('stateDocumentMinRetentionRatio', 0.5)
+            if (retention_ratio and len(current_document) > self.STATE_DOCUMENT_SHRINK_GUARD_FLOOR_CHARS
+                    and len(updated_document) < retention_ratio * len(current_document)):
+                logger.error(
+                    "State document workflow '%s' shrank the document from %d to %d characters, below "
+                    "the minimum retention ratio of %s; keeping existing document. If this shrink was "
+                    "intended, lower 'stateDocumentMinRetentionRatio' in the discussion ID workflow "
+                    "settings.",
+                    workflow_name, len(current_document), len(updated_document), retention_ratio)
+                return
+
+            write_plain_text_file(filepath, updated_document,
+                                  encryption_key=context.encryption_key,
+                                  backup_suffix='.bak')
+            logger.info("State document updated for discussion %s (%d -> %d characters).",
+                        context.discussion_id, len(current_document), len(updated_document))
+        except Exception as e:
+            logger.error("Failed to update state document for discussion '%s': %s",
+                         context.discussion_id, e, exc_info=True)
 
     def perform_keyword_search(self, keywords: str, target: str, context: ExecutionContext):
         """
@@ -394,8 +564,7 @@ JSON Output:"""
                 else:
                     logger.info("Message count threshold met. Generating vector memories.")
 
-                hashed_chunks = chunk_messages_with_hashes(new_message_content_to_process, chunk_size,
-                                                           max_messages_before_chunk=max_messages)
+                hashed_chunks = chunk_messages_with_hashes(new_message_content_to_process, chunk_size)
                 text_chunks = extract_text_blocks_from_hashed_chunks(hashed_chunks)
 
                 if not text_chunks:
@@ -468,8 +637,7 @@ JSON Output:"""
                     logger.info("Token threshold met. Generating new memories.")
                 else:
                     logger.info("Message count threshold met. Generating new memories.")
-                hashed_chunks = chunk_messages_with_hashes(new_message_content_to_process, chunk_size,
-                                                           max_messages_before_chunk=max_messages)
+                hashed_chunks = chunk_messages_with_hashes(new_message_content_to_process, chunk_size)
                 text_chunks = extract_text_blocks_from_hashed_chunks(hashed_chunks)
                 if len(hashed_chunks) >= 1:
                     logger.info("Using original file-based memory creation flow.")
@@ -480,7 +648,7 @@ JSON Output:"""
                     # Wait is bounded so a stuck holder can't hang this (often
                     # post-returnToUser) node forever; on timeout we skip this round
                     # rather than proceed unlocked (which would risk the very overwrite
-                    # the lock prevents). The work is self-healing — the unprocessed
+                    # the lock prevents). The work is self-healing: the unprocessed
                     # messages still meet the threshold on the next qualifying turn.
                     lock = _get_condensation_lock(context.discussion_id)
                     lock_timeout = self._resolve_condensation_lock_timeout(discussion_id_workflow_config)
@@ -614,11 +782,7 @@ JSON Output:"""
             endpoint_data.get("maxContextTokenSize", 4096), max_tokens
         )
 
-        # Create a temporary context with the correct, newly created llm_handler
-        temp_llm_context = deepcopy(context)
-        temp_llm_context.llm_handler = llm_handler
-        # Also ensure the config in the temp context is the correct one for *this* task
-        temp_llm_context.config = workflow_config
+        temp_llm_context = dc_replace(context, llm_handler=llm_handler, config=workflow_config)
 
         # Note: The 'fileMemoryWorkflowName' should be in 'workflow_config', not 'context.config'
         file_workflow_name = workflow_config.get('fileMemoryWorkflowName')
@@ -694,15 +858,30 @@ JSON Output:"""
                 request_id=context.request_id
             )
 
-    def _condense_memories_already_locked(self, discussion_id: str, workflow_config: Dict,
-                                          context: ExecutionContext) -> None:
-        """Runs condensation assuming the caller already holds the per-discussion lock."""
-        if not workflow_config.get('condenseMemories', False):
-            return
+    @staticmethod
+    def _get_condensation_threshold(workflow_config: Dict) -> Optional[int]:
+        """Returns memoriesBeforeCondensation when condensation is enabled and configured.
 
+        Args:
+            workflow_config (Dict): The memory workflow configuration.
+
+        Returns:
+            Optional[int]: The threshold, or None when condensation is disabled or
+                misconfigured (the misconfiguration is logged).
+        """
+        if not workflow_config.get('condenseMemories', False):
+            return None
         memories_before_condensation = workflow_config.get('memoriesBeforeCondensation')
         if memories_before_condensation is None:
             logger.error("condenseMemories is enabled but memoriesBeforeCondensation is not set. Skipping.")
+            return None
+        return memories_before_condensation
+
+    def _condense_memories_already_locked(self, discussion_id: str, workflow_config: Dict,
+                                          context: ExecutionContext) -> None:
+        """Runs condensation assuming the caller already holds the per-discussion lock."""
+        memories_before_condensation = self._get_condensation_threshold(workflow_config)
+        if memories_before_condensation is None:
             return
 
         self._condense_memories_locked(discussion_id, workflow_config, context,
@@ -728,12 +907,8 @@ JSON Output:"""
             workflow_config (Dict): The discussion ID workflow configuration dictionary.
             context (ExecutionContext): The current workflow execution context.
         """
-        if not workflow_config.get('condenseMemories', False):
-            return
-
-        memories_before_condensation = workflow_config.get('memoriesBeforeCondensation')
+        memories_before_condensation = self._get_condensation_threshold(workflow_config)
         if memories_before_condensation is None:
-            logger.error("condenseMemories is enabled but memoriesBeforeCondensation is not set. Skipping.")
             return
 
         lock = _get_condensation_lock(discussion_id)
@@ -850,9 +1025,7 @@ JSON Output:"""
             endpoint_data.get("maxContextTokenSize", 4096), max_tokens
         )
 
-        temp_context = deepcopy(context)
-        temp_context.llm_handler = llm_handler
-        temp_context.config = workflow_config
+        temp_context = dc_replace(context, llm_handler=llm_handler, config=workflow_config)
 
         condensed_text = self.process_single_chunk(
             combined_text, prompt, system_prompt, temp_context

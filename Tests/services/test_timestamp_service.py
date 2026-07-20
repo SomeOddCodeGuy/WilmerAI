@@ -160,6 +160,16 @@ class TestTimestampService:
             encryption_key=None
         )
 
+    def test_commit_assistant_response_empty_content_no_placeholder_no_save(self, timestamp_service,
+                                                                            mock_dependencies):
+        """Empty content with no pending placeholder writes nothing at all."""
+        mock_dependencies["load_file"].return_value = {"hash1": "(T_Old)"}
+
+        timestamp_service.commit_assistant_response("id", "")
+
+        mock_dependencies["hash"].assert_not_called()
+        mock_dependencies["save_file"].assert_not_called()
+
     # ##########################################
     # ##### Tests for resolve_and_track_history
     # ##########################################
@@ -253,6 +263,60 @@ class TestTimestampService:
         args, _ = mock_dependencies["save_file"].call_args
         assert args[1] == expected_saved_data
 
+    def test_resolve_and_track_mixed_known_unknown_anchor_adoption(self, timestamp_service, mock_dependencies):
+        """
+        Backward iteration must adopt a known message's timestamp as the anchor:
+        an unknown message OLDER than a known one gets known_time - 1s, not
+        now - 2s.
+        """
+        T_NOW_STR = f"({MOCK_NOW.strftime(TS_FORMAT)})"
+        T_MID = f"({(MOCK_NOW - timedelta(minutes=10)).strftime(TS_FORMAT)})"
+        T_MID_M1S = f"({(MOCK_NOW - timedelta(minutes=10, seconds=1)).strftime(TS_FORMAT)})"
+        messages = [
+            {'role': 'user', 'content': 'Untracked old message'},
+            {'role': 'assistant', 'content': 'Tracked middle message'},
+            {'role': 'user', 'content': 'Untracked new message'}
+        ]
+        mock_dependencies["load_file"].return_value = {'hash_mid': T_MID}
+        # Phase 1 iterates newest-to-oldest.
+        mock_dependencies["hash"].side_effect = ['hash_new', 'hash_mid', 'hash_old']
+
+        timestamp_service.resolve_and_track_history(messages, "convo")
+
+        expected_saved_data = {
+            'hash_new': T_NOW_STR,  # Anchored to "now"
+            'hash_mid': T_MID,  # Already known, unchanged; becomes the new anchor
+            'hash_old': T_MID_M1S,  # Adopts the known anchor minus one second
+        }
+        mock_dependencies["save_file"].assert_called_once()
+        args, _ = mock_dependencies["save_file"].call_args
+        assert args[1] == expected_saved_data
+
+    def test_resolve_placeholder_unresolvable_without_assistant_message(self, timestamp_service, mock_dependencies,
+                                                                         mocker):
+        """
+        When a placeholder is pending but no assistant message exists in the
+        history, a warning is logged, the placeholder is removed, and the file
+        is still saved.
+        """
+        mock_warning = mocker.patch('Middleware.services.timestamp_service.logger.warning')
+        T_NOW_STR = f"({MOCK_NOW.strftime(TS_FORMAT)})"
+        messages = [
+            {'role': 'system', 'content': 'System instruction'},
+            {'role': 'user', 'content': 'Hello'}
+        ]
+        mock_dependencies["load_file"].return_value = {PLACEHOLDER_HASH: "(T_Stale)"}
+        mock_dependencies["hash"].return_value = 'hash_user'
+
+        timestamp_service.resolve_and_track_history(messages, "convo")
+
+        mock_warning.assert_called_once()
+        assert "Could not find a suitable assistant message" in mock_warning.call_args[0][0]
+        mock_dependencies["save_file"].assert_called_once()
+        args, _ = mock_dependencies["save_file"].call_args
+        assert PLACEHOLDER_HASH not in args[1]
+        assert args[1] == {'hash_user': T_NOW_STR}
+
     # ##########################################
     # ##### Tests for format_messages_with_timestamps
     # ##########################################
@@ -313,6 +377,39 @@ class TestTimestampService:
 
         assert result[0]['content'] == f"{T_NOW_STR} Msg1"
         assert result[1]['content'] == "Character:"  # Unchanged
+
+    @pytest.mark.parametrize("system_role", ["system", "systemMes"])
+    def test_format_messages_skips_system_messages(self, timestamp_service, mock_dependencies, system_role):
+        """System messages are never timestamp-prefixed and never even hashed,
+        matching the write-path skip in resolve_and_track_history."""
+        T_NOW_STR = f"({MOCK_NOW.strftime(TS_FORMAT)})"
+        messages = [
+            {'role': system_role, 'content': 'System instruction'},
+            {'role': 'user', 'content': 'Msg1'}
+        ]
+        mock_dependencies["load_file"].return_value = {"hash_user": T_NOW_STR}
+        mock_dependencies["hash"].return_value = 'hash_user'
+
+        result = timestamp_service.format_messages_with_timestamps(messages, "convo")
+
+        assert result[0]['content'] == 'System instruction'  # Unchanged
+        mock_dependencies["hash"].assert_called_once_with(messages[1])
+        assert result[1]['content'] == f"{T_NOW_STR} Msg1"
+
+    def test_format_messages_untracked_hash_left_unformatted(self, timestamp_service, mock_dependencies):
+        """A message whose hash is absent from the timestamp file is left untouched."""
+        T_NOW_STR = f"({MOCK_NOW.strftime(TS_FORMAT)})"
+        messages = [
+            {'role': 'user', 'content': 'Tracked message'},
+            {'role': 'assistant', 'content': 'Untracked message'}
+        ]
+        mock_dependencies["load_file"].return_value = {"hash_tracked": T_NOW_STR}
+        mock_dependencies["hash"].side_effect = ['hash_tracked', 'hash_untracked']
+
+        result = timestamp_service.format_messages_with_timestamps(messages, "convo")
+
+        assert result[0]['content'] == f"{T_NOW_STR} Tracked message"
+        assert result[1]['content'] == "Untracked message"  # Unchanged
 
     # ##########################################
     # ##### Tests for save_specific_timestamp
@@ -449,25 +546,9 @@ class TestTimestampService:
         assert summary == expected_summary
         assert mock_dependencies["format_string"].call_count == 2
 
-    def test_get_time_context_summary_ignores_current_placeholder(self, timestamp_service, mock_dependencies):
-        """Ensures the summary ignores the current placeholder hash."""
-        timestamps = {
-            "hash1": "(Monday, 2025-09-22 10:00:00)",
-            PLACEHOLDER_HASH: "(Monday, 2025-09-22 15:00:00)"
-        }
-        mock_dependencies["load_file"].return_value = timestamps
-        mock_dependencies["format_string"].return_value = "5 hours"
-
-        summary = timestamp_service.get_time_context_summary("test-discussion")
-
-        expected_summary = "[Time Context: The conversation started 5 hours ago.]"
-        assert summary == expected_summary
-        assert mock_dependencies["format_string"].call_count == 2
-
     @pytest.mark.parametrize("discussion_id, loaded_data", [
         (None, {}), ("", {}), ("test-id", {}),
         ("test-id", {"hash1": "invalid-timestamp-format"}),
-        ("test-id", {PLACEHOLDER_HASH: "(Monday, 2025-09-22 10:00:00)"}),
         ("test-id", {PLACEHOLDER_HASH: "(Monday, 2025-09-22 10:00:00)"}),
         ("test-id", {"hash1": None})
     ])
@@ -490,23 +571,38 @@ class TestTimestampService:
             {'role': 'user', 'content': 'Hello'},
             {'role': 'assistant', 'content': 'Roland:'}  # Generation prompt
         ]
-        mock_dependencies["load_file"].return_value = {}
-        mock_dependencies["hash"].side_effect = ['hash1']
+        # Stateful load/save backed by a shared dict so the placeholder written by
+        # save_placeholder_timestamp is actually found by commit_assistant_response.
+        file_state = {}
+
+        def _load_file(path, encryption_key=None):
+            return dict(file_state)
+
+        def _save_file(path, data, encryption_key=None):
+            file_state.clear()
+            file_state.update(data)
+
+        mock_dependencies["load_file"].side_effect = _load_file
+        mock_dependencies["save_file"].side_effect = _save_file
+        mock_dependencies["hash"].side_effect = ['hash1', 'hash2']
         T_NOW_STR = f"({MOCK_NOW.strftime(TS_FORMAT)})"
 
         timestamp_service.resolve_and_track_history(messages, "convo")
         timestamp_service.save_placeholder_timestamp("convo")
 
+        # The placeholder must be present in the persisted state before commit.
+        assert file_state[PLACEHOLDER_HASH] == T_NOW_STR
+
         assistant_response = "Hi there! How can I help?"
-        mock_dependencies["hash"].side_effect = ['hash2']
         timestamp_service.commit_assistant_response("convo", assistant_response)
 
-        # Should have saved twice: once for tracking, once for commit
+        # Saved three times: history tracking, placeholder save, and commit.
         assert mock_dependencies["save_file"].call_count == 3
-        # Final state should have both messages timestamped
-        final_call_args = mock_dependencies["save_file"].call_args_list[-1][0]
-        assert 'hash2' in final_call_args[1]
-        assert final_call_args[1]['hash2'] == T_NOW_STR
+        # The commit consumed the placeholder and bound its time to the response hash.
+        assert PLACEHOLDER_HASH not in file_state
+        assert file_state['hash2'] == T_NOW_STR
+        # The user message tracked during history resolution is still present.
+        assert file_state['hash1'] == T_NOW_STR
 
     def test_workflow_with_group_chat_logic_disabled(self, timestamp_service, mock_dependencies):
         """Tests the complete flow when useGroupChatTimestampLogic is false (behavior B)."""
@@ -537,21 +633,8 @@ class TestTimestampService:
         # Placeholder should have been resolved
         assert PLACEHOLDER_HASH not in mock_dependencies["save_file"].call_args_list[-1][0][1]
 
-    def test_generation_prompt_reconstruction(self, timestamp_service, mock_dependencies):
-        """Tests behavior D - generation prompt reconstruction logic."""
-        generation_prompt = "Roland:"
-        assistant_content = "Hello there!"  # Does not start with a colon-ending word
-
-        mock_dependencies["load_file"].return_value = {PLACEHOLDER_HASH: "(Time)"}
-        mock_dependencies["hash"].return_value = "hash1"
-
-        timestamp_service.commit_assistant_response("convo", assistant_content)
-
-        # The hash should be called with the original content (reconstruction happens at streaming level)
-        mock_dependencies["hash"].assert_called_with({'role': 'assistant', 'content': assistant_content})
-
-    def test_no_timestamp_file_when_disabled(self, timestamp_service, mock_dependencies):
-        """Tests behavior A - no timestamp file is created when addDiscussionIdTimestampsForLLM is false."""
+    def test_methods_are_noop_without_discussion_id(self, timestamp_service, mock_dependencies):
+        """All service entry points are no-ops without a discussion_id: nothing is loaded or saved."""
         messages = [
             {'role': 'user', 'content': 'Hello'},
             {'role': 'assistant', 'content': 'Hi'}
@@ -566,7 +649,7 @@ class TestTimestampService:
         mock_dependencies["save_file"].assert_not_called()
 
     def test_multiple_regenerations_do_not_replace_placeholder(self, timestamp_service, mock_dependencies):
-        """Tests behavior B - regenerations don't replace the placeholder until next user turn."""
+        """Tests behavior B: regenerations don't replace the placeholder until next user turn."""
         initial_messages = [
             {'role': 'user', 'content': 'Hello'},
             {'role': 'assistant', 'content': 'First response'}
@@ -594,7 +677,7 @@ class TestTimestampService:
         assert last_save_call['hash3'] == T_PLACEHOLDER  # Verify it got the placeholder timestamp
 
     def test_placeholder_resolution_with_generation_prompt_last(self, timestamp_service, mock_dependencies):
-        """Tests behavior E - placeholder resolution when the last message is a generation prompt."""
+        """Tests behavior E: placeholder resolution when the last message is a generation prompt."""
         messages = [
             {'role': 'user', 'content': 'Hello'},
             {'role': 'assistant', 'content': 'Previous response'},

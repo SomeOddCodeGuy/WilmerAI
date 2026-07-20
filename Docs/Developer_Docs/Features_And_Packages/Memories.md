@@ -9,7 +9,7 @@ schemas.
 ## 1\. Core Concepts & Architecture
 
 WilmerAI's memory system is a multi-layered feature set implemented through specialized nodes within the
-workflow engine. This design allows for different types of memory operations -- creation, retrieval, and summarization -- to
+workflow engine. This design allows for different types of memory operations (creation, retrieval, and summarization) to
 be strategically placed within workflows.
 
 #### **Key Architectural Principles:**
@@ -68,13 +68,30 @@ be strategically placed within workflows.
           **LLM-generated summary**, not the raw conversation chunk. It also stores the full `metadata_json`.
         * **`memories_fts` table**: A virtual table that indexes the metadata for fast searching. The indexed columns
           are `title`, `summary`, `entities`, `key_phrases`, and the original `memory_text`. Search relevance is
-          determined by the **`bm25`** ranking function.
-        * **Recency Scoring**: The database connection is initialized with a custom SQL function, `recency_score`, which
-          can calculate a time-decay boost for memories. While the default search query uses only `bm25` ranking, this
-          function is available for developers to implement time-sensitive search ranking logic.
+          determined by the **`bm25`** ranking function. When `vectorMemoryIndexTopics` is enabled in the discussion
+          settings, `add_memory_to_vector_db(..., index_topics=True)` folds the metadata's `topics` list into the
+          `key_phrases` column at write time (no schema change; the stored `metadata_json` is untouched). Off by
+          default, preserving the historical index contents exactly.
+        * **`memory_embeddings` table**: An optional, purely additive store of float32 embedding vectors keyed by
+          `(memory_id, model)`, powering semantic/hybrid search. See Section 7 for the full design.
+        * **Recency Scoring**: The database connection is initialized with a custom SQL function, `recency_score`,
+          which calculates a time-decay boost for memories. The default search query uses only `bm25` ranking, but
+          `search_memories_by_keyword` accepts opt-in ranking options surfaced on the `VectorMemorySearch` node:
+          `bm25_weights` (five per-column weights) and `use_recency` (multiplies the rank by
+          `recency_score(date_added)`; BM25 scores are negative, so a boost > 1 ranks newer matches higher under
+          `ORDER BY ... ASC`). `MemoryService.search_vector_memories` additionally supports `include_dates`, which
+          prefixes each result with its `date_added` date so the consuming LLM can arbitrate stale facts. All three
+          default to off to preserve historical ranking for existing configurations.
     4. **Vector Memory Tracker (`vector_memory_hash_log` table)**: Located inside `vector_memory.db`, this table
        stores the hash of the last message processed for vector memory creation. This crucial feature prevents the
        system from re-processing the same conversation history on subsequent runs.
+    5. **State Document (`state_document.md`)**: An optional, continuously updated markdown document holding the
+       current ground-truth state of the conversation's subject matter (a user profile, roleplay world state, etc.).
+       Unlike the other artefacts it is stored as plain markdown so users can hand-edit it. It is written by the
+       vector memory pipeline (see Section 6) and read by the `GetCurrentStateDocument` node. When per-user
+       encryption is active it is encrypted at rest via the shared `file_utils` helpers; the previous version is
+       kept as `state_document.md.bak` after every automatic update. The path resolves via
+       `config_utils.get_discussion_state_document_file_path(discussion_id, api_key_hash=...)`.
 
 -----
 
@@ -107,6 +124,8 @@ These nodes perform the "heavy lifting" of creating and saving memories. They ar
                   output **must be a JSON string representing a single object or an array of objects**.
             * **B) Direct LLM Call (Legacy)**: If a workflow name is not provided, the system falls back to a direct LLM
               call using prompts defined in the config.
+        5. On the vector path, after a chunk's memories are stored and its hash logged, the optional state document
+           update runs (see Section 6).
 
 #### **Memory Retrieval (Read)**
 
@@ -121,7 +140,7 @@ These nodes perform fast, inexpensive "read" operations and are powered by **`Me
 
 * **`VectorMemorySearch`**: The primary **RAG search node**.
 
-    * **Purpose**: Performs a highly relevant, keyword-based search against the discussion-specific vector memory
+    * **Purpose**: Performs a relevance-ranked, keyword-based search against the discussion-specific vector memory
       database.
     * **Process Flow**: This node takes a string of keywords. The keywords **must be separated by semicolons (`;`)**.
       The `MemoryService` calls `vector_db_utils.search_memories_by_keyword`.
@@ -132,14 +151,28 @@ These nodes perform fast, inexpensive "read" operations and are powered by **`Me
         * **Limits**: The system truncates the keyword list to a maximum of `60` (`MAX_KEYWORDS_FOR_SEARCH`) to avoid
           exceeding SQLite's expression depth limit.
         * **Ranking**: The final results are ranked by relevance using the `bm25` algorithm.
+    * **Entity Expansion (opt-in)**: When the node sets `useEntityExpansion`, `MemoryService._expand_with_entity_pass`
+      runs after the base search (in any `searchMode`): entities from the `metadata_json` of the top
+      `ENTITY_EXPANSION_SEED_ROWS` (10) results are deduplicated case-insensitively against the query terms and
+      become the query for a second `search_memories_by_keyword` pass (capped at `MAX_KEYWORDS_FOR_SEARCH`) with the
+      same ranking options. The second pass deliberately does NOT repeat the original terms: re-including them lets
+      every seed row re-match on its own entities and crowd true bridge hits out of the ranking. Hits the base search
+      did not return get a reserved share of the final slots (`min(max(1, limit // 3), novel_count, limit - 1)`, so
+      expansion can never evict the strongest direct match), appended
+      after the base results, because a memory reachable only through a bridge entity would otherwise be outranked by
+      direct matches. No embeddings are involved; the pass degrades to a no-op when nothing new is harvested or found.
 
 * **`FullChatSummary`**: Retrieves the holistic, rolling summary of the conversation from `<id>_chat_summary.json`.
+
+* **`GetCurrentStateDocument`**: Retrieves the full text of the discussion's state document via
+  `MemoryService.get_current_state_document`. A pure read with no update logic; returns
+  `"No state document has been created yet"` when the file is missing, empty, or no `discussionId` is active.
 
 -----
 
 ## 3\. Critical Files for Development
 
-To modify or extend the memory system, you will primarily work with these five files:
+To modify or extend the memory system, you will primarily work with these nine files:
 
 1. **`Middleware/workflows/tools/slow_but_quality_rag_tool.py`**: The heart of **memory creation**. Modify this file to
    change how memories are generated, including the logic for choosing between vector/file and workflow/LLM-call
@@ -154,6 +187,18 @@ To modify or extend the memory system, you will primarily work with these five f
 5. **`Middleware/workflows/managers/workflow_manager.py`**: The **system registrar**. You must register your new
    `node_type` in the `node_handlers` dictionary within this manager's constructor. This manager is also responsible for
    executing the memory generation sub-workflows.
+6. **`Middleware/services/embedding_service.py`**: The **embedding tier's service layer**. `EmbeddingService` resolves
+   an embeddings endpoint config (an ordinary `Endpoints/` file whose ApiType `type` is one of the embeddings types),
+   validates it, and provides batch embedding; presets and prompt templates do not apply to embeddings.
+7. **`Middleware/utilities/vector_math_utils.py`**: The **vector math layer**. Stdlib-only float32 blob
+   serialization/deserialization and brute-force cosine similarity used by the semantic search path (no numeric
+   library dependency).
+8. **`Middleware/llmapis/handlers/impl/embedding_api_handler.py`**: The **embedding transport**. `EmbeddingApiHandler`
+   builds on `BaseApiTransport` to POST to the configured embeddings endpoint (`openAIEmbeddings` or
+   `ollamaEmbeddings`) and parse the vectors from the response.
+9. **`Scripts/backfill_embeddings.py`**: The **standalone bulk backfill script**. Embeds an existing database's
+   backlog of un-embedded memories in one pass, taking the DB path and endpoint directly on the command line; the
+   normal write path only backfills `embeddingBackfillBatchSize` memories per cycle.
 
 -----
 
@@ -190,14 +235,14 @@ Both thresholds are active. Memory generation triggers when **either** threshold
 This "whichever comes first" logic allows the system to generate memories based on either volume (tokens) or frequency
 (messages), depending on which condition is met first.
 
-The memory file does not need to contain any chunks for standard mode to apply -- it just needs to exist on disk. In a
+The memory file does not need to contain any chunks for standard mode to apply; it just needs to exist on disk. In a
 new conversation, the file is created (as an empty `[]`) on the first check (around message 3, after the early return
 for conversations with fewer than 3 messages). From that point on, standard mode applies and both thresholds are active.
 
 #### Consolidation Mode (Memory File Does Not Exist)
 
 Only the token threshold applies. The message count threshold is disabled. This mode activates only when the memory file
-has been deleted from disk -- for example, when a user wants to regenerate memories with a larger chunk size to produce
+has been deleted from disk; for example, when a user wants to regenerate memories with a larger chunk size to produce
 fewer, larger chunks.
 
 ### Implementation Details
@@ -221,7 +266,7 @@ The triggering logic lives in `SlowButQualityRAGTool.handle_discussion_id_flow()
 ### File Creation Side-Effect
 
 The `read_chunks_with_hashes()` function calls `ensure_json_file_exists()`, which creates the memory file as an empty
-JSON array (`[]`) if it does not exist on disk. This is why the `file_exists` check must happen before that call --
+JSON array (`[]`) if it does not exist on disk. This is why the `file_exists` check must happen before that call;
 otherwise the file would always appear to exist. The side-effect is intentional: it means that on the first memory
 check of a new conversation (around message 3), the file is created, and from message 4 onward the system operates in
 standard mode with both thresholds active.
@@ -259,8 +304,8 @@ These fields are added to the `_DiscussionId-MemoryFile-Workflow-Settings.json` 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `condenseMemories` | bool | `false` | Master toggle for the feature. |
-| `memoriesBeforeCondensation` | int | (required if enabled) | N - how many new memories trigger a condensation pass. |
-| `memoryCondensationBuffer` | int | `0` | X - number of most recent memories excluded from condensation. |
+| `memoriesBeforeCondensation` | int | (required if enabled) | N: how many new memories trigger a condensation pass. |
+| `memoryCondensationBuffer` | int | `0` | X: number of most recent memories excluded from condensation. |
 | `condenseMemoriesSystemPrompt` | str | built-in default | System prompt for the condensation LLM call. |
 | `condenseMemoriesPrompt` | str | built-in default | User prompt; supports `[MemoriesToCondense]` and `[Memories_Before_Memories_to_Condense]` placeholders. |
 | `condenseMemoriesEndpointName` | str | falls back to `endpointName` | Optional endpoint override for condensation. |
@@ -273,9 +318,9 @@ State is tracked in a separate file (`{discussion_id}_condensation_tracker.json`
 `{"lastCondensationHash": "..."}`. This file is kept separate from the memory file to preserve the existing
 `[{text_block, hash}]` schema. The relevant utility functions are:
 
-* `config_utils.get_discussion_condensation_tracker_file_path(discussion_id)` - returns the tracker file path.
-* `file_utils.read_condensation_tracker(filepath)` - reads the tracker dict (or empty dict if missing).
-* `file_utils.write_condensation_tracker(filepath, data)` - writes the tracker dict, creating directories as needed.
+* `config_utils.get_discussion_condensation_tracker_file_path(discussion_id)`: returns the tracker file path.
+* `file_utils.read_condensation_tracker(filepath)`: reads the tracker dict (or empty dict if missing).
+* `file_utils.write_condensation_tracker(filepath, data)`: writes the tracker dict, creating directories as needed.
 
 ### Edge Cases
 
@@ -296,7 +341,109 @@ The condensation logic is entirely within `SlowButQualityRAGTool.condense_memori
 
 -----
 
-## 6\. How to Add a New Memory Feature
+## 6\. The State Document
+
+The state document is an optional "current state" layer maintained by the vector memory write path. Where the
+memory files and vector database are historical records, the state document is a mutable snapshot of what is true
+now, kept coherent by an LLM merge step.
+
+### Update Flow
+
+The logic lives in `SlowButQualityRAGTool._update_state_document()`, called from
+`generate_and_store_vector_memories()` once per chunk, **after** the chunk's memories are stored and its hash is
+logged. The ordering is deliberate: a failed document update must not cause the chunk to be re-extracted (and its
+facts duplicated in the vector DB) on the next pass. The update is best-effort: every failure is caught, logged,
+and swallowed.
+
+1. The current document is read via `file_utils.read_plain_text_file()` (empty string if missing).
+2. The sub-workflow named by `stateDocumentWorkflowName` runs with two `scoped_inputs`:
+    * `{agent1Input}`: The chunk's newly stored memory summaries, formatted as a bullet list.
+    * `{agent2Input}`: The current state document text.
+3. The workflow's final output replaces the document, subject to the safety guards below.
+4. The write goes through `file_utils.write_plain_text_file()`: atomic (temp file + rename), with the previous
+   version copied to `state_document.md.bak` first. If the backup copy fails, the write is aborted.
+
+### Safety Guards
+
+Because an LLM performs the merge, the save path defends the existing document:
+
+* **Empty output**: Rejected outright; the existing document is kept.
+* **Shrink guard**: If the output is smaller than `stateDocumentMinRetentionRatio` (default `0.5`) times the
+  current document's length, it is rejected. The guard only activates once the document exceeds
+  `STATE_DOCUMENT_SHRINK_GUARD_FLOOR_CHARS` (500), so small early documents can settle freely. A ratio of `0`
+  disables the guard.
+* **Backup**: `state_document.md.bak` always holds the pre-update version, providing a one-step manual undo.
+
+### Configuration Fields
+
+These fields live in the discussion ID workflow settings file, alongside the vector memory fields:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `useStateDocument` | bool | `false` | Master toggle. Only effective on the vector memory path. |
+| `stateDocumentWorkflowName` | str | (required if enabled) | Sub-workflow that merges new facts into the document. |
+| `stateDocumentMinRetentionRatio` | float | `0.5` | Minimum output/current length ratio accepted by the shrink guard. |
+
+### Design Notes
+
+* The document's structure is defined entirely by the merge workflow's prompts (see
+  `Public/Configs/Workflows/_example_assistant_with_vector_memory/State_Document_Workflow.json` for the reference
+  implementation). The engine ships the mechanism; the schema is user configuration.
+* The feature is incremental-only: enabling it on an existing discussion does **not** trigger any reprocessing of
+  historical memories. The document builds from the next conversation exchange onward, and users can seed it by
+  hand-writing the markdown file.
+
+-----
+
+## 7\. Embedding-Based Semantic Search
+
+Optional semantic retrieval over the vector memory database, built with zero new dependencies: embeddings come from
+whatever backend the user already runs (via an embeddings endpoint), storage is an additive SQLite table, and
+similarity is brute-force cosine in the standard library.
+
+### Components
+
+* **`Middleware/llmapis/handlers/impl/embedding_api_handler.py`** (`EmbeddingApiHandler`): transport-level handler
+  extending `BaseApiTransport` (a deliberate sibling of `LlmApiHandler`, which carries streaming/sampler machinery
+  that does not apply). Supports two ApiType `type` values, declared in `constants.EMBEDDING_API_TYPES`:
+  `openAIEmbeddings` (POST `{base}/v1/embeddings`) and `ollamaEmbeddings` (POST `{base}/api/embed`).
+* **`Middleware/services/embedding_service.py`** (`EmbeddingService`): resolves an Endpoints config + ApiType into a
+  handler; rejects non-embeddings ApiTypes. Conversely, `LlmApiService.__init__` rejects embeddings ApiTypes before
+  preset resolution, so a misconfigured node fails with a clear message in either direction.
+* **`Middleware/utilities/vector_math_utils.py`**: float32 blob serialization, cosine similarity (via
+  `math.sumprod` when available, pure-Python fallback), `rank_by_cosine`, and `reciprocal_rank_fusion` (RRF, k=60).
+* **`memory_embeddings` table** (in `vector_memory.db`): `(memory_id, model, dim, vector BLOB)` with
+  `PRIMARY KEY (memory_id, model)`. Created by `initialize_vector_db` via `CREATE TABLE IF NOT EXISTS`, so
+  pre-embedding databases gain it on next open. The composite key lets vectors from multiple models coexist:
+  same-model writes replace, other models' rows are untouched, and search filters to the active endpoint's model.
+  Cross-model cosine comparison is meaningless noise; the per-model filter is what prevents a model switch from
+  silently poisoning search. Embeddings are derived data, always recomputable from `memories.memory_text`.
+
+### Write Path
+
+`SlowButQualityRAGTool._store_embeddings_for_new_memories()` runs per chunk, after the hash log (same rationale as
+the state document: a failure must not cause re-extraction), when `embeddingEndpointName` is set in the discussion
+settings. It embeds the chunk's new memories plus up to `embeddingBackfillBatchSize` (default 20) older un-embedded
+memories per processed chunk (a single memory pass may process several chunks); this is the lazy backfill that heals
+existing databases without a bulk job. Best-effort: all failures
+are logged and swallowed; memories without embeddings remain fully searchable via BM25. The standalone
+`Scripts/backfill_embeddings.py` script performs the same backfill in bulk against a database file directly,
+with no Wilmer config resolution.
+
+### Search Path
+
+`MemoryService.search_vector_memories` accepts `search_mode` ("keyword" | "semantic" | "hybrid"), `semantic_query`,
+and `embedding_endpoint_name`, surfaced on the `VectorMemorySearch` node as `searchMode`, `semanticQuery`, and
+`embeddingEndpointName`. Semantic mode embeds the query text, loads all stored blobs for the endpoint's model, ranks
+by cosine, and fetches the top rows. Hybrid mode merges the keyword and semantic rankings with RRF (no score
+normalization needed between BM25 and cosine). Every failure path degrades to keyword search rather than raising:
+missing endpoint name, endpoint unreachable, no stored embeddings yet. The separate `use_entity_expansion` option
+(node property `useEntityExpansion`, see Section 2) runs after whichever mode produced the base results and is pure
+keyword search; it works with no embeddings endpoint at all.
+
+-----
+
+## 8\. How to Add a New Memory Feature
 
 The system is designed for extension. Below are two common scenarios.
 

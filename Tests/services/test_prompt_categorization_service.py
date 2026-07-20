@@ -252,6 +252,45 @@ class TestCategorizationAndRouting:
         mock_conversational_method.assert_called_once_with(messages, request_id, discussion_id, False, api_key=None,
                                                               tools=None, tool_choice=None)
 
+    @patch('Middleware.services.prompt_categorization_service.WorkflowManager')
+    def test_get_prompt_category_passes_tools_to_workflow(self, MockWorkflowManager, service, mocker):
+        """
+        Verifies that tool definitions and tool_choice from the incoming request
+        are forwarded to the routed workflow's run_workflow call.
+        """
+        mocker.patch.object(service, '_categorize_request', return_value="CODING")
+        mock_workflow_instance = MagicMock()
+        MockWorkflowManager.return_value = mock_workflow_instance
+        messages = [{"role": "user", "content": "What is the weather in Paris?"}]
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the current weather for a city.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                        "required": ["city"],
+                    },
+                },
+            }
+        ]
+        tool_choice = "auto"
+
+        service.get_prompt_category(messages, "req-123", "disc-456", stream=False,
+                                    tools=tools, tool_choice=tool_choice)
+
+        mock_workflow_instance.run_workflow.assert_called_once_with(
+            messages=messages,
+            request_id="req-123",
+            discussionId="disc-456",
+            stream=False,
+            api_key=None,
+            tools=tools,
+            tool_choice=tool_choice,
+        )
+
     def test_initialize_categories(self, service):
         """
         Verifies that category data is correctly formatted into various strings
@@ -262,8 +301,11 @@ class TestCategorizationAndRouting:
         assert result['categoriesSeparatedByOr'] == 'CODING or TECHNICAL'
         assert result[
                    'category_colon_descriptions'] == 'CODING: Writing or editing code.; TECHNICAL: IT-related discussion, not code.'
+        assert result[
+                   'category_colon_descriptions_newline_bulletpoint'] == '\n- CODING: Writing or editing code.\n- TECHNICAL: IT-related discussion, not code.'
         assert result['categoryNameBulletpoints'] == '\n- CODING\n- TECHNICAL'
         assert result['category_list'] == ['CODING', 'TECHNICAL']
+        assert result['category_descriptions'] == ['Writing or editing code.', 'IT-related discussion, not code.']
 
     @pytest.mark.parametrize("processed_input, expected_match", [
         ("The category is CODING.", "CODING"),
@@ -280,16 +322,23 @@ class TestCategorizationAndRouting:
 
     def test_categorize_request_success_first_try(self, service, mocker):
         """
-        Verifies a successful categorization on the first attempt.
+        Verifies a successful categorization on the first attempt, and that the
+        categorization workflow is invoked as a non-responding, non-streaming call.
         """
         mock_workflow_manager_instance = MagicMock()
         mock_workflow_manager_instance.run_workflow.return_value = "The final category is CODING."
         mocker.patch.object(service, '_configure_workflow_manager', return_value=mock_workflow_manager_instance)
+        messages = [{"role": "user", "content": "test"}]
 
-        result = service._categorize_request([{"role": "user", "content": "test"}], "req-123")
+        result = service._categorize_request(messages, "req-123")
 
         assert result == "CODING"
-        mock_workflow_manager_instance.run_workflow.assert_called_once()
+        mock_workflow_manager_instance.run_workflow.assert_called_once_with(
+            messages=messages,
+            request_id="req-123",
+            nonResponder=True,
+            stream=False,
+        )
 
     def test_categorize_request_fails_with_default_one_attempt(self, service, mocker):
         """
@@ -320,6 +369,33 @@ class TestCategorizationAndRouting:
         assert result == "UNKNOWN"
         assert mock_workflow_manager_instance.run_workflow.call_count == 3
 
+    @patch('Middleware.services.prompt_categorization_service.WorkflowManager')
+    def test_unmatched_output_runs_default_workflow_end_to_end(self, MockWorkflowManager, service, mocker):
+        """End-to-end router-failure fallback: when the categorization LLM's output
+        matches no configured category, the request must run '_DefaultWorkflow' via
+        run_custom_workflow, and no category workflow may be instantiated. This is
+        the fallback Chris mirrors every user's main workflow into."""
+        mock_categorization_wm = MagicMock()
+        mock_categorization_wm.run_workflow.return_value = "gibberish that matches nothing"
+        mocker.patch.object(service, '_configure_workflow_manager',
+                            return_value=mock_categorization_wm)
+        messages = [{"role": "user", "content": "hello"}]
+
+        service.get_prompt_category(messages, "req-99", "disc-99", stream=True)
+
+        MockWorkflowManager.run_custom_workflow.assert_called_once_with(
+            workflow_name='_DefaultWorkflow',
+            request_id="req-99",
+            discussion_id="disc-99",
+            messages=messages,
+            is_streaming=True,
+            api_key=None,
+            tools=None,
+            tool_choice=None,
+        )
+        # No category workflow was constructed for the unmatched request.
+        MockWorkflowManager.assert_not_called()
+
     def test_categorize_request_succeeds_on_retry(self, service, mocker):
         """
         Verifies that if the workflow fails once but succeeds on a retry,
@@ -334,10 +410,19 @@ class TestCategorizationAndRouting:
         ]
         mocker.patch.object(service, '_configure_workflow_manager', return_value=mock_workflow_manager_instance)
 
-        result = service._categorize_request([{"role": "user", "content": "test"}], "req-123")
+        messages = [{"role": "user", "content": "test"}]
+        result = service._categorize_request(messages, "req-123")
 
         assert result == "TECHNICAL"
         assert mock_workflow_manager_instance.run_workflow.call_count == 2
+        # Every attempt must be a non-responding, non-streaming call.
+        for call in mock_workflow_manager_instance.run_workflow.call_args_list:
+            assert call.kwargs == {
+                "messages": messages,
+                "request_id": "req-123",
+                "nonResponder": True,
+                "stream": False,
+            }
 
 
 class TestMatchCategoryUnderscoreKeys:
@@ -496,7 +581,7 @@ class TestCategorizeRequestWithUnderscoreKeys:
     """
 
     def test_llm_returns_exact_underscore_key(self, underscore_service, mocker):
-        """LLM returns 'NEW_INSTRUCTION' — the underscore is stripped, must still match."""
+        """LLM returns 'NEW_INSTRUCTION'; the underscore is stripped, must still match."""
         mock_wm = MagicMock()
         mock_wm.run_workflow.return_value = "NEW_INSTRUCTION"
         mocker.patch.object(underscore_service, '_configure_workflow_manager', return_value=mock_wm)
@@ -513,7 +598,7 @@ class TestCategorizeRequestWithUnderscoreKeys:
         assert result == "TOOL_CONTINUATION"
 
     def test_llm_returns_key_in_sentence(self, underscore_service, mocker):
-        """LLM wraps the category in a sentence — punctuation stripped, then matched."""
+        """LLM wraps the category in a sentence; punctuation stripped, then matched."""
         mock_wm = MagicMock()
         mock_wm.run_workflow.return_value = "The category is NEW_INSTRUCTION."
         mocker.patch.object(underscore_service, '_configure_workflow_manager', return_value=mock_wm)
@@ -522,7 +607,7 @@ class TestCategorizeRequestWithUnderscoreKeys:
         assert result == "NEW_INSTRUCTION"
 
     def test_llm_returns_key_with_quotes(self, underscore_service, mocker):
-        """LLM wraps answer in quotes — quotes are stripped as punctuation."""
+        """LLM wraps answer in quotes; quotes are stripped as punctuation."""
         mock_wm = MagicMock()
         mock_wm.run_workflow.return_value = '"NEW_INSTRUCTION"'
         mocker.patch.object(underscore_service, '_configure_workflow_manager', return_value=mock_wm)
@@ -539,7 +624,7 @@ class TestCategorizeRequestWithUnderscoreKeys:
         assert result == "TOOL_CONTINUATION"
 
     def test_llm_returns_key_with_asterisks(self, underscore_service, mocker):
-        """LLM uses markdown bold — asterisks are stripped."""
+        """LLM uses markdown bold; asterisks are stripped."""
         mock_wm = MagicMock()
         mock_wm.run_workflow.return_value = "**NEW_INSTRUCTION**"
         mocker.patch.object(underscore_service, '_configure_workflow_manager', return_value=mock_wm)
@@ -548,7 +633,7 @@ class TestCategorizeRequestWithUnderscoreKeys:
         assert result == "NEW_INSTRUCTION"
 
     def test_llm_returns_key_with_colon_prefix(self, underscore_service, mocker):
-        """LLM says 'Category: NEW_INSTRUCTION' — colon stripped."""
+        """LLM says 'Category: NEW_INSTRUCTION'; the colon is stripped."""
         mock_wm = MagicMock()
         mock_wm.run_workflow.return_value = "Category: NEW_INSTRUCTION"
         mocker.patch.object(underscore_service, '_configure_workflow_manager', return_value=mock_wm)

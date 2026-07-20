@@ -170,7 +170,6 @@ class WorkflowManager:
             self.path_finder_func = lambda wn: default_get_workflow_path(wn,
                                                                          user_folder_override=workflow_user_folder_override)
         else:
-            # Keep original behavior
             self.path_finder_func = kwargs.pop('path_finder_func', default_get_workflow_path)
 
         self.workflowConfigName = workflow_config_name
@@ -216,6 +215,7 @@ class WorkflowManager:
             "WriteCurrentSummaryToFileAndReturnIt": memory_node_handler,
             "QualityMemory": memory_node_handler,
             "GetCurrentMemoryFromFile": memory_node_handler,
+            "GetCurrentStateDocument": memory_node_handler,
 
             # Tool-based Search nodes
             "ConversationalKeywordSearchPerformerTool": tool_node_handler,
@@ -234,6 +234,7 @@ class WorkflowManager:
             # Other node types
             "CustomWorkflow": sub_workflow_handler,
             "ConditionalCustomWorkflow": sub_workflow_handler,
+            "ConversationChunkProcessor": sub_workflow_handler,
             "WorkflowLock": specialized_node_handler,
             "GetCustomFile": specialized_node_handler,
             "SaveCustomFile": specialized_node_handler,
@@ -290,11 +291,15 @@ class WorkflowManager:
         # Tool-related messages are preserved even if their content is empty, because
         # assistant messages with tool_calls and tool-role responses with tool_call_id
         # carry structural data that the LLM needs to maintain the tool call chain.
+        # Image-only messages (empty content plus an ``images`` payload, as emitted by
+        # Ollama generate and by OpenAI chat when addUserAssistant is off) are likewise
+        # preserved so an ImageProcessor node still sees them.
         messages[:] = [
             m for m in messages
             if m.get('content', '').strip()
             or m.get('tool_calls')
             or m.get('tool_call_id')
+            or m.get('images')
         ]
 
         try:

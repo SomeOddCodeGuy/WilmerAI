@@ -10,8 +10,10 @@ from urllib.parse import urljoin, urlsplit
 import requests
 
 from Middleware.utilities.network_security_utils import check_url_allowed
-from Middleware.utilities.streaming_utils import stream_static_content
 from Middleware.workflows.handlers.base.base_workflow_node_handler import BaseHandler
+from Middleware.workflows.handlers.impl.extension_node_helpers import (
+    maybe_stream, resolve_allowed_hosts, validate_bool, validate_max_bytes, validate_timeout,
+)
 from Middleware.workflows.models.execution_context import ExecutionContext
 
 logger = logging.getLogger(__name__)
@@ -51,7 +53,7 @@ _HTML_STRIP_SKIP_TAGS = frozenset({"script", "style", "head", "noscript", "ifram
 
 
 class _HtmlTextExtractor(HTMLParser):
-    """A minimal stdlib-only HTML→text extractor.
+    """A minimal stdlib-only HTML-to-text extractor.
 
     Skips content inside non-visible container tags (script/style/head/noscript/iframe)
     and collects everything else as text, one non-empty chunk per text-bearing element.
@@ -164,14 +166,16 @@ class WebFetchHandler(BaseHandler):
             raise ValueError("WebFetch node requires a 'url' field.")
 
         method = str(config.get("method", "GET")).upper()
-        timeout = self._validate_timeout(config.get("timeout", _DEFAULT_TIMEOUT_SECONDS))
+        timeout = validate_timeout(config.get("timeout", _DEFAULT_TIMEOUT_SECONDS), "WebFetch")
         output_format = config.get("outputFormat", "text")
         on_error = config.get("onError", "raise")
         proxy_template = config.get("proxy")
-        allow_redirects = self._validate_bool(config.get("allowRedirects", True), "allowRedirects")
-        max_bytes = self._validate_max_bytes(config.get("maxResponseBytes", _DEFAULT_MAX_RESPONSE_BYTES))
-        block_private = self._validate_bool(config.get("blockPrivateAddresses", False), "blockPrivateAddresses")
-        allowed_hosts = self._resolve_allowed_hosts(config.get("allowedHosts"), context)
+        allow_redirects = validate_bool(config.get("allowRedirects", True), "allowRedirects", "WebFetch")
+        max_bytes = validate_max_bytes(config.get("maxResponseBytes", _DEFAULT_MAX_RESPONSE_BYTES), "WebFetch")
+        block_private = validate_bool(config.get("blockPrivateAddresses", False), "blockPrivateAddresses", "WebFetch")
+        allowed_hosts = resolve_allowed_hosts(
+            config.get("allowedHosts"), context, self.workflow_variable_service, "WebFetch"
+        )
 
         if output_format not in _VALID_OUTPUT_FORMATS:
             raise ValueError(
@@ -234,7 +238,7 @@ class WebFetchHandler(BaseHandler):
                 if err_response is not None:
                     self._load_capped_error_body(err_response, max_bytes)
             result = self._format_error(exc, output_format)
-            return self._maybe_stream(result, context)
+            return maybe_stream(result, context)
 
         try:
             result = self._format_response(response, output_format)
@@ -249,7 +253,7 @@ class WebFetchHandler(BaseHandler):
             if on_error == "raise":
                 raise
             result = self._format_error(exc, output_format, response=response)
-        return self._maybe_stream(result, context)
+        return maybe_stream(result, context)
 
     def _request_with_guard(
         self,
@@ -367,37 +371,6 @@ class WebFetchHandler(BaseHandler):
         """
         return (urlsplit(url_a).hostname or "").lower() == (urlsplit(url_b).hostname or "").lower()
 
-    def _resolve_allowed_hosts(
-        self,
-        allowed_hosts_template: Any,
-        context: ExecutionContext,
-    ) -> FrozenSet[str]:
-        """Resolves the optional ``allowedHosts`` allowlist to a set of lowercased hosts.
-
-        Absent (``None``) means no allowlist (empty set). Each entry supports variable
-        substitution so an allowlist can be sourced from a workflow variable.
-
-        Args:
-            allowed_hosts_template (Any): The configured allowlist (None or a list of host strings).
-            context (ExecutionContext): The runtime context used for variable substitution.
-
-        Returns:
-            FrozenSet[str]: The lowercased, substituted host allowlist (empty when absent).
-
-        Raises:
-            ValueError: When ``allowedHosts`` is set but is not a list.
-        """
-        if allowed_hosts_template is None:
-            return frozenset()
-        if not isinstance(allowed_hosts_template, list):
-            raise ValueError("WebFetch 'allowedHosts' must be a JSON list of host strings.")
-        resolved = set()
-        for entry in allowed_hosts_template:
-            value = self.workflow_variable_service.apply_variables(str(entry), context).strip().lower()
-            if value:
-                resolved.add(value)
-        return frozenset(resolved)
-
     def _resolve_proxies(
         self,
         proxy_template: Any,
@@ -465,7 +438,7 @@ class WebFetchHandler(BaseHandler):
             ValueError: When ``verify`` is not a boolean, ``caBundle`` is set but is not
                 a string, or the resolved ``caBundle`` path does not point at a file.
         """
-        verify = self._validate_bool(verify_value, "verify")
+        verify = validate_bool(verify_value, "verify", "WebFetch")
         if not verify:
             logger.warning(
                 "WebFetch TLS certificate verification is DISABLED (verify=false). The "
@@ -516,76 +489,6 @@ class WebFetchHandler(BaseHandler):
         return resolved
 
     @staticmethod
-    def _validate_timeout(value: Any) -> float:
-        """Coerces the configured timeout to a positive number of seconds.
-
-        Mirrors the node's other up-front field validations so a non-numeric
-        or non-positive value raises a clear ``ValueError`` instead of an
-        opaque ``TypeError`` from deep inside ``requests``.
-
-        Args:
-            value (Any): The configured ``timeout`` value to validate and coerce.
-
-        Returns:
-            float: The validated timeout as a positive number of seconds.
-
-        Raises:
-            ValueError: When the value is a boolean, non-numeric, or not positive.
-        """
-        if isinstance(value, bool):
-            raise ValueError(f"WebFetch 'timeout' must be a number of seconds; got {value!r}.")
-        if not isinstance(value, (int, float)):
-            try:
-                value = float(value)
-            except (TypeError, ValueError):
-                raise ValueError(f"WebFetch 'timeout' must be a number of seconds; got {value!r}.")
-        if value <= 0:
-            raise ValueError(f"WebFetch 'timeout' must be a positive number of seconds; got {value!r}.")
-        return value
-
-    @staticmethod
-    def _validate_bool(value: Any, field: str) -> bool:
-        """Validates a boolean config field, mirroring the node's other field validations.
-
-        Args:
-            value (Any): The configured value to validate.
-            field (str): The field name, used in the error message.
-
-        Returns:
-            bool: The validated boolean value.
-
-        Raises:
-            ValueError: When the value is not a boolean.
-        """
-        if not isinstance(value, bool):
-            raise ValueError(f"WebFetch '{field}' must be a boolean (true/false); got {value!r}.")
-        return value
-
-    @staticmethod
-    def _validate_max_bytes(value: Any) -> int:
-        """Coerces the configured response cap to an integer number of bytes.
-
-        ``0`` (or any non-positive value) disables the cap. A non-numeric value
-        raises a clear ``ValueError`` rather than failing deep in the read loop.
-
-        Args:
-            value (Any): The configured ``maxResponseBytes`` value to validate and coerce.
-
-        Returns:
-            int: The validated cap in bytes (non-positive disables the cap).
-
-        Raises:
-            ValueError: When the value is a boolean or cannot be coerced to an integer.
-        """
-        if isinstance(value, bool):
-            raise ValueError(f"WebFetch 'maxResponseBytes' must be an integer; got {value!r}.")
-        try:
-            value = int(value)
-        except (TypeError, ValueError):
-            raise ValueError(f"WebFetch 'maxResponseBytes' must be an integer; got {value!r}.")
-        return value
-
-    @staticmethod
     def _load_capped_content(response: requests.Response, max_bytes: int) -> None:
         """Reads a streamed response body up to ``max_bytes`` and populates ``response.content``.
 
@@ -614,7 +517,7 @@ class WebFetchHandler(BaseHandler):
                 )
             chunks.append(chunk)
         # Populate the response so .text/.json() work normally downstream. This sets
-        # `requests.Response` private internals (_content/_content_consumed) — the
+        # `requests.Response` private internals (_content/_content_consumed), the
         # standard idiom for a manually-streamed read, valid against the pinned
         # `requests` version; revisit here if that pin is ever bumped.
         response._content = b"".join(chunks)
@@ -711,18 +614,3 @@ class WebFetchHandler(BaseHandler):
             return response.text
         return str(exc)
 
-    @staticmethod
-    def _maybe_stream(payload: str, context: ExecutionContext) -> Any:
-        """Returns the payload as a streaming generator when streaming is enabled.
-
-        Args:
-            payload (str): The already-rendered string payload to return or stream.
-            context (ExecutionContext): The runtime context whose ``stream`` flag is checked.
-
-        Returns:
-            Any: A streaming generator wrapping the payload when ``context.stream`` is True,
-                otherwise the payload string unchanged.
-        """
-        if context.stream:
-            return stream_static_content(payload)
-        return payload

@@ -141,7 +141,7 @@ descriptions.
 
 ## Archived Example: A Multi-Character Group Chat
 
-Routing does not have to choose between *task types* -- it can also choose between *speakers*. WilmerAI used to ship a
+Routing does not have to choose between *task types*; it can also choose between *speakers*. WilmerAI used to ship a
 `group-chat-example` user that let several models talk as different characters in a single conversation: the routing
 config mapped each character name to that character's own workflow, and the categorization step picked who should
 respond next.
@@ -150,9 +150,9 @@ That user is no longer wired up to run out of the box, but it has been kept unde
 folder as a reference for building this style of setup:
 
 * `Public/Configs/Users/_archived/group-chat-example.json`
-* `Public/Configs/Routing/_archived/groupChatExampleCategoriesConfig.json` -- one category per character (CHATGPT,
+* `Public/Configs/Routing/_archived/groupChatExampleCategoriesConfig.json`: one category per character (CHATGPT,
   Claire, DataFinder, Eve, LePi, Lex, MrDramaLlama, MusicalMinstral), each pointing at that character's workflow.
-* `Public/Configs/Workflows/_archived/group-chat-example/` -- the per-character workflows plus the
+* `Public/Configs/Workflows/_archived/group-chat-example/`: the per-character workflows plus the
   `CustomCategorizationWorkflow` that selects the speaker.
 
 To turn it back into a running user you would supply your own Endpoints and Presets, but the routing, categorization,

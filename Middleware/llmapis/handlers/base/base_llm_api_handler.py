@@ -5,8 +5,6 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, Generator, List, Optional, Union
 
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3 import Retry
 
 try:
     import eventlet
@@ -15,20 +13,24 @@ except ImportError:
     EVENTLET_AVAILABLE = False
 
 
+from Middleware.llmapis.handlers.base.base_api_transport import BaseApiTransport, _AbortHandle
 from Middleware.llmapis.sampler_translation import normalize_gen_input
 from Middleware.services.cancellation_service import cancellation_service
-from Middleware.utilities.config_utils import get_config_property_if_exists, get_connect_timeout
+from Middleware.utilities.config_utils import get_config_property_if_exists
 from Middleware.utilities.sensitive_logging_utils import sensitive_log, log_prompt_content
+from Middleware.utilities.structured_output_utils import get_structured_output_config
 
 logger = logging.getLogger(__name__)
 
 
-class LlmApiHandler(ABC):
+class LlmApiHandler(BaseApiTransport, ABC):
     """
-    Defines the abstract interface and shared HTTP logic for all LLM API handlers.
+    Defines the abstract interface and shared generation logic for all LLM API handlers.
 
-    Provides the core functionality for sending HTTP requests and processing responses
-    in both streaming and non-streaming modes. Concrete subclasses must implement
+    Inherits HTTP transport concerns (session lifecycle, retry policy, timeouts,
+    and the cancellation-aware non-streaming POST skeleton) from BaseApiTransport,
+    and layers generation-specific behavior on top: streaming, prompt/payload
+    preparation, and sampler injection. Concrete subclasses must implement
     API-specific logic for payload creation and response parsing.
     """
 
@@ -53,19 +55,10 @@ class LlmApiHandler(ABC):
                 manual non-streaming retry loop to a single attempt. Set by LlmApiService
                 when a backup endpoint is configured so failover happens on first failure.
         """
-        self.base_url = base_url
-        self.api_key = api_key
+        super().__init__(base_url=base_url, api_key=api_key, headers=headers,
+                         suppress_retries=suppress_retries)
         self.gen_input = gen_input
         self.model_name = model_name
-        self.headers = headers
-        self.suppress_retries = suppress_retries
-        self.session = requests.Session()
-        if suppress_retries:
-            retries = Retry(total=0)
-        else:
-            retries = Retry(total=5, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
-        self.session.mount("http://", HTTPAdapter(max_retries=retries))
-        self.session.mount("https://", HTTPAdapter(max_retries=retries))
         self.stream = stream
         self.endpoint_config = endpoint_config
         self.api_type_config = api_type_config
@@ -74,7 +67,6 @@ class LlmApiHandler(ABC):
         self.stream_property_name = get_config_property_if_exists("streamPropertyName", api_type_config)
         self.max_token_property_name = get_config_property_if_exists("maxNewTokensPropertyName", api_type_config)
         self.dont_include_model = dont_include_model
-        self.connect_timeout = get_connect_timeout()
 
     @abstractmethod
     def _get_api_endpoint_url(self) -> str:
@@ -89,7 +81,8 @@ class LlmApiHandler(ABC):
     @abstractmethod
     def _prepare_payload(self, conversation: Optional[List[Dict[str, str]]], system_prompt: Optional[str],
                          prompt: Optional[str], *, tools: Optional[List[Dict]] = None,
-                         tool_choice: Optional[Any] = None) -> Dict:
+                         tool_choice: Optional[Any] = None,
+                         structured_output_schema: Optional[Dict] = None) -> Dict:
         """
         Creates the JSON payload for the LLM API request.
 
@@ -99,11 +92,66 @@ class LlmApiHandler(ABC):
             prompt (Optional[str]): The latest user prompt.
             tools (Optional[List[Dict]]): Tool definitions in OpenAI format.
             tool_choice (Optional[Any]): Tool selection policy.
+            structured_output_schema (Optional[Dict]): JSON schema to constrain
+                the response with, when the API type supports it.
 
         Returns:
             Dict: The formatted request payload as a dictionary.
         """
         raise NotImplementedError
+
+    def _attach_structured_output(self, payload: Dict, structured_output_schema: Optional[Dict]) -> None:
+        """
+        Attaches a structured-output constraint to a payload, per the API type.
+
+        The ApiType's "structuredOutput" block is declarative (like "thinking"
+        and "samplerFieldMap"): "field" names the payload key the schema is
+        written to, dotted for nesting (e.g. "structured_outputs.json"),
+        and "style" names the wrapper shape ("openaiJsonSchema" or "raw").
+        When the API type declares no valid block the payload is left unchanged
+        and a warning is logged; callers must not assume the response will be
+        constrained (and should post-parse-check it regardless: some backends
+        accept a constraint field and silently fail to enforce it).
+
+        Args:
+            payload (Dict): The request payload to mutate.
+            structured_output_schema (Optional[Dict]): The JSON schema, or None
+                to do nothing.
+        """
+        if not structured_output_schema:
+            return
+        so_config = get_structured_output_config(self.api_type_config)
+        if not so_config:
+            logger.warning(
+                "Structured output was requested but this endpoint's API type "
+                "declares no valid structuredOutput block; sending the request "
+                "unconstrained.")
+            return
+        if so_config["style"] == "openaiJsonSchema":
+            value = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "wilmer_structured_output",
+                    "strict": so_config["strict"],
+                    "schema": structured_output_schema,
+                },
+            }
+        else:  # "raw"
+            value = structured_output_schema
+        target = payload
+        *parents, leaf = so_config["field"].split(".")
+        for key in parents:
+            nxt = target.get(key)
+            if not isinstance(nxt, dict):
+                nxt = {}
+                target[key] = nxt
+            target = nxt
+        if leaf in target:
+            logger.warning(
+                "Structured output is overwriting the existing payload field '%s' "
+                "(preset- or sampler-supplied); the schema constraint wins.",
+                so_config["field"])
+        target[leaf] = value
 
     @abstractmethod
     def _process_stream_data(self, data_str: str) -> Optional[Dict[str, Any]]:
@@ -157,7 +205,8 @@ class LlmApiHandler(ABC):
     def handle_streaming(self, conversation: Optional[List[Dict[str, str]]] = None, system_prompt: Optional[str] = None,
                          prompt: Optional[str] = None, request_id: Optional[str] = None,
                          tools: Optional[List[Dict]] = None,
-                         tool_choice: Optional[Any] = None) -> Generator[Dict[str, Any], None, None]:
+                         tool_choice: Optional[Any] = None,
+                         structured_output_schema: Optional[Dict] = None) -> Generator[Dict[str, Any], None, None]:
         """
         Manages a streaming request to the LLM API.
 
@@ -182,7 +231,8 @@ class LlmApiHandler(ABC):
             requests.exceptions.RequestException: If a non-cancellation network error
                 occurs and all retries are exhausted.
         """
-        payload = self._prepare_payload(conversation, system_prompt, prompt, tools=tools, tool_choice=tool_choice)
+        payload = self._prepare_payload(conversation, system_prompt, prompt, tools=tools, tool_choice=tool_choice,
+                                        structured_output_schema=structured_output_schema)
         sensitive_log(logger, logging.DEBUG, "Payload being sent to LLM API: %s", payload)
         url = self._get_api_endpoint_url()
 
@@ -203,34 +253,11 @@ class LlmApiHandler(ABC):
             logger.info(f"Using standard synchronous streaming for request_id: {request_id}")
 
         # --- Abort Callback Setup ---
-        response_to_abort = None
-
-        def abort_callback():
-            """Aggressively closes the HTTP session to interrupt the stream or prefill phase."""
-            nonlocal response_to_abort
-            logger.info(f"Abort callback triggered for request_id: {request_id}. Starting session close procedure.")
-
-            # Primary Mechanism: Close the session aggressively.
-            try:
-                logger.info(f"Closing the entire session for request_id: {request_id}")
-                self.session.adapters.clear()
-                self.session.close()
-                logger.info(f"Session closed successfully for request_id: {request_id}")
-            except Exception as e:
-                logger.error(f"Error closing session in abort callback for request_id {request_id}: {e}")
-
-            # Secondary cleanup
-            if response_to_abort is not None:
-                try:
-                    logger.debug(f"Closing response object for request_id: {request_id}")
-                    response_to_abort.close()
-                except Exception as e:
-                    logger.debug(f"Error closing response object in abort callback: {e}")
-                response_to_abort = None
+        abort_handle = _AbortHandle(self.session, request_id, "streaming")
 
         if request_id:
             logger.info(f"Registering abort callback for request_id: {request_id}")
-            cancellation_service.register_abort_callback(request_id, abort_callback)
+            cancellation_service.register_abort_callback(request_id, abort_handle.abort)
 
         # --- Streaming Logic ---
         # When Eventlet is active, session.post() is monkey-patched to be cooperative
@@ -239,7 +266,7 @@ class LlmApiHandler(ABC):
             logger.info(f"Starting POST request for streaming request_id: {request_id}")
             # This call is cooperative when Eventlet is active (monkey-patched)
             with self.session.post(url, headers=self.headers, json=payload, stream=True, timeout=(self.connect_timeout, 14400)) as response:
-                response_to_abort = response
+                abort_handle.response = response
 
                 # Check for errors and capture the response body before raising
                 if response.status_code >= 400:
@@ -275,20 +302,15 @@ class LlmApiHandler(ABC):
                     if self._iterate_by_lines:
                         data_str = line
                     else:
-                        # SSE parsing logic
+                        # SSE parsing. startswith guarantees the ":" separator, so
+                        # split(":", 1)[1] cannot raise.
                         if line.startswith("event:"):
-                            try:
-                                current_event = line.split(":", 1)[1].strip()
-                            except IndexError:
-                                pass
+                            current_event = line.split(":", 1)[1].strip()
                             continue
                         if line.startswith("data:"):
                             if self._required_event_name and current_event != self._required_event_name:
                                 continue
-                            try:
-                                data_str = line.split(":", 1)[1].strip()
-                            except IndexError:
-                                pass
+                            data_str = line.split(":", 1)[1].strip()
 
                     if data_str is None or data_str == '[DONE]':
                         continue
@@ -311,12 +333,12 @@ class LlmApiHandler(ABC):
                 logger.info(f"Request {request_id} encountered expected error due to cancellation. Exiting gracefully. (Error: {type(e).__name__})")
                 return
             else:
-                # Genuine error - details already logged above if it was an HTTP error
+                # Genuine error; details already logged above if it was an HTTP error
                 logger.error(f"Error during streaming: {e}", exc_info=True)
-                raise e
+                raise
         except Exception as e:
             logger.error(f"Unexpected error during streaming: {e}", exc_info=True)
-            raise e
+            raise
         finally:
             # Clean up the abort callback
             if request_id:
@@ -326,9 +348,15 @@ class LlmApiHandler(ABC):
                              system_prompt: Optional[str] = None, prompt: Optional[str] = None,
                              request_id: Optional[str] = None,
                              tools: Optional[List[Dict]] = None,
-                             tool_choice: Optional[Any] = None) -> Union[str, Dict[str, Any]]:
+                             tool_choice: Optional[Any] = None,
+                             structured_output_schema: Optional[Dict] = None) -> Union[str, Dict[str, Any]]:
         """
         Manages a non-streaming request to the LLM API to get a complete response.
+
+        The HTTP transport (retry loop, cancellation handling, abort callbacks)
+        is delegated to BaseApiTransport.execute_non_streaming_post; this method
+        contributes the generation-specific payload preparation and response
+        parsing around it.
 
         Args:
             conversation (Optional[List[Dict[str, str]]]): The history of the conversation.
@@ -343,7 +371,9 @@ class LlmApiHandler(ABC):
             or a dictionary with 'content', 'tool_calls', and 'finish_reason' keys
             when the response includes tool calls.
         """
-        # Check if already cancelled before making the request
+        # Check if already cancelled before making the request. The transport
+        # repeats this check, but doing it here first avoids preparing a payload
+        # for a request that will never be sent.
         if request_id and cancellation_service.is_cancelled(request_id):
             logger.info(f"Request {request_id} was already cancelled before starting LLM request.")
             try:
@@ -352,94 +382,26 @@ class LlmApiHandler(ABC):
                 pass
             return ""
 
-        payload = self._prepare_payload(conversation, system_prompt, prompt, tools=tools, tool_choice=tool_choice)
+        payload = self._prepare_payload(conversation, system_prompt, prompt, tools=tools, tool_choice=tool_choice,
+                                        structured_output_schema=structured_output_schema)
         url = self._get_api_endpoint_url()
-        retries = 1 if self.suppress_retries else 3
 
-        for attempt in range(retries):
-            # Check for cancellation before each retry
-            if request_id and cancellation_service.is_cancelled(request_id):
-                logger.info(f"Request {request_id} was cancelled before attempt {attempt + 1}.")
-                return ""
+        response_json = self.execute_non_streaming_post(url, payload, request_id=request_id)
+        if response_json is None:
+            # The request was cancelled before or during execution.
+            return ""
 
-            response_to_abort = None
+        try:
+            result = self._parse_non_stream_response(response_json)
+        except Exception as e:
+            logger.error(f"Unexpected error in {self.__class__.__name__}: {e}", exc_info=True)
+            raise
 
-            def abort_callback():
-                """Aggressively closes the HTTP connection to interrupt the request."""
-                nonlocal response_to_abort
-                logger.info(f"Abort callback invoked (non-streaming) for request_id: {request_id}. Forcefully closing the session.")
-
-                # Primary Mechanism: Close the session aggressively.
-                try:
-                    logger.info(f"Closing the entire session (non-streaming) for request_id: {request_id}")
-                    # Clearing adapters forces urllib3 to dispose of the connection pool immediately.
-                    self.session.adapters.clear()
-                    self.session.close()
-                    logger.info(f"Session closed successfully (non-streaming) for request_id: {request_id}")
-                except Exception as e:
-                    logger.error(f"Error closing session in abort callback (non-streaming): {e}")
-
-                # Secondary cleanup: Close the specific response object if it exists.
-                if response_to_abort is not None:
-                    try:
-                        logger.debug(f"Closing response object (non-streaming) for request_id: {request_id}")
-                        response_to_abort.close()
-                    except Exception as e:
-                        logger.debug(f"Error closing response object in abort callback (non-streaming): {e}")
-                    response_to_abort = None
-
-            # Register the abort callback if we have a request_id
-            if request_id:
-                cancellation_service.register_abort_callback(request_id, abort_callback)
-
-            try:
-                # This call blocks. Closing the session will cause an exception here.
-                response = self.session.post(url, headers=self.headers, json=payload, timeout=(self.connect_timeout, 14400))
-                response_to_abort = response
-
-                response.raise_for_status()
-                response_json = response.json()
-                result = self._parse_non_stream_response(response_json)
-
-                if isinstance(result, dict):
-                    log_prompt_content(logger, "Raw output from the LLM", result.get('content', ''))
-                    return result
-                log_prompt_content(logger, "Raw output from the LLM", result)
-                return result or ""
-            except (requests.exceptions.RequestException, ConnectionError, OSError) as e:
-                # Check if this was due to cancellation (session closed by abort_callback)
-                if request_id and cancellation_service.is_cancelled(request_id):
-                    logger.info(f"Request {request_id} was cancelled during non-streaming request. Connection closed.")
-                    # Cleanup handled in finally
-                    return ""
-
-                is_final = attempt == retries - 1
-                logger.error(
-                    f"Attempt {attempt + 1} of {retries} for {self.__class__.__name__} failed: {e}",
-                    exc_info=is_final)
-                if is_final:
-                    # Cleanup handled in finally
-                    raise
-
-            except Exception as e:
-                logger.error(f"Unexpected error in {self.__class__.__name__}: {e}", exc_info=True)
-                # Cleanup handled in finally
-                raise
-            except (KeyboardInterrupt, SystemExit, GeneratorExit):
-                # Normal control-flow / teardown (Ctrl-C, process shutdown, eventlet
-                # GreenletExit arrives as GeneratorExit): re-raise cleanly without logging
-                # an error-level traceback for what is not an error.
-                raise
-            except BaseException as e:
-                logger.error(f"BaseException in {self.__class__.__name__} (request_id={request_id}): "
-                             f"{type(e).__name__}: {e}", exc_info=True)
-                raise
-            finally:
-                # Ensure cleanup happens after every attempt (success or failure)
-                if request_id:
-                    cancellation_service.unregister_abort_callbacks(request_id)
-
-        return ""
+        if isinstance(result, dict):
+            log_prompt_content(logger, "Raw output from the LLM", result.get('content', ''))
+            return result
+        log_prompt_content(logger, "Raw output from the LLM", result)
+        return result or ""
 
     def set_gen_input(self):
         """
@@ -475,13 +437,6 @@ class LlmApiHandler(ABC):
                 self.gen_input[self.max_token_property_name] = self.max_tokens
                 logger.debug(f"Added {self.max_token_property_name}={self.max_tokens} to gen_input")
         else:
-            logger.warning(f"max_token_property_name is not set, max_tokens will not be included in payload")
+            logger.warning("max_token_property_name is not set, max_tokens will not be included in payload")
 
         self.gen_input = normalize_gen_input(self.gen_input)
-
-    def close(self):
-        """Closes the HTTP session to release keep-alive connections."""
-        try:
-            self.session.close()
-        except Exception:
-            pass

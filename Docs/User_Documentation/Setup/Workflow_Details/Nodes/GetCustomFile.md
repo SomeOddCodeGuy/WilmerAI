@@ -3,8 +3,8 @@
 ### Overview
 
 The **`GetCustomFile`** node is a utility node that loads the content of a local text file directly into a workflow.
-This allows you to inject large blocks of static text -- like project specifications, reference documents, or configuration
-templates -- without cluttering the workflow JSON itself.
+This allows you to inject large blocks of static text (like project specifications, reference documents, or
+configuration templates) without cluttering the workflow JSON itself.
 
 The content of the file is returned as a string, which can then be used by subsequent nodes through the workflow's
 variable system (e.g., `{agent1Output}`).
@@ -78,7 +78,7 @@ Each field is explained in detail below.
     * **Type**: `Integer`
     * **Required**: No
     * **Description**: Optional, opt-in limiting. When set, the node returns only the first N (`headCount`) or last N
-      (`tailCount`) chunks of the file instead of the whole thing -- the content is split on `chunkDelimiter` (a single
+      (`tailCount`) chunks of the file instead of the whole thing; the content is split on `chunkDelimiter` (a single
       newline by default, so "the last N lines"). This is the clean way to feed only the recent tail of an unbounded log
       into an LLM without reading the entire file into context. Set **at most one** of the two; setting both returns an
       error. A count larger than the number of chunks simply returns everything.

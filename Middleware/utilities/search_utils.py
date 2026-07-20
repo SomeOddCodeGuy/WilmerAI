@@ -1,23 +1,11 @@
 # /Middleware/utilities/search_utils.py
 
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from itertools import combinations
 from typing import List, Dict
 
-# Conditional import for sklearn dependencies
-try:
-    from sklearn.feature_extraction.text import TfidfVectorizer
-except ImportError:
-    TfidfVectorizer = None
-
-# Assuming tokenize is correctly imported. We define a fallback for robustness.
-try:
-    from Middleware.utilities.text_utils import tokenize
-except ImportError:
-    # Fallback definition using standard word boundaries.
-    def tokenize(text: str) -> List[str]:
-        return re.findall(r'\b\w+\b', text)
+from Middleware.utilities.text_utils import tokenize
 
 
 def build_inverted_index(lines: List[str]) -> Dict[str, List[int]]:
@@ -41,8 +29,11 @@ def build_inverted_index(lines: List[str]) -> Dict[str, List[int]]:
         for token in tokenize(line):
             token_lower = token.lower().strip()
             if token_lower not in speakers_in_line:
-                if line_number not in index[token_lower]:
-                    index[token_lower].append(line_number)
+                postings = index[token_lower]
+                # Lines are indexed in order, so a duplicate line number can only
+                # ever be the most recent entry.
+                if not postings or postings[-1] != line_number:
+                    postings.append(line_number)
     return index
 
 
@@ -72,8 +63,8 @@ def calculate_line_scores(lines: List[str], index: Dict[str, List[int]], query_t
             relevant_line_numbers.update(index[token])
     for line_number in relevant_line_numbers:
         if line_number < len(lines):
-            line_tokens = [word.lower() for word in tokenize(lines[line_number])]
-            score = sum(line_tokens.count(query_token) for query_token in lower_query_tokens)
+            line_token_counts = Counter(word.lower() for word in tokenize(lines[line_number]))
+            score = sum(line_token_counts[query_token] for query_token in lower_query_tokens)
             if score > 0:
                 line_scores[line_number] = score
     return line_scores
@@ -223,65 +214,3 @@ def filter_keywords_by_speakers(messages: List[Dict[str, str]], keywords: str) -
     return result
 
 
-def calculate_tfidf_scores(chunks: List[str], query: str) -> List[float]:
-    """
-    Calculates TF-IDF scores for each text chunk against a query.
-
-    This function uses the Term Frequency-Inverse Document Frequency (TF-IDF)
-    algorithm to evaluate the relevance of each chunk in a list to a given
-    query string. It returns a score for each chunk indicating its relevance.
-
-    Args:
-        chunks (List[str]): A list of text chunks (documents) to score.
-        query (str): The query string to use for comparison.
-
-    Returns:
-        List[float]: A list of TF-IDF scores, where each score corresponds to a
-        chunk at the same index.
-    """
-    if not chunks or not query:
-        return [0.0] * len(chunks)
-    if TfidfVectorizer is None:
-        return [0.0] * len(chunks)
-    try:
-        vectorizer = TfidfVectorizer()
-        tfidf_matrix = vectorizer.fit_transform(chunks)
-        query_vector = vectorizer.transform([query])
-        scores = (tfidf_matrix * query_vector.T).toarray().flatten()
-        return scores.tolist()
-    except ValueError:
-        return [0.0] * len(chunks)
-
-
-def advanced_search(lines: List[str], index: Dict[str, List[int]], query: str, max_excerpts: int = 5,
-                    proximity_limit: int = 5) -> List[str]:
-    """
-    Performs an advanced search using a pre-built inverted index.
-
-    This function executes a search query against a list of text lines. It
-    leverages a provided inverted index for efficiency, calculates line scores,
-    applies a proximity filter to refine results, and returns a list of the
-    top-scoring lines.
-
-    Args:
-        lines (List[str]): The list of lines to search through.
-        index (Dict[str, List[int]]): A pre-built inverted index for the lines.
-        query (str): The query string to search for.
-        max_excerpts (int, optional): The maximum number of top-scoring lines
-            (excerpts) to return. Defaults to 5.
-        proximity_limit (int, optional): The maximum distance between tokens for
-            the proximity filter. Defaults to 5.
-
-    Returns:
-        List[str]: A sorted list of the most relevant lines (excerpts).
-    """
-    if not lines or not query or not index:
-        return []
-    query_tokens = tokenize(query)
-    line_scores = calculate_line_scores(lines, index, query_tokens)
-    if proximity_limit > 0:
-        line_scores = apply_proximity_filter(lines, line_scores, query_tokens, proximity_limit)
-    sorted_line_numbers = sorted(line_scores, key=line_scores.get, reverse=True)
-    excerpts = [lines[line_number].strip() for line_number in sorted_line_numbers[:max_excerpts] if
-                line_number < len(lines)]
-    return excerpts

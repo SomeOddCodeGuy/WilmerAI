@@ -35,7 +35,9 @@ def mock_dependencies(mocker):
         'load_template': mocker.patch('Middleware.utilities.prompt_template_utils.load_template_from_json',
                                       return_value=MOCK_TEMPLATE_DATA),
         'separate_messages': mocker.patch('Middleware.utilities.prompt_template_utils.separate_messages'),
-        'estimate_tokens': mocker.patch('Middleware.utilities.prompt_template_utils.rough_estimate_token_length'),
+        # The token-budget selectors live in prompt_extraction_utils; patching there
+        # controls the estimates for the get_formatted_last_turns_* delegation paths.
+        'estimate_tokens': mocker.patch('Middleware.utilities.prompt_extraction_utils.rough_estimate_token_length'),
     }
     return mocks
 
@@ -109,6 +111,25 @@ def test_format_messages_with_template_as_completions_api(mock_dependencies):
     assert result[0]["content"] == "<USER>Hello</USER>"
     # Last assistant message should NOT have a suffix
     assert result[1]["content"] == "<ASST>Hi there"
+
+
+def test_format_messages_with_template_suffix_present_when_last_is_user(mock_dependencies):
+    """
+    The suffix-omission special case applies only when the LAST message is an
+    assistant turn. When the conversation ends in a user message, every message
+    (including the final user turn) keeps its suffix.
+    """
+    messages = [
+        {"role": "assistant", "content": "Hi there"},
+        {"role": "user", "content": "Hello"},
+    ]
+
+    result = prompt_template_utils.format_messages_with_template(messages, "test_template.json",
+                                                                 isChatCompletion=False)
+
+    # The assistant turn is not last, so it keeps its suffix too.
+    assert result[0]["content"] == "<ASST>Hi there</ASST>"
+    assert result[1]["content"] == "<USER>Hello</USER>"
 
 
 def test_format_messages_with_template_handles_missing_template_keys(mock_dependencies):
@@ -188,6 +209,24 @@ def test_single_turn_formatters_chat(mock_dependencies):
     mock_dependencies['load_template'].assert_not_called()
 
 
+def test_format_assistant_turn_with_template_chat(mock_dependencies):
+    """For chat completions the assistant formatter only strips tags: no prefix
+    is applied and the template file is never loaded."""
+    result = prompt_template_utils.format_assistant_turn_with_template(
+        "reply [Beg_Assistant]", "template.json", isChatCompletion=True)
+    assert result == "reply "
+    mock_dependencies['load_template'].assert_not_called()
+
+
+def test_format_system_prompt_with_template_chat(mock_dependencies):
+    """For chat completions the system formatter only strips tags: no
+    prefix/suffix is applied and the template file is never loaded."""
+    result = prompt_template_utils.format_system_prompt_with_template(
+        "[Beg_Sys]be helpful", "template.json", isChatCompletion=True)
+    assert result == "be helpful"
+    mock_dependencies['load_template'].assert_not_called()
+
+
 ## Test for add_assistant_end_token_to_user_turn
 
 def test_add_assistant_end_token_to_user_turn(mock_dependencies):
@@ -196,6 +235,36 @@ def test_add_assistant_end_token_to_user_turn(mock_dependencies):
                                                                         isChatCompletion=False)
     expected = "user text<ASST><END>"
     assert result == expected
+
+
+def test_add_assistant_end_token_to_user_turn_chat(mock_dependencies):
+    """For chat completions no end token is appended: tags are stripped and the
+    template file is never loaded."""
+    result = prompt_template_utils.add_assistant_end_token_to_user_turn(
+        "user text [Beg_User]", "template.json", isChatCompletion=True)
+    assert result == "user text "
+    mock_dependencies['load_template'].assert_not_called()
+
+
+## Tests for format_templated_prompt
+
+def test_format_templated_prompt_completions_mode(mock_dependencies, mock_llm_handler):
+    """format_templated_prompt applies the user-turn template when the handler
+    does not take a message collection (completions mode)."""
+    mock_llm_handler.takes_message_collection = False
+    result = prompt_template_utils.format_templated_prompt(
+        "some prompt", mock_llm_handler, "template.json")
+    assert result == "<USER>some prompt</USER>"
+
+
+def test_format_templated_prompt_chat_mode(mock_dependencies, mock_llm_handler):
+    """format_templated_prompt passes the text through (tags stripped only)
+    when the handler takes a message collection (chat mode)."""
+    mock_llm_handler.takes_message_collection = True
+    result = prompt_template_utils.format_templated_prompt(
+        "some prompt [Beg_User]", mock_llm_handler, "template.json")
+    assert result == "some prompt "
+    mock_dependencies['load_template'].assert_not_called()
 
 
 ## Tests for higher-level orchestrators
@@ -219,14 +288,57 @@ def test_format_templated_system_prompt(mock_dependencies, mock_llm_handler):
 
 def test_format_system_prompts(mocker, mock_dependencies, mock_llm_handler):
     """
-    Tests the main orchestrator function `format_system_prompts`.
+    Tests the main orchestrator function `format_system_prompts`, including the
+    name-to-output-key wiring: the chat template name must drive the chat_* keys
+    and the handler's prompt_template_file_name must drive the templated_* keys.
     """
     # Setup mocks
+    other_messages = [{"role": "user", "content": "user prompt"}]
+    mock_dependencies['separate_messages'].return_value = ("system prompt", other_messages)
+    mock_message_formatter = mocker.patch(
+        'Middleware.utilities.prompt_template_utils.format_messages_with_template', side_effect=[
+            [{"role": "user", "content": "formatted chat prompt"}],
+            [{"role": "user", "content": "formatted template prompt"}]
+        ])
+    mock_system_formatter = mocker.patch(
+        'Middleware.utilities.prompt_template_utils.format_templated_system_prompt', side_effect=[
+            "formatted chat system",
+            "formatted template system"
+        ])
+
+    result = prompt_template_utils.format_system_prompts([], mock_llm_handler, "chat_template.json")
+
+    # First formatter call must receive the chat template name, second the
+    # handler's own prompt_template_file_name; both get the non-system messages.
+    assert mock_message_formatter.call_args_list[0].args == (
+        other_messages, "chat_template.json", mock_llm_handler.takes_message_collection)
+    assert mock_message_formatter.call_args_list[1].args == (
+        other_messages, "test_template.json", mock_llm_handler.takes_message_collection)
+
+    # The system prompt formatter mirrors the same wiring.
+    assert mock_system_formatter.call_args_list[0].args == (
+        "system prompt", mock_llm_handler, "chat_template.json")
+    assert mock_system_formatter.call_args_list[1].args == (
+        "system prompt", mock_llm_handler, "test_template.json")
+
+    assert result["chat_system_prompt"] == "formatted chat system"
+    assert result["templated_system_prompt"] == "formatted template system"
+    assert result["chat_user_prompt_without_system"] == "formatted chat prompt"
+    assert result["templated_user_prompt_without_system"] == "formatted template prompt"
+
+
+def test_format_system_prompts_filters_system_role_from_user_prompts(mocker, mock_dependencies, mock_llm_handler):
+    """
+    System-role messages returned by the formatter must not leak into the
+    *_user_prompt_without_system outputs.
+    """
     mock_dependencies['separate_messages'].return_value = (
         "system prompt", [{"role": "user", "content": "user prompt"}])
     mocker.patch('Middleware.utilities.prompt_template_utils.format_messages_with_template', side_effect=[
-        [{"role": "user", "content": "formatted chat prompt"}],
-        [{"role": "user", "content": "formatted template prompt"}]
+        [{"role": "system", "content": "CHAT_SYS_LEAK"},
+         {"role": "user", "content": "formatted chat prompt"}],
+        [{"role": "system", "content": "TEMPLATE_SYS_LEAK"},
+         {"role": "user", "content": "formatted template prompt"}]
     ])
     mocker.patch('Middleware.utilities.prompt_template_utils.format_templated_system_prompt', side_effect=[
         "formatted chat system",
@@ -235,51 +347,10 @@ def test_format_system_prompts(mocker, mock_dependencies, mock_llm_handler):
 
     result = prompt_template_utils.format_system_prompts([], mock_llm_handler, "chat_template.json")
 
-    assert result["chat_system_prompt"] == "formatted chat system"
-    assert result["templated_system_prompt"] == "formatted template system"
     assert result["chat_user_prompt_without_system"] == "formatted chat prompt"
+    assert "CHAT_SYS_LEAK" not in result["chat_user_prompt_without_system"]
     assert result["templated_user_prompt_without_system"] == "formatted template prompt"
-
-
-## Test for reduce_messages_to_fit_token_limit
-
-def test_reduce_messages_to_fit_token_limit(mock_dependencies):
-    """
-    Tests that messages are correctly trimmed from the beginning to fit the token limit.
-    """
-    system_prompt = "system"
-    messages = [
-        {"role": "user", "content": "msg1"},
-        {"role": "user", "content": "msg2"},
-        {"role": "user", "content": "msg3"},
-    ]
-    max_tokens = 100
-
-    # Mock token counts
-    mock_dependencies['estimate_tokens'].side_effect = lambda text: {
-        "system": 40,
-        "msg1": 30,
-        "msg2": 30,
-        "msg3": 30,
-    }.get(text, 0)
-
-    result = prompt_template_utils.reduce_messages_to_fit_token_limit(system_prompt, messages, max_tokens)
-
-    assert len(result) == 2
-    assert result[0]['content'] == "msg2"
-    assert result[1]['content'] == "msg3"
-
-
-def test_reduce_messages_all_fit(mock_dependencies):
-    """Tests the case where all messages fit within the token limit."""
-    system_prompt = "system"
-    messages = [{"role": "user", "content": "msg1"}, {"role": "user", "content": "msg2"}]
-    max_tokens = 200
-    mock_dependencies['estimate_tokens'].return_value = 10
-
-    result = prompt_template_utils.reduce_messages_to_fit_token_limit(system_prompt, messages, max_tokens)
-
-    assert result == messages
+    assert "TEMPLATE_SYS_LEAK" not in result["templated_user_prompt_without_system"]
 
 
 ## Test for get_formatted_last_n_turns_as_string
@@ -409,8 +480,13 @@ def test_get_formatted_token_limit_exact_boundary(mocker, mock_dependencies):
     assert len(formatter_call_args) == 2
 
 
-def test_get_formatted_token_limit_does_not_mutate_originals(mocker, mock_dependencies):
-    """Tests that the original messages list is not mutated."""
+def test_get_formatted_token_limit_does_not_mutate_originals(mock_dependencies):
+    """Tests that the original messages survive the full select-and-format path.
+
+    Runs the REAL format_messages_with_template (which owns the copy-before-mutate
+    responsibility) with a template whose prefixes rewrite every content string, so
+    a regression that drops the formatter's internal deepcopy fails here.
+    """
     from copy import deepcopy
     messages = [
         {"role": "user", "content": "hello"},
@@ -419,18 +495,10 @@ def test_get_formatted_token_limit_does_not_mutate_originals(mocker, mock_depend
     original_copy = deepcopy(messages)
     mock_dependencies['estimate_tokens'].return_value = 10
 
-    mock_formatter = mocker.patch('Middleware.utilities.prompt_template_utils.format_messages_with_template')
-    # Simulate format_messages_with_template mutating the messages it receives
-    def mutating_formatter(msgs, template, isChatCompletion):
-        for m in msgs:
-            m['content'] = 'MUTATED'
-        return msgs
-    mock_formatter.side_effect = mutating_formatter
-
-    prompt_template_utils.get_formatted_last_turns_by_estimated_token_limit_as_string(
+    result = prompt_template_utils.get_formatted_last_turns_by_estimated_token_limit_as_string(
         messages, 1000, "template.json", False
     )
-    # Original should be unchanged thanks to deepcopy in the function
+    assert "<USER>hello</USER>" in result
     assert messages == original_copy
 
 
@@ -516,8 +584,13 @@ def test_get_formatted_combo_min_floor_overrides_token_ceiling(mocker, mock_depe
     assert len(formatter_call_args) == 3
 
 
-def test_get_formatted_combo_does_not_mutate_originals(mocker, mock_dependencies):
-    """Tests that the original messages are not mutated."""
+def test_get_formatted_combo_does_not_mutate_originals(mock_dependencies):
+    """Tests that the original messages survive the full select-and-format path.
+
+    Runs the REAL format_messages_with_template (which owns the copy-before-mutate
+    responsibility) with a template whose prefixes rewrite every content string, so
+    a regression that drops the formatter's internal deepcopy fails here.
+    """
     from copy import deepcopy
     messages = [
         {"role": "user", "content": "hello"},
@@ -526,16 +599,10 @@ def test_get_formatted_combo_does_not_mutate_originals(mocker, mock_dependencies
     original_copy = deepcopy(messages)
     mock_dependencies['estimate_tokens'].return_value = 10
 
-    mock_formatter = mocker.patch('Middleware.utilities.prompt_template_utils.format_messages_with_template')
-    def mutating_formatter(msgs, template, isChatCompletion):
-        for m in msgs:
-            m['content'] = 'MUTATED'
-        return msgs
-    mock_formatter.side_effect = mutating_formatter
-
-    prompt_template_utils.get_formatted_last_turns_with_min_messages_and_token_limit_as_string(
+    result = prompt_template_utils.get_formatted_last_turns_with_min_messages_and_token_limit_as_string(
         messages, 1, 1000, "template.json", False
     )
+    assert "<USER>hello</USER>" in result
     assert messages == original_copy
 
 
@@ -617,7 +684,7 @@ def test_get_formatted_combo_budget_overrides_min_false_keeps_hard_floor(mocker,
 ## Regression: a tool-calling assistant message has content=None. The token estimate
 ## must treat it as empty rather than crashing on None.split(). These deliberately use
 ## the REAL rough_estimate_token_length (not the mocked one) so a regression back to
-## message.get("content", "") -> None would actually fail here -- the exact gap that the
+## message.get("content", "") -> None would actually fail here. This is the exact gap that the
 ## None-safe fix in prompt_extraction_utils was not originally mirrored into here.
 
 def test_get_formatted_by_token_limit_handles_none_content(mocker):

@@ -107,12 +107,12 @@ def process_file(filepath: str, old_key: bytes, new_key: bytes = None) -> bool:
         try:
             json.loads(raw)
         except (json.JSONDecodeError, UnicodeDecodeError):
-            # Not valid JSON and not decryptable — likely encrypted with
+            # Not valid JSON and not decryptable; likely encrypted with
             # a different key, or the data is corrupted. In re-key mode,
             # encrypting unverified bytes would produce irrecoverable
             # double-encrypted data. In decrypt mode, we can't do anything
             # useful either. Warn and skip in both cases.
-            print(f"  WARNING: Skipping {filepath} — could not decrypt with old key "
+            print(f"  WARNING: Skipping {filepath}: could not decrypt with old key "
                   f"and file is not valid plaintext JSON. It may be encrypted with "
                   f"a different key.")
             return False
@@ -274,7 +274,7 @@ def main():
 
     print("\n  IMPORTANT: Stop WilmerAI before running this script. Running while the server is active may cause data corruption.")
 
-    # Backup confirmation -- rekey modifies files in-place and cannot be rolled back
+    # Backup confirmation; rekey modifies files in-place and cannot be rolled back
     print("\n  You should back up your current discussion files before proceeding.")
     print("  If something goes wrong during this process, you could lose them.")
     choice = input("\n  Have you backed up?\n"

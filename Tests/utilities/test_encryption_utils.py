@@ -1,5 +1,6 @@
 
 import pytest
+from cryptography.fernet import InvalidToken
 
 from Middleware.utilities.encryption_utils import (
     derive_fernet_key,
@@ -53,6 +54,23 @@ class TestDeriveFernetKey:
         key2 = derive_fernet_key("my-key", username=None)
         assert key1 == key2
 
+    # Known-answer tests. The literals below were produced by running the
+    # current implementation (PBKDF2-HMAC-SHA256, 100,000 iterations, salt
+    # b"WilmerAI-encryption-salt-v1" without a username or
+    # b"WilmerAI-v1-<sha256(username)>" with one). They pin the derivation
+    # itself: if a refactor changes the KDF, iteration count, salt format, or
+    # encoding, every user's existing encrypted data silently becomes
+    # undecryptable. A failure here means the change orphans existing data and
+    # needs a migration path; do not just update the literal.
+
+    def test_known_answer_without_username(self):
+        expected = b"C9o55gE7gWuBRV0K2LlbfZMKbmInoxBU6mdOyUS6lbs="
+        assert derive_fernet_key("wilmer-kat-api-key") == expected
+
+    def test_known_answer_with_username(self):
+        expected = b"Jn5L4URVkOevuRB8P4vIIzO_LEvaZIqMXoM8FNCL-Yw="
+        assert derive_fernet_key("wilmer-kat-api-key", username="alice") == expected
+
 
 class TestHashApiKey:
     """Tests for hash_api_key."""
@@ -74,6 +92,14 @@ class TestHashApiKey:
     def test_returns_hex_string(self):
         result = hash_api_key("test")
         assert all(c in "0123456789abcdef" for c in result)
+
+    def test_known_answer(self):
+        # Known-answer test: literal produced by running the current
+        # implementation (first 16 hex chars of SHA-256 of the key). Discussion
+        # directory names on disk are built from this value, so changing the
+        # construction orphans every existing per-key directory. A failure here
+        # means a migration path is needed; do not just update the literal.
+        assert hash_api_key("wilmer-kat-api-key") == "d9f1a0f35a24bdc1"
 
 
 class TestEncryptDecryptBytes:
@@ -97,8 +123,23 @@ class TestEncryptDecryptBytes:
         key_b = derive_fernet_key("key-b")
         plaintext = b"secret data"
         encrypted = encrypt_bytes(plaintext, key_a)
-        with pytest.raises(Exception):
+        with pytest.raises(InvalidToken):
             decrypt_bytes(encrypted, key_b)
+
+    def test_flipped_byte_raises_invalid_token(self):
+        """Tampering with a single byte of the ciphertext must fail authentication."""
+        key = derive_fernet_key("tamper-key")
+        token = bytearray(encrypt_bytes(b"authentic data", key))
+        token[len(token) // 2] ^= 0x01
+        with pytest.raises(InvalidToken):
+            decrypt_bytes(bytes(token), key)
+
+    def test_truncated_token_raises_invalid_token(self):
+        """A truncated ciphertext must be rejected, not partially decrypted."""
+        key = derive_fernet_key("tamper-key")
+        token = encrypt_bytes(b"authentic data", key)
+        with pytest.raises(InvalidToken):
+            decrypt_bytes(token[: len(token) // 2], key)
 
     def test_empty_bytes(self):
         key = derive_fernet_key("test-key")
@@ -120,8 +161,16 @@ class TestEncryptDecryptBytes:
         key_alice = derive_fernet_key("same-key", username="alice")
         key_bob = derive_fernet_key("same-key", username="bob")
         encrypted = encrypt_bytes(b"secret", key_alice)
-        with pytest.raises(Exception):
+        with pytest.raises(InvalidToken):
             decrypt_bytes(encrypted, key_bob)
+
+    def test_round_trip_with_unicode_api_key_and_username(self):
+        """Non-ASCII API keys and usernames must round-trip cleanly."""
+        key = derive_fernet_key("clé-api-日本語", username="Ünïcode-Üser-测试")
+        plaintext = "日本語のメッセージ".encode("utf-8")
+        encrypted = encrypt_bytes(plaintext, key)
+        decrypted = decrypt_bytes(encrypted, key)
+        assert decrypted == plaintext
 
 
 class TestConvenienceHelpers:

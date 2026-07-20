@@ -105,7 +105,7 @@ including proprietary APIs, depending on how you build your workflow.
 
 * **Multi-LLM & Multi-Tool Orchestration**
   Each node in a workflow can connect to a completely different LLM endpoint or execute a tool. This allows you to
-  orchestrate the best model for each part of a task -- for example, using a small, fast local model for summarization
+  orchestrate the best model for each part of a task. For example, using a small, fast local model for summarization
   and a large cloud model for the final reasoning, all within a single workflow.
 
 ---
@@ -117,15 +117,26 @@ including proprietary APIs, depending on how you build your workflow.
 ---
 
 * **Stateful Conversation Memory**
-  To provide the necessary context for long conversations and accurate routing, WilmerAI uses a three-part memory
-  system: a chronological summary file, a continuously updated "rolling summary" of the entire chat, and a searchable
-  vector database for Retrieval-Augmented Generation (RAG).
+  To provide the necessary context for long conversations and accurate routing, WilmerAI uses a four-part memory
+  system: a chronological summary file, a continuously updated "rolling summary" of the entire chat, a searchable
+  vector database (keyword search by default, with optional embedding-based semantic/hybrid search), and a
+  continuously maintained state document describing the current state of the conversation.
 
 ---
 
 * **Adaptable API Gateway**
   WilmerAI's "front door." It exposes OpenAI- and Ollama-compatible API endpoints, allowing you to connect your existing
   front-end applications and tools without modification.
+
+---
+
+* **Tool Calling & Structured Output**
+  Full OpenAI-style tool calling passthrough, including reliable multi-round tool loops through authored-prompt
+  workflows (`appendNativeToolExchange`). On backends with constrained decoding (llama.cpp, Ollama, LM Studio, vLLM,
+  OpenAI), demanded tool calls (`tool_choice` forced or `required`) are grammar-enforced rather than hoped for, and
+  any workflow node can pin its output to a JSON Schema (`structuredOutputFile`), turning routing decisions,
+  extractions, and classifications into guaranteed-parseable JSON even on small local models. See
+  `Docs/User_Documentation/Core_Features/Tool_Calling_And_Structured_Output.md`.
 
 ---
 
@@ -138,8 +149,8 @@ including proprietary APIs, depending on how you build your workflow.
 
 - **Agentic MCP Tool Integration:** Experimental support for agentic MCP server tool
   calling, allowing the model to discover and use tools mid-workflow. Originally
-  contributed by [iSevenDays](https://github.com/iSevenDays) — big thank you for the
-  amazing work on this feature; the transport has since been migrated to the official
+  contributed by [iSevenDays](https://github.com/iSevenDays); big thank you for the
+  amazing work on this feature. The transport has since been migrated to the official
   MCP SDK (MCPO remains supported as a legacy option). More info can be found in the
   [ReadMe](Public/workflow_python_scripts/_isevendays_mcp_scripts/README_MCP_TOOLS.md)
 
@@ -153,7 +164,7 @@ including proprietary APIs, depending on how you build your workflow.
 
 ---
 
-#### Privacy Check -- 2026-06-21
+#### Privacy Check (2026-07-19)
 
 For my own edification, to ensure I didn't accidentally add something that would negatively impact
 Wilmer's privacy posture, I'll sometimes ask Claude Code to do an end-to-end check to look for any
@@ -163,7 +174,7 @@ peace of mind. I've included the results of the check here.
 I've been doing this check whenever I make a really big set of changes, just to make sure
 that I didn't introduce something I didn't intend to via a library or sloppy coding.
 
-On 2026-06-21, Claude Code (Claude Opus 4.8) was asked to search the codebase and report any outbound
+On 2026-07-19, Claude Code (Claude Opus 4.8) was asked to search the codebase and report any outbound
 network calls, telemetry, or other privacy-relevant behavior it could find. The results listed
 below were generated for my own personal use and were shared for transparency; **they are not a
 guarantee**.
@@ -174,13 +185,14 @@ If privacy matters to your deployment, please run your own analysis before using
 What Was Checked
 ----------------
 The Middleware/ and Public/ source trees, the top-level entry points (server.py, run_eventlet.py,
-run_waitress.py), and all shell/batch launcher scripts (run_macos.sh, run_windows.bat,
-Scripts/rekey_encrypted_files.sh, Scripts/rekey_encrypted_files.bat) were searched for outbound
-HTTP calls (requests.get, requests.post, requests.Session, requests.request), raw socket usage,
-subprocess invocations, dynamic imports, hardcoded external URLs, telemetry-related keywords
-(analytics, telemetry, phone-home, tracking, metrics), and environment variable reads. The entry
-points and launcher scripts contained no outbound network calls; run_eventlet.py sets TCP_NODELAY
-on the local listening socket but makes no external connections.
+run_waitress.py), the Scripts/ utilities (rekey_encrypted_files.py, backfill_embeddings.py), and
+all shell/batch launcher scripts (run_macos.sh, run_windows.bat, Scripts/rekey_encrypted_files.sh,
+Scripts/rekey_encrypted_files.bat) were searched for outbound HTTP calls (requests.get,
+requests.post, requests.Session, requests.request), raw socket usage, subprocess invocations,
+dynamic imports, hardcoded external URLs, telemetry-related keywords (analytics, telemetry,
+phone-home, tracking, metrics), and environment variable reads. The server entry points and
+launcher scripts contained no outbound network calls; run_eventlet.py sets TCP_NODELAY on the
+local listening socket but makes no external connections.
 
 Outbound Network Calls
 ----------------------
@@ -188,18 +200,20 @@ The main outbound network call sites in Wilmer's own code, each targeting a dest
 configures (this reflects the current source and is representative rather than a guaranteed
 exhaustive registry; run your own analysis if it matters to you):
 
-1. Middleware/llmapis/handlers/base/base_llm_api_handler.py
-   - session.post() to user-configured LLM endpoint (self.base_url from endpoint config)
+1. Middleware/llmapis/handlers/base/base_llm_api_handler.py and handlers/base/base_api_transport.py
+   - session.post() to the user-configured LLM endpoint (self.base_url from the endpoint config);
+     the streaming path posts from base_llm_api_handler.py and the non-streaming path from
+     base_api_transport.py, both to the same user-configured destination
 
 2. Middleware/workflows/tools/offline_wikipedia_api_tool.py
-   - requests.get() to user-configured host; defaults to 127.0.0.1:5728
-   - Disabled unless activateWikiApi is set
+   - requests.get() to a user-configured host; defaults to 127.0.0.1:5728
+   - Disabled unless useOfflineWikiApi is set
 
 3. Public/workflow_python_scripts/_isevendays_mcp_scripts/mcp_service_discoverer.py
-   - requests.get() to user-configured or env-var MCPO server; defaults to localhost:8889
+   - requests.get() to a user-configured or env-var MCPO server; defaults to localhost:8889
 
 4. Public/workflow_python_scripts/_isevendays_mcp_scripts/mcp_tool_executor.py
-   - requests.request() to same MCPO server as above
+   - requests.request() to the same MCPO server as above
 
 5. Middleware/workflows/handlers/impl/web_fetch_handler.py
    - requests.request() to the URL set on a WebFetch node (user-authored); optional HTTP/SOCKS
@@ -213,8 +227,17 @@ exhaustive registry; run your own analysis if it matters to you):
    - connects to an MCP server defined under Public/Configs/MCPServers/ (user-configured) over
      stdio (local process), SSE, or streamable HTTP, for MCPToolCall nodes
 
+8. Middleware/llmapis/handlers/impl/embedding_api_handler.py (via handlers/base/base_api_transport.py)
+   - session.post() to the user-configured embeddings endpoint; only used when a discussion's
+     memory settings configure an embeddings endpoint, or a node requests semantic or hybrid
+     search against one
+
+9. Scripts/backfill_embeddings.py
+   - requests.post() only to the user-supplied --url, and only when the script is run by hand;
+     never invoked by the server
+
 No telemetry, analytics, phone-home, auto-update, or hardcoded external URLs were found. Every
-outbound call Wilmer is known to make goes to a destination the user configures -- there are no
+outbound call Wilmer is known to make goes to a destination the user configures; there are no
 connections to hosts that Wilmer picks on its own. Any optional tool or node not individually
 listed above follows the same rule: it stays off unless the user enables it, and it targets only
 the host the user points it at (typically defaulting to a local address). The WebFetch and
@@ -237,14 +260,13 @@ All runtime dependencies from requirements.txt:
 
   requests 2.34.2         - HTTP client for LLM API and tool calls
   urllib3 2.7.0           - Transport layer for requests
-  scikit-learn 1.9.0      - TF-IDF vectorization for memory search
   Flask 3.1.3             - HTTP server framework
   Jinja2 3.1.6            - Template rendering for workflow prompts
-  Pillow 12.2.0           - Image format detection and processing
-  eventlet 0.41.0         - Async WSGI server (optional)
+  Pillow 12.3.0           - Image format detection and processing
+  eventlet 0.41.1         - Async WSGI server (optional)
   waitress 3.0.2          - Production WSGI server (optional)
-  cryptography 48.0.1     - Fernet encryption for stored data
-  mcp 1.27.2              - Model Context Protocol client (MCPToolCall node)
+  cryptography 49.0.0     - Fernet encryption for stored data
+  mcp 1.28.1              - Model Context Protocol client (MCPToolCall node)
   PySocks 1.7.1           - SOCKS proxy support for requests (WebFetch proxy)
 
 No telemetry or analytics code was found in any of these packages' initialization paths as used
@@ -431,7 +453,6 @@ The libraries are:
 
 * Flask : https://github.com/pallets/flask/
 * requests: https://github.com/psf/requests/
-* scikit-learn: https://github.com/scikit-learn/scikit-learn/
 * urllib3: https://github.com/urllib3/urllib3/
 * jinja2: https://github.com/pallets/jinja
 * pillow: https://github.com/python-pillow/Pillow

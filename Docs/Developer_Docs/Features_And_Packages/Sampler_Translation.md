@@ -65,8 +65,8 @@ seed  stop  samplers  logit_bias  ignore_eos  n_probs  min_keep  grammar  json_s
 
 Plus two special block keys that are not flat samplers:
 
-- **`thinkingMode`** — canonical reasoning control (see below).
-- **`chat_template_kwargs`** — an open passthrough object (see below).
+- **`thinkingMode`**: canonical reasoning control (see below).
+- **`chat_template_kwargs`**: an open passthrough object (see below).
 
 **Deliberately not canonical:** max-tokens, the streaming flag, and context truncation. Those are
 injected structurally by `set_gen_input` from the node/endpoint (via the ApiType's
@@ -78,7 +78,7 @@ as canonical samplers would double-handle them.
 ## Per-ApiType mapping summary (the decision basis)
 
 Each `Public/Configs/ApiTypes/*.json` file carries its own `samplerFieldMap`, `supportsChatTemplateKwargs`,
-and `thinking` descriptor. The map is keyed **per ApiType file, not per wire protocol** — four
+and `thinking` descriptor. The map is keyed **per ApiType file, not per wire protocol**: four
 ApiTypes share the `openAIChatCompletion` handler yet accept very different sampler sets, so each
 gets an independent map. The table below summarizes what each was mapped against; the authoritative
 detail is in each config file.
@@ -103,7 +103,7 @@ Notes and assumptions made while authoring:
   into an `options` object themselves, so the map emits flat native names.
 - **`chat_template_kwargs` is gated per ApiType.** It is only emitted for backends that accept it
   (currently `LlamaCppServer`). For others the whole object is dropped with a log, so it is never sent
-  to e.g. Claude or real OpenAI. Its *inner* keys are never validated — they are defined by the loaded
+  to e.g. Claude or real OpenAI. Its *inner* keys are never validated; they are defined by the loaded
   model's chat template, not by Wilmer.
 - **Thinking is conservative on cloud/uncertain backends.** Only the cases with a clear native
   mechanism are mapped (`enable_thinking` for llama.cpp, `think` for Ollama, `reasoning_effort` for
@@ -149,12 +149,12 @@ ApiType files need no migration.
 `none`, and `disabled` are also treated as off). `resolve_thinking` maps it per the ApiType's
 `thinking` descriptor:
 
-- **`mode: "bool"`** — `off` emits `false`, anything else `true`. Placed at `location` (top level, or
+- **`mode: "bool"`**: `off` emits `false`, anything else `true`. Placed at `location` (top level, or
   inside `chat_template_kwargs`). Used by `LlamaCppServer` (`enable_thinking`) and Ollama (`think`).
-- **`mode: "effort"`** — `off` emits nothing (you cannot turn a reasoning model "off" with a value, so
+- **`mode: "effort"`**: `off` emits nothing (you cannot turn a reasoning model "off" with a value, so
   the field is omitted); `low`/`medium`/`high` pass through; `on` defaults to `medium`. Used by
   `Open-AI-API` (`reasoning_effort`).
-- **`mode: "unsupported"`** — `thinkingMode` is dropped with a warning.
+- **`mode: "unsupported"`**: `thinkingMode` is dropped with a warning.
 
 Thinking budget is intentionally **not** a canonical field; it rides in raw `chat_template_kwargs`
 (e.g. `"thinking_budget": 0`) for backends that accept that object, because its behavior is
@@ -172,10 +172,10 @@ higher-precedence layer wins. Scalars and arrays are atomic (replace, not concat
 After assembly and structural injection, `normalize_gen_input` runs once (at the tail of
 `set_gen_input`, which every handler routes through):
 
-- a value of `null` **drops the key** — the field is omitted so the backend uses its own default.
+- a value of `null` **drops the key**: the field is omitted so the backend uses its own default.
   This is also how a higher layer deletes a lower layer's value, and how a user keeps a field that
   "misbehaves if present at all" out of the payload.
-- the sentinel string **`"__wilmer_null__"`** is replaced with a real `null` — the rare case where a
+- the sentinel string **`"__wilmer_null__"`** is replaced with a real `null`, for the rare case where a
   literal JSON `null` must actually be sent.
 - nested objects are processed recursively and dropped if they become empty (no `chat_template_kwargs:
   {}` is emitted).

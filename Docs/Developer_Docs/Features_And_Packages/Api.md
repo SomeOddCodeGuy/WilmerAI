@@ -8,7 +8,7 @@ This directory contains the primary entry point for the WilmerAI application: a 
 
 The architecture is designed to be modular and extensible. The API logic is broken down into an orchestrator (`ApiServer`), a business logic gateway (`workflow_gateway`), and a series of self-contained **handlers** for specific API schemas. A key component of this architecture is the `ResponseBuilderService`, which centralizes all logic for constructing API-specific JSON responses, ensuring that outgoing data matches the schema expected by the client.
 
-This separation of concerns makes the system cleaner, more maintainable, and significantly easier to extend with new endpoints or entire API compatibility layers.
+This separation of concerns makes the system easier to maintain and to extend with new endpoints or entire API compatibility layers.
 
 -----
 
@@ -82,16 +82,48 @@ depends on whether the client requests a streaming or non-streaming response.
     * `ApiServer` class:
         * `_discover_and_register_handlers()`: Automatically scans the `Middleware/api/handlers/` directory tree for
           Python files. It imports them, finds any classes that inherit from `BaseApiHandler`, and calls
-          their `register_routes()` method, making the system plug-and-play.
-        * `run()`: Starts the Flask development server (for debugging only).
+          their `register_routes()` method, making the system plug-and-play. The class exposes the Flask
+          `app` for a WSGI server; port resolution and server startup live in the entry-point scripts
+          (`server.py`, `run_eventlet.py`, `run_waitress.py`), not on `ApiServer` itself.
 
 #### `workflow_gateway.py`
 
 * **Responsibility**: Acts as the single, standardized bridge between the API request handlers and the backend workflow
   engine.
 * **Key Components**:
-    * `handle_user_prompt()`: The crucial function that every data-handling endpoint calls. It takes the `request_id`,
+    * `handle_user_prompt()`: The function that every data-handling endpoint calls. It takes the `request_id`,
       the standardized `messages` list, and a `stream` flag, and dispatches the request to the correct backend service.
+      Before any routing, **and only when the current user's config has `livenessToolCall` set**
+      (`config_utils.get_liveness_tool_call()` returns non-None), it passes the conversation through
+      `strip_machinery_turns()` and then `collapse_duplicate_tool_calls()`. Users without `livenessToolCall`
+      never have their conversations rewritten.
+    * `strip_machinery_turns()`: Removes buried machinery no-op turns from the ingested conversation before anything
+      else sees them. Machinery-injected turns (such as the liveness guard's synthetic tool call, see
+      `Wilmer_Prompt_Flow_Beginning_To_End.md`) must be **one-shot**: the model sees the injection exactly once (as
+      the conversation's trailing exchange on the request immediately following the injection, where it serves as
+      corrective feedback that the previous reply lacked a tool call), and it is stripped from every conversation in
+      which it sits buried, so a small model can never adopt it as a repeatable pattern. The trailing exchange is the
+      final assistant tool-call turn plus its following `role: "tool"` results (trailing assistant filler does not
+      bury it: either the empty filler appended by `add_missing_assistant` handling or the bare `"Assistant:"`
+      content used when `chatCompleteAddUserAssistant` is enabled). A tool call is identified as machinery when its
+      `id` starts with `wilmer_liveness_` (a genuine injection), when its arguments contain the `[Wilmer]` marker
+      substring (which also catches model-emitted imitations of an earlier injection), or when its name and
+      arguments exactly equal the user's configured `livenessToolCall` (necessary for Ollama-format frontends,
+      whose wire format carries no tool-call id, when the configured arguments lack the marker). Buried matching
+      calls are removed from their assistant turn; a turn left with no genuine calls and no text content (the bare
+      `"Assistant:"` filler counts as no content) is dropped entirely, along with its paired `role: "tool"` result
+      messages (matched by `tool_call_id`, or by immediate adjacency for results that carry no id). Malformed
+      `tool_calls` entries are tolerated and treated as genuine.
+    * `collapse_duplicate_tool_calls()`: Runs at ingestion immediately after `strip_machinery_turns()`, under the
+      same `livenessToolCall` gate. When the
+      conversation contains a run of three or more consecutive exchanges (each an assistant turn making exactly one
+      tool call followed by its result) where every call (same function, same arguments) and every
+      whitespace-normalized result are identical, the run is collapsed to its first exchange and a note is appended
+      to the kept result stating how many times the call was repeated and that repeating it will not change the
+      outcome. Small models fall into repetition attractors where each visible copy of the exchange reinforces the
+      next repeat, and identical empty results get misread as tool failure; collapsing removes the reinforcement and
+      delivers the corrective inside the tool result, where the model actually reads. Two consecutive repeats (a
+      legitimate retry), multi-call turns, differing arguments, and differing results (polling) are never collapsed.
     * `check_openwebui_tool_request()`: Called inline by the chat-style handlers (after user context is set) to
       optionally intercept OpenWebUI tool-selection requests. Only active when the current user's
       `interceptOpenWebUIToolRequests` config is `true`. When disabled (the default), tool-selection requests
@@ -104,8 +136,6 @@ depends on whether the client requests a streaming or non-streaming response.
 * **Key Functions**:
     * `build_response_json()`: Constructs a **single streaming JSON chunk**. It acts as a dispatcher, calling the
       appropriate chunk-building method on the `ResponseBuilderService` based on the globally set `API_TYPE`.
-    * `extract_text_from_chunk()`: Parses an incoming data chunk from an LLM backend and extracts the text content,
-      handling multiple formats (SSE, plain JSON).
     * `sse_format()`: Formats a string into the correct Server-Sent Event (SSE) structure.
     * `get_model_name()`: Returns the model identifier for API responses. When a workflow override is active, returns
       `username:workflow` format; otherwise returns just the username.
@@ -115,6 +145,9 @@ depends on whether the client requests a streaming or non-streaming response.
       processing.
     * `clear_workflow_override()`: Clears the workflow override. Called at the end of request processing.
     * `get_active_workflow_override()`: Returns the currently active workflow override, if any.
+    * `extract_api_key()`: Reads the API key from the `Authorization: Bearer` header.
+    * `extract_idempotency_key()`: Reads the client's `X-Idempotency-Key` header (case-insensitive; empty or
+      longer than `MAX_IDEMPOTENCY_KEY_LENGTH` = 128 is treated as absent). See section 8.
 
 ### `Middleware/services/`
 
@@ -129,6 +162,15 @@ depends on whether the client requests a streaming or non-streaming response.
           schema-compliant dictionary.
         * **Streaming Chunk Methods**: Contains methods like `build_openai_chat_completion_chunk()`
           and `build_ollama_chat_chunk()` that create a single, schema-compliant JSON chunk for a streaming response.
+        * **Ollama `done` semantics**: The Ollama chunk builders mark a chunk `"done": true` for **any** terminal
+          `finish_reason` ("stop", "length", "tool_calls", ...), not just "stop"; Ollama clients read the stream
+          until they see `done: true`, so a stream that ends on a token cap or a tool call must still terminate.
+          A `done_reason` field is included on the terminal chunk, mapped to Ollama's vocabulary ("length" stays
+          "length"; everything else maps to "stop").
+        * **Ollama tool-call shape**: `build_ollama_chat_chunk()` and `build_ollama_chat_response()` convert tool
+          calls to Ollama's native wire shape via `_convert_tool_calls_to_ollama_format()`: `arguments` as a JSON
+          object, no OpenAI `id`/`type`/`index` envelope. The conversion is idempotent, so callers may pass either
+          OpenAI-format or already-native calls.
         * **Models List Methods**: `build_openai_models_response()` and `build_ollama_tags_response()` return lists of
           available workflows from the `_shared` folder. Each workflow is presented in `username:workflow` format,
           allowing front-end applications to select specific workflows via their model dropdown.
@@ -142,6 +184,24 @@ depends on whether the client requests a streaming or non-streaming response.
     * `@abstractmethod register_routes()`: The contract method. Every concrete handler must implement this to register
       its URL rules with the Flask app.
 
+#### `base/base_streaming.py`
+
+* **Responsibility**: Houses the streaming machinery shared by the OpenAI and Ollama handlers: the Eventlet-optimized
+  streamer (background reader greenlet plus heartbeat-capable client generator), the synchronous fallback streamer,
+  and the selector that picks between them. The `base_` filename prefix keeps this module out of the `ApiServer`
+  handler discovery walk. The streaming behavior itself is described in section 5.
+* **Key Components**:
+    * `StreamingApiConfig`: A frozen dataclass holding the four values that differ per API schema: the log label, the
+      heartbeat bytes, the response mimetype, and the stream-terminator predicate. Each handler module defines one at
+      module level.
+    * `handle_streaming_request()`: The selector. Uses the Eventlet streamer when Eventlet is installed and actively
+      monkey-patching the socket layer; otherwise falls back to synchronous streaming. Handlers call this with their
+      `StreamingApiConfig` and their own `handle_user_prompt` reference (passed at call time so tests can patch it on
+      the handler module).
+    * `stream_with_eventlet_optimized()` / `stream_response_fallback()`: The two streaming implementations. Both
+      release the request's idempotency entry in their teardown `finally` and log pre-response disconnects (see
+      section 8).
+
 #### `impl/openai_api_handler.py`
 
 * **Responsibility**: Implements all endpoints that conform to the OpenAI API specification.
@@ -150,7 +210,11 @@ depends on whether the client requests a streaming or non-streaming response.
     * `CompletionsAPI`: Handles the legacy `/v1/completions`.
     * `ChatCompletionsAPI`: Handles the standard `/v1/chat/completions`.
 * **Interactions**: Generates a `request_id` for each call. Uses `workflow_gateway.handle_user_prompt()` to process
-  requests. Relies on `eventlet` and client disconnection to trigger the `CancellationService`.
+  requests. Relies on `eventlet` and client disconnection to trigger the `CancellationService`. Streaming responses
+  come from `base/base_streaming.py`, configured with the SSE comment heartbeat, the `text/event-stream` mimetype,
+  and the `[DONE]` terminator predicate. `CompletionsAPI` and `ChatCompletionsAPI` also honor the
+  `X-Idempotency-Key` header via `_admit_idempotency_key()`: a duplicate in-flight key cancels the orphaned
+  original before serving the new arrival fresh (see section 8).
 
 #### `impl/ollama_api_handler.py`
 
@@ -166,7 +230,11 @@ depends on whether the client requests a streaming or non-streaming response.
       providing its `request_id`.
 * **Interactions**: Generates a `request_id` and includes it in responses to the client.
   Uses `workflow_gateway.handle_user_prompt()` to process requests. Streaming responses include disconnect detection
-  that triggers cancellation.
+  that triggers cancellation, and come from `base/base_streaming.py`. The module defines two `StreamingApiConfig`
+  instances because the two routes use different chunk shapes: `_CHAT_STREAMING_CONFIG` (`/api/chat`) sends a
+  message-shaped heartbeat (`{"message": {...}, "done": false}`) while `_GENERATE_STREAMING_CONFIG`
+  (`/api/generate`) sends a response-shaped one (`{"response": "", "done": false}`). Both use the
+  `application/x-ndjson` mimetype and the `done:true` terminator predicate.
 
 -----
 
@@ -215,9 +283,9 @@ Per-request user resolution uses `get_request_user()` / `set_request_user()` sto
 
 The `get_current_username()` function checks in order:
 1. Request-scoped user (set from the model field)
-2. `USERS` has exactly one entry -- return `USERS[0]` (single-user mode)
-3. `USERS` has multiple entries but no request user -- **raises RuntimeError** (prevents silent cross-user data leaks)
-4. `USERS` is None -- fall back to `_current-user.json` (legacy, no `--User` arg)
+2. `USERS` has exactly one entry: return `USERS[0]` (single-user mode)
+3. `USERS` has multiple entries but no request user: **raises RuntimeError** (prevents silent cross-user data leaks)
+4. `USERS` is None: fall back to `_current-user.json` (legacy, no `--User` arg)
 
 Since all downstream config functions (`get_user_config()`, `get_config_value()`, `get_workflow_path()`, etc.)
 chain through `get_current_username()`, they all become request-aware automatically. The RuntimeError in step 3
@@ -242,10 +310,10 @@ on whether multi-user mode is active:
 
 | Format | Example | Result |
 |--------|---------|--------|
-| `username` | `user-two` | `("user-two", None)` -- routes to user-two's default workflow |
-| `username:workflow` | `user-two:general` | `("user-two", "general")` -- routes to user-two's shared workflow |
-| `workflow` (bare) | `general` | `(None, None)` -- rejected, user must be specified |
-| Non-matching | `gpt-4` | `(None, None)` -- rejected by `require_identified_user()` |
+| `username` | `user-two` | `("user-two", None)` (routes to user-two's default workflow) |
+| `username:workflow` | `user-two:general` | `("user-two", "general")` (routes to user-two's shared workflow) |
+| `workflow` (bare) | `general` | `(None, None)` (rejected, user must be specified) |
+| Non-matching | `gpt-4` | `(None, None)` (rejected by `require_identified_user()`) |
 
 ### Folder Structure
 
@@ -289,7 +357,8 @@ Public/Configs/Workflows/
   `workflow_exists_in_shared_folder()`
 * `workflow_gateway.py`: Checks for workflow override before normal routing
 * `response_builder_service.py`: Aggregates models from all configured users
-* `server.py`: Contains `UserInjectionFilter` and `UserRoutingFileHandler` for per-user log isolation
+* `Middleware/common/server_startup.py`: Contains `UserInjectionFilter` and `UserRoutingFileHandler` for per-user
+  log isolation (re-exported by `server.py` for backwards compatibility)
 
 -----
 
@@ -297,7 +366,8 @@ Public/Configs/Workflows/
 
 All streaming responses in WilmerAI (both Ollama and OpenAI handlers) explicitly set the `Connection: close` HTTP
 header. This forces the TCP connection to be torn down after each streaming response completes, rather than being
-kept alive for reuse.
+kept alive for reuse. The machinery described in this section is implemented once, in
+`Middleware/api/handlers/base/base_streaming.py`, and parameterized per handler via `StreamingApiConfig`.
 
 ### Why Connection: close
 
@@ -330,15 +400,19 @@ This is necessary because of how workflow processing works. When a workflow has 
 node (which produces the stream) may not be the last node. After the stream finishes (the `done:true` chunk for
 Ollama, or the `[DONE]` sentinel for OpenAI), the workflow processor continues executing remaining non-responding
 nodes (memory summarization, categorization, etc.) within the same generator. During this post-stream processing,
-the Eventlet heartbeat mechanism would send heartbeat messages to the client -- but from the client's perspective,
+the Eventlet heartbeat mechanism would send heartbeat messages to the client, but from the client's perspective,
 the stream is already complete.
 
-The fix: each streaming generator checks whether the chunk it just yielded contains the stream-complete marker:
+The fix: each streaming generator checks whether the chunk it just yielded is the stream-complete marker:
 
-- **Ollama**: checks for `"done": true` or `"done":true` in the encoded bytes
-- **OpenAI**: checks for `[DONE]` in the encoded bytes
+- **Ollama**: checks for `"done": true` or `"done":true` in the encoded bytes. A substring check is safe here
+  because generated text inside the chunk's JSON has its quotes escaped (`\"done\": true`), so content can never
+  false-positive.
+- **OpenAI**: exact match against the terminator event (`data: [DONE]`, ignoring surrounding whitespace). This
+  must NOT be a substring check: each chunk is one SSE event, and a model writing the literal text "[DONE]" in
+  its response would otherwise terminate the client stream mid-response.
 
-When detected, the generator returns immediately — but the backend reader greenlet is **not** killed.
+When detected, the generator returns immediately, but the backend reader greenlet is **not** killed.
 This allows post-returnToUser workflow nodes (memory summarization, categorization, reflection, etc.)
 to finish processing in the background. The reader greenlet is only killed on client disconnect or error.
 
@@ -350,15 +424,15 @@ before the generator naturally exhausts.
 **Connection-hold consequence (fallback only).** Because there is no background greenlet in this path,
 the only way to keep the workflow running after the responder streams its answer is to keep driving the
 same WSGI generator. The client has already received the stream terminator and sees a complete response,
-but the underlying HTTP request — and the worker handling it (Waitress thread, Gunicorn sync worker, or
-the Flask dev server) — stays occupied until the post-returnToUser nodes finish and the generator
+but the underlying HTTP request, and the worker handling it (Waitress thread, Gunicorn sync worker, or
+the Flask dev server), stays occupied until the post-returnToUser nodes finish and the generator
 exhausts. Deployments with heavy post-return work (large memory generation, reflection sub-workflows)
 on a small worker pool should size the pool accordingly. The Eventlet path does **not** have this
 property: it returns at the terminator (closing the connection) and finishes post-return nodes in the
 background greenlet.
 
 **Post-terminator exception containment (fallback only).** If a post-returnToUser node raises *after* the
-terminator has been sent, the failure must not propagate out of the WSGI generator — the client already
+terminator has been sent, the failure must not propagate out of the WSGI generator; the client already
 saw a visually-complete stream, and re-raising would corrupt connection teardown. The fallback generator
 therefore logs and swallows any exception that occurs once the done flag is set (mirroring the contained
 handling in the Eventlet reader), and only re-raises exceptions that occur *before* the terminator.
@@ -367,12 +441,13 @@ handling in the Eventlet reader), and only re-raises exceptions that occur *befo
 
 Heartbeats differ between API formats:
 
-- **Ollama (`application/x-ndjson`)**: A full JSON object matching the Ollama response schema with `"done":false`
-  and an empty `"message"` content. This ensures compatibility with clients like Open WebUI that require valid
-  JSON on every line of the NDJSON stream.
+- **Ollama (`application/x-ndjson`)**: A full JSON object matching the route's own response schema with
+  `"done":false`: `/api/chat` sends an empty `"message"` object, `/api/generate` sends an empty `"response"`
+  string. This ensures compatibility with clients like Open WebUI that require valid JSON on every line of the
+  NDJSON stream, including strict clients that validate the chunk shape per route.
 - **OpenAI (`text/event-stream`)**: An SSE comment (`:\n\n`). SSE clients ignore comment lines by design.
 
-Both formats cause a TCP write, which is sufficient for disconnect detection -- if the client has closed the
+Both formats cause a TCP write, which is sufficient for disconnect detection: if the client has closed the
 connection, the write will fail and trigger cancellation.
 
 ### Greenlet Lifecycle After Stream Completion
@@ -388,14 +463,24 @@ exits due to client disconnect (`GeneratorExit`, `ClientDisconnected`, `BrokenPi
 or an unexpected error. In these cases, cancellation is also requested via `cancellation_service`, and each
 node in `execute()` checks for cancellation at the start of its iteration.
 
+**Cancellation registry lifecycle.** A cancellation entry is acknowledged (removed from the registry) at
+whichever of these happens: the workflow's node-boundary check catches it and raises
+`EarlyTerminationException`, or the stream tears down; the Eventlet reader greenlet's `finally` and the
+fallback generator's `finally` both acknowledge any still-pending cancellation for their `request_id`. The
+teardown acknowledgment matters because a cancellation that lands during the *final* responder node has no
+later node boundary to catch it; without it the id stayed in the registry forever. As a backstop for ids that
+are never acknowledged at all (e.g. bogus `request_id` values sent to the unauthenticated DELETE endpoints),
+`CancellationService` lazily prunes entries older than `CANCELLATION_TTL_SECONDS` (1 hour) on each new
+cancellation request, so the registry cannot grow without bound over long uptimes.
+
 **Unbounded post-return lifetime.** On *natural* completion there is no per-node deadline or time-based cancellation:
 the reader terminates only when `handle_user_prompt()` exhausts. A post-returnToUser node that blocks indefinitely
 therefore keeps its reader greenlet (and the request-scoped state it captured) alive for the life of the process, since
 the client has already disconnected at the terminator and nothing else will reclaim it. This is an inherent trade-off
 of letting post-return work outlive the client; bound such nodes with their own timeouts rather than relying on the
-request lifecycle to free them. The known concrete instance of this — the per-discussion memory condensation lock in
-`slow_but_quality_rag_tool.py` — is now bounded by default: the acquire waits `condensationLockTimeoutSeconds` (default
-600s) and, on timeout, skips memory generation for that round (self-healing — it retries on the next qualifying turn)
+request lifecycle to free them. The known concrete instance of this, the per-discussion memory condensation lock in
+`slow_but_quality_rag_tool.py`, is now bounded by default: the acquire waits `condensationLockTimeoutSeconds` (default
+600s) and, on timeout, skips memory generation for that round (self-healing: it retries on the next qualifying turn)
 rather than blocking forever. Set that key to 0 to restore the original unbounded wait.
 
 Correspondingly, the streaming generator's `finally` block sends `stop_signal` to the reader **only** on this
@@ -412,11 +497,10 @@ finalization.
 
 ### Implementation Details
 
-Both `Connection: close` and stream-complete detection are implemented in the Eventlet-optimized and fallback
-streaming functions in each handler:
-
-- `ollama_api_handler.py`: `_stream_with_eventlet_optimized()` and `_stream_response_fallback()`
-- `openai_api_handler.py`: `_stream_with_eventlet_optimized()` and `_stream_response_fallback()`
+Both `Connection: close` and stream-complete detection are implemented in the shared streaming functions
+`stream_with_eventlet_optimized()` and `stream_response_fallback()` in
+`Middleware/api/handlers/base/base_streaming.py`. Each handler supplies its own stream-terminator predicate,
+heartbeat bytes, mimetype, and log label through its module-level `StreamingApiConfig`.
 
 Note that `Connection` is technically a hop-by-hop header under WSGI/PEP 3333 and should not normally be set by
 WSGI applications. However, setting it to `close` is the safer pragmatic choice for streaming responses, as it
@@ -438,8 +522,8 @@ preventing zombie connections from accumulating if a client fails to close its e
 
 ## 6\. How to Extend
 
-The architecture makes it easy to add new functionality. The `ApiServer` automatically discovers new handlers, so in
-most cases, you only need to add new files without modifying existing ones.
+The `ApiServer` automatically discovers new handlers, so in most cases, you only need to add new files without
+modifying existing ones.
 
 ### **Example: Add Support for a New API Type (e.g., Anthropic)**
 
@@ -632,7 +716,7 @@ This ensures it sits between the WSGI server (Eventlet) and Flask's routing laye
   before being rejected with a 503. Stored in `instance_global_variables.CONCURRENCY_TIMEOUT`. Defaults to 900
   seconds (15 minutes). This generous default accounts for long-running LLM inference on local hardware.
   Users with slower hardware or very large models may want to increase this further. Applies to both `wilmer` and
-  `endpoint` modes -- in `endpoint` mode, an LLM call that times out at the gate raises `TimeoutError` from inside
+  `endpoint` modes; in `endpoint` mode, an LLM call that times out at the gate raises `TimeoutError` from inside
   `get_response_from_llm` instead of returning a WSGI 503.
 
 * **`--concurrency-level {wilmer,endpoint}`**: Selects which layer holds the semaphore. Stored in
@@ -644,7 +728,7 @@ This ensures it sits between the WSGI server (Eventlet) and Flask's routing laye
 The middleware exempts non-POST requests from the semaphore. This works because all LLM-dispatching endpoints
 use POST, while metadata endpoints (model lists, version) use GET and cancellation endpoints use DELETE. The
 check is done via `_requires_concurrency_limit()`, a static method that reads `REQUEST_METHOD` from the WSGI
-environ. This approach avoids maintaining a path allowlist -- if a new POST endpoint is added that does not
+environ. This approach avoids maintaining a path allowlist; if a new POST endpoint is added that does not
 call an LLM, it would need to be handled (e.g., by switching to a path-based check or adding it to an
 exemption set).
 
@@ -702,3 +786,98 @@ paths explicitly release the gate before invoking the backup. The backup re-acqu
   `app.wsgi_app` with the middleware during server initialization.
 * `Middleware/llmapis/llm_api.py`: Module-level `_acquire_endpoint_gate()` / `_release_endpoint_gate()` and the
   `LlmApiService.get_response_from_llm` wrapping that uses them in `endpoint` mode.
+
+-----
+
+## 8\. Request Idempotency & Disconnect Propagation
+
+Two related mechanisms keep a single-slot backend from wasting a generation when a client's request dies and it
+retries. Both target the same failure mode: a client opens a streaming `/v1/chat/completions`, the connection
+dies before any response byte arrives, the client retries, and, without protection, Wilmer double-generates
+because the first attempt already forwarded the prompt to the backend LLM.
+
+### The pre-response window
+
+A streaming request has a window between "request parsed / prompt forwarded to the backend" and "first response
+byte written to the client." Response headers are written lazily by the WSGI server on the first yielded chunk,
+so during this window no HTTP response line has been sent yet. Two things can end a request inside this window:
+
+* **Client disconnect**: the requesting client closes the socket. In Eventlet mode the 1-second heartbeat
+  (`:\n\n` / NDJSON) forces a socket write that fails and raises `GeneratorExit`/`ClientDisconnected`, so the
+  disconnect is detected within one heartbeat interval and cancellation is requested. Cancelling aborts
+  Wilmer's own HTTP connection to the backend (via the `CancellationService` abort callbacks in
+  `base_api_transport`), and llama.cpp-style backends abort generation when their requester disconnects.
+* **Server-side failure**: the backend workflow raises *before* the first chunk (a transient backend error, a
+  connection refusal, an exception in an early node). The streaming generator re-raises before yielding, so the
+  WSGI server closes the accepted connection with no HTTP response; the client observes a bare "server
+  disconnected without sending a response." This path is intentionally left as-is (it is what triggers the
+  client's retry), but it is now **instrumented**: `stream_with_eventlet_optimized` and `stream_response_fallback`
+  track a `first_output_sent` flag and, when a teardown happens before any byte was written, log a distinct
+  `WARNING` tagged with the `request_id`, the cause, and the lifecycle phase (`awaiting-backend` vs
+  `backend-data-buffered`). Correlate that `request_id` with the accept-path log line to find the root cause of
+  pre-response drops.
+
+### Feature 1: disconnect ⇒ cancellation
+
+The rule is *no client connection ⇒ no backend generation*. Mid-stream and pre-response client disconnects both
+request cancellation for the request's `request_id`, which:
+
+* aborts the in-flight backend HTTP call (abort callback closes the `requests.Session`),
+* trips the workflow's per-node cancellation check (`workflows_processor.execute()`), terminating the workflow
+  at the next node boundary, and
+* frees the request's concurrency slot (the `_SemaphoreReleasingIterator` releases when the response iterator
+  is closed) and endpoint gate (`llm_api`'s `finally`).
+
+This is keyless: by the time a client retries, its first attempt's connection is already dead, so the orphan is
+already being cancelled. Non-streaming requests do not have a general mid-call disconnect watcher (the WSGI
+worker is blocked in a synchronous call with no yield point to poll the socket); the idempotency key below is
+what protects the non-streaming retry case.
+
+### Feature 2: idempotency keys (`X-Idempotency-Key`)
+
+`Middleware/services/idempotency_service.py` provides the `IdempotencyService` singleton, a thread-safe,
+bounded `key -> request_id` registry (with a `request_id -> key` reverse index). It tightens the window from
+"until Wilmer notices the disconnect" to "immediately," and gives a request-correlation id in the logs.
+
+* **Admission** (`_admit_idempotency_key` in `openai_api_handler.py`): the OpenAI chat-completions and legacy
+  completions endpoints read `X-Idempotency-Key` (via `api_helpers.extract_idempotency_key`; case-insensitive,
+  `<= 128` chars, empty/over-long/absent = legacy client) and call `idempotency_service.register(key, request_id)`.
+  `register` returns any **displaced** in-flight `request_id` that was previously bound to the same key; the
+  endpoint then calls `cancellation_service.request_cancellation(displaced)` to kill the orphan and processes
+  the new arrival fresh. Streams are never spliced or teed.
+* **Release** is guarded and keyed by `request_id`. It only removes the forward `key -> request_id` binding when
+  it still points at the finishing request, so a displaced original's late teardown clears only its own stale
+  reverse index and leaves the newer request's live binding intact. Release fires from:
+    * the streaming teardown (`backend_reader`'s `finally` in Eventlet mode, the fallback generator's `finally`)
+      so a streaming key is held for the *entire* backend lifetime, including post-returnToUser nodes, and
+      released exactly once at the end;
+    * the endpoint's `finally` for the non-streaming path (the streaming path sets `handed_to_stream` and skips
+      this so it does not release prematurely, since the view returns its `Response` before the stream runs).
+  Release is a no-op for a request that never registered (legacy client, or any non-OpenAI endpoint), so
+  `base_streaming` can call it unconditionally.
+* **Bounding**: the registry is capped at `MAX_IN_FLIGHT_KEYS` (1024, LRU-evicted) and entries older than
+  `IN_FLIGHT_TTL_SECONDS` (900s) are pruned lazily on the next `register` as a leak backstop. Healthy requests
+  remove their own entry at completion. Keys are process-local; nothing is persisted.
+
+Because a displaced original is cancelled through the *same* `CancellationService` machinery as a disconnect,
+Feature 2 also protects the **non-streaming** retry case for free: the orphaned non-streaming workflow is
+interrupted at its next node boundary even though there is no non-streaming disconnect watcher.
+
+### Client contract (what the chat UI ships)
+
+* `X-Idempotency-Key: <uuid4>` on every completion request; the **same** value across all retries of one
+  logical request; a fresh value per new logical request.
+* The client only retries when an attempt failed **before a response started** (connect errors and the
+  pre-response disconnect). Once headers/tokens arrive it never retries. So Wilmer never sees a duplicate key
+  for a request whose response already began; a duplicate always means the original's client is gone.
+* Header absence = legacy client; Wilmer behaves exactly as before.
+
+### Key Files
+
+* `Middleware/services/idempotency_service.py`: the `IdempotencyService` singleton (`register`, guarded
+  `release`, `get_request_id_for_key`, `clear`) and its `MAX_IN_FLIGHT_KEYS` / `IN_FLIGHT_TTL_SECONDS` bounds.
+* `Middleware/api/api_helpers.py`: `extract_idempotency_key()` and `MAX_IDEMPOTENCY_KEY_LENGTH`.
+* `Middleware/api/handlers/impl/openai_api_handler.py`: `_admit_idempotency_key()` and the register/release
+  wiring in `ChatCompletionsAPI` / `CompletionsAPI`.
+* `Middleware/api/handlers/base/base_streaming.py`: guarded release in the streaming teardowns and the
+  pre-response disconnect instrumentation.

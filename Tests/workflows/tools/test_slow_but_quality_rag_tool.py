@@ -7,6 +7,17 @@ from Middleware.workflows.models.execution_context import ExecutionContext
 from Middleware.workflows.tools.slow_but_quality_rag_tool import SlowButQualityRAGTool
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_discussion_id_workflow_path(mocker):
+    """handle_discussion_id_flow resolves the discussion-id workflow path through
+    the real user config on disk (get_discussion_id_workflow_path -> get_user_config);
+    stub the tool module's by-name import so tests never read machine state. Tests
+    exercising the flow already patch load_config, so the fake path is never opened."""
+    mocker.patch(
+        'Middleware.workflows.tools.slow_but_quality_rag_tool.get_discussion_id_workflow_path',
+        return_value='/fake/discussion-id-workflow-settings.json')
+
+
 @pytest.fixture
 def mock_context(mocker):
     """Creates a mock ExecutionContext object for tests."""
@@ -88,6 +99,7 @@ class TestSlowButQualityRAGTool:
             "A test summary.",
             json.dumps({"title": "Test", "summary": "A test summary.", "entities": [], "key_phrases": []}),
             api_key_hash=mock_context.api_key_hash,
+            index_topics=False,
         )
 
         assert mock_vector_db.add_vector_check_hash.call_count == 2
@@ -97,6 +109,25 @@ class TestSlowButQualityRAGTool:
         mock_vector_db.add_vector_check_hash.assert_any_call(
             mock_context.discussion_id, "hash2", api_key_hash=mock_context.api_key_hash
         )
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.vector_db_utils')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.SlowButQualityRAGTool._parse_llm_json_output')
+    def test_failed_vector_add_does_not_log_hash(self, mock_parse_json, mock_vector_db, mock_context):
+        """A memory the DB refused to store (add returns None) must not count as
+        a success: the chunk hash stays unlogged so the chunk is retried on the
+        next memory cycle instead of being silently lost."""
+        tool = SlowButQualityRAGTool()
+        config = {'vectorMemoryWorkflowName': 'test-vector-workflow'}
+        hashed_chunks = [("first chunk", "hash1")]
+
+        mock_context.workflow_manager.run_custom_workflow.return_value = '{}'
+        mock_parse_json.return_value = {"title": "T", "summary": "S", "entities": [], "key_phrases": []}
+        mock_vector_db.add_memory_to_vector_db.return_value = None
+
+        tool.generate_and_store_vector_memories(hashed_chunks, config, mock_context)
+
+        mock_vector_db.add_memory_to_vector_db.assert_called_once()
+        mock_vector_db.add_vector_check_hash.assert_not_called()
 
     @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.vector_db_utils')
     @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.SlowButQualityRAGTool.process_single_chunk')
@@ -125,9 +156,34 @@ class TestSlowButQualityRAGTool:
             "Direct summary.",
             json.dumps({"title": "Direct", "summary": "Direct summary.", "entities": ["a"], "key_phrases": ["b"]}),
             api_key_hash=mock_context.api_key_hash,
+            index_topics=False,
         )
         mock_vector_db.add_vector_check_hash.assert_called_once_with(
             mock_context.discussion_id, "chunk_hash", api_key_hash=mock_context.api_key_hash
+        )
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.vector_db_utils')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.SlowButQualityRAGTool._parse_llm_json_output')
+    def test_generate_and_store_vector_memories_threads_index_topics(self, mock_parse_json, mock_vector_db,
+                                                                     mock_context):
+        """Tests that vectorMemoryIndexTopics in the discussion settings reaches the write call."""
+        tool = SlowButQualityRAGTool()
+        config = {'vectorMemoryWorkflowName': 'test-vector-workflow', 'vectorMemoryIndexTopics': True}
+        hashed_chunks = [("a chunk", "hash1")]
+
+        mock_context.workflow_manager.run_custom_workflow.return_value = 'raw'
+        mock_parse_json.return_value = {"title": "T", "summary": "S.", "entities": [],
+                                        "key_phrases": [], "topics": ["board games"]}
+
+        tool.generate_and_store_vector_memories(hashed_chunks, config, mock_context)
+
+        mock_vector_db.add_memory_to_vector_db.assert_called_once_with(
+            mock_context.discussion_id,
+            "S.",
+            json.dumps({"title": "T", "summary": "S.", "entities": [], "key_phrases": [],
+                        "topics": ["board games"]}),
+            api_key_hash=mock_context.api_key_hash,
+            index_topics=True,
         )
 
     def test_perform_keyword_search_routes_correctly(self, mock_context):
@@ -298,6 +354,10 @@ class TestSlowButQualityRAGTool:
             assert any("skipping memory generation" in r.getMessage() for r in caplog.records)
         finally:
             lock.release()
+            from Middleware.workflows.tools.slow_but_quality_rag_tool import (
+                _condensation_locks, _condensation_locks_guard)
+            with _condensation_locks_guard:
+                _condensation_locks.pop(mock_context.discussion_id, None)
 
     def test_perform_rag_on_conversation_chunk_no_discussion_id(self, mock_context):
         """Tests that perform_rag_on_conversation_chunk returns empty string when discussion_id is None."""
@@ -318,11 +378,31 @@ class TestSlowButQualityRAGTool:
         assert result == ""
 
     def test_handle_discussion_id_flow_no_discussion_id(self, mock_context):
-        """Tests that handle_discussion_id_flow returns early when discussion_id is None."""
+        """No discussion_id: the flow returns before ever consulting the discussion-id
+        workflow config, even when the conversation is long enough to otherwise qualify
+        (>= 3 messages, so the message-count guard cannot mask a broken id guard)."""
         mock_context.discussion_id = None
+        mock_context.messages = [{"role": "user", "content": f"message {i}"} for i in range(5)]
         tool = SlowButQualityRAGTool()
 
-        tool.handle_discussion_id_flow(mock_context)
+        with patch('Middleware.workflows.tools.slow_but_quality_rag_tool.load_config') as mock_load:
+            tool.handle_discussion_id_flow(mock_context)
+
+        mock_load.assert_not_called()
+
+    def test_handle_discussion_id_flow_fewer_than_three_messages_skips(self, mock_context):
+        """With a discussion_id but fewer than 3 messages, no memory work happens:
+        the discussion-id workflow config is never loaded."""
+        mock_context.messages = [
+            {"role": "user", "content": "one"},
+            {"role": "assistant", "content": "two"},
+        ]
+        tool = SlowButQualityRAGTool()
+
+        with patch('Middleware.workflows.tools.slow_but_quality_rag_tool.load_config') as mock_load:
+            tool.handle_discussion_id_flow(mock_context)
+
+        mock_load.assert_not_called()
 
     @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.SlowButQualityRAGTool.process_single_chunk')
     def test_perform_rag_on_memory_chunk_direct_call(self, mock_process_chunk, mock_context):
@@ -339,7 +419,9 @@ class TestSlowButQualityRAGTool:
         with patch('Middleware.workflows.tools.slow_but_quality_rag_tool.read_chunks_with_hashes', return_value=[]), \
                 patch('Middleware.services.memory_service.MemoryService.get_current_summary', return_value=""), \
                 patch('Middleware.workflows.tools.slow_but_quality_rag_tool.LlmHandlerService'), \
-                patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_endpoint_config'):
+                patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_endpoint_config'), \
+                patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_discussion_memory_file_path',
+                      return_value='/nonexistent/memory.json'):
             result = tool.perform_rag_on_memory_chunk(
                 "sys", "prompt", text_chunk, mock_context, workflow_config, custom_delimiter="||"
             )
@@ -443,13 +525,13 @@ class TestSlowButQualityRAGTool:
             self, mock_estimate_tokens, mock_hasher, mock_chunker, mock_vector_db, mock_load_config, mock_context
     ):
         """
-        Tests that the vector memory hash is NOT updated when generate_and_store_vector_memories
-        returns 0 (no memories were actually stored). This prevents the "walking hash" bug where
-        the hash advances even though no memories were created.
-
-        Note: With the resumability change, hashes are now written per-chunk INSIDE
-        generate_and_store_vector_memories. This test verifies that handle_discussion_id_flow
-        correctly passes hashed_chunks and that the method is called appropriately.
+        Pins the flow-level half of the "walking hash" contract: handle_discussion_id_flow
+        itself must never call add_vector_check_hash (the original bug advanced the hash
+        at the flow level even when nothing was stored), and it must hand the hashed
+        chunks to generate_and_store_vector_memories unchanged. The store-level half
+        (the guard inside generate_and_store_vector_memories that skips the hash when
+        nothing lands) is pinned by test_failed_vector_add_does_not_log_hash and
+        test_junk_llm_output_stores_nothing_and_skips_hash.
         """
         tool = SlowButQualityRAGTool()
 
@@ -586,6 +668,34 @@ class TestSlowButQualityRAGTool:
 
     @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.load_config')
     @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.vector_db_utils')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.chunk_messages_with_hashes', return_value=[])
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.hash_single_message')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.rough_estimate_token_length', return_value=5000)
+    def test_vector_path_empty_chunker_output_generates_nothing(
+            self, mock_estimate_tokens, mock_hasher, mock_chunker, mock_vector_db, mock_load_config, mock_context
+    ):
+        """If the trigger fires but chunking yields no chunks (no text blocks), the
+        flow logs and skips generation instead of calling the store with nothing."""
+        tool = SlowButQualityRAGTool()
+        mock_load_config.return_value = {
+            'useVectorForQualityMemory': True,
+            'lookbackStartTurn': 1,
+            'vectorMemoryChunkEstimatedTokenSize': 1000,
+            'vectorMemoryMaxMessagesBetweenChunks': 5
+        }
+        mock_context.messages = [{"role": "user", "content": f"message_{i}"} for i in range(10)]
+        mock_hasher.side_effect = lambda msg: f"hash_of_{msg['content']}"
+        mock_vector_db.get_vector_check_hash_history.return_value = []
+
+        with patch.object(tool, 'generate_and_store_vector_memories') as mock_generate:
+            tool.handle_discussion_id_flow(mock_context)
+
+        mock_chunker.assert_called_once()
+        mock_generate.assert_not_called()
+        mock_vector_db.add_vector_check_hash.assert_not_called()
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.load_config')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.vector_db_utils')
     @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.hash_single_message')
     @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.rough_estimate_token_length', return_value=100)
     def test_vector_lookback_start_turn_respected(
@@ -600,7 +710,7 @@ class TestSlowButQualityRAGTool:
             'vectorMemoryChunkEstimatedTokenSize': 1,
             'vectorMemoryMaxMessagesBetweenChunks': 1
         }
-        # Only 4 messages (including no system since they're filtered) — within lookback of 5
+        # Only 4 messages (including no system since they're filtered), within lookback of 5
         mock_context.messages = [{"role": "user", "content": f"message_{i}"} for i in range(4)]
 
         with patch.object(tool, 'generate_and_store_vector_memories') as mock_generate:
@@ -623,7 +733,7 @@ class TestSlowButQualityRAGTool:
             'vectorMemoryChunkEstimatedTokenSize': 1,
             'vectorMemoryMaxMessagesBetweenChunks': 1
         }
-        # 3 messages but one is system — after filtering, only 2 non-system messages remain
+        # 3 messages but one is system; after filtering, only 2 non-system messages remain
         # With lookback of 1, only 1 message is eligible
         mock_context.messages = [
             {"role": "system", "content": "You are a helpful assistant."},
@@ -639,10 +749,13 @@ class TestSlowButQualityRAGTool:
             with patch.object(tool, 'generate_and_store_vector_memories', return_value=1) as mock_generate:
                 tool.handle_discussion_id_flow(mock_context)
 
-                if mock_chunker.called:
-                    messages_arg = mock_chunker.call_args[0][0]
-                    for msg in messages_arg:
-                        assert msg['role'] != 'system', "System messages should be filtered out"
+                assert mock_chunker.called, (
+                    "Flow never reached the chunker; the system-message filter was not exercised"
+                )
+                messages_arg = mock_chunker.call_args[0][0]
+                assert messages_arg, "Chunker received no messages"
+                for msg in messages_arg:
+                    assert msg['role'] != 'system', "System messages should be filtered out"
 
     @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.os.path.exists', return_value=True)
     @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.load_config')
@@ -861,21 +974,6 @@ class TestSlowButQualityRAGTool:
             tool.handle_discussion_id_flow(mock_context)
             mock_process.assert_not_called()
 
-    def test_process_single_chunk_passes_request_id_completions(self, mock_context):
-        """Tests that process_single_chunk passes request_id for completions-style APIs."""
-        mock_context.llm_handler.takes_message_collection = False
-
-        SlowButQualityRAGTool.process_single_chunk(
-            "my text chunk", "Prompt: [TextChunk]", "System: [TextChunk]", mock_context
-        )
-
-        mock_context.llm_handler.llm.get_response_from_llm.assert_called_once_with(
-            system_prompt="System: my text chunk",
-            prompt="Prompt: my text chunk",
-            llm_takes_images=False,
-            request_id="test-req-123"
-        )
-
     def test_process_single_chunk_passes_request_id_chat(self, mock_context):
         """Tests that process_single_chunk passes request_id for chat-style APIs."""
         mock_context.llm_handler.takes_message_collection = True
@@ -887,6 +985,45 @@ class TestSlowButQualityRAGTool:
         call_args, call_kwargs = mock_context.llm_handler.llm.get_response_from_llm.call_args
         assert call_kwargs.get('request_id') == "test-req-123"
         assert call_kwargs.get('llm_takes_images') is False
+
+    def test_process_single_chunk_returns_empty_without_llm_handler(self, mock_context):
+        """A context with no llm_handler at all returns "" without crashing and
+        without attempting variable substitution."""
+        mock_context.llm_handler = None
+
+        result = SlowButQualityRAGTool.process_single_chunk(
+            "chunk", "Prompt: [TextChunk]", "System: [TextChunk]", mock_context
+        )
+
+        assert result == ""
+        mock_context.workflow_variable_service.apply_variables.assert_not_called()
+
+    def test_process_single_chunk_returns_empty_when_handler_has_no_llm(self, mock_context):
+        """A handler whose internal .llm is missing returns "" without crashing."""
+        mock_context.llm_handler.llm = None
+
+        result = SlowButQualityRAGTool.process_single_chunk(
+            "chunk", "Prompt: [TextChunk]", "System: [TextChunk]", mock_context
+        )
+
+        assert result == ""
+        mock_context.workflow_variable_service.apply_variables.assert_not_called()
+
+    def test_perform_rag_on_conversation_chunk_delegates_with_config(self, mock_context):
+        """With a discussion_id, the conversation-chunk entry point (used by the
+        SlowButQualityRAG tool node) delegates to perform_rag_on_memory_chunk with
+        the node's own config and its chunksPerMemory setting."""
+        tool = SlowButQualityRAGTool()
+        mock_context.config = {'chunksPerMemory': 5}
+
+        with patch.object(tool, 'perform_rag_on_memory_chunk', return_value="summary") as mock_rag:
+            result = tool.perform_rag_on_conversation_chunk("sys", "prompt", "chunk", mock_context)
+
+        assert result == "summary"
+        mock_rag.assert_called_once_with(
+            "sys", "prompt", "chunk", mock_context, mock_context.config,
+            custom_delimiter="", chunks_per_memory=5
+        )
 
     @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.os.path.exists', return_value=True)
     @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.load_config')
@@ -901,7 +1038,7 @@ class TestSlowButQualityRAGTool:
         """
         Scenario: New chat where file exists on disk but has no chunks (empty []).
         The message threshold should be active because the file exists, even though
-        it contains no memory chunks. This is the key fix — previously, the code
+        it contains no memory chunks. This is the key fix: previously, the code
         checked bool(discussion_chunks) which was False for empty files, disabling
         the message threshold entirely for new conversations.
         """
@@ -1037,6 +1174,34 @@ class TestSlowButQualityRAGTool:
             tool.handle_discussion_id_flow(mock_context)
             mock_process.assert_not_called()
 
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.os.path.exists', return_value=True)
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.load_config')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.read_chunks_with_hashes',
+           return_value=[("existing memory", "existing_hash")])
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.rough_estimate_token_length')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_discussion_memory_file_path')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.find_last_matching_hash_message', return_value=0)
+    def test_file_path_hash_cursor_current_skips_before_threshold_check(
+            self, mock_find_hash, mock_get_path, mock_estimate_tokens,
+            mock_read_hashes, mock_load_config, mock_path_exists, mock_context
+    ):
+        """When the hash cursor says nothing is new (find_last_matching_hash_message
+        returns 0), the flow returns before even estimating tokens; this is the
+        no-op path taken on every turn between memory generations."""
+        tool = SlowButQualityRAGTool()
+        mock_load_config.return_value = {
+            'useVectorForQualityMemory': False,
+            'lookbackStartTurn': 3,
+            'chunkEstimatedTokenSize': 1000,
+            'maxMessagesBetweenChunks': 5
+        }
+        mock_context.messages = [{"role": "user", "content": f"message {i}"} for i in range(20)]
+
+        with patch.object(tool, 'process_new_memory_chunks') as mock_process:
+            tool.handle_discussion_id_flow(mock_context)
+
+        mock_process.assert_not_called()
+        mock_estimate_tokens.assert_not_called()
 
     @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.write_condensation_tracker')
     @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_discussion_condensation_tracker_file_path',
@@ -1124,7 +1289,7 @@ class TestSlowButQualityRAGTool:
     ):
         """
         When memory file exists (normal mode) and condenseMemories is enabled,
-        the tracker seeding should NOT happen — only consolidation mode seeds it.
+        the tracker seeding should NOT happen; only consolidation mode seeds it.
         """
         tool = SlowButQualityRAGTool()
         mock_load_config.return_value = {
@@ -1142,6 +1307,354 @@ class TestSlowButQualityRAGTool:
             with patch.object(tool, 'condense_memories'):
                 tool.handle_discussion_id_flow(mock_context)
                 mock_write_tracker.assert_not_called()
+
+
+class TestProcessNewMemoryChunks:
+    """Direct unit tests for process_new_memory_chunks."""
+
+    @pytest.fixture
+    def mock_context(self, mocker):
+        """Creates a mock ExecutionContext for these tests."""
+        context = ExecutionContext(
+            request_id="test-req-123",
+            workflow_id="test-wf-123",
+            discussion_id="test-disc-123",
+            config={"key": "value"},
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=False,
+            workflow_config={"global_key": "global_value"},
+            agent_outputs={}
+        )
+        context.workflow_manager = MagicMock()
+        context.workflow_variable_service = MagicMock()
+        return context
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.update_chunks_with_hashes')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.read_chunks_with_hashes',
+           return_value=[("existing summary", "existing_hash")])
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_discussion_memory_file_path',
+           return_value='/fake/memories.json')
+    def test_appends_split_results_to_existing_chunks(
+            self, mock_get_path, mock_read_hashes, mock_update_chunks, mock_context
+    ):
+        """The RAG output is split on --rag_break--, each summary is paired with its
+        chunk hash, and the file is overwritten with existing + new pairs."""
+        tool = SlowButQualityRAGTool()
+        chunks = ["chunk one", "chunk two"]
+        hash_chunks = [("chunk one", "h1"), ("chunk two", "h2")]
+        workflow_config = {'endpointName': 'test-endpoint'}
+
+        with patch.object(tool, 'perform_rag_on_memory_chunk',
+                          return_value="s1--rag_break--s2") as mock_rag:
+            tool.process_new_memory_chunks(chunks, hash_chunks, "sys", "prompt",
+                                           workflow_config, mock_context)
+
+        mock_rag.assert_called_once_with(
+            "sys", "prompt", "chunk one--ChunkBreak--chunk two", mock_context,
+            workflow_config, "--rag_break--", 3
+        )
+        mock_update_chunks.assert_called_once_with(
+            [("existing summary", "existing_hash"), ("s1", "h1"), ("s2", "h2")],
+            '/fake/memories.json', mode="overwrite", encryption_key=None
+        )
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.update_chunks_with_hashes')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.read_chunks_with_hashes', return_value=[])
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_discussion_memory_file_path',
+           return_value='/fake/memories.json')
+    def test_result_hash_count_mismatch_truncates_and_warns(
+            self, mock_get_path, mock_read_hashes, mock_update_chunks, mock_context, caplog
+    ):
+        """When the LLM returns more summaries than there are hashed chunks, the zip
+        truncates to the shorter list and a warning is logged."""
+        tool = SlowButQualityRAGTool()
+        chunks = ["chunk one", "chunk two"]
+        hash_chunks = [("chunk one", "h1"), ("chunk two", "h2")]
+
+        with patch.object(tool, 'perform_rag_on_memory_chunk',
+                          return_value="s1--rag_break--s2--rag_break--s3"):
+            with caplog.at_level(
+                "WARNING", logger="Middleware.workflows.tools.slow_but_quality_rag_tool"
+            ):
+                tool.process_new_memory_chunks(chunks, hash_chunks, "sys", "prompt",
+                                               {}, mock_context)
+
+        mock_update_chunks.assert_called_once_with(
+            [("s1", "h1"), ("s2", "h2")],
+            '/fake/memories.json', mode="overwrite", encryption_key=None
+        )
+        assert any("does not match" in r.getMessage() for r in caplog.records)
+
+
+class TestPerformRagOnMemoryChunk:
+    """Additional unit tests for perform_rag_on_memory_chunk routing behavior."""
+
+    @pytest.fixture(autouse=True)
+    def _no_disk_paths(self, mocker):
+        """perform_rag_on_memory_chunk resolves the discussion memory file path,
+        which creates the discussion folder on disk; keep these tests hermetic."""
+        mocker.patch(
+            'Middleware.workflows.tools.slow_but_quality_rag_tool.get_discussion_memory_file_path',
+            return_value='/nonexistent/memory.json')
+
+    @pytest.fixture
+    def mock_context(self, mocker):
+        """Creates a mock ExecutionContext for these tests."""
+        context = ExecutionContext(
+            request_id="test-req-123",
+            workflow_id="test-wf-123",
+            discussion_id="test-disc-123",
+            config={"key": "value"},
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=False,
+            workflow_config={"global_key": "global_value"},
+            agent_outputs={}
+        )
+        context.workflow_manager = MagicMock()
+        context.workflow_variable_service = MagicMock()
+        mock_llm_handler = MagicMock()
+        mock_llm_handler.takes_message_collection = True
+        context.llm_handler = mock_llm_handler
+        return context
+
+    @patch('Middleware.services.memory_service.MemoryService.get_current_summary',
+           return_value="The chat summary")
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.read_chunks_with_hashes', return_value=[])
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.LlmHandlerService')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_endpoint_config')
+    def test_workflow_path_passes_exact_scoped_inputs(
+            self, mock_get_endpoint, mock_llm_service, mock_read_hashes, mock_summary, mock_context
+    ):
+        """With fileMemoryWorkflowName set, each chunk routes through run_custom_workflow
+        with scoped_inputs of exactly [chunk, current_memories, full_memories, chat_summary]."""
+        tool = SlowButQualityRAGTool()
+        workflow_config = {
+            'endpointName': 'test-endpoint',
+            'preset': 'test-preset',
+            'fileMemoryWorkflowName': 'memory-file-workflow'
+        }
+        mock_context.workflow_manager.run_custom_workflow.return_value = "workflow summary"
+
+        result = tool.perform_rag_on_memory_chunk(
+            "sys", "prompt", "only chunk", mock_context, workflow_config
+        )
+
+        mock_context.workflow_manager.run_custom_workflow.assert_called_once_with(
+            workflow_name='memory-file-workflow',
+            request_id=mock_context.request_id,
+            discussion_id=mock_context.discussion_id,
+            messages=mock_context.messages,
+            non_responder=True,
+            scoped_inputs=[
+                "only chunk",
+                "No preceding memories to show",
+                "No preceding memories to show",
+                "The chat summary",
+            ],
+            api_key=mock_context.api_key
+        )
+        assert result == "workflow summary"
+
+    @patch('Middleware.services.memory_service.MemoryService.get_current_summary', return_value="")
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.read_chunks_with_hashes', return_value=[])
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.LlmHandlerService')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_endpoint_config')
+    def test_direct_path_rolls_prior_summaries_into_next_prompt(
+            self, mock_get_endpoint, mock_llm_service, mock_read_hashes, mock_summary, mock_context
+    ):
+        """Rolling accumulation: chunk 2's prompt must contain chunk 1's freshly
+        generated summary via the [Memory_file] placeholder."""
+        tool = SlowButQualityRAGTool()
+        workflow_config = {
+            'endpointName': 'test-endpoint',
+            'preset': 'test-preset',
+        }
+        rag_prompt = "Recent memories: [Memory_file]\nSummarize the chunk."
+
+        with patch.object(SlowButQualityRAGTool, 'process_single_chunk',
+                          side_effect=["summary1", "summary2"]) as mock_process:
+            result = tool.perform_rag_on_memory_chunk(
+                "sys", rag_prompt, "chunk1--ChunkBreak--chunk2", mock_context,
+                workflow_config, custom_delimiter="||"
+            )
+
+        assert result == "summary1||summary2"
+        assert mock_process.call_count == 2
+        first_prompt = mock_process.call_args_list[0][0][1]
+        second_prompt = mock_process.call_args_list[1][0][1]
+        assert "No preceding memories to show" in first_prompt
+        assert "summary1" in second_prompt
+
+
+class TestGenerateAndStoreVectorMemoriesNegativePaths:
+    """Negative-path tests for generate_and_store_vector_memories."""
+
+    @pytest.fixture
+    def mock_context(self, mocker):
+        """Creates a mock ExecutionContext for these tests."""
+        context = ExecutionContext(
+            request_id="test-req-123",
+            workflow_id="test-wf-123",
+            discussion_id="test-disc-123",
+            config={"key": "value"},
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=False,
+            workflow_config={"global_key": "global_value"},
+            agent_outputs={}
+        )
+        context.workflow_manager = MagicMock()
+        context.workflow_variable_service = MagicMock()
+        return context
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.vector_db_utils')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.LlmHandlerService')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_endpoint_config')
+    def test_junk_llm_output_stores_nothing_and_skips_hash(
+            self, mock_get_endpoint, mock_llm_service, mock_vector_db, mock_context
+    ):
+        """Junk (non-JSON) LLM output must not advance the resumability hash:
+        no memory stored, no hash written, and the method returns 0."""
+        tool = SlowButQualityRAGTool()
+        config = {'vectorMemoryEndpointName': 'test-endpoint', 'vectorMemoryPreset': 'test-preset'}
+        hashed_chunks = [("chunk text", "h1")]
+
+        with patch.object(SlowButQualityRAGTool, 'process_single_chunk',
+                          return_value="Sorry, I cannot produce JSON for this."):
+            result = tool.generate_and_store_vector_memories(hashed_chunks, config, mock_context)
+
+        assert result == 0
+        mock_vector_db.add_memory_to_vector_db.assert_not_called()
+        mock_vector_db.add_vector_check_hash.assert_not_called()
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.vector_db_utils')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.LlmHandlerService')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_endpoint_config')
+    def test_json_array_of_two_memories_stores_both_with_one_hash_write(
+            self, mock_get_endpoint, mock_llm_service, mock_vector_db, mock_context
+    ):
+        """A JSON array with two valid memory objects yields two vector DB adds
+        but only a single per-chunk hash write."""
+        tool = SlowButQualityRAGTool()
+        config = {'vectorMemoryEndpointName': 'test-endpoint', 'vectorMemoryPreset': 'test-preset'}
+        hashed_chunks = [("chunk text", "h1")]
+        llm_output = json.dumps([
+            {"title": "A", "summary": "Summary A", "entities": [], "key_phrases": []},
+            {"title": "B", "summary": "Summary B", "entities": [], "key_phrases": []},
+        ])
+
+        with patch.object(SlowButQualityRAGTool, 'process_single_chunk', return_value=llm_output):
+            result = tool.generate_and_store_vector_memories(hashed_chunks, config, mock_context)
+
+        assert result == 2
+        assert mock_vector_db.add_memory_to_vector_db.call_count == 2
+        stored_summaries = [c[0][1] for c in mock_vector_db.add_memory_to_vector_db.call_args_list]
+        assert stored_summaries == ["Summary A", "Summary B"]
+        mock_vector_db.add_vector_check_hash.assert_called_once_with(
+            mock_context.discussion_id, "h1", api_key_hash=mock_context.api_key_hash
+        )
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.vector_db_utils')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.LlmHandlerService')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_endpoint_config')
+    def test_memory_missing_required_key_is_skipped_without_crashing(
+            self, mock_get_endpoint, mock_llm_service, mock_vector_db, mock_context
+    ):
+        """A memory object missing a required key (summary here) is dropped by the
+        required-keys gate; the valid sibling still stores and the hash advances."""
+        tool = SlowButQualityRAGTool()
+        config = {'vectorMemoryEndpointName': 'test-endpoint', 'vectorMemoryPreset': 'test-preset'}
+        hashed_chunks = [("chunk text", "h1")]
+        llm_output = json.dumps([
+            {"title": "A", "entities": [], "key_phrases": []},
+            {"title": "B", "summary": "Summary B", "entities": [], "key_phrases": []},
+        ])
+
+        with patch.object(SlowButQualityRAGTool, 'process_single_chunk', return_value=llm_output):
+            result = tool.generate_and_store_vector_memories(hashed_chunks, config, mock_context)
+
+        assert result == 1
+        mock_vector_db.add_memory_to_vector_db.assert_called_once()
+        assert mock_vector_db.add_memory_to_vector_db.call_args[0][1] == "Summary B"
+        mock_vector_db.add_vector_check_hash.assert_called_once_with(
+            mock_context.discussion_id, "h1", api_key_hash=mock_context.api_key_hash
+        )
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.vector_db_utils')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.LlmHandlerService')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_endpoint_config')
+    def test_whitespace_only_chunk_is_skipped_entirely(
+            self, mock_get_endpoint, mock_llm_service, mock_vector_db, mock_context
+    ):
+        """A whitespace-only chunk is skipped before any LLM call or DB write."""
+        tool = SlowButQualityRAGTool()
+        config = {'vectorMemoryEndpointName': 'test-endpoint', 'vectorMemoryPreset': 'test-preset'}
+        hashed_chunks = [("   \n  ", "h_blank")]
+
+        with patch.object(SlowButQualityRAGTool, 'process_single_chunk') as mock_process:
+            result = tool.generate_and_store_vector_memories(hashed_chunks, config, mock_context)
+
+        assert result == 0
+        mock_process.assert_not_called()
+        mock_context.workflow_manager.run_custom_workflow.assert_not_called()
+        mock_vector_db.add_memory_to_vector_db.assert_not_called()
+        mock_vector_db.add_vector_check_hash.assert_not_called()
+
+
+class TestKeywordSearchEdgeCases:
+    """Edge-case tests for the keyword/conversation search paths."""
+
+    @pytest.fixture
+    def mock_context(self, mocker):
+        """Creates a mock ExecutionContext for these tests."""
+        context = ExecutionContext(
+            request_id="test-req-123",
+            workflow_id="test-wf-123",
+            discussion_id="test-disc-123",
+            config={"key": "value"},
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=False,
+            workflow_config={"global_key": "global_value"},
+            agent_outputs={}
+        )
+        context.workflow_manager = MagicMock()
+        context.workflow_variable_service = MagicMock()
+        mock_llm_handler = MagicMock()
+        mock_llm_handler.takes_message_collection = True
+        context.llm_handler = mock_llm_handler
+        return context
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.advanced_search_in_chunks',
+           return_value=["found A", "", "found B"])
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.filter_keywords_by_speakers',
+           side_effect=lambda _, k: k)
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_message_chunks',
+           return_value=["chunk1", "chunk2"])
+    def test_perform_conversation_search_joins_multiple_chunks(
+            self, mock_get_chunks, mock_filter, mock_advanced_search, mock_context
+    ):
+        """Multiple non-empty result chunks are joined with --ChunkBreak--; empty
+        chunks are filtered out of the joined string."""
+        tool = SlowButQualityRAGTool()
+        result = tool.perform_conversation_search("test keywords", mock_context)
+        assert result == "found A--ChunkBreak--found B"
+
+    def test_perform_conversation_search_lookback_beyond_history_returns_sentinel(self, mock_context):
+        """A lookbackStartTurn at or beyond the message count returns the
+        no-memories sentinel without searching anything."""
+        tool = SlowButQualityRAGTool()
+        result = tool.perform_conversation_search("kw", mock_context, lookbackStartTurn=1)
+        assert result == ('There are no memories. This conversation has not gone long '
+                          'enough for there to be memories.')
+
+    def test_perform_keyword_search_current_conversation_empty_messages(self, mock_context):
+        """CurrentConversation search with no messages short-circuits to an empty
+        string without calling the conversation search."""
+        mock_context.messages = []
+        tool = SlowButQualityRAGTool()
+        with patch.object(tool, 'perform_conversation_search') as mock_conv_search:
+            result = tool.perform_keyword_search("kw", "CurrentConversation", mock_context)
+        assert result == ""
+        mock_conv_search.assert_not_called()
 
 
 class TestCondenseMemories:
@@ -1767,7 +2280,7 @@ class TestCondenseMemories:
         config = {
             'condenseMemories': True,
             'memoriesBeforeCondensation': 3,
-            # No memoryCondensationBuffer specified - should default to 0
+            # No memoryCondensationBuffer specified; should default to 0
             'endpointName': 'test-endpoint',
             'preset': 'test-preset',
         }
@@ -1784,3 +2297,471 @@ class TestCondenseMemories:
             tool.condense_memories("disc123", config, mock_context)
 
         mock_update.assert_called_once()
+
+    def test_skips_when_lock_already_held(self, mock_context):
+        """condense_memories uses a non-blocking acquire on the per-discussion lock;
+        while another holder has it, the whole condensation pass is skipped."""
+        from Middleware.workflows.tools.slow_but_quality_rag_tool import _get_condensation_lock
+
+        tool = SlowButQualityRAGTool()
+        config = {'condenseMemories': True, 'memoriesBeforeCondensation': 3}
+        discussion_id = "test-disc-lock-held"
+
+        lock = _get_condensation_lock(discussion_id)
+        assert lock.acquire(blocking=False)
+        try:
+            with patch.object(tool, '_condense_memories_locked') as mock_locked:
+                tool.condense_memories(discussion_id, config, mock_context)
+                mock_locked.assert_not_called()
+        finally:
+            lock.release()
+            from Middleware.workflows.tools.slow_but_quality_rag_tool import (
+                _condensation_locks, _condensation_locks_guard)
+            with _condensation_locks_guard:
+                _condensation_locks.pop(discussion_id, None)
+
+
+class TestStateDocumentUpdate:
+    """Unit tests for SlowButQualityRAGTool._update_state_document."""
+
+    def _config(self, **overrides):
+        config = {
+            'useStateDocument': True,
+            'stateDocumentWorkflowName': 'State_Document_Workflow',
+        }
+        config.update(overrides)
+        return config
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.write_plain_text_file')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.read_plain_text_file')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_discussion_state_document_file_path')
+    def test_happy_path_merges_and_saves(self, mock_path, mock_read, mock_write, mock_context):
+        """Tests the full merge flow: sub-workflow receives new facts and current doc, output is saved with backup."""
+        tool = SlowButQualityRAGTool()
+        mock_path.return_value = '/fake/state_document.md'
+        mock_read.return_value = '## Old\n- old fact'
+        mock_context.workflow_manager.run_custom_workflow.return_value = '## New\n- merged fact'
+
+        tool._update_state_document(self._config(), mock_context, ['fact one', 'fact two'])
+
+        mock_context.workflow_manager.run_custom_workflow.assert_called_once_with(
+            workflow_name='State_Document_Workflow',
+            request_id=mock_context.request_id,
+            discussion_id=mock_context.discussion_id,
+            messages=mock_context.messages,
+            non_responder=True,
+            scoped_inputs=['- fact one\n- fact two', '## Old\n- old fact'],
+            api_key=mock_context.api_key
+        )
+        mock_write.assert_called_once_with(
+            '/fake/state_document.md',
+            '## New\n- merged fact',
+            encryption_key=mock_context.encryption_key,
+            backup_suffix='.bak'
+        )
+
+    def test_disabled_is_no_op(self, mock_context):
+        """Tests that nothing runs when useStateDocument is absent."""
+        tool = SlowButQualityRAGTool()
+
+        tool._update_state_document({}, mock_context, ['fact'])
+
+        mock_context.workflow_manager.run_custom_workflow.assert_not_called()
+
+    def test_enabled_without_workflow_name_is_no_op(self, mock_context):
+        """Tests that a missing stateDocumentWorkflowName is logged and skipped, not raised."""
+        tool = SlowButQualityRAGTool()
+
+        tool._update_state_document({'useStateDocument': True}, mock_context, ['fact'])
+
+        mock_context.workflow_manager.run_custom_workflow.assert_not_called()
+
+    def test_no_new_facts_is_no_op(self, mock_context):
+        """Tests that an empty fact list never triggers the merge workflow."""
+        tool = SlowButQualityRAGTool()
+
+        tool._update_state_document(self._config(), mock_context, [])
+
+        mock_context.workflow_manager.run_custom_workflow.assert_not_called()
+
+    @pytest.mark.parametrize("bad_output", [None, '', '   \n  '])
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.write_plain_text_file')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.read_plain_text_file')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_discussion_state_document_file_path')
+    def test_empty_workflow_output_keeps_existing_document(self, mock_path, mock_read, mock_write,
+                                                           mock_context, bad_output):
+        """Tests that an empty or whitespace merge output never overwrites the document."""
+        tool = SlowButQualityRAGTool()
+        mock_read.return_value = 'current document'
+        mock_context.workflow_manager.run_custom_workflow.return_value = bad_output
+
+        tool._update_state_document(self._config(), mock_context, ['fact'])
+
+        mock_write.assert_not_called()
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.write_plain_text_file')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.read_plain_text_file')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_discussion_state_document_file_path')
+    def test_shrink_guard_rejects_collapsed_output(self, mock_path, mock_read, mock_write, mock_context):
+        """Tests that an output far smaller than the current document is rejected."""
+        tool = SlowButQualityRAGTool()
+        mock_read.return_value = 'x' * 1000
+        mock_context.workflow_manager.run_custom_workflow.return_value = 'y' * 100
+
+        tool._update_state_document(self._config(), mock_context, ['fact'])
+
+        mock_write.assert_not_called()
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.write_plain_text_file')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.read_plain_text_file')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_discussion_state_document_file_path')
+    def test_shrink_guard_disabled_by_zero_ratio(self, mock_path, mock_read, mock_write, mock_context):
+        """Tests that stateDocumentMinRetentionRatio of 0 disables the shrink guard."""
+        tool = SlowButQualityRAGTool()
+        mock_read.return_value = 'x' * 1000
+        mock_context.workflow_manager.run_custom_workflow.return_value = 'y' * 100
+
+        tool._update_state_document(self._config(stateDocumentMinRetentionRatio=0), mock_context, ['fact'])
+
+        mock_write.assert_called_once()
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.write_plain_text_file')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.read_plain_text_file')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_discussion_state_document_file_path')
+    def test_shrink_guard_inactive_below_size_floor(self, mock_path, mock_read, mock_write, mock_context):
+        """Tests that small documents may shrink freely (early conversations settle)."""
+        tool = SlowButQualityRAGTool()
+        mock_read.return_value = 'x' * 400
+        mock_context.workflow_manager.run_custom_workflow.return_value = 'y' * 100
+
+        tool._update_state_document(self._config(), mock_context, ['fact'])
+
+        mock_write.assert_called_once()
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.write_plain_text_file')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.read_plain_text_file')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.get_discussion_state_document_file_path')
+    def test_workflow_exception_is_swallowed(self, mock_path, mock_read, mock_write, mock_context):
+        """Tests that a failing merge workflow never propagates or writes."""
+        tool = SlowButQualityRAGTool()
+        mock_read.return_value = 'current document'
+        mock_context.workflow_manager.run_custom_workflow.side_effect = RuntimeError("LLM down")
+
+        tool._update_state_document(self._config(), mock_context, ['fact'])
+
+        mock_write.assert_not_called()
+
+
+class TestStateDocumentIntegration:
+    """Tests for the state document hook inside generate_and_store_vector_memories."""
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.vector_db_utils')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.SlowButQualityRAGTool._parse_llm_json_output')
+    def test_vector_write_path_triggers_state_document_update(self, mock_parse_json, mock_vector_db, mock_context):
+        """Tests that stored summaries for a chunk are handed to the state document update."""
+        tool = SlowButQualityRAGTool()
+        config = {'vectorMemoryWorkflowName': 'wf', 'useStateDocument': True,
+                  'stateDocumentWorkflowName': 'State_Document_Workflow'}
+        mock_context.workflow_manager.run_custom_workflow.return_value = 'raw output'
+        mock_parse_json.return_value = {"title": "T", "summary": "A stored fact.",
+                                        "entities": [], "key_phrases": []}
+
+        with patch.object(tool, '_update_state_document') as mock_update:
+            tool.generate_and_store_vector_memories([("chunk text", "hash1")], config, mock_context)
+
+        mock_update.assert_called_once_with(config, mock_context, ["A stored fact."])
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.vector_db_utils')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.SlowButQualityRAGTool._parse_llm_json_output')
+    def test_no_state_document_update_when_no_memories_stored(self, mock_parse_json, mock_vector_db, mock_context):
+        """Tests that a failed chunk (no stored memories) never touches the state document."""
+        tool = SlowButQualityRAGTool()
+        config = {'vectorMemoryWorkflowName': 'wf', 'useStateDocument': True,
+                  'stateDocumentWorkflowName': 'State_Document_Workflow'}
+        mock_context.workflow_manager.run_custom_workflow.return_value = 'raw output'
+        mock_parse_json.return_value = None
+
+        with patch.object(tool, '_update_state_document') as mock_update:
+            tool.generate_and_store_vector_memories([("chunk text", "hash1")], config, mock_context)
+
+        mock_update.assert_not_called()
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.vector_db_utils')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.SlowButQualityRAGTool._parse_llm_json_output')
+    def test_hash_is_logged_before_state_document_update(self, mock_parse_json, mock_vector_db, mock_context):
+        """Tests write ordering: hash first, so a failed doc update cannot cause duplicate re-processing."""
+        tool = SlowButQualityRAGTool()
+        config = {'vectorMemoryWorkflowName': 'wf', 'useStateDocument': True,
+                  'stateDocumentWorkflowName': 'State_Document_Workflow'}
+        mock_context.workflow_manager.run_custom_workflow.return_value = 'raw output'
+        mock_parse_json.return_value = {"title": "T", "summary": "A stored fact.",
+                                        "entities": [], "key_phrases": []}
+
+        call_order = []
+        mock_vector_db.add_vector_check_hash.side_effect = lambda *a, **k: call_order.append('hash')
+        with patch.object(tool, '_update_state_document',
+                          side_effect=lambda *a, **k: call_order.append('update')):
+            tool.generate_and_store_vector_memories([("chunk text", "hash1")], config, mock_context)
+
+        assert call_order == ['hash', 'update']
+
+
+class TestEmbeddingWriteHook:
+    """Unit tests for SlowButQualityRAGTool._store_embeddings_for_new_memories."""
+
+    def _config(self, **overrides):
+        config = {'embeddingEndpointName': 'Embedding-Endpoint'}
+        config.update(overrides)
+        return config
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.vector_db_utils')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.EmbeddingService')
+    def test_disabled_without_endpoint_name(self, mock_service_cls, mock_vdb, mock_context):
+        tool = SlowButQualityRAGTool()
+
+        tool._store_embeddings_for_new_memories({}, mock_context, [(1, 'a fact')])
+
+        mock_service_cls.assert_not_called()
+        mock_vdb.add_embeddings_to_db.assert_not_called()
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.vector_db_utils')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.EmbeddingService')
+    def test_embeds_new_memories_plus_deduped_backlog(self, mock_service_cls, mock_vdb, mock_context):
+        """New memories and the lazy-backfill batch embed in one call; overlap is deduped."""
+        tool = SlowButQualityRAGTool()
+        service = mock_service_cls.return_value
+        service.model_name = 'emb-model'
+        service.get_embeddings.return_value = [[1.0], [2.0], [3.0]]
+        mock_vdb.get_memories_without_embeddings.return_value = [
+            {'id': 3, 'memory_text': 'old fact'},
+            {'id': 1, 'memory_text': 'already in this batch'},
+        ]
+
+        tool._store_embeddings_for_new_memories(self._config(), mock_context, [(1, 'a'), (2, 'b')])
+
+        service.get_embeddings.assert_called_once_with(
+            ['a', 'b', 'old fact'], request_id=mock_context.request_id)
+        blobs = mock_vdb.add_embeddings_to_db.call_args[0][1]
+        assert [memory_id for memory_id, _ in blobs] == [1, 2, 3]
+        assert mock_vdb.add_embeddings_to_db.call_args[0][2] == 'emb-model'
+        service.close.assert_called_once()
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.vector_db_utils')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.EmbeddingService')
+    def test_empty_embeddings_response_stores_nothing(self, mock_service_cls, mock_vdb, mock_context):
+        """An endpoint returning no vectors must skip storage entirely (memories
+        stay BM25-searchable) and still close the service."""
+        tool = SlowButQualityRAGTool()
+        service = mock_service_cls.return_value
+        service.model_name = 'emb-model'
+        service.get_embeddings.return_value = []
+
+        tool._store_embeddings_for_new_memories(self._config(), mock_context, [(1, 'a')])
+
+        mock_vdb.add_embeddings_to_db.assert_not_called()
+        service.close.assert_called_once()
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.vector_db_utils')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.EmbeddingService')
+    def test_short_embedding_batch_stores_only_paired_vectors(self, mock_service_cls, mock_vdb,
+                                                              mock_context):
+        """If the endpoint returns fewer vectors than texts, only the pairs that
+        received a vector are stored (zip truncation); the unmatched memory stays
+        in the backfill backlog rather than getting a misaligned blob."""
+        tool = SlowButQualityRAGTool()
+        service = mock_service_cls.return_value
+        service.model_name = 'emb-model'
+        service.get_embeddings.return_value = [[1.0]]
+        mock_vdb.get_memories_without_embeddings.return_value = []
+
+        tool._store_embeddings_for_new_memories(self._config(), mock_context, [(1, 'a'), (2, 'b')])
+
+        blobs = mock_vdb.add_embeddings_to_db.call_args[0][1]
+        assert [memory_id for memory_id, _ in blobs] == [1]
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.vector_db_utils')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.EmbeddingService')
+    def test_backfill_disabled_by_zero_batch_size(self, mock_service_cls, mock_vdb, mock_context):
+        tool = SlowButQualityRAGTool()
+        service = mock_service_cls.return_value
+        service.model_name = 'emb-model'
+        service.get_embeddings.return_value = [[1.0]]
+
+        tool._store_embeddings_for_new_memories(
+            self._config(embeddingBackfillBatchSize=0), mock_context, [(1, 'a')])
+
+        mock_vdb.get_memories_without_embeddings.assert_not_called()
+        service.get_embeddings.assert_called_once_with(['a'], request_id=mock_context.request_id)
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.vector_db_utils')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.EmbeddingService')
+    def test_bool_batch_size_warns_and_skips_backfill(self, mock_service_cls, mock_vdb,
+                                                      mock_context, caplog):
+        """True is an int subclass; it must not silently act as batch size 1."""
+        tool = SlowButQualityRAGTool()
+        service = mock_service_cls.return_value
+        service.model_name = 'emb-model'
+        service.get_embeddings.return_value = [[1.0]]
+
+        with caplog.at_level(
+            "WARNING", logger="Middleware.workflows.tools.slow_but_quality_rag_tool"
+        ):
+            tool._store_embeddings_for_new_memories(
+                self._config(embeddingBackfillBatchSize=True), mock_context, [(1, 'a')])
+
+        assert any("embeddingBackfillBatchSize" in r.getMessage() for r in caplog.records)
+        mock_vdb.get_memories_without_embeddings.assert_not_called()
+        # New memories are still embedded even though backfill was skipped.
+        service.get_embeddings.assert_called_once_with(['a'], request_id=mock_context.request_id)
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.vector_db_utils')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.EmbeddingService')
+    def test_non_int_batch_size_warns_and_skips_backfill(self, mock_service_cls, mock_vdb,
+                                                         mock_context, caplog):
+        tool = SlowButQualityRAGTool()
+        service = mock_service_cls.return_value
+        service.model_name = 'emb-model'
+        service.get_embeddings.return_value = [[1.0]]
+
+        with caplog.at_level(
+            "WARNING", logger="Middleware.workflows.tools.slow_but_quality_rag_tool"
+        ):
+            tool._store_embeddings_for_new_memories(
+                self._config(embeddingBackfillBatchSize="20"), mock_context, [(1, 'a')])
+
+        assert any("embeddingBackfillBatchSize" in r.getMessage() for r in caplog.records)
+        mock_vdb.get_memories_without_embeddings.assert_not_called()
+        service.get_embeddings.assert_called_once_with(['a'], request_id=mock_context.request_id)
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.vector_db_utils')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.EmbeddingService')
+    def test_zero_batch_size_does_not_warn(self, mock_service_cls, mock_vdb,
+                                           mock_context, caplog):
+        """0 is the documented disable value; it must not produce a warning."""
+        tool = SlowButQualityRAGTool()
+        service = mock_service_cls.return_value
+        service.model_name = 'emb-model'
+        service.get_embeddings.return_value = [[1.0]]
+
+        with caplog.at_level(
+            "WARNING", logger="Middleware.workflows.tools.slow_but_quality_rag_tool"
+        ):
+            tool._store_embeddings_for_new_memories(
+                self._config(embeddingBackfillBatchSize=0), mock_context, [(1, 'a')])
+
+        assert not any("embeddingBackfillBatchSize" in r.getMessage() for r in caplog.records)
+        mock_vdb.get_memories_without_embeddings.assert_not_called()
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.vector_db_utils')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.EmbeddingService')
+    def test_nothing_to_embed_skips_api_call(self, mock_service_cls, mock_vdb, mock_context):
+        tool = SlowButQualityRAGTool()
+        service = mock_service_cls.return_value
+        service.model_name = 'emb-model'
+        mock_vdb.get_memories_without_embeddings.return_value = []
+
+        tool._store_embeddings_for_new_memories(self._config(), mock_context, [])
+
+        service.get_embeddings.assert_not_called()
+        mock_vdb.add_embeddings_to_db.assert_not_called()
+        service.close.assert_called_once()
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.vector_db_utils')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.EmbeddingService')
+    def test_endpoint_failure_is_swallowed(self, mock_service_cls, mock_vdb, mock_context):
+        """A down embeddings endpoint must never break the memory write path."""
+        tool = SlowButQualityRAGTool()
+        mock_service_cls.side_effect = RuntimeError("connection refused")
+
+        tool._store_embeddings_for_new_memories(self._config(), mock_context, [(1, 'a')])
+
+        mock_vdb.add_embeddings_to_db.assert_not_called()
+
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.vector_db_utils')
+    @patch('Middleware.workflows.tools.slow_but_quality_rag_tool.SlowButQualityRAGTool._parse_llm_json_output')
+    def test_generate_passes_stored_ids_to_embedding_hook(self, mock_parse_json, mock_vector_db, mock_context):
+        """The write path hands (memory_id, summary) pairs from storage to the hook."""
+        tool = SlowButQualityRAGTool()
+        config = {'vectorMemoryWorkflowName': 'wf', 'embeddingEndpointName': 'Embedding-Endpoint'}
+        mock_context.workflow_manager.run_custom_workflow.return_value = 'raw output'
+        mock_parse_json.return_value = {"title": "T", "summary": "A stored fact.",
+                                        "entities": [], "key_phrases": []}
+        mock_vector_db.add_memory_to_vector_db.return_value = 7
+
+        with patch.object(tool, '_store_embeddings_for_new_memories') as mock_hook:
+            tool.generate_and_store_vector_memories([("chunk text", "hash1")], config, mock_context)
+
+        mock_hook.assert_called_once_with(config, mock_context, [(7, "A stored fact.")])
+
+
+class TestCondensationLockRegistry:
+    """Tests for the bounded per-discussion condensation lock registry."""
+
+    @pytest.fixture(autouse=True)
+    def _isolated_registry(self):
+        """Save and restore the module-level lock registry so these tests neither
+        see nor leak entries from other tests."""
+        from Middleware.workflows.tools.slow_but_quality_rag_tool import (
+            _condensation_locks, _condensation_locks_guard)
+        with _condensation_locks_guard:
+            saved = dict(_condensation_locks)
+            _condensation_locks.clear()
+        yield
+        with _condensation_locks_guard:
+            _condensation_locks.clear()
+            _condensation_locks.update(saved)
+
+    def test_same_discussion_returns_same_lock(self):
+        """Repeated requests for one discussion must return the identical lock object,
+        otherwise the mutual exclusion it exists for is silently lost."""
+        from Middleware.workflows.tools.slow_but_quality_rag_tool import _get_condensation_lock
+
+        lock_a = _get_condensation_lock("disc-a")
+        assert _get_condensation_lock("disc-a") is lock_a
+
+    def test_eviction_of_oldest_unlocked_entry_at_cap(self, mocker):
+        """At the registry cap, requesting a NEW discussion evicts the oldest
+        (insertion-order) entry when that entry is not held, keeping the registry
+        bounded on long-running servers."""
+        from Middleware.workflows.tools import slow_but_quality_rag_tool as rag_module
+
+        mocker.patch.object(rag_module, '_MAX_CONDENSATION_LOCKS', 2)
+        rag_module._get_condensation_lock("disc-a")
+        rag_module._get_condensation_lock("disc-b")
+
+        rag_module._get_condensation_lock("disc-c")
+
+        assert "disc-a" not in rag_module._condensation_locks
+        assert set(rag_module._condensation_locks) == {"disc-b", "disc-c"}
+
+    def test_held_oldest_lock_is_never_evicted(self, mocker):
+        """A currently-held lock must survive eviction (dropping it would allow a
+        second thread to condense the same memory file concurrently); the registry
+        temporarily exceeds the cap instead."""
+        from Middleware.workflows.tools import slow_but_quality_rag_tool as rag_module
+
+        mocker.patch.object(rag_module, '_MAX_CONDENSATION_LOCKS', 2)
+        lock_a = rag_module._get_condensation_lock("disc-a")
+        rag_module._get_condensation_lock("disc-b")
+
+        assert lock_a.acquire(blocking=False)
+        try:
+            lock_c = rag_module._get_condensation_lock("disc-c")
+        finally:
+            lock_a.release()
+
+        assert rag_module._condensation_locks["disc-a"] is lock_a
+        assert set(rag_module._condensation_locks) == {"disc-a", "disc-b", "disc-c"}
+        assert lock_c is rag_module._condensation_locks["disc-c"]
+
+    def test_existing_discussion_at_cap_does_not_evict(self, mocker):
+        """Requesting a lock that already exists while the registry is at the cap
+        must not evict anything; eviction only happens for genuinely new entries."""
+        from Middleware.workflows.tools import slow_but_quality_rag_tool as rag_module
+
+        mocker.patch.object(rag_module, '_MAX_CONDENSATION_LOCKS', 2)
+        lock_a = rag_module._get_condensation_lock("disc-a")
+        rag_module._get_condensation_lock("disc-b")
+
+        assert rag_module._get_condensation_lock("disc-a") is lock_a
+        assert set(rag_module._condensation_locks) == {"disc-a", "disc-b"}

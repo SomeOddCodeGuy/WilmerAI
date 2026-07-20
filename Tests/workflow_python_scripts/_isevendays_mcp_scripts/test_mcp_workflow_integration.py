@@ -238,6 +238,38 @@ def test_invoke_with_validation_returns_error_message_on_tool_failure(mocker):
     assert "boom" in result
 
 
+def test_invoke_returns_error_string_when_tool_call_detected_with_empty_map(mocker):
+    """
+    Tests that when the executor reports a detected tool call but the handler's
+    tool_execution_map is empty, execute_tools returns the integration error
+    string (a resilient string return, not a raised exception).
+    """
+    # Arrange: Executor says a tool call was detected but could not execute it.
+    mocker.patch(
+        "Public.workflow_python_scripts._isevendays_mcp_scripts.mcp_workflow_integration.mcp_tool_executor.Invoke",
+        return_value={
+            "response": "raw",
+            "has_tool_call": True,
+            "tool_results": [],
+            "error": "Tool calls found, but no tool_execution_map provided to execute them.",
+            "status": "execution_error",
+        },
+    )
+
+    # Act
+    result = Invoke(
+        messages=[{"role": "user", "content": "what time is it?"}],
+        original_response='{"tool_calls": [{"name": "get_current_time", "parameters": {}}]}',
+        tool_execution_map={},
+    )
+
+    # Assert: The exact error string is returned, not raised.
+    assert result == (
+        "MCP Integration Error: Tool calls were detected, but the tool "
+        "execution map is empty. Cannot execute tools."
+    )
+
+
 def test_invoke_raises_configuration_error_for_missing_map():
     """
     Tests that a missing tool_execution_map raises MCPConfigurationError

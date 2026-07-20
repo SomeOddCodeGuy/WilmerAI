@@ -14,6 +14,25 @@ NO_INFORMATION_FOUND_MESSAGE = "No pertinent information was found in the search
 _CONNECT_TIMEOUT_SECONDS = 5
 
 
+def _error_envelope(reason):
+    """Builds the failure envelope shaped like the service's own error response.
+
+    Args:
+        reason (str): The machine-readable failure reason.
+
+    Returns:
+        dict: An error envelope with the same keys the service returns, so callers
+            can treat transport failures and service errors uniformly.
+    """
+    return {
+        "status": "error",
+        "reason": reason,
+        "answer": None,
+        "no_information_found": False,
+        "sources": [],
+    }
+
+
 class OfflineResearcherApiClient:
     """
     A client to interact with SomeOddCodeGuy's Offline Researcher service.
@@ -66,13 +85,7 @@ class OfflineResearcherApiClient:
                  "no_information_found": False, "sources": []}
         """
         if not self.use_offline_researcher_api:
-            return {
-                "status": "error",
-                "reason": "offline_researcher_disabled",
-                "answer": None,
-                "no_information_found": False,
-                "sources": [],
-            }
+            return _error_envelope("offline_researcher_disabled")
 
         url = f"{self.base_url}/search"
         payload = {"query": query, "mode": mode}
@@ -90,22 +103,10 @@ class OfflineResearcherApiClient:
             response = requests.post(url, json=payload, timeout=request_timeout)
         except requests.exceptions.Timeout:
             logger.error(f"Offline researcher timed out after {timeout_seconds}s")
-            return {
-                "status": "error",
-                "reason": "timeout",
-                "answer": None,
-                "no_information_found": False,
-                "sources": [],
-            }
+            return _error_envelope("timeout")
         except requests.exceptions.RequestException as e:
             logger.error(f"Offline researcher transport error: {e}")
-            return {
-                "status": "error",
-                "reason": "transport_error",
-                "answer": None,
-                "no_information_found": False,
-                "sources": [],
-            }
+            return _error_envelope("transport_error")
 
         logger.debug(f"Offline researcher response status: {response.status_code}")
         if response.status_code == 200:
@@ -116,19 +117,7 @@ class OfflineResearcherApiClient:
                 # other local service) would otherwise raise out of search(), breaking
                 # the documented "always returns an envelope" contract. Degrade instead.
                 logger.error("Offline researcher returned a 200 with a non-JSON body")
-                return {
-                    "status": "error",
-                    "reason": "invalid_json",
-                    "answer": None,
-                    "no_information_found": False,
-                    "sources": [],
-                }
+                return _error_envelope("invalid_json")
 
         logger.error(f"Offline researcher returned {response.status_code}: {response.text[:500]}")
-        return {
-            "status": "error",
-            "reason": f"http_{response.status_code}",
-            "answer": None,
-            "no_information_found": False,
-            "sources": [],
-        }
+        return _error_envelope(f"http_{response.status_code}")

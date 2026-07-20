@@ -25,7 +25,9 @@ The core LLM-calling node. Assembles a prompt, sends it to an endpoint, returns 
 | `acceptImages` | Bool | false | Pass images to the LLM (endpoint must support vision). |
 | `maxImagesToSend` | Int | 0 | Limit images sent (0 = no limit). **[limited var]** |
 | `allowTools` | Bool | false | Forward frontend tool definitions to the LLM. Only useful on responder. |
+| `appendNativeToolExchange` | Bool | false | Authored-prompt nodes: deliver the trailing assistant `tool_calls` + `role:"tool"` exchange as native messages after the authored prompt (excluded from the text transcript). Needed for multi-round tool loops. Inert on collection-mode nodes, completions backends, and endpoints with `backendSupportsToolTurns: false`. |
 | `lowercaseToolCallFunctionNames` | Bool | false | Lowercase tool call function names in LLM responses. Fixes local models that produce `Glob` instead of `glob`. |
+| `structuredOutputFile` | String | none | Grammar-constrain this node's output to a JSON Schema from `Configs/StructuredOutputs/` (backend must declare a `structuredOutput` mechanism in its ApiType). Output is guaranteed-parseable JSON. Describe the shape in the prompt too. |
 | `addDiscussionIdTimestampsForLLM` | Bool | false | Inject timestamps into messages. |
 | `useRelativeTimestamps` | Bool | false | Use relative timestamps ("5 min ago") instead of absolute. |
 | `useGroupChatTimestampLogic` | Bool | false | Commit assistant timestamps immediately (for group chats). If false, commit on next user turn. |
@@ -45,7 +47,7 @@ The core LLM-calling node. Assembles a prompt, sends it to an endpoint, returns 
 | `maxEstimatedTokensInVariable` | Int | 2048 | Token budget for expansion beyond min messages. |
 
 When `prompt` is empty, the node sends the raw conversation (last N messages) to the LLM. This is how you do
-"passthrough" -- just set `"prompt": ""` and the LLM sees the actual conversation.
+"passthrough": just set `"prompt": ""` and the LLM sees the actual conversation.
 
 ---
 
@@ -78,7 +80,7 @@ Branches to different sub-workflows based on a variable's value.
 
 **Important:** If the resolved `conditionalKey` does not match any entry in `conditionalWorkflows` and neither a
 `"Default"` key nor `UseDefaultContentInsteadOfWorkflow` is defined, the node will error at runtime. Always include
-at least one fallback -- either a `"Default"` workflow or `UseDefaultContentInsteadOfWorkflow` (use `""` for a no-op).
+at least one fallback: either a `"Default"` workflow or `UseDefaultContentInsteadOfWorkflow` (use `""` for a no-op).
 
 ---
 
@@ -238,7 +240,7 @@ Place after the responder node and before long-running tasks (e.g., memory gener
 ## ContextCompactor
 
 Compacts conversation history into two rolling summaries (Old and Oldest) using token-based windowing.
-Independent from the memory system -- directly summarizes raw conversation messages, not memory chunks.
+Independent from the memory system; it directly summarizes raw conversation messages, not memory chunks.
 
 Output is XML-tagged: `<context_compactor_old>` and `<context_compactor_oldest>`. Use `TagTextExtractor` to parse.
 
@@ -268,7 +270,7 @@ Query a local `OfflineWikipediaTextApi` service. All have `promptToSearch` **[va
 Run a non-LLM keyword search and return the matching text. The search target is selected by the `searchTarget`
 property, **not** by the node type: `ConversationalKeywordSearchPerformerTool` and `MemoryKeywordSearchPerformerTool`
 both dispatch to the same handler and route purely on `searchTarget`. A `MemoryKeywordSearchPerformerTool` node
-therefore requires `"searchTarget": "RecentMemories"` — written without it, it falls back to the default
+therefore requires `"searchTarget": "RecentMemories"`; written without it, it falls back to the default
 (`CurrentConversation`) and searches the conversation, not memory.
 
 | Property | Type | Default | Description |

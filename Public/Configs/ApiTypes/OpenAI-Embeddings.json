@@ -1,0 +1,4 @@
+{
+  "nameForDisplayOnly": "OpenAI-compatible embeddings endpoint (/v1/embeddings). Works with OpenAI, llama.cpp server launched with --embedding, and most compatible servers.",
+  "type": "openAIEmbeddings"
+}

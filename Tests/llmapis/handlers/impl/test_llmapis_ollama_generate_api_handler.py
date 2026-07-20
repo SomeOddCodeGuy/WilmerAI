@@ -71,15 +71,51 @@ def test_iterate_by_lines_property(ollama_generate_handler):
     assert handler._iterate_by_lines is True
 
 
-def test_prepare_payload_non_streaming(ollama_generate_handler, mocker):
+def _configs_without_stream_property(mock_configs):
+    """
+    Returns mock_configs with streamPropertyName removed from the api_type_config.
+
+    The handler now strips the injected stream key when building 'options'
+    (stream is a top-level transport field, not an Ollama option); the
+    realistic-config regression test below covers that. These variants keep
+    the exact-options assertions independent of the stripping behavior.
+    """
+    api_type_config = {k: v for k, v in mock_configs["api_type_config"].items()
+                       if k != "streamPropertyName"}
+    return {"api_type_config": api_type_config, "endpoint_config": mock_configs["endpoint_config"]}
+
+
+def test_prepare_payload_realistic_config_keeps_stream_out_of_options(mock_configs, mocker):
+    """With the shipped config (streamPropertyName: "stream"), the injected stream
+    key must not leak into 'options'; stream lives only at the payload top level."""
+    mocker.patch("Middleware.llmapis.handlers.base.base_api_transport.get_connect_timeout", return_value=30)
+    handler = _build_generate_handler(mock_configs, {"temperature": 0.8, "top_p": 0.9}, stream=True)
+    mocker.patch.object(handler, '_build_prompt_from_conversation', return_value="prompt")
+
+    payload = handler._prepare_payload(None, "sys", "user")
+
+    assert payload == {
+        "model": "test-model:latest",
+        "prompt": "prompt",
+        "stream": True,
+        "raw": True,
+        "options": {"temperature": 0.8, "top_p": 0.9, "num_predict": 1024},
+    }
+
+
+def test_prepare_payload_non_streaming(mock_configs, mocker):
     """
     Tests the payload creation for a non-streaming request.
     It should include the correct model, a flattened prompt, stream=False, raw=True,
-    and generation parameters nested under 'options'.
+    and exactly the generation parameters nested under 'options'.
     """
-    # GIVEN a handler configured for non-streaming
-    handler = ollama_generate_handler
-    handler.stream = False
+    # GIVEN a handler configured for non-streaming, without streamPropertyName
+    mocker.patch("Middleware.llmapis.handlers.base.base_api_transport.get_connect_timeout", return_value=30)
+    handler = _build_generate_handler(
+        _configs_without_stream_property(mock_configs),
+        {"temperature": 0.8, "top_p": 0.9},
+        stream=False,
+    )
 
     # GIVEN the prompt building method returns a known string
     mock_build_prompt = mocker.patch(
@@ -90,27 +126,30 @@ def test_prepare_payload_non_streaming(ollama_generate_handler, mocker):
     # WHEN the payload is prepared
     payload = handler._prepare_payload(None, "System: You are a bot.", "User: Hello!")
 
-    # THEN the payload should be correctly structured for Ollama's /generate endpoint
-    assert payload["model"] == "test-model:latest"
-    assert payload["prompt"] == "System: You are a bot.\nUser: Hello!"
-    assert payload["stream"] is False  # Explicitly False for non-streaming
-    assert payload["raw"] is True  # Should always be raw
-    assert "temperature" in payload["options"]
-    assert "top_p" in payload["options"]
-    assert "num_predict" in payload["options"]
-    assert payload["options"]["num_predict"] == 1024
+    # THEN the payload should be exactly structured for Ollama's /generate endpoint
+    assert payload == {
+        "model": "test-model:latest",
+        "prompt": "System: You are a bot.\nUser: Hello!",
+        "stream": False,  # Explicitly False for non-streaming
+        "raw": True,  # Should always be raw
+        "options": {"temperature": 0.8, "top_p": 0.9, "num_predict": 1024},
+    }
 
     mock_build_prompt.assert_called_once_with("System: You are a bot.", "User: Hello!")
 
 
-def test_prepare_payload_streaming(ollama_generate_handler, mocker):
+def test_prepare_payload_streaming(mock_configs, mocker):
     """
     Tests the payload creation for a streaming request.
     The structure should be identical to non-streaming, but with 'stream' set to True.
     """
-    # GIVEN a handler configured for streaming
-    handler = ollama_generate_handler
-    handler.stream = True
+    # GIVEN a handler configured for streaming, without streamPropertyName
+    mocker.patch("Middleware.llmapis.handlers.base.base_api_transport.get_connect_timeout", return_value=30)
+    handler = _build_generate_handler(
+        _configs_without_stream_property(mock_configs),
+        {"temperature": 0.8, "top_p": 0.9},
+        stream=True,
+    )
 
     # GIVEN the prompt building method returns a known string
     mock_build_prompt = mocker.patch(
@@ -121,12 +160,53 @@ def test_prepare_payload_streaming(ollama_generate_handler, mocker):
     # WHEN the payload is prepared
     payload = handler._prepare_payload(None, "System: You are a bot.", "User: Hello!")
 
-    # THEN the 'stream' key in the payload should be True
-    assert payload["stream"] is True
-    assert payload["model"] == "test-model:latest"
-    assert payload["prompt"] == "System: You are a bot.\nUser: Hello!"
-    assert payload["raw"] is True
-    assert "temperature" in payload["options"]
+    # THEN the payload should be identical except for 'stream' being True
+    assert payload == {
+        "model": "test-model:latest",
+        "prompt": "System: You are a bot.\nUser: Hello!",
+        "stream": True,
+        "raw": True,
+        "options": {"temperature": 0.8, "top_p": 0.9, "num_predict": 1024},
+    }
+
+    mock_build_prompt.assert_called_once_with("System: You are a bot.", "User: Hello!")
+
+
+def test_prepare_payload_truncate_length_injected_into_options(mock_configs, mocker):
+    """
+    When the api_type_config defines truncateLengthPropertyName, the endpoint's
+    maxContextTokenSize is injected into 'options' under that name.
+    """
+    mocker.patch("Middleware.llmapis.handlers.base.base_api_transport.get_connect_timeout", return_value=30)
+    configs = _configs_without_stream_property(mock_configs)
+    configs["api_type_config"] = dict(configs["api_type_config"], truncateLengthPropertyName="num_ctx")
+    handler = _build_generate_handler(configs, {"temperature": 0.8}, stream=False)
+    mocker.patch.object(handler, '_build_prompt_from_conversation', return_value="prompt")
+
+    payload = handler._prepare_payload(None, "sys", "user")
+
+    assert payload["options"]["num_ctx"] == 4096  # from endpoint_config maxContextTokenSize
+    assert payload["options"] == {"temperature": 0.8, "num_predict": 1024, "num_ctx": 4096}
+
+
+def test_get_api_endpoint_url_with_trailing_slash(mock_configs, mocker):
+    """
+    A base_url with a trailing slash must not produce a double slash in the URL.
+    """
+    mocker.patch("Middleware.llmapis.handlers.base.base_api_transport.get_connect_timeout", return_value=30)
+    handler = OllamaGenerateApiHandler(
+        base_url="http://localhost:11434/",
+        api_key="",
+        gen_input={"temperature": 0.8},
+        model_name="test-model:latest",
+        headers={"Content-Type": "application/json"},
+        stream=False,
+        api_type_config=mock_configs["api_type_config"],
+        endpoint_config=mock_configs["endpoint_config"],
+        max_tokens=1024,
+    )
+
+    assert handler._get_api_endpoint_url() == "http://localhost:11434/api/generate"
 
 
 @pytest.mark.parametrize("input_str, expected_output", [
@@ -164,6 +244,11 @@ def test_prepare_payload_streaming(ollama_generate_handler, mocker):
     (
             '{"response": "more text"}',
             {'token': 'more text', 'finish_reason': None}
+    ),
+    # Test case 8: JSON that parses to a non-dict is skipped, not fatal
+    (
+            "123",
+            None
     ),
 ])
 def test_process_stream_data(ollama_generate_handler, caplog, input_str, expected_output):

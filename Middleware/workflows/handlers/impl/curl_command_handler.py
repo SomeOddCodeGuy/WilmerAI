@@ -8,8 +8,10 @@ import threading
 from typing import Any, Dict, FrozenSet, List
 
 from Middleware.utilities.network_security_utils import check_url_allowed
-from Middleware.utilities.streaming_utils import stream_static_content
 from Middleware.workflows.handlers.base.base_workflow_node_handler import BaseHandler
+from Middleware.workflows.handlers.impl.extension_node_helpers import (
+    maybe_stream, resolve_allowed_hosts, validate_bool, validate_max_bytes, validate_timeout,
+)
 from Middleware.workflows.models.execution_context import ExecutionContext
 
 logger = logging.getLogger(__name__)
@@ -73,7 +75,7 @@ class CurlCommandHandler(BaseHandler):
     best-effort here, not a hard boundary. The host is validated in Python
     (`check_url_allowed` parses with `urlsplit` and resolves with `getaddrinfo`), but the
     raw arg string is then handed to `curl`, which re-parses the URL and re-resolves DNS
-    itself — so the component validated is not the component that connects. URL-parser
+    itself, so the component validated is not the component that connects. URL-parser
     divergence (e.g. alternate IP encodings, unusual delimiters) and DNS rebinding can
     therefore slip past it; `--max-redirs 0` (injected while the guard is active) closes
     only the redirect-bounce vector. For untrusted/conversation-derived URLs prefer the
@@ -110,27 +112,29 @@ class CurlCommandHandler(BaseHandler):
         if not isinstance(args_template, list):
             raise ValueError("CurlCommand 'args' must be a JSON list of strings.")
 
-        timeout = self._validate_timeout(config.get("timeout", _DEFAULT_TIMEOUT_SECONDS))
+        timeout = validate_timeout(config.get("timeout", _DEFAULT_TIMEOUT_SECONDS), "CurlCommand")
         output_format = config.get("outputFormat", "stdout")
         on_error = config.get("onError", "raise")
         proxy_template = config.get("proxy")
-        max_bytes = self._validate_max_bytes(config.get("maxResponseBytes", _DEFAULT_MAX_RESPONSE_BYTES))
-        block_option_injection = self._validate_bool(
-            config.get("blockOptionInjection", False), "blockOptionInjection"
+        max_bytes = validate_max_bytes(config.get("maxResponseBytes", _DEFAULT_MAX_RESPONSE_BYTES), "CurlCommand")
+        block_option_injection = validate_bool(
+            config.get("blockOptionInjection", False), "blockOptionInjection", "CurlCommand"
         )
         # Scheme-injection guard is ON by default (safe-by-default): a variable that
         # expands into a non-http(s) URL scheme is rejected. Set allowSchemeInjection
         # to true to fully open this up.
-        allow_scheme_injection = self._validate_bool(
-            config.get("allowSchemeInjection", False), "allowSchemeInjection"
+        allow_scheme_injection = validate_bool(
+            config.get("allowSchemeInjection", False), "allowSchemeInjection", "CurlCommand"
         )
         # SSRF address guard (opt-in, both default off): blockPrivateAddresses rejects
         # http(s) URL args that target a private/internal/link-local address, and
         # allowedHosts restricts them to a host allowlist. See _resolve_args.
-        block_private = self._validate_bool(
-            config.get("blockPrivateAddresses", False), "blockPrivateAddresses"
+        block_private = validate_bool(
+            config.get("blockPrivateAddresses", False), "blockPrivateAddresses", "CurlCommand"
         )
-        allowed_hosts = self._resolve_allowed_hosts(config.get("allowedHosts"), context)
+        allowed_hosts = resolve_allowed_hosts(
+            config.get("allowedHosts"), context, self.workflow_variable_service, "CurlCommand"
+        )
 
         if output_format not in _VALID_OUTPUT_FORMATS:
             raise ValueError(
@@ -170,7 +174,7 @@ class CurlCommandHandler(BaseHandler):
 
         ``subprocess.run`` buffers all of curl's stdout into memory regardless of any
         cap, and curl's native ``--max-filesize`` only aborts when the server advertises
-        an over-cap ``Content-Length`` — a chunked or unknown-length response slips past
+        an over-cap ``Content-Length``; a chunked or unknown-length response slips past
         it. To bound memory for real, stdout is read incrementally with a running byte
         total and the process is killed the instant it exceeds the cap. stderr is drained
         concurrently (and bounded to the same cap) so a chatty diagnostic stream cannot
@@ -220,8 +224,8 @@ class CurlCommandHandler(BaseHandler):
 
         timed_out = False
         try:
-            # Returns promptly once curl exits — including when _read_body kills it
-            # on a cap breach — and otherwise after `timeout` seconds.
+            # Returns promptly once curl exits (including when _read_body kills it
+            # on a cap breach), and otherwise after `timeout` seconds.
             proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             timed_out = True
@@ -241,14 +245,14 @@ class CurlCommandHandler(BaseHandler):
             exc = subprocess.TimeoutExpired(command, timeout, output=stdout_text, stderr=stderr_text)
             if on_error == "raise":
                 raise exc
-            return self._maybe_stream(self._format_timeout(exc, output_format, timeout), context)
+            return maybe_stream(self._format_timeout(exc, output_format, timeout), context)
 
         if stdout_box.get("truncated"):
             message = f"CurlCommand response exceeded the {cap}-byte cap (maxResponseBytes)."
             logger.warning("CurlCommand aborted: %s", message)
             if on_error == "raise":
                 raise RuntimeError(message)
-            return self._maybe_stream(
+            return maybe_stream(
                 self._format_cap_exceeded(message, stdout_text, stderr_text, output_format), context
             )
 
@@ -258,7 +262,7 @@ class CurlCommandHandler(BaseHandler):
                 f"CurlCommand exited with status {completed.returncode}: {completed.stderr.strip()}"
             )
 
-        return self._maybe_stream(self._format_result(completed, output_format), context)
+        return maybe_stream(self._format_result(completed, output_format), context)
 
     @staticmethod
     def _read_body(proc: "subprocess.Popen", cap: int, box: Dict[str, Any]) -> None:
@@ -443,7 +447,7 @@ class CurlCommandHandler(BaseHandler):
             resolved.append(resolved_value)
 
         # SSRF address guard (post-resolution pass): validate every arg curl will treat
-        # as a URL. Done after resolution so curl's argument grammar can be honored -- a
+        # as a URL. Done after resolution so curl's argument grammar can be honored: a
         # schemeless arg in a URL position (e.g. "169.254.169.254/...", which curl fetches
         # over http) is checked too, not only args carrying an explicit http(s):// scheme,
         # and an option's value (e.g. the "10.0.0.1" in "-d 10.0.0.1") is not mistaken for
@@ -510,8 +514,8 @@ class CurlCommandHandler(BaseHandler):
 
         An explicit http/https URL is returned unchanged. A schemeless value whose
         leading authority looks like a host[:port] is fetched by curl over http, so it
-        is returned with an ``http://`` prefix. Any other value -- a non-http(s) scheme
-        (governed by the scheme-injection guard) or a token that is not host-like --
+        is returned with an ``http://`` prefix. Any other value, meaning a non-http(s)
+        scheme (governed by the scheme-injection guard) or a token that is not host-like,
         returns '' and is not address-checked.
 
         Args:
@@ -556,35 +560,6 @@ class CurlCommandHandler(BaseHandler):
             return []
         return ["--max-redirs", "0"]
 
-    def _resolve_allowed_hosts(
-        self, allowed_hosts_template: Any, context: ExecutionContext
-    ) -> FrozenSet[str]:
-        """Resolves the optional ``allowedHosts`` allowlist to a set of lowercased hosts.
-
-        Absent (``None``) means no allowlist (empty set). Each entry supports variable
-        substitution so an allowlist can be sourced from a workflow variable.
-
-        Args:
-            allowed_hosts_template (Any): The raw ``allowedHosts`` config (``None`` or a list).
-            context (ExecutionContext): The central object containing all runtime data for the node.
-
-        Returns:
-            FrozenSet[str]: The resolved, lowercased, non-empty host entries.
-
-        Raises:
-            ValueError: If ``allowedHosts`` is provided but is not a list.
-        """
-        if allowed_hosts_template is None:
-            return frozenset()
-        if not isinstance(allowed_hosts_template, list):
-            raise ValueError("CurlCommand 'allowedHosts' must be a JSON list of host strings.")
-        resolved = set()
-        for entry in allowed_hosts_template:
-            value = self.workflow_variable_service.apply_variables(str(entry), context).strip().lower()
-            if value:
-                resolved.add(value)
-        return frozenset(resolved)
-
     @staticmethod
     def _injected_dangerous_scheme(template_str: str, resolved_value: str) -> str:
         """Returns the URL scheme (e.g. 'file') if substitution introduced a non-http(s)
@@ -610,47 +585,6 @@ class CurlCommandHandler(BaseHandler):
         if template_match and template_match.group(1).lower() == scheme:
             return ""
         return scheme
-
-    @staticmethod
-    def _validate_bool(value: Any, field: str) -> bool:
-        """Validates a boolean config field, mirroring the node's other field validations.
-
-        Args:
-            value (Any): The configured value to validate.
-            field (str): The config field name, used in the error message.
-
-        Returns:
-            bool: The validated boolean value.
-
-        Raises:
-            ValueError: If ``value`` is not a boolean.
-        """
-        if not isinstance(value, bool):
-            raise ValueError(f"CurlCommand '{field}' must be a boolean (true/false); got {value!r}.")
-        return value
-
-    @staticmethod
-    def _validate_max_bytes(value: Any) -> int:
-        """Coerces the configured download cap to an integer number of bytes.
-
-        ``0`` (or any non-positive value) disables ``--max-filesize`` injection.
-
-        Args:
-            value (Any): The configured ``maxResponseBytes`` value to coerce.
-
-        Returns:
-            int: The cap as an integer number of bytes.
-
-        Raises:
-            ValueError: If ``value`` is a boolean or cannot be parsed as an integer.
-        """
-        if isinstance(value, bool):
-            raise ValueError(f"CurlCommand 'maxResponseBytes' must be an integer; got {value!r}.")
-        try:
-            value = int(value)
-        except (TypeError, ValueError):
-            raise ValueError(f"CurlCommand 'maxResponseBytes' must be an integer; got {value!r}.")
-        return value
 
     @staticmethod
     def _max_filesize_args(resolved_args: List[str], max_bytes: int) -> List[str]:
@@ -699,34 +633,6 @@ class CurlCommandHandler(BaseHandler):
         if not resolved:
             return []
         return ["-x", resolved]
-
-    @staticmethod
-    def _validate_timeout(value: Any) -> float:
-        """Coerces the configured timeout to a positive number of seconds.
-
-        Mirrors the node's other up-front field validations so a non-numeric
-        or non-positive value raises a clear ``ValueError`` instead of an
-        opaque ``TypeError`` from ``proc.wait(timeout=...)``.
-
-        Args:
-            value (Any): The configured ``timeout`` value to coerce.
-
-        Returns:
-            float: The timeout as a positive number of seconds.
-
-        Raises:
-            ValueError: If ``value`` is a boolean, non-numeric, or non-positive.
-        """
-        if isinstance(value, bool):
-            raise ValueError(f"CurlCommand 'timeout' must be a number of seconds; got {value!r}.")
-        if not isinstance(value, (int, float)):
-            try:
-                value = float(value)
-            except (TypeError, ValueError):
-                raise ValueError(f"CurlCommand 'timeout' must be a number of seconds; got {value!r}.")
-        if value <= 0:
-            raise ValueError(f"CurlCommand 'timeout' must be a positive number of seconds; got {value!r}.")
-        return value
 
     @staticmethod
     def _format_result(completed: subprocess.CompletedProcess, output_format: str) -> str:
@@ -795,19 +701,3 @@ class CurlCommandHandler(BaseHandler):
                 "error": message,
             })
         return message
-
-    @staticmethod
-    def _maybe_stream(payload: str, context: ExecutionContext) -> Any:
-        """Wraps the payload in a streaming generator when the node is streaming.
-
-        Args:
-            payload (str): The fully formed result string.
-            context (ExecutionContext): The central object containing all runtime data for the node.
-
-        Returns:
-            Any: A streaming generator over ``payload`` when ``context.stream`` is True,
-                otherwise ``payload`` unchanged.
-        """
-        if context.stream:
-            return stream_static_content(payload)
-        return payload

@@ -6,6 +6,11 @@
   "maxNewTokensPropertyName": "max_tokens",
   "streamPropertyName": "stream",
   "supportsChatTemplateKwargs": false,
+  "structuredOutput": {
+    "field": "response_format",
+    "style": "openaiJsonSchema",
+    "strict": false
+  },
   "thinking": {
     "location": "top",
     "field": "reasoning_effort",

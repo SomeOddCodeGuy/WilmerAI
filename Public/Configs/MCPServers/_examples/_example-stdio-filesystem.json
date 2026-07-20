@@ -1,9 +1,7 @@
 {
   "transport": "stdio",
-  "command": "npx",
-  "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed/directory"],
-  "env": {
-    "NODE_ENV": "production"
-  },
+  "command": "/absolute/path/to/mcp-server-filesystem",
+  "args": ["/path/to/allowed/directory"],
+  "env": {},
   "cwd": null
 }

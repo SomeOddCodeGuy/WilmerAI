@@ -1,6 +1,7 @@
 import json
 import threading
-from unittest.mock import MagicMock
+
+import pytest
 
 from Middleware.api.concurrency_middleware import (
     ConcurrencyLimitMiddleware,
@@ -66,7 +67,7 @@ def test_streaming_held_across_chunks():
 
     captured, body = _call_middleware(mw)
 
-    # Read first chunk — semaphore still held
+    # Read first chunk; semaphore still held
     first = next(body)
     assert first == b"chunk1"
     assert not sem.acquire(blocking=False)
@@ -89,10 +90,8 @@ def test_inner_app_exception_releases_semaphore():
 
     mw = ConcurrencyLimitMiddleware(failing_app, sem, acquire_timeout=5)
 
-    try:
+    with pytest.raises(RuntimeError, match="boom"):
         _call_middleware(mw)
-    except RuntimeError:
-        pass
 
     # Semaphore should be released
     assert sem.acquire(blocking=False)
@@ -117,10 +116,8 @@ def test_mid_iteration_exception_releases_semaphore():
     first = next(body)
     assert first == b"ok"
 
-    try:
+    with pytest.raises(ValueError, match="mid-stream error"):
         next(body)
-    except ValueError:
-        pass
 
     # Semaphore released
     assert sem.acquire(blocking=False)
@@ -216,7 +213,7 @@ def test_concurrency_two_allows_two_blocks_third():
     t3 = threading.Thread(target=run_third)
     t3.start()
 
-    # Give t3 a moment — it should NOT have entered the app
+    # Give t3 a moment; it should NOT have entered the app
     assert not third_entered_app.wait(timeout=0.3)
 
     # Release the first two
@@ -250,69 +247,65 @@ def test_acquire_timeout_returns_503():
     assert parsed["error"]["type"] == "server_error"
     assert parsed["error"]["code"] == 503
 
-    sem.release()  # cleanup
-
-
-def test_no_middleware_when_semaphore_is_none(mocker):
-    """When get_request_semaphore returns None, wsgi_app is not wrapped."""
-    mocker.patch(
-        "Middleware.common.instance_global_variables.get_request_semaphore",
-        return_value=None,
-    )
-
-    from Middleware.api.api_server import ApiServer
-    mocker.patch.object(ApiServer, "_discover_and_register_handlers")
-
-    mock_app = MagicMock()
-    original_wsgi_app = mock_app.wsgi_app
-
-    server = ApiServer(app_instance=mock_app)
-
-    # wsgi_app should be unchanged
-    assert mock_app.wsgi_app is original_wsgi_app
-
-
-def test_get_request_bypasses_semaphore():
-    """GET requests (model lists, version) should pass through without acquiring the semaphore."""
-    sem = threading.BoundedSemaphore(1)
-    sem.acquire()  # exhaust the semaphore
-
-    app = _make_simple_app([b"models response"])
-    mw = ConcurrencyLimitMiddleware(app, sem, acquire_timeout=0.1)
-
-    # A POST would block and 503, but a GET should pass straight through
-    captured, body = _call_middleware(mw, method="GET")
-    assert captured["status"] == "200 OK"
-    assert list(body) == [b"models response"]
+    # The 503 must carry correct headers so clients can parse the JSON body.
+    headers = dict(captured["headers"])
+    assert headers["Content-Type"] == "application/json"
+    assert headers["Content-Length"] == str(len(response_body))
 
     sem.release()  # cleanup
 
 
-def test_delete_request_bypasses_semaphore():
-    """DELETE requests (cancellation) should pass through without acquiring the semaphore."""
+def test_exhaust_then_close_releases_exactly_once():
+    """WSGI servers call close() after consuming the iterator. The release that
+    already happened at exhaustion must not repeat; BoundedSemaphore would
+    raise ValueError on a second release."""
     sem = threading.BoundedSemaphore(1)
-    sem.acquire()  # exhaust the semaphore
+    app = _make_streaming_app([b"a", b"b"])
+    mw = ConcurrencyLimitMiddleware(app, sem, acquire_timeout=5)
 
-    app = _make_simple_app([b"cancelled"])
+    captured, body = _call_middleware(mw)
+    assert list(body) == [b"a", b"b"]
+
+    body.close()  # must not raise via a second semaphore.release()
+
+    # Released exactly once: the slot is free again.
+    assert sem.acquire(blocking=False)
+    sem.release()
+
+
+@pytest.mark.parametrize("method,expects_gate", [
+    # Only POST dispatches to LLM workflows and is throttled; every other method
+    # (and there are only GET/DELETE metadata endpoints today) bypasses the gate.
+    ("GET", False),
+    ("POST", True),
+    ("PUT", False),
+    ("PATCH", False),
+    ("DELETE", False),
+    # A missing REQUEST_METHOD defaults to POST, i.e. fail-closed into the gate.
+    (None, True),
+])
+def test_request_method_semaphore_gating(method, expects_gate):
+    """Pins _requires_concurrency_limit: which methods acquire the semaphore."""
+    sem = threading.BoundedSemaphore(1)
+    sem.acquire()  # exhaust; gated methods must 503, bypassing methods succeed
+
+    app = _make_simple_app([b"body"])
     mw = ConcurrencyLimitMiddleware(app, sem, acquire_timeout=0.1)
 
-    captured, body = _call_middleware(mw, method="DELETE")
-    assert captured["status"] == "200 OK"
-    assert list(body) == [b"cancelled"]
+    environ = {} if method is None else {"REQUEST_METHOD": method}
+    captured = {}
 
-    sem.release()  # cleanup
+    def start_response(status, headers):
+        captured["status"] = status
+        captured["headers"] = headers
 
+    body = mw(environ, start_response)
 
-def test_post_request_still_acquires_semaphore():
-    """POST requests must still go through the semaphore."""
-    sem = threading.BoundedSemaphore(1)
-    sem.acquire()  # exhaust the semaphore
-
-    app = _make_simple_app([b"should not reach"])
-    mw = ConcurrencyLimitMiddleware(app, sem, acquire_timeout=0.1)
-
-    captured, body = _call_middleware(mw, method="POST")
-    assert captured["status"] == "503 Service Unavailable"
+    if expects_gate:
+        assert captured["status"] == "503 Service Unavailable"
+    else:
+        assert captured["status"] == "200 OK"
+        assert list(body) == [b"body"]
 
     sem.release()  # cleanup
 
@@ -327,7 +320,7 @@ def test_endpoint_level_short_circuits_middleware(mocker):
         "endpoint",
     )
     sem = threading.BoundedSemaphore(1)
-    sem.acquire()  # exhaust — would block in wilmer mode
+    sem.acquire()  # exhaust; would block in wilmer mode
 
     app = _make_simple_app([b"passthrough"])
     mw = ConcurrencyLimitMiddleware(app, sem, acquire_timeout=0.1)

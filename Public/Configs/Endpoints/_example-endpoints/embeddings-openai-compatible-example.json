@@ -1,0 +1,8 @@
+{
+  "modelNameForDisplayOnly": "Embeddings example: OpenAI-compatible /v1/embeddings (llama.cpp server with --embedding, OpenAI, LM Studio, vLLM, etc.). Only the fields shown here apply to embeddings endpoints; presets and prompt templates are not used.",
+  "endpoint": "http://127.0.0.1:8081",
+  "apiTypeConfigFileName": "OpenAI-Embeddings",
+  "modelNameToSendToAPI": "nomic-embed-text-v1.5",
+  "dontIncludeModel": false,
+  "apiKey": ""
+}

@@ -2,8 +2,7 @@
 
 import json
 import logging
-from copy import deepcopy
-from typing import Dict, Any, Optional
+from typing import Any, List, Optional, Tuple
 
 from Middleware.utilities.prompt_extraction_utils import (
     extract_last_n_turns,
@@ -22,6 +21,14 @@ from Middleware.utilities.config_utils import (
     CONTEXT_WINDOW_BUDGET_HEADROOM_TOKENS,
     ESTIMATION_LEVEL_KEY,
     DEFAULT_ESTIMATION_LEVEL,
+)
+from Middleware.utilities.structured_output_utils import (
+    build_tool_calls_result,
+    build_tool_enforcement_schema,
+    build_tools_description_text,
+    get_structured_output_config,
+    load_structured_output_schema,
+    parse_constrained_tool_response,
 )
 from Middleware.utilities.text_utils import rough_estimate_token_length
 from Middleware.workflows.models.execution_context import ExecutionContext
@@ -92,6 +99,35 @@ class LLMDispatchService:
             else:
                 msg["images"] = images[-remaining:]
                 remaining = 0
+
+    @staticmethod
+    def _gather_recent_images(messages, config, max_images):
+        """Collect image data from the most recent messages.
+
+        Used on the dispatch paths that send a text prompt string rather than
+        the conversation itself: the prompt cannot carry image data, so images
+        must be gathered from recent messages and attached explicitly or the
+        vision-capable LLM never sees them.
+
+        Args:
+            messages (list): The full conversation messages.
+            config (dict): The node config; its lastMessagesToSendInsteadOfPrompt
+                bounds how far back to look (default 5, matching the completions
+                text window so images never come from messages whose text is not
+                in the prompt).
+            max_images (int): Maximum number of images to return. 0 means no limit.
+
+        Returns:
+            list: The gathered base64 image strings, oldest first.
+        """
+        image_lookback = config.get("lastMessagesToSendInsteadOfPrompt", 5)
+        all_images = []
+        for msg in messages[-image_lookback:]:
+            if "images" in msg and msg["images"]:
+                all_images.extend(msg["images"])
+        if max_images > 0:
+            all_images = all_images[-max_images:]
+        return all_images
 
     @staticmethod
     def _merge_consecutive_assistant_messages(messages, delimiter="\n"):
@@ -475,6 +511,155 @@ class LLMDispatchService:
         )
 
     @staticmethod
+    def _execute_constrained_tool_round(llm_handler, call_kwargs: dict, tools: list,
+                                        tool_choice, schema: dict,
+                                        request_id: Optional[str]) -> Any:
+        """
+        Runs a tool-enforcement round constrained by a structured-output schema.
+
+        The backend call carries the schema (attached per the endpoint's ApiType
+        mechanism) instead of native tools, and its text output is parsed back
+        into Wilmer's internal tool-call dict. Because some backends accept a
+        constraint field without enforcing it (llama.cpp fails open on bad
+        grammars; some servers silently ignore the field), the parse result is
+        never assumed: one redraw is attempted on a failed parse, after which
+        the raw text is returned as-is with an error logged.
+
+        Streaming calls are buffered: the client declared this round machine-
+        consumed by pinning tool_choice, and the constrained output is a single
+        short JSON object. The converted call is re-emitted as standard
+        streaming chunks.
+
+        Args:
+            llm_handler: The node's LLM handler.
+            call_kwargs (dict): Keyword arguments for get_response_from_llm,
+                without the schema.
+            tools (list): The request's tool definitions (for parse validation).
+            tool_choice: The request's tool_choice value.
+            schema (dict): The enforcement schema to attach.
+            request_id (Optional[str]): Request ID, checked before a redraw.
+
+        Returns:
+            Any: A tool-call dict, a synthetic streaming generator, or the raw
+            response when both attempts fail to parse.
+        """
+        from Middleware.services.cancellation_service import cancellation_service
+
+        def call_once():
+            return llm_handler.llm.get_response_from_llm(
+                **call_kwargs, structured_output_schema=schema)
+
+        def collect(result):
+            # Buffers a streaming generator into (text, was_stream); passthrough
+            # for strings. Dict results are native tool calls already.
+            if isinstance(result, (str, dict)) or result is None:
+                return result, False
+            tokens = []
+            for chunk in result:
+                if isinstance(chunk, dict):
+                    tokens.append(chunk.get('token') or '')
+            return "".join(tokens), True
+
+        def empty_stream():
+            # Streaming consumers type-gate on isinstance(x, Generator); a bare
+            # iter(()) would fail that check and leak into the SSE body.
+            yield from ()
+
+        result, was_stream = collect(call_once())
+        if isinstance(result, dict):
+            return result  # backend natively enforced and parsed; already correct
+        parsed = parse_constrained_tool_response(result, tools, tool_choice)
+        if parsed is None:
+            if request_id and cancellation_service.is_cancelled(request_id):
+                return result if not was_stream else empty_stream()
+            logger.warning("Constrained tool round returned unparseable output; redrawing once.")
+            result, was_stream = collect(call_once())
+            if isinstance(result, dict):
+                return result
+            parsed = parse_constrained_tool_response(result, tools, tool_choice)
+
+        if parsed is None:
+            if request_id and cancellation_service.is_cancelled(request_id):
+                # Cancellation landed during the redraw; not a backend fault.
+                return result if not was_stream else empty_stream()
+            logger.error(
+                "Constrained tool round failed to produce a valid tool call after a "
+                "redraw; the backend likely accepted the constraint field without "
+                "enforcing it. Returning the raw output.")
+            if not was_stream:
+                return result
+            raw_text = result
+
+            def raw_stream():
+                yield {'token': raw_text, 'finish_reason': None}
+                yield {'token': '', 'finish_reason': 'stop'}
+            return raw_stream()
+
+        converted = build_tool_calls_result(parsed)
+        if not was_stream:
+            return converted
+
+        tool_calls = [dict(call, index=i) for i, call in enumerate(converted['tool_calls'])]
+
+        def tool_call_stream():
+            yield {'token': '', 'tool_calls': tool_calls, 'finish_reason': None}
+            yield {'token': '', 'finish_reason': 'tool_calls'}
+        return tool_call_stream()
+
+    @staticmethod
+    def _extract_trailing_tool_exchange(messages: List[dict]) -> Tuple[int, List[dict]]:
+        """
+        Identifies the trailing tool exchange of a conversation, if any.
+
+        The trailing exchange is the final assistant ``tool_calls`` turn plus the
+        contiguous ``role: "tool"`` result(s) that follow it, ignoring any
+        assistant filler appended after them (empty content, or the bare
+        "Assistant:" prompt added by chatCompleteAddMissingAssistant). This is
+        the live exchange the frontend just executed (the one the model must
+        respond to next), as opposed to earlier, completed exchanges buried in
+        the conversation.
+
+        Used by ``appendNativeToolExchange``: an authored-prompt node opting in
+        has this exchange delivered natively (as real messages after the
+        authored prompt) instead of rendered into the text transcript, so the
+        model generates from the standard post-tool-result position.
+
+        Args:
+            messages (List[dict]): The conversation messages.
+
+        Returns:
+            Tuple[int, List[dict]]: The index where the exchange begins and the
+            exchange messages (assistant tool_calls turn followed by its tool
+            results, trailing filler excluded). ``(len(messages), [])`` when the
+            conversation does not end with a tool exchange.
+        """
+        no_exchange = (len(messages), [])
+        idx = len(messages) - 1
+        # Skip trailing assistant filler (no tool_calls, empty/"Assistant:" content).
+        while idx >= 0:
+            message = messages[idx]
+            if not isinstance(message, dict) or message.get("role") != "assistant" \
+                    or message.get("tool_calls"):
+                break
+            content = message.get("content")
+            stripped = content.strip() if isinstance(content, str) else ""
+            if stripped and stripped != "Assistant:":
+                break
+            idx -= 1
+        # Collect the contiguous tool results.
+        end = idx
+        while idx >= 0 and isinstance(messages[idx], dict) and messages[idx].get("role") == "tool":
+            idx -= 1
+        if idx == end:
+            return no_exchange
+        # The message immediately before the results must be the assistant turn
+        # that made the call(s).
+        if idx >= 0 and isinstance(messages[idx], dict) and messages[idx].get("role") == "assistant" \
+                and isinstance(messages[idx].get("tool_calls"), list) and messages[idx]["tool_calls"]:
+            return idx, messages[idx:end + 1]
+        return no_exchange
+
+    @staticmethod
     def dispatch(
             context: ExecutionContext,
             llm_takes_images: bool = False,
@@ -500,23 +685,71 @@ class LLMDispatchService:
         if context.messages is None:
             raise ValueError("ExecutionContext.messages must not be None when dispatching to LLM")
 
-        message_copy = deepcopy(context.messages)
+        # Per-message dict copies isolate the caller's conversation from the in-place
+        # key surgery below (_apply_image_limit deletes/replaces the "images" key).
+        # Nothing downstream mutates a nested value in place (the extraction utils
+        # filter/slice, and format_messages_with_template deep-copies internally), so
+        # deep-copying the whole history on every dispatch was redundant work.
+        message_copy = [dict(msg) for msg in context.messages]
 
-        # 1. Get and apply variables to base prompts from the node config
-        system_prompt = workflow_variable_service.apply_variables(
-            prompt=config.get("systemPrompt", ""),
-            context=context  # Pass the whole context
-        )
+        # appendNativeToolExchange: on an authored-prompt (non-collection) node
+        # bound to a chat-completions endpoint, deliver the trailing tool exchange
+        # (the assistant tool_calls turn the frontend just executed plus its
+        # role:"tool" results) as native messages after the authored prompt,
+        # instead of rendering it into the text transcript. The exchange is
+        # removed from the messages the prompt variables render from (for THIS
+        # node only), so the model sees it exactly once, natively, and generates
+        # from the standard post-tool-result position. Collection-mode nodes
+        # already send native turns, so the flag is inert there; completions
+        # endpoints cannot carry structured turns, so it is inert there too.
+        # An endpoint whose backing model's chat template cannot render tool
+        # turns (old models, strict alternation templates without tool support)
+        # opts out via "backendSupportsToolTurns": false in its endpoint config;
+        # the node then falls back to the text-transcript behavior, so one old
+        # backend never requires editing every workflow that sets the flag.
+        exchange_endpoint_file = getattr(getattr(llm_handler, "llm", None), "endpoint_file", None)
+        backend_supports_tool_turns = (
+            exchange_endpoint_file.get("backendSupportsToolTurns", True)
+            if isinstance(exchange_endpoint_file, dict) else True)
+        native_tool_exchange = []
+        if config.get("appendNativeToolExchange", False) \
+                and config.get("prompt", "") \
+                and llm_handler.takes_message_collection \
+                and backend_supports_tool_turns:
+            exchange_start, native_tool_exchange = \
+                LLMDispatchService._extract_trailing_tool_exchange(message_copy)
+            if native_tool_exchange:
+                logger.debug(
+                    "appendNativeToolExchange: delivering trailing tool exchange "
+                    "(%d message(s)) natively; excluding it from prompt variables.",
+                    len(native_tool_exchange))
+                message_copy = message_copy[:exchange_start]
 
-        prompt = config.get("prompt", "")
-        if prompt:
-            prompt = workflow_variable_service.apply_variables(
-                prompt=prompt,
+        # 1. Get and apply variables to base prompts from the node config.
+        # While the variables render, context.messages is swapped to the
+        # exchange-trimmed copy (a no-op when the feature did not engage) so
+        # every conversation variable excludes the natively-delivered exchange;
+        # the original list is restored before anything else sees the context.
+        original_messages = context.messages
+        try:
+            if native_tool_exchange:
+                context.messages = message_copy
+            system_prompt = workflow_variable_service.apply_variables(
+                prompt=config.get("systemPrompt", ""),
                 context=context  # Pass the whole context
             )
-            use_last_n_messages = False
-        else:
-            use_last_n_messages = True
+
+            prompt = config.get("prompt", "")
+            if prompt:
+                prompt = workflow_variable_service.apply_variables(
+                    prompt=prompt,
+                    context=context  # Pass the whole context
+                )
+                use_last_n_messages = False
+            else:
+                use_last_n_messages = True
+        finally:
+            context.messages = original_messages
 
         # Determine whether this node should receive tool definitions.
         # Only nodes with "allowTools": true in their config will forward
@@ -525,6 +758,64 @@ class LLMDispatchService:
         allow_tools = config.get("allowTools", False)
         tools_to_send = context.tools if allow_tools else None
         tool_choice_to_send = context.tool_choice if allow_tools else None
+
+        # Tool enforcement via structured output: when the client DEMANDS a call
+        # (forced-function or "required" tool_choice, never "auto") and the
+        # endpoint's API type declares a structuredOutput mechanism, this round
+        # is constrained instead of steered. Native tools/tool_choice are
+        # dropped from the payload (the combination with an explicit schema is
+        # unsupported on llama.cpp and Ollama) and the tool definitions are
+        # injected as text (grammar backends do not show the model the schema);
+        # the guaranteed-JSON output is converted back into a tool_calls
+        # response after the call. Backends that enforce tool_choice natively
+        # and declare no mechanism (e.g. Claude) never enter this path.
+        tool_enforcement_schema = None
+        enforced_tools = None
+        enforced_tool_choice = None
+        if tools_to_send and llm_handler.takes_message_collection:
+            endpoint_api_type = getattr(getattr(llm_handler, "llm", None), "api_type_config", None)
+            if get_structured_output_config(endpoint_api_type):
+                tool_enforcement_schema = build_tool_enforcement_schema(
+                    tools_to_send, tool_choice_to_send)
+        if tool_enforcement_schema:
+            logger.debug("Tool-enforcement round: constraining via structured output "
+                         "and dropping native tools from the payload.")
+            description = build_tools_description_text(tools_to_send, tool_choice_to_send)
+            if description:
+                system_prompt = f"{system_prompt}\n\n{description}" if system_prompt else description
+            enforced_tools = tools_to_send
+            enforced_tool_choice = tool_choice_to_send
+            tools_to_send = None
+            tool_choice_to_send = None
+
+        # Author-declared structured output: a node may pin its own output shape
+        # via "structuredOutputFile" (a schema in Configs/StructuredOutputs/).
+        # The schema rides the same ApiType mechanism; the node's output IS the
+        # constrained JSON text (no conversion). The author must describe the
+        # desired structure in the node's prompts; grammar backends do not
+        # show the model the schema. Colliding with an engaged tool-enforcement
+        # round is a configuration error, not a silent precedence pick.
+        node_output_schema = None
+        structured_output_file = config.get("structuredOutputFile")
+        if structured_output_file:
+            if tool_enforcement_schema:
+                raise ValueError(
+                    "Node declares structuredOutputFile while a tool-enforcement round "
+                    "is active (forced/required tool_choice with allowTools). These "
+                    "constraints conflict; remove one.")
+            if not llm_handler.takes_message_collection:
+                logger.warning(
+                    "structuredOutputFile is set on a node bound to a completions-"
+                    "paradigm endpoint; structured output is not supported there "
+                    "and the setting is ignored.")
+            else:
+                node_output_schema = load_structured_output_schema(structured_output_file)
+                if tools_to_send:
+                    logger.warning(
+                        "structuredOutputFile is set on a node that is also forwarding "
+                        "native tool definitions (non-forcing tool_choice). Most backends "
+                        "cannot combine an explicit schema with native tools; the schema "
+                        "will constrain the output and native tool calls will not occur.")
 
         # The pre-send context clamp is the master switch for all context-window
         # awareness. Resolve it once (node > endpoint > user > default OFF); when it
@@ -611,8 +902,19 @@ class LLMDispatchService:
             system_prompt = format_system_prompt_with_template(
                 system_prompt, llm_handler.prompt_template_file_name, False)
 
+            # Completions handlers ignore `conversation` for text, but the
+            # image-capable ones (koboldCppGenerateImageSpecific) read
+            # per-message images from it. The prompt string cannot carry image
+            # data, so pass gathered images in a minimal conversation.
+            image_conversation = None
+            if llm_takes_images:
+                recent_images = LLMDispatchService._gather_recent_images(
+                    message_copy, config, max_images)
+                if recent_images:
+                    image_conversation = [{"role": "user", "content": "", "images": recent_images}]
+
             return llm_handler.llm.get_response_from_llm(
-                conversation=None, system_prompt=system_prompt,
+                conversation=image_conversation, system_prompt=system_prompt,
                 prompt=prompt, llm_takes_images=llm_takes_images,
                 request_id=getattr(context, 'request_id', None),
                 tools=tools_to_send,
@@ -652,21 +954,17 @@ class LLMDispatchService:
             else:
                 user_msg = {"role": "user", "content": prompt}
                 if llm_takes_images:
-                    # When dispatching via a text prompt string (rather than the full
-                    # conversation), image data is not embedded in the prompt text.
-                    # Images must be gathered from recent messages and attached
-                    # explicitly to the outgoing user message; otherwise they are
-                    # silently dropped and the vision-capable LLM never sees them.
-                    image_lookback = config.get("lastMessagesToSendInsteadOfPrompt", 10)
-                    all_images = []
-                    for msg in message_copy[-image_lookback:]:
-                        if "images" in msg and msg["images"]:
-                            all_images.extend(msg["images"])
-                    if max_images > 0:
-                        all_images = all_images[-max_images:]
-                    if all_images:
-                        user_msg["images"] = all_images
+                    recent_images = LLMDispatchService._gather_recent_images(
+                        message_copy, config, max_images)
+                    if recent_images:
+                        user_msg["images"] = recent_images
                 collection.append(user_msg)
+                # appendNativeToolExchange: the live tool exchange follows the
+                # authored prompt as real messages, putting the model in the
+                # standard generate-after-tool-result position. The exchange was
+                # already excluded from the transcript the prompt rendered.
+                if native_tool_exchange:
+                    collection.extend(native_tool_exchange)
                 # This user message IS the operator's authored prompt; never truncate
                 # it. Warn if it overflows and send as-is (see the completions branch).
                 LLMDispatchService._warn_if_authored_prompt_overflows(
@@ -697,9 +995,16 @@ class LLMDispatchService:
                 # query don't reject the request.
                 LLMDispatchService._ensure_user_message_present(collection, message_copy)
 
-            return llm_handler.llm.get_response_from_llm(
+            final_kwargs = dict(
                 conversation=collection, llm_takes_images=llm_takes_images,
                 request_id=getattr(context, 'request_id', None),
                 tools=tools_to_send,
                 tool_choice=tool_choice_to_send,
             )
+            if tool_enforcement_schema:
+                return LLMDispatchService._execute_constrained_tool_round(
+                    llm_handler, final_kwargs, enforced_tools, enforced_tool_choice,
+                    tool_enforcement_schema, getattr(context, 'request_id', None))
+            if node_output_schema is not None:
+                final_kwargs["structured_output_schema"] = node_output_schema
+            return llm_handler.llm.get_response_from_llm(**final_kwargs)

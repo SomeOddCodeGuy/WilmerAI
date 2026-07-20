@@ -4,8 +4,8 @@ import logging
 from typing import Any, Dict
 
 from Middleware.workflows.tools.mcp_client_tool import MCPClient, MCPToolCallError
-from Middleware.utilities.streaming_utils import stream_static_content
 from Middleware.workflows.handlers.base.base_workflow_node_handler import BaseHandler
+from Middleware.workflows.handlers.impl.extension_node_helpers import maybe_stream, validate_timeout
 from Middleware.workflows.models.execution_context import ExecutionContext
 
 logger = logging.getLogger(__name__)
@@ -58,7 +58,7 @@ class MCPToolCallHandler(BaseHandler):
         if not tool:
             raise ValueError("MCPToolCall node requires a 'tool' field.")
 
-        timeout = self._validate_timeout(config.get("timeout", _DEFAULT_TIMEOUT_SECONDS))
+        timeout = validate_timeout(config.get("timeout", _DEFAULT_TIMEOUT_SECONDS), "MCPToolCall")
         on_error = config.get("onError", "raise")
 
         if on_error not in _VALID_ON_ERROR:
@@ -86,37 +86,9 @@ class MCPToolCallHandler(BaseHandler):
             logger.warning("MCPToolCall failed: %s", exc)
             if on_error == "raise":
                 raise
-            return self._maybe_stream(str(exc), context)
+            return maybe_stream(str(exc), context)
 
-        return self._maybe_stream(result, context)
-
-    @staticmethod
-    def _validate_timeout(value: Any) -> float:
-        """Coerces the configured timeout to a positive number of seconds.
-
-        Mirrors the node's other up-front field validations so a non-numeric
-        or non-positive value raises a clear ``ValueError`` instead of an
-        opaque ``TypeError`` from ``timedelta(seconds=...)`` deeper in the call.
-
-        Args:
-            value (Any): The raw ``timeout`` value from the node config.
-
-        Returns:
-            float: The validated, positive timeout in seconds.
-
-        Raises:
-            ValueError: If the value is a bool, not coercible to a number, or not positive.
-        """
-        if isinstance(value, bool):
-            raise ValueError(f"MCPToolCall 'timeout' must be a number of seconds; got {value!r}.")
-        if not isinstance(value, (int, float)):
-            try:
-                value = float(value)
-            except (TypeError, ValueError):
-                raise ValueError(f"MCPToolCall 'timeout' must be a number of seconds; got {value!r}.")
-        if value <= 0:
-            raise ValueError(f"MCPToolCall 'timeout' must be a positive number of seconds; got {value!r}.")
-        return value
+        return maybe_stream(result, context)
 
     def _resolve_arguments(
         self,
@@ -162,18 +134,3 @@ class MCPToolCallHandler(BaseHandler):
         if isinstance(value, list):
             return [self._resolve_value(item, context) for item in value]
         return value
-
-    @staticmethod
-    def _maybe_stream(payload: str, context: ExecutionContext) -> Any:
-        """Returns the payload as-is, or wraps it in a streaming generator when streaming is on.
-
-        Args:
-            payload (str): The string result to return or stream.
-            context (ExecutionContext): The runtime context; ``context.stream`` selects the mode.
-
-        Returns:
-            Any: The payload string, or a generator streaming it when ``context.stream`` is True.
-        """
-        if context.stream:
-            return stream_static_content(payload)
-        return payload

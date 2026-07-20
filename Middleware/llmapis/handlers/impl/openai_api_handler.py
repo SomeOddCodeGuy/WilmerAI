@@ -4,15 +4,14 @@ import binascii
 import io
 import json
 import logging
-import os
 import re
-import traceback
 from typing import Dict, List, Optional, Any, Union
 from urllib.parse import urlparse
 
 from PIL import Image
 
 from Middleware.llmapis.handlers.base.base_chat_completions_handler import BaseChatCompletionsHandler
+from Middleware.llmapis.handlers.base.image_injection import inject_images_into_messages
 
 logger = logging.getLogger(__name__)
 
@@ -83,10 +82,16 @@ class OpenAiApiHandler(BaseChatCompletionsHandler):
 
             result = {'token': token, 'finish_reason': finish_reason}
             tool_calls_delta = delta.get("tool_calls")
-            if tool_calls_delta is not None:
+            # Only attach real tool-call deltas. Some OpenAI-compatible backends put
+            # an empty "tool_calls": [] on ordinary text deltas; forwarding that would
+            # make the streaming handler treat plain text as a tool-call chunk.
+            if tool_calls_delta:
                 result['tool_calls'] = tool_calls_delta
             return result
-        except (json.JSONDecodeError, IndexError):
+        except (json.JSONDecodeError, IndexError, TypeError, AttributeError):
+            # TypeError/AttributeError cover chunks whose JSON parses to a non-dict,
+            # or whose 'choices' entries are not dicts; malformed chunks are skipped,
+            # not fatal to the stream.
             logger.warning(f"Could not parse OpenAI stream data string: {data_str}")
             return None
 
@@ -118,7 +123,9 @@ class OpenAiApiHandler(BaseChatCompletionsHandler):
                     'finish_reason': response_json['choices'][0].get('finish_reason', 'tool_calls')
                 }
             return content
-        except (KeyError, IndexError, TypeError):
+        except (KeyError, IndexError, TypeError, AttributeError):
+            # AttributeError covers a non-dict 'message' entry, which .get access
+            # would otherwise escape.
             logger.error(f"Could not find content in OpenAI response: {response_json}")
             return ""
 
@@ -128,9 +135,13 @@ class OpenAiApiHandler(BaseChatCompletionsHandler):
         Overrides the base message building to process and inject image data.
 
         This method first calls the parent implementation to get a standard, clean
-        conversation list. It then inspects each message for an 'images' key. For each
-        message that has images, it converts the content to the OpenAI multimodal format,
-        attaching images to their originating message.
+        conversation list, then runs the shared image-injection traversal with the
+        OpenAI block format (images appended after the text block). On failure the
+        conversation is reverted to text-only with an error note.
+
+        Assistant messages carrying an empty or null ``tool_calls`` key (residue
+        from clients replaying history) have the key stripped, because the OpenAI
+        API rejects an assistant message whose ``tool_calls`` is an empty array.
 
         Args:
             conversation (Optional[List[Dict[str, str]]]): The historical conversation.
@@ -142,66 +153,23 @@ class OpenAiApiHandler(BaseChatCompletionsHandler):
             multimodal content with formatted image data, ready for the API payload.
         """
         messages = super()._build_messages_from_conversation(conversation, system_prompt, prompt)
-
-        try:
-            if not any("images" in msg for msg in messages):
-                return messages
-
-            for msg in messages:
-                if msg.get("role") == "user" and "images" in msg:
-                    image_list = msg.pop("images")
-                    image_contents = []
-                    for img_source in image_list:
-                        img_dict = self._process_single_image_source(img_source)
-                        if img_dict:
-                            image_contents.append(img_dict)
-
-                    if image_contents:
-                        if isinstance(msg["content"], str):
-                            msg["content"] = [{"type": "text", "text": msg["content"]}]
-                        for img_item in image_contents:
-                            msg["content"].append(img_item)
-
-            for msg in messages:
-                msg.pop("images", None)
-
-            return messages
-
-        except Exception as e:
-            logger.error(f"Critical error during image processing: {e}\n{traceback.format_exc()}")
-            return self._build_fallback_conversation(messages)
-
-    @staticmethod
-    def _build_fallback_conversation(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Creates a safe, text-only conversation when image processing fails.
-
-        This method cleans up any partially modified multimodal messages, reverting them
-        to simple text. It then appends a system note to the last user message,
-        informing the user that the image could not be processed.
-
-        Args:
-            messages (List[Dict[str, Any]]): The message list, possibly in a corrupted
-                multimodal state.
-
-        Returns:
-            List[Dict[str, Any]]: A cleaned, text-only message list with an error notification.
-        """
-        for msg in messages:
-            msg.pop("images", None)
-            if msg["role"] == "user" and isinstance(msg.get("content"), list):
-                text_content = next((item.get("text", "") for item in msg["content"] if item.get("type") == "text"), "")
-                msg["content"] = text_content
-
-        if messages and messages[-1].get("role") == "user":
-            messages[-1][
-                "content"] += "\n\n[System note: There was an error processing the provided image(s). I will respond based on the text alone.]"
-        else:
-            messages.append({
-                "role": "user",
-                "content": "There was an error processing an image. Please assist based on prior text, and state that you were unable to see the image."
-            })
-        return messages
+        messages = [
+            {k: v for k, v in msg.items() if k != "tool_calls"}
+            if msg.get("role") == "assistant" and "tool_calls" in msg
+               and not (isinstance(msg.get("tool_calls"), list) and msg.get("tool_calls"))
+            else msg
+            for msg in messages
+        ]
+        return inject_images_into_messages(
+            messages,
+            to_image_block=self._process_single_image_source,
+            images_first=False,
+            api_label="OpenAI",
+            missing_user_fallback_text=(
+                "There was an error processing an image. Please assist based on prior text, "
+                "and state that you were unable to see the image."
+            ),
+        )
 
     @staticmethod
     def _process_single_image_source(content: str) -> Optional[Dict]:
@@ -232,7 +200,7 @@ class OpenAiApiHandler(BaseChatCompletionsHandler):
                 data_uri = f"data:image/{image_format};base64,{content}"
                 return {"type": "image_url", "image_url": {"url": data_uri}}
             except (binascii.Error, ValueError, Image.UnidentifiedImageError):
-                logger.warning(f"Pillow could not identify image from base64 data. Skipping.")
+                logger.warning("Pillow could not identify image from base64 data. Skipping.")
                 return None
 
         if content.startswith('file://'):

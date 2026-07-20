@@ -85,11 +85,10 @@ class ApiServer:
 
     def _apply_concurrency_middleware(self):
         """Wraps the WSGI app with concurrency-limiting middleware if configured."""
-        from Middleware.common.instance_global_variables import get_request_semaphore
         from Middleware.common import instance_global_variables
         from Middleware.api.concurrency_middleware import ConcurrencyLimitMiddleware
 
-        semaphore = get_request_semaphore()
+        semaphore = instance_global_variables.get_request_semaphore()
         if semaphore is not None:
             self.app.wsgi_app = ConcurrencyLimitMiddleware(
                 self.app.wsgi_app, semaphore,
