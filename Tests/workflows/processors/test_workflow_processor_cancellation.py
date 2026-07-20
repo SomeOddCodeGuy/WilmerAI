@@ -1,9 +1,21 @@
+import json
+
 import pytest
 from unittest.mock import MagicMock, patch, Mock
 
 from Middleware.workflows.processors.workflows_processor import WorkflowProcessor
 from Middleware.exceptions.early_termination_exception import EarlyTerminationException
 from Middleware.services.cancellation_service import cancellation_service
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_chat_template_name(mocker):
+    """Nodes without an endpointName construct LlmHandler(None, get_chat_template_name(), ...),
+    which reads the real user config from disk; stub the processor module's by-name import
+    so these tests never depend on machine state."""
+    mocker.patch(
+        'Middleware.workflows.processors.workflows_processor.get_chat_template_name',
+        return_value='fake_template')
 
 
 @pytest.fixture
@@ -151,8 +163,9 @@ class TestWorkflowProcessorCancellation:
         # Execute should complete normally
         result = list(processor.execute())
 
-        # Both nodes should have executed
+        # Both nodes should have executed, and the responder's output is returned
         assert execution_count['count'] == 2
+        assert result == ["output 2"]
 
     def test_cancellation_acknowledged_after_termination(self, mock_dependencies, setup_cancellation_service):
         """Test that cancellation is properly acknowledged after early termination."""
@@ -288,11 +301,11 @@ class TestWorkflowProcessorCancellation:
         # Cancel only request A
         cancellation_service.request_cancellation(request_id_a)
 
-        # Execute processor A - should fail
+        # Execute processor A; it should fail
         with pytest.raises(EarlyTerminationException):
             list(processor_a.execute())
 
-        # Execute processor B - should complete normally
+        # Execute processor B; it should complete normally
         result_b = list(processor_b.execute())
 
         # Verify A was cancelled but B completed
@@ -300,47 +313,82 @@ class TestWorkflowProcessorCancellation:
         assert len(execution_log_b) == 3, f"Request B should have executed all nodes, got {len(execution_log_b)}"
         assert len(result_b) > 0, "Request B should have returned output"
 
-    def test_streaming_cancellation_during_node_execution(self, mock_dependencies, setup_cancellation_service):
+    def test_streaming_cancellation_truncated_stream_and_post_node_skipped(self, mocker, mock_dependencies,
+                                                                            setup_cancellation_service):
         """
-        Test that cancellation works when a node is actively streaming tokens.
-
-        This simulates a scenario where an LLM is generating tokens and the request
-        is cancelled mid-generation. The node should stop yielding tokens.
+        Mid-stream cancellation is enforced by the LLM API layer, which truncates
+        the raw token stream; the processor's own responsibilities are to
+        (a) faithfully process whatever tokens did arrive through the real
+        StreamingResponseHandler and (b) stop before executing any later node.
+        This test feeds a truncated raw stream (as the LLM layer produces after
+        honoring a cancellation) and asserts both behaviors.
         """
-        from Middleware.common import instance_global_variables
-        instance_global_variables.set_api_type('ollamaapichat')
+        # Keep the real StreamingResponseHandler hermetic: no reads of the user
+        # config from disk, and no thread-local api_type leak (mocker restores
+        # the patched getter automatically).
+        mocker.patch('Middleware.common.instance_global_variables.get_api_type',
+                     return_value='openaichatcompletion')
+        mocker.patch('Middleware.workflows.streaming.response_handler.get_is_chat_complete_add_user_assistant',
+                     return_value=False)
+        mocker.patch('Middleware.workflows.streaming.response_handler.get_is_chat_complete_add_missing_assistant',
+                     return_value=False)
+        mocker.patch('Middleware.api.api_helpers.get_model_name', return_value='test-model')
+        mocker.patch('Middleware.workflows.processors.workflows_processor.get_chat_template_name',
+                     return_value='chatml')
 
+        request_id = mock_dependencies['request_id']
         mock_dependencies['configs'] = [
-            {'type': 'Standard', 'returnToUser': True}
+            {'type': 'Standard', 'returnToUser': True},
+            {'type': 'Standard', 'title': 'post-node'}
         ]
         mock_dependencies['stream'] = True
 
-        tokens_generated = []
-        request_id = mock_dependencies['request_id']
+        post_node_executions = []
 
-        def mock_streaming_handler(context):
-            """Mock handler that yields tokens and can be cancelled mid-stream."""
-            # This simulates what an actual LLM streaming call would do
-            for i in range(10):
-                # Check cancellation before each token (simulating the LLM API layer check)
-                if cancellation_service.is_cancelled(request_id):
-                    break
-                tokens_generated.append(f"token_{i}")
-                # Simulate yielding a token in the format expected by streaming response handler
-                yield {"token": f"token_{i}", "finish_reason": None}
-                # Cancel after 3 tokens
-                if i == 2:
-                    cancellation_service.request_cancellation(request_id)
+        def mock_handle(context):
+            if context.config.get('title') == 'post-node':
+                post_node_executions.append(True)
+                return "post output"
 
-        mock_dependencies['node_handlers']['Standard'].handle = mock_streaming_handler
+            def truncated_stream():
+                # The LLM API layer stops the stream after three tokens when
+                # the cancellation arrives; the processor just sees a stream
+                # that ends without a finish_reason.
+                for i in range(3):
+                    yield {"token": f"token_{i}", "finish_reason": None}
+                cancellation_service.request_cancellation(request_id)
+
+            return truncated_stream()
+
+        mock_dependencies['node_handlers']['Standard'].handle = mock_handle
 
         processor = WorkflowProcessor(**mock_dependencies)
 
-        # Execute and consume the stream
-        result_tokens = []
-        for token in processor.execute():
-            result_tokens.append(token)
+        result_chunks = []
+        with pytest.raises(EarlyTerminationException):
+            for chunk in processor.execute():
+                result_chunks.append(chunk)
 
-        # Should have generated only 3 tokens before cancellation stopped it
-        assert len(tokens_generated) == 3, f"Should have generated 3 tokens, got {len(tokens_generated)}: {tokens_generated}"
+        # The truncated stream was still processed into a well-formed SSE stream:
+        # all three tokens, a terminal stop event, and the [DONE] sentinel.
+        contents = []
+        finish_reasons = []
+        for chunk in result_chunks:
+            payload = chunk.split("data: ")[1].strip()
+            if payload == "[DONE]":
+                continue
+            choice = json.loads(payload)["choices"][0]
+            content = choice["delta"].get("content")
+            if content:
+                contents.append(content)
+            if choice.get("finish_reason"):
+                finish_reasons.append(choice["finish_reason"])
+        assert "".join(contents) == "token_0token_1token_2"
+        assert finish_reasons == ["stop"]
+        assert result_chunks[-1] == "data: [DONE]\n\n"
+
+        # The processor's per-node cancellation check stopped the workflow
+        # before the post-return node, and acknowledged the cancellation.
+        assert post_node_executions == []
+        assert not cancellation_service.is_cancelled(request_id)
 

@@ -24,6 +24,7 @@ MOCK_PRESET_CONFIG = {"temperature": 0.7, "top_p": 0.9}
 
 SUPPORTED_HANDLERS = [
     ("openAIChatCompletion", "OpenAiApiHandler"),
+    ("claudeMessages", "ClaudeApiHandler"),
     ("koboldCppGenerate", "KoboldCppApiHandler"),
     # ImageSpecific types are deprecated but still supported for backwards compatibility
     # They now map to the regular handlers which have integrated image support
@@ -34,6 +35,10 @@ SUPPORTED_HANDLERS = [
     ("ollamaApiChatImageSpecific", "OllamaChatHandler"),
     ("openAIApiChatImageSpecific", "OpenAiApiHandler"),
 ]
+
+# Handler types whose constructor accepts the dont_include_model kwarg; the factory
+# passes it only to these (see LlmApiService.create_api_handler).
+DONT_INCLUDE_MODEL_TYPES = {"openAIChatCompletion", "openAIApiChatImageSpecific", "claudeMessages"}
 
 
 @pytest.fixture
@@ -73,6 +78,7 @@ class TestLlmApiService:
         assert service.endpoint_url == "http://localhost:1234"
         assert service.model_name == "test-model"
         assert service.llm_type == "openAIChatCompletion"
+        assert service.headers["Authorization"] == "Bearer test_api_key"
         mock_create_handler.assert_called_once()
 
     def test_init_preset_not_found_raises_error(self, mock_configs, mocker):
@@ -84,11 +90,46 @@ class TestLlmApiService:
         with pytest.raises(FileNotFoundError):
             LlmApiService(endpoint="test_endpoint", presetname="non_existent_preset", max_tokens=128)
 
+    def test_load_preset_file_falls_back_to_type_root(self, mocker):
+        """
+        When the user-subdirectory preset path does not exist, resolution falls
+        back to the Presets/<type>/ root path (queried WITHOUT the user-subdir
+        flag), and the file is read with explicit utf-8 encoding so presets
+        containing non-ASCII stop strings load identically on every platform.
+        """
+        mocker.patch("Middleware.llmapis.llm_api.get_endpoint_config", return_value=MOCK_ENDPOINT_CONFIG)
+        mocker.patch("Middleware.llmapis.llm_api.get_api_type_config", return_value=MOCK_API_TYPE_CONFIG)
+        mocker.patch("Middleware.llmapis.llm_api.try_get_endpoint_config", return_value=None)
+        mocker.patch("Middleware.llmapis.llm_api.LlmApiService.create_api_handler")
+
+        path_calls = []
+
+        def fake_preset_path(presetname, preset_type, user_subdir=False):
+            path_calls.append((presetname, preset_type, user_subdir))
+            return f"/fake/{'user' if user_subdir else 'root'}/{presetname}.json"
+
+        mocker.patch("Middleware.llmapis.llm_api.get_openai_preset_path", side_effect=fake_preset_path)
+        # User-subdir path missing, type-root path present.
+        mocker.patch("os.path.exists",
+                     side_effect=lambda p: p == "/fake/root/test_preset.json")
+        m_open = mock_open(read_data=json.dumps({"temperature": 0.42, "stop": ["…"]}))
+        mocker.patch("builtins.open", m_open)
+
+        service = LlmApiService(endpoint="test", presetname="test_preset", max_tokens=64)
+
+        assert service._gen_input == {"temperature": 0.42, "stop": ["…"]}
+        assert path_calls == [
+            ("test_preset", "OpenAI", True),
+            ("test_preset", "OpenAI", False),
+        ]
+        m_open.assert_called_once_with("/fake/root/test_preset.json", encoding="utf-8")
+
     @pytest.mark.parametrize("llm_type, handler_class_name", SUPPORTED_HANDLERS)
     def test_create_api_handler_factory(self, llm_type, handler_class_name, mocker):
         """
         Tests the factory method `create_api_handler` to ensure it instantiates
-        the correct handler class for each supported `llm_type`.
+        the correct handler class for each supported `llm_type`, with the
+        expected constructor kwargs.
         """
         mock_handler = mocker.patch(f"Middleware.llmapis.llm_api.{handler_class_name}")
 
@@ -106,6 +147,17 @@ class TestLlmApiService:
         LlmApiService(endpoint="test", presetname="test", max_tokens=100)
 
         mock_handler.assert_called_once()
+        kwargs = mock_handler.call_args.kwargs
+        assert kwargs["base_url"] == "http://localhost:1234"
+        assert kwargs["stream"] is False
+        # MOCK_ENDPOINT_CONFIG has no backupEndpointName, so retries are not suppressed.
+        assert kwargs["suppress_retries"] is False
+        # dont_include_model is only accepted by (and passed to) the OpenAI-chat and
+        # Claude handlers; the factory must not pass it to the others.
+        if llm_type in DONT_INCLUDE_MODEL_TYPES:
+            assert kwargs["dont_include_model"] is False
+        else:
+            assert "dont_include_model" not in kwargs
 
     def test_create_api_handler_unsupported_type_raises_error(self, mock_configs, mocker):
         """
@@ -245,17 +297,6 @@ class TestLlmApiService:
 
         assert service.is_busy() is False
 
-    def test_is_busy_flag(self, mock_configs, mocker):
-        """
-        Tests the is_busy() method reflects the internal state.
-        """
-        mocker.patch("Middleware.llmapis.llm_api.LlmApiService.create_api_handler")
-        service = LlmApiService(endpoint="test", presetname="test", max_tokens=128)
-
-        assert service.is_busy() is False
-        service.is_busy_flag = True
-        assert service.is_busy() is True
-
     def test_close_delegates_to_handler(self, mock_configs, mocker):
         """
         Tests that LlmApiService.close() delegates to the handler's close().
@@ -316,6 +357,31 @@ class TestLlmApiService:
         list(response_generator)
 
         mock_handler_instance.close.assert_called_once()
+
+    def test_streaming_abandonment_closes_handler_and_clears_busy(self, mock_configs, mocker):
+        """
+        Tests that a caller abandoning a stream mid-way (generator close) still
+        closes the handler exactly once and clears the busy flag.
+        """
+        mocker.patch("Middleware.llmapis.llm_api.LlmApiService.create_api_handler")
+        service = LlmApiService(endpoint="test", presetname="test", max_tokens=128, stream=True)
+
+        def mock_stream_generator():
+            yield {"token": "Hello"}
+            yield {"token": " World"}
+
+        mock_handler_instance = MagicMock()
+        mock_handler_instance.handle_streaming.return_value = mock_stream_generator()
+        service._api_handler = mock_handler_instance
+
+        response_generator = service.get_response_from_llm(prompt="Hello")
+        assert next(response_generator) == {"token": "Hello"}
+        assert service.is_busy() is True
+
+        response_generator.close()  # abandon the stream before exhaustion
+
+        mock_handler_instance.close.assert_called_once()
+        assert service.is_busy() is False
 
     def test_non_streaming_calls_close_on_exception(self, mock_configs, mocker):
         """

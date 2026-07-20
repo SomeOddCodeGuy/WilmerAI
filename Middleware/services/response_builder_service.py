@@ -1,6 +1,7 @@
 # Middleware/services/response_builder_service.py
 
 import hashlib
+import json
 import logging
 import time
 import uuid
@@ -11,6 +12,15 @@ from Middleware.common import instance_global_variables
 from Middleware.utilities import config_utils
 
 logger = logging.getLogger(__name__)
+
+
+def _utc_now_iso() -> str:
+    """Returns the current UTC time in Ollama's ISO format with a Z suffix.
+
+    Returns:
+        str: The current UTC timestamp, e.g. ``2024-11-23T00:00:00.000000Z``.
+    """
+    return datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
 
 
 class ResponseBuilderService:
@@ -42,7 +52,7 @@ class ResponseBuilderService:
             list: List of username strings.
         """
         users = instance_global_variables.USERS
-        if users and len(users) > 0:
+        if users:
             return list(users)
         return [config_utils.get_current_username()]
 
@@ -59,6 +69,33 @@ class ResponseBuilderService:
         override = config_utils.get_config_property_if_exists('sharedWorkflowsSubDirectoryOverride', user_config)
         return override if override else '_shared'
 
+    def _enumerate_model_ids(self) -> List[str]:
+        """
+        Lists the model ids Wilmer advertises, aggregated across configured users.
+
+        For each user, if allowSharedWorkflows is enabled, their shared workflows
+        are listed as ``username:workflow``; otherwise (including when the user's
+        config cannot be loaded, which is logged) the bare username is listed.
+
+        Returns:
+            List[str]: The advertised model id strings.
+        """
+        model_ids = []
+        for username in self._get_configured_users():
+            user_ids = []
+            try:
+                user_config = config_utils.get_user_config_for(username)
+                allow_shared = config_utils.get_config_property_if_exists('allowSharedWorkflows', user_config)
+                if allow_shared:
+                    shared_folder = self._get_shared_folder_for_user(user_config)
+                    workflows = config_utils.get_available_shared_workflows(shared_folder_override=shared_folder)
+                    user_ids = [f"{username}:{workflow}" for workflow in workflows]
+            except Exception as e:
+                logger.warning(f"Could not load config for user '{username}': {e}")
+
+            model_ids.extend(user_ids if user_ids else [username])
+        return model_ids
+
     def build_openai_models_response(self) -> Dict[str, Any]:
         """
         Builds the response payload for the OpenAI-compatible /v1/models endpoint.
@@ -71,39 +108,17 @@ class ResponseBuilderService:
             Dict[str, Any]: A dictionary representing the list of available models.
         """
         current_time = int(time.time())
-        models_data = []
-
-        for username in self._get_configured_users():
-            user_models = []
-            try:
-                user_config = config_utils.get_user_config_for(username)
-                allow_shared = config_utils.get_config_property_if_exists('allowSharedWorkflows', user_config)
-                if allow_shared:
-                    shared_folder = self._get_shared_folder_for_user(user_config)
-                    workflows = config_utils.get_available_shared_workflows(shared_folder_override=shared_folder)
-                    for workflow in workflows:
-                        model_id = f"{username}:{workflow}"
-                        user_models.append({
-                            "id": model_id,
-                            "object": "model",
-                            "created": current_time,
-                            "owned_by": "Wilmer"
-                        })
-            except Exception as e:
-                logger.warning(f"Could not load config for user '{username}': {e}")
-
-            if not user_models:
-                user_models.append({
-                    "id": username,
+        return {
+            "object": "list",
+            "data": [
+                {
+                    "id": model_id,
                     "object": "model",
                     "created": current_time,
                     "owned_by": "Wilmer"
-                })
-            models_data.extend(user_models)
-
-        return {
-            "object": "list",
-            "data": models_data
+                }
+                for model_id in self._enumerate_model_ids()
+            ]
         }
 
     def build_openai_completion_response(self, full_text: str) -> Dict[str, Any]:
@@ -273,47 +288,22 @@ class ResponseBuilderService:
         Returns:
             Dict[str, List[Dict[str, Any]]]: A dictionary containing a list of available models.
         """
-        models_list = []
-
-        for username in self._get_configured_users():
-            user_models = []
-            try:
-                user_config = config_utils.get_user_config_for(username)
-                allow_shared = config_utils.get_config_property_if_exists('allowSharedWorkflows', user_config)
-                if allow_shared:
-                    shared_folder = self._get_shared_folder_for_user(user_config)
-                    workflows = config_utils.get_available_shared_workflows(shared_folder_override=shared_folder)
-                    for workflow in workflows:
-                        model_id = f"{username}:{workflow}"
-                        user_models.append({
-                            "name": model_id,
-                            "model": model_id + ":latest",
-                            "modified_at": "2024-11-23T00:00:00Z",
-                            "size": 1,
-                            "digest": hashlib.sha256(model_id.encode('utf-8')).hexdigest(),
-                            "details": {
-                                "format": "gguf", "family": "wilmer", "families": None,
-                                "parameter_size": "N/A", "quantization_level": "Q8"
-                            }
-                        })
-            except Exception as e:
-                logger.warning(f"Could not load config for user '{username}': {e}")
-
-            if not user_models:
-                user_models.append({
-                    "name": username,
-                    "model": username + ":latest",
+        return {
+            "models": [
+                {
+                    "name": model_id,
+                    "model": model_id + ":latest",
                     "modified_at": "2024-11-23T00:00:00Z",
                     "size": 1,
-                    "digest": hashlib.sha256(username.encode('utf-8')).hexdigest(),
+                    "digest": hashlib.sha256(model_id.encode('utf-8')).hexdigest(),
                     "details": {
                         "format": "gguf", "family": "wilmer", "families": None,
                         "parameter_size": "N/A", "quantization_level": "Q8"
                     }
-                })
-            models_list.extend(user_models)
-
-        return {"models": models_list}
+                }
+                for model_id in self._enumerate_model_ids()
+            ]
+        }
 
     def build_ollama_version_response(self) -> Dict[str, str]:
         """
@@ -342,6 +332,8 @@ class ResponseBuilderService:
             "created": int(time.time()),
             "model": model,
             "response": full_text,
+            "done_reason": "stop",
+            "done": True,
             "choices": [
                 {
                     "text": full_text,
@@ -356,10 +348,54 @@ class ResponseBuilderService:
             response["request_id"] = request_id
         return response
 
+    @staticmethod
+    def _convert_tool_calls_to_ollama_format(tool_calls: Optional[List[Dict[str, Any]]]) -> Optional[List[Dict[str, Any]]]:
+        """
+        Converts tool calls to Ollama's native wire shape.
+
+        Wilmer's internal tool-call format is OpenAI's ({"id", "type", "index",
+        "function": {"name", "arguments": "<json string>"}}); Ollama clients
+        expect {"function": {"name", "arguments": {...}}} with arguments as a
+        JSON object. Entries already in native shape pass through unchanged, so
+        the conversion is idempotent. Unparseable argument strings degrade to an
+        empty object with a warning rather than failing the response.
+
+        Args:
+            tool_calls (Optional[List[Dict[str, Any]]]): Tool calls in OpenAI or
+                Ollama-native format, or None.
+
+        Returns:
+            Optional[List[Dict[str, Any]]]: Ollama-native tool calls; None when
+            the input is None, an empty list when it is empty.
+        """
+        if not tool_calls:
+            return tool_calls
+        converted = []
+        for tool_call in tool_calls:
+            if not isinstance(tool_call, dict):
+                continue
+            function = tool_call.get("function") or {}
+            arguments = function.get("arguments")
+            if isinstance(arguments, str):
+                try:
+                    parsed = json.loads(arguments) if arguments.strip() else {}
+                    arguments = parsed if isinstance(parsed, dict) else {}
+                except json.JSONDecodeError:
+                    logger.warning("Tool-call arguments were not valid JSON; sending empty "
+                                   "arguments to the Ollama client.")
+                    arguments = {}
+            elif not isinstance(arguments, dict):
+                arguments = {}
+            converted.append({"function": {"name": function.get("name", ""), "arguments": arguments}})
+        return converted
+
     def build_ollama_chat_response(self, full_text: str, model_name: str, request_id: Optional[str] = None,
                                        tool_calls=None) -> Dict[str, Any]:
         """
         Builds the final, non-streaming response for the Ollama-compatible /api/chat endpoint.
+
+        Tool calls are converted to Ollama's native shape (arguments as a JSON
+        object, no OpenAI envelope) before being attached to the message.
 
         Args:
             full_text (str): The complete generated text from the LLM.
@@ -375,10 +411,10 @@ class ResponseBuilderService:
             "content": full_text
         }
         if tool_calls is not None:
-            message["tool_calls"] = tool_calls
+            message["tool_calls"] = self._convert_tool_calls_to_ollama_format(tool_calls)
         response = {
             "model": model_name,
-            "created_at": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+            "created_at": _utc_now_iso(),
             "message": message,
             "done_reason": "stop",
             "done": True,
@@ -402,7 +438,7 @@ class ResponseBuilderService:
         """
         return {
             "model": model_name,
-            "created_at": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+            "created_at": _utc_now_iso(),
             "message": {"role": "assistant", "content": ""},
             "done_reason": "stop",
             "done": True, "total_duration": 0, "load_duration": 0,
@@ -412,9 +448,32 @@ class ResponseBuilderService:
 
     # --- Ollama Compatible Streaming Chunks ---
 
+    @staticmethod
+    def _map_ollama_done_reason(finish_reason: Optional[str]) -> Optional[str]:
+        """
+        Maps an internal finish_reason to Ollama's done_reason vocabulary.
+
+        Ollama only reports "stop" and "length" for completed generations, so
+        every other terminal reason (e.g. "tool_calls") maps to "stop".
+
+        Args:
+            finish_reason (Optional[str]): The internal finish reason.
+
+        Returns:
+            Optional[str]: The Ollama done_reason, or None when the stream has
+            not finished.
+        """
+        if finish_reason is None:
+            return None
+        return "length" if finish_reason == "length" else "stop"
+
     def build_ollama_generate_chunk(self, token: str, finish_reason: Optional[str], request_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Builds a single streaming chunk for the Ollama-compatible /api/generate endpoint.
+
+        Any terminal finish_reason ("stop", "length", "tool_calls", ...) marks the
+        chunk done; Ollama clients read the stream until they see done: true, so
+        a stream that ends on a token cap or tool call must still signal done.
 
         Args:
             token (str): The token to include in the chunk's 'response' field.
@@ -424,12 +483,15 @@ class ResponseBuilderService:
         Returns:
             Dict[str, Any]: A dictionary representing a single generate event stream chunk.
         """
+        done = finish_reason is not None
         response = {
             "model": self._get_model_name(),
-            "created_at": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+            "created_at": _utc_now_iso(),
             "response": token,
-            "done": finish_reason == "stop"
+            "done": done
         }
+        if done:
+            response["done_reason"] = self._map_ollama_done_reason(finish_reason)
         if request_id:
             response["request_id"] = request_id
         return response
@@ -438,6 +500,10 @@ class ResponseBuilderService:
                                    tool_calls=None) -> Dict[str, Any]:
         """
         Builds a single streaming chunk for the Ollama-compatible /api/chat endpoint.
+
+        Any terminal finish_reason ("stop", "length", "tool_calls", ...) marks the
+        chunk done; Ollama clients read the stream until they see done: true, so
+        a stream that ends on a token cap or tool call must still signal done.
 
         Args:
             token (str): The token to include in the chunk's message content.
@@ -453,13 +519,16 @@ class ResponseBuilderService:
             "content": token
         }
         if tool_calls is not None:
-            message["tool_calls"] = tool_calls
+            message["tool_calls"] = self._convert_tool_calls_to_ollama_format(tool_calls)
+        done = finish_reason is not None
         response = {
             "model": self._get_model_name(),
-            "created_at": datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z'),
+            "created_at": _utc_now_iso(),
             "message": message,
-            "done": finish_reason == "stop"
+            "done": done
         }
+        if done:
+            response["done_reason"] = self._map_ollama_done_reason(finish_reason)
         if request_id:
             response["request_id"] = request_id
         return response

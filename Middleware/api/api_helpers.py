@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 from typing import Dict, Any, List, Optional, Tuple
 
 from flask import request as flask_request
@@ -9,7 +10,7 @@ from flask import request as flask_request
 from Middleware.common import instance_global_variables
 from Middleware.services.response_builder_service import ResponseBuilderService
 from Middleware.utilities.config_utils import get_current_username, workflow_exists_in_shared_folder, \
-    get_config_property_if_exists, get_user_config_for
+    get_config_property_if_exists, get_user_config_for, get_root_config_directory, _is_safe_flat_config_name
 
 logger = logging.getLogger(__name__)
 response_builder = ResponseBuilderService()
@@ -55,96 +56,6 @@ def build_response_json(
     return json.dumps(response, ensure_ascii=False)
 
 
-def _extract_content_from_parsed_json(parsed_json: dict) -> str:
-    """
-    Extracts text content from a parsed JSON dictionary.
-
-    Args:
-        parsed_json (dict): The parsed JSON dictionary from a streaming chunk.
-
-    Returns:
-        str: The extracted text content, or an empty string if not found.
-    """
-    if not isinstance(parsed_json, dict):
-        return ""
-
-    content = ""
-    # 1. Try OpenAI format (choices[0].delta.content or choices[0].text)
-    choices = parsed_json.get('choices', [])
-    if choices and isinstance(choices, list) and len(choices) > 0:
-        # First try delta.content (chat completion format)
-        delta = choices[0].get('delta', {})
-        if isinstance(delta, dict):
-            content = delta.get('content', '')
-
-        # If no content found, try text field (legacy completion format)
-        if not content:
-            content = choices[0].get('text', '')
-
-    # 2. If not found, try Ollama /generate format (response)
-    if not content:
-        content = parsed_json.get('response', '')
-
-    # 3. If not found, try Ollama /chat format (message.content)
-    if not content:
-        message_data = parsed_json.get('message')
-        if isinstance(message_data, dict):
-            content = message_data.get('content', '')
-
-    return content
-
-
-def extract_text_from_chunk(chunk) -> str:
-    """
-    Extracts text content from a streaming response chunk.
-
-    Args:
-        chunk: The incoming data chunk, which can be a string, dictionary, or other type.
-
-    Returns:
-        str: The extracted text content from the chunk.
-    """
-    extracted = ""
-    try:
-        if chunk is None:
-            return ""
-
-        # Handle string chunks (potentially SSE or plain JSON)
-        elif isinstance(chunk, str):
-            parsed_json = None
-            # Handle SSE data format ("data: {...}")
-            if chunk.startswith('data:'):
-                try:
-                    json_content = chunk.replace('data:', '').strip()
-                    # Avoid parsing the SSE [DONE] terminator
-                    if json_content != '[DONE]':
-                        parsed_json = json.loads(json_content)
-                except json.JSONDecodeError as e:
-                    logger.warning(f"Failed to parse SSE JSON content '{json_content}': {e}")
-            # Handle plain JSON string format
-            else:
-                try:
-                    # Avoid parsing empty strings which might occur
-                    if chunk.strip():
-                        parsed_json = json.loads(chunk.strip())
-                except json.JSONDecodeError as e:
-                    logger.warning(f"Failed to parse plain JSON string: {e}")
-
-            if parsed_json is not None:
-                extracted = _extract_content_from_parsed_json(parsed_json)
-
-        # Handle dictionary chunks directly
-        elif isinstance(chunk, dict):
-            extracted = _extract_content_from_parsed_json(chunk)
-
-    except Exception as e:
-        # Log unexpected errors during processing
-        logger.warning(f"Error processing chunk of type {type(chunk)}: {e}", exc_info=True)
-        extracted = ""
-
-    return extracted
-
-
 def get_model_name():
     """
     Retrieves the current model name based on the username and active workflow.
@@ -174,13 +85,13 @@ def parse_model_field(model_value: Optional[str]) -> Tuple[Optional[str], Option
     - Anything else -> (None, None)
 
     In single-user mode (USERS is None or has one entry), the behavior matches
-    the legacy logic — only workflow matching is attempted.
+    the legacy logic: only workflow matching is attempted.
 
     Args:
         model_value (Optional[str]): The model field value from the request.
 
     Returns:
-        Tuple[Optional[str], Optional[str]]: (user, workflow) — either or both
+        Tuple[Optional[str], Optional[str]]: (user, workflow); either or both
             may be None.
     """
     if not model_value:
@@ -195,24 +106,20 @@ def parse_model_field(model_value: Optional[str]) -> Tuple[Optional[str], Option
 
     # Check for "username:workflow" format
     if ':' in model_value:
-        parts = model_value.split(':', 1)
-        if len(parts) == 2:
-            candidate_user = parts[0]
-            workflow_name = parts[1]
+        candidate_user, workflow_name = model_value.split(':', 1)
 
-            # In multi-user mode, validate the user part
-            if is_multi_user and candidate_user in configured_users:
-                if workflow_name and _workflow_exists_for_user(workflow_name, candidate_user):
-                    return candidate_user, workflow_name
-                # User matched but workflow didn't — still route to the user
-                return candidate_user, None
+        if is_multi_user and candidate_user in configured_users:
+            if workflow_name and _workflow_exists_for_user(workflow_name, candidate_user):
+                return candidate_user, workflow_name
+            # User matched but workflow didn't; still route to the user
+            return candidate_user, None
 
-            # In single-user mode, try legacy workflow matching.
-            # In multi-user mode, a bare or unrecognised user:workflow is invalid —
-            # skip the shared-folder check (it would crash because no request user
-            # is set yet) and let require_identified_user() return a clean 400.
-            if not is_multi_user and workflow_exists_in_shared_folder(workflow_name):
-                return None, workflow_name
+        # In single-user mode, try legacy workflow matching.
+        # In multi-user mode, a bare or unrecognised user:workflow is invalid:
+        # skip the shared-folder check (it would crash because no request user
+        # is set yet) and let require_identified_user() return a clean 400.
+        if not is_multi_user and workflow_exists_in_shared_folder(workflow_name):
+            return None, workflow_name
 
     # In multi-user mode, check if model_value is a configured username
     if is_multi_user and model_value in configured_users:
@@ -242,7 +149,11 @@ def _workflow_exists_for_user(workflow_name: str, username: str) -> bool:
     Returns:
         bool: True if the workflow folder exists for that user.
     """
-    import os
+    # The workflow name comes from the request model field ("user:workflow"); a
+    # traversal/absolute value must not resolve outside the user's shared folder.
+    if not _is_safe_flat_config_name(workflow_name):
+        return False
+
     try:
         user_config = get_user_config_for(username)
         shared_override = get_config_property_if_exists('sharedWorkflowsSubDirectoryOverride', user_config)
@@ -250,7 +161,6 @@ def _workflow_exists_for_user(workflow_name: str, username: str) -> bool:
     except Exception:
         shared_folder = '_shared'
 
-    from Middleware.utilities.config_utils import get_root_config_directory
     config_dir = str(get_root_config_directory())
     folder_path = os.path.join(config_dir, 'Workflows', shared_folder, workflow_name)
     return os.path.isdir(folder_path)
@@ -376,20 +286,28 @@ def extract_api_key() -> Optional[str]:
     return None
 
 
-def remove_assistant_prefix(response_text: str) -> str:
-    """
-    Removes the 'Assistant:' prefix from a response string.
+# The client contract specifies an opaque idempotency-key string of at most
+# this length. A longer or empty value is treated as no key (legacy client),
+# so a malformed header cannot bloat the in-flight registry or change behavior.
+MAX_IDEMPOTENCY_KEY_LENGTH = 128
 
-    Args:
-        response_text (str): The response text to be processed.
+
+def extract_idempotency_key() -> Optional[str]:
+    """
+    Extracts the client-supplied idempotency key from the request headers.
+
+    The chat client sends ``X-Idempotency-Key`` with the same value across every
+    retry of one logical request. HTTP header names are case-insensitive, which
+    Flask's header lookup already honors. A missing, empty, or over-long value is
+    reported as absent so the caller behaves exactly as it would for a legacy
+    client that sends no key.
 
     Returns:
-        str: The cleaned response text.
+        Optional[str]: The idempotency key, or None when it is absent, empty, or
+        longer than MAX_IDEMPOTENCY_KEY_LENGTH.
     """
-    # Strip leading whitespace first to normalize
-    response_text = response_text.lstrip()
-
-    if response_text.startswith("Assistant:"):
-        response_text = response_text[len("Assistant:"):].lstrip()
-
-    return response_text
+    value = flask_request.headers.get('X-Idempotency-Key', '')
+    value = value.strip()
+    if not value or len(value) > MAX_IDEMPOTENCY_KEY_LENGTH:
+        return None
+    return value

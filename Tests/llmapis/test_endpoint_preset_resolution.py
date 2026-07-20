@@ -86,6 +86,26 @@ class TestPresetResolution:
         gen_input = _build(mocker, donor=None, preset_file=raw)
         assert gen_input == raw
 
+    def test_donor_endpoint_without_presetsamplers_falls_back_to_folder(self, mocker):
+        # An endpoint named P EXISTS but carries no presetSamplers block: this is a
+        # distinct branch from "no endpoint named P" and must also fall back to the
+        # legacy folder preset rather than translating an empty block.
+        donor = {"endpoint": "http://other:1234", "apiKey": "x"}
+        gen_input = _build(mocker, donor=donor, preset_file={"temperature": 0.7, "top_p": 0.9})
+        assert gen_input == {"temperature": 0.7, "top_p": 0.9}
+
+    def test_append_preset_deep_merges_chat_template_kwargs(self, mocker):
+        # The donor's thinkingMode resolves into chat_template_kwargs; the append
+        # file adds another kwarg. The deep merge must keep both leaf keys instead
+        # of the append file's object clobbering the resolved one.
+        endpoint = dict(ENDPOINT, appendPresetName="extra")
+        donor = {"presetSamplers": {"thinkingMode": "off"}}
+        gen_input = _build(mocker, endpoint=endpoint, donor=donor,
+                           preset_file={"chat_template_kwargs": {"thinking_budget": 0}})
+        assert gen_input == {
+            "chat_template_kwargs": {"enable_thinking": False, "thinking_budget": 0}
+        }
+
 
 class TestSetGenInput:
     def _handler(self, gen_input, api_type, endpoint_config, max_tokens=100, stream=False):
@@ -124,3 +144,27 @@ class TestSetGenInput:
         h = self._handler({"draft_model": SAMPLER_LITERAL_NULL}, self.API, {})
         h.set_gen_input()
         assert h.gen_input["draft_model"] is None
+
+    def test_explicit_null_suppresses_truncation_length(self, mocker):
+        # An explicit null for the truncation field is honored as "omit" even
+        # when the endpoint defines maxContextTokenSize.
+        mocker.patch("Middleware.llmapis.handlers.base.base_api_transport.get_connect_timeout", return_value=30)
+        h = self._handler({"temperature": 0.5, "truncation_length": None}, self.API,
+                          {"maxContextTokenSize": 4096})
+        h.set_gen_input()
+        assert "truncation_length" not in h.gen_input
+        assert h.gen_input["temperature"] == 0.5
+
+    def test_stream_true_injected(self, mocker):
+        mocker.patch("Middleware.llmapis.handlers.base.base_api_transport.get_connect_timeout", return_value=30)
+        h = self._handler({"temperature": 0.5}, self.API, {"maxContextTokenSize": 4096}, stream=True)
+        h.set_gen_input()
+        assert h.gen_input == {"temperature": 0.5, "stream": True, "max_tokens": 100, "truncation_length": 4096}
+
+    def test_no_max_token_property_name_skips_injection(self):
+        # An ApiType without maxNewTokensPropertyName cannot receive a max-tokens
+        # field under a guessed name; the value is simply not injected (warn path).
+        api = {"streamPropertyName": "stream"}
+        h = self._handler({"temperature": 0.5}, api, {"maxContextTokenSize": 4096})
+        h.set_gen_input()
+        assert h.gen_input == {"temperature": 0.5, "stream": False}

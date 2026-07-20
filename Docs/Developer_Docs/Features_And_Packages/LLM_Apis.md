@@ -117,14 +117,38 @@ such as a `$WorkflowProcessor$` or `$StreamingResponseHandler$`, which consume t
     * `$get_response_from_llm(...)$`: The main public method. It accepts a `request_id` and delegates the API call to
       the selected handler. It returns a **raw, unformatted** result.
 
+### `handlers/base/base_api_transport.py`
+
+* **Responsibility**: The shared HTTP transport that all outbound API handlers build on. Holds no generation-specific
+  state; `$LlmApiHandler$` layers streaming and payload/prompt concerns on top of it, and `$EmbeddingApiHandler$`
+  uses it as-is.
+* **Key Components**:
+    * `$BaseApiTransport$`: Owns the persistent `requests.Session`, the retry policy (`urllib3 Retry` with 5xx
+      backoff, or `total=0` when `suppress_retries` is set), and the connect timeout from `$get_connect_timeout()$`.
+    * `$execute_non_streaming_post()$`: The cancellation-aware non-streaming POST skeleton: pre-flight cancellation
+      check, bounded manual retry loop (3 attempts, or 1 with `suppress_retries`), abort-callback registration per
+      attempt, cancellation-aware error interpretation (a session closed by abort reads as cancelled, not as an
+      error), and finally-block unregistration of the abort callback. Returns the parsed JSON body, or `None` if
+      the request was cancelled.
+    * `$_AbortHandle$`: The cancellation state shared between a request and the `$CancellationService$`. Its
+      `abort()` method is registered as the abort callback and aggressively closes the session (and any attached
+      in-flight response) to interrupt the stream or prefill phase. Used by both the non-streaming skeleton here
+      and the streaming path in `$LlmApiHandler.handle_streaming()$`.
+    * `$close()$`: Closes the HTTP session to release keep-alive connections.
+
 ### `handlers/base/base_llm_api_handler.py`
 
-* **Responsibility**: Defines the abstract contract for all API handlers and provides the shared boilerplate for making
-  HTTP requests.
+* **Responsibility**: Defines the abstract contract for all LLM API handlers and layers the generation-specific
+  behavior (streaming, prompt/payload preparation, and sampler injection) on top of the HTTP transport it
+  inherits from `$BaseApiTransport$`.
 * **Key Components**:
-    * `$LlmApiHandler(ABC)$`: The abstract base class for the entire handler hierarchy.
-    * `$handle_streaming()` / `$handle_non_streaming()`: Concrete methods containing the shared logic for sending HTTP
-      requests. The streaming method includes the core cancellation check logic.
+    * `$LlmApiHandler(BaseApiTransport, ABC)$`: The abstract base class for the LLM handler hierarchy.
+    * `$handle_streaming()`: Owns the streaming request path: prepares the payload, sends the streaming POST over
+      the inherited session, iterates the response (SSE or line-delimited JSON per `$_iterate_by_lines$`), and
+      checks `cancellation_service.is_cancelled(request_id)` before processing each line. Registers an
+      `$_AbortHandle$` so cancellation can tear down the connection mid-stream or during prefill.
+    * `$handle_non_streaming()`: Contributes payload preparation and response parsing; the HTTP retry loop,
+      cancellation handling, and abort callbacks are delegated to `$BaseApiTransport.execute_non_streaming_post()$`.
     * **Abstract Methods**: Defines the interface that all concrete handlers must implement.
 
 ### `handlers/base/base_chat_completions_handler.py`
@@ -161,6 +185,9 @@ such as a `$WorkflowProcessor$` or `$StreamingResponseHandler$`, which consume t
 `{"role": "user", "content": "What's this?", "images": ["base64data"]}`). There are no separate `role: "images"` messages.
 Chat completion handlers (`OllamaChatHandler`, `OpenAiApiHandler`, `ClaudeApiHandler`) detect the
 `"images"` key and format images appropriately for each API in their `_build_messages_from_conversation` methods.
+For `OpenAiApiHandler` and `ClaudeApiHandler`, the shared traversal and the text-only error fallback live in
+`handlers/base/image_injection.py`; each handler supplies its own block format (`_process_single_image_source`),
+image placement (Claude prepends, OpenAI appends), and API-visible fallback note text.
 Completions handlers (e.g., `KoboldCppApiHandler`) do not process images. The `LlmApiService` gatekeeper
 strips the `"images"` key from all messages when `llm_takes_images` is False, ensuring non-vision models never see image
 data. Separate "ImageSpecific" handlers are no longer needed and have been deprecated.
@@ -176,6 +203,21 @@ The `ImageProcessor` workflow node supports optional per-discussion caching of v
 `{discussion_id}/vision_responses.json` (keyed by a hash of the message's role, content, and sorted image data).
 Cache reads/writes use `read_vision_responses` / `write_vision_responses` in `file_utils.py`, and the hash function
 is `hash_message_with_images` in `hashing_utils.py`.
+
+### `handlers/impl/embedding_api_handler.py`
+
+* **Responsibility**: Calls a user-configured embeddings endpoint. Used by the `$EmbeddingService$` for the
+  vector-memory semantic tier (`searchMode: "semantic"` / `"hybrid"`; see `Memories.md`).
+* **Key Components**:
+    * `$EmbeddingApiHandler$`: Deliberately a **sibling** of `$LlmApiHandler$` rather than a subclass: embeddings
+      have no streaming, no prompt templates, and no samplers, so it extends `$BaseApiTransport$` directly and adds
+      only URL construction, payload shaping, and response parsing for the two supported API types (the ApiType
+      config's `type` field): `"openAIEmbeddings"` (`POST {base}/v1/embeddings`; OpenAI, llama.cpp server with
+      `--embedding`, and most compatible servers) and `"ollamaEmbeddings"` (`POST {base}/api/embed`).
+    * `$get_embeddings(texts, request_id)$`: Embeds a batch of texts via
+      `$BaseApiTransport.execute_non_streaming_post()$` and returns one vector per input text in input order.
+      Returns an empty list for empty input, `None` if the request was cancelled, and raises `ValueError` on a
+      malformed response or a vector-count mismatch.
 
 -----
 
@@ -217,6 +259,27 @@ format:
 * **`$OllamaChatHandler$`**: Passes `tools` and `tool_choice` through directly, as Ollama accepts OpenAI-format tool
   definitions.
 
+### Conversation Replay (Tool Round Trips)
+
+The internal message format keeps tool traffic in OpenAI's shape: an assistant message carries a `tool_calls` list
+and each result arrives as a `role: "tool"` message with a `tool_call_id`. OpenAI-compatible and Ollama backends
+accept these directly. The Anthropic Messages API accepts neither, so `$ClaudeApiHandler$._prepare_payload` runs
+`_convert_tool_messages_for_claude()` over the conversation before sending:
+
+* An assistant message with `tool_calls` becomes an assistant turn whose content is a block list: existing text
+  first, then one `{"type": "tool_use", "id": ..., "name": ..., "input": {...}}` block per call. Argument strings
+  are parsed to the object Claude requires; unparseable arguments degrade to `{}` with a warning.
+* A `role: "tool"` message becomes a user turn holding a `{"type": "tool_result", "tool_use_id": ..., "content": ...}`
+  block. Consecutive results merge into one user turn, and a plain user message immediately following tool results
+  merges into that same turn (tool_result blocks must lead the turn), keeping roles alternating.
+
+Without this conversion, the second request of any tool loop pointed at a Claude endpoint (the one that replays the
+call and its result) was rejected with a 400.
+
+Related: the message builders drop the empty trailing assistant marker added by `add_missing_assistant`, but never
+one that carries `tool_calls`; that is structural data, not filler (`$BaseChatCompletionsHandler$` and
+`$OllamaChatHandler$` both guard this).
+
 ### Streaming Responses (`_process_stream_data`)
 
 `_process_stream_data` can now return dictionaries that include a `tool_calls` key alongside `token` and
@@ -255,7 +318,7 @@ misconfiguration.
 
 ### Triggering Condition
 
-Failover is triggered on **any** exception raised by the handler call — including `requests.exceptions.ConnectionError`,
+Failover is triggered on **any** exception raised by the handler call, including `requests.exceptions.ConnectionError`,
 `Timeout`, `RequestException`, and generic `ValueError` / `RuntimeError` / `OSError`. The feature deliberately does not
 introduce new timeout behaviour; the existing `$get_connect_timeout()` connect timeout and the 14400-second read
 timeout are unchanged. This is intentional: WilmerAI is often used with local models that legitimately take many minutes
@@ -268,7 +331,7 @@ to respond, and we do not want to spuriously failover on long reads.
 
 * **Streaming**: The wrapping generator tracks whether any token has been yielded to the caller. If the handler raises
   **before** the first token, failover delegates to the backup's generator and yields its tokens instead. If the handler
-  raises **after** one or more tokens have been emitted, the original exception is re-raised — streaming failover cannot
+  raises **after** one or more tokens have been emitted, the original exception is re-raised; streaming failover cannot
   recover mid-stream because the client has already received partial data.
 
 ### Retry Suppression
@@ -277,7 +340,8 @@ When an endpoint has a backup configured, its `$LlmApiHandler$` is instantiated 
 two effects on the handler's HTTP behaviour:
 
 1. The underlying `$urllib3 Retry$` adapter is configured with `total=0`, disabling the automatic 5xx retry loop.
-2. The manual retry loop in `$handle_non_streaming()$` collapses to a single attempt (`retries = 1` instead of `retries = 3`).
+2. The manual retry loop in `$BaseApiTransport.execute_non_streaming_post()$` (which `$handle_non_streaming()$`
+   delegates to) collapses to a single attempt (`retries = 1` instead of `retries = 3`).
 
 Endpoints without a backup (typically the tail of a chain, or endpoints configured without failover) retain the original
 retry behaviour: 5 `urllib3` retries with exponential backoff on 5xx responses, and 3 manual attempts on network
@@ -288,11 +352,11 @@ exceptions in the non-streaming path.
 Failover ships the whole conversation/prompt to the backup's host, so `$_build_backup_service()$` classifies that host
 before delegating (`_classify_backup_host`, parsing the backup endpoint's `endpoint` URL):
 
-- **local** — loopback / RFC1918-private / link-local IP, or `localhost`/`*.localhost`: allowed silently.
-- **remote** — a public IP literal: **blocked** with a `$RuntimeError$` unless the backup endpoint sets
+- **local** (loopback / RFC1918-private / link-local IP, or `localhost`/`*.localhost`): allowed silently.
+- **remote** (a public IP literal): **blocked** with a `$RuntimeError$` unless the backup endpoint sets
   `allowRemoteBackup: true`. This is safe-by-default: a transient local failure cannot silently send the prompt to a
   public address.
-- **unknown** — a hostname that cannot be classified without DNS: allowed, but logged at `$WARNING$` as possible
+- **unknown** (a hostname that cannot be classified without DNS): allowed, but logged at `$WARNING$` as possible
   off-machine egress (a synchronous guard deliberately does not resolve DNS, and blanket-blocking hostnames would break
   the common case of referencing a backend by name).
 
@@ -305,13 +369,13 @@ The backup service is constructed with the preset name from the originating endp
 field, falling back to the originating request's own preset name when that field is unset
 (`presetname=self._backup_preset_name or self._presetname` in `$_build_backup_service()$`). That name is resolved
 against the **backup's own** preset type, so a heterogeneous backup (a different API type) must either ship a preset of
-the inherited name in its `Presets/<type>/` directory or set `backupPresetName` to one it does — otherwise construction
+the inherited name in its `Presets/<type>/` directory or set `backupPresetName` to one it does; otherwise construction
 raises `$FileNotFoundError$` mid-failover. See `Endpoint.md` (`backupPresetName`) for the operator-facing description.
 
 ### Concurrency Gate Interaction
 
 When `CONCURRENCY_LEVEL == "endpoint"`, `$get_response_from_llm()$` also acquires the per-instance LLM-call semaphore for
-the duration of the outbound call and **must release it before delegating to a backup** — otherwise the backup's own
+the duration of the outbound call and **must release it before delegating to a backup**; otherwise the backup's own
 acquire would deadlock against the still-held slot at `limit=1`. The full mechanics (acquire/release placement,
 streaming vs non-streaming, generator-close handling) are documented in `Api.md` §7.7. The slot-wait `$TimeoutError$` is
 not a backend failure and does **not** trigger failover.
@@ -321,7 +385,7 @@ not a backend failure and does **not** trigger failover.
 Each `$LlmApiService$` carries a `_visited_endpoints: Set[str]` set that accumulates across the chain. The primary adds
 itself to the set on construction. When building the backup service, `$_build_backup_service()$` checks whether the
 backup name is already in the set; if so, it raises `$RuntimeError$` with a message naming the offending chain. Callers
-should never pass `_visited_endpoints` explicitly — it is an internal parameter populated by the service itself during
+should never pass `_visited_endpoints` explicitly; it is an internal parameter populated by the service itself during
 failover.
 
 ### Lifecycle and Logging
@@ -338,5 +402,5 @@ failover.
 ### Caller Transparency
 
 No caller code needs to change. `$LlmApiService$` is instantiated with the primary endpoint name as usual, and the
-service handles failover internally. All call sites — workflow nodes, memory/summarization, categorization, chat
-responders — inherit failover automatically.
+service handles failover internally. All call sites (workflow nodes, memory/summarization, categorization, chat
+responders) inherit failover automatically.

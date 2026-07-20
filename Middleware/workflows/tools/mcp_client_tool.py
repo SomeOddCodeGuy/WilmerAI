@@ -82,6 +82,21 @@ def _load_validated_server_config(server_name: str) -> Dict[str, Any]:
     return server_config
 
 
+def _innermost_exception(exc: BaseException) -> BaseException:
+    """Returns the first leaf exception inside possibly-nested exception groups.
+
+    Args:
+        exc (BaseException): An exception, possibly a nested ``BaseExceptionGroup``.
+
+    Returns:
+        BaseException: The first non-group exception, found by walking
+            ``exceptions[0]`` at each nesting level.
+    """
+    while isinstance(exc, BaseExceptionGroup):
+        exc = exc.exceptions[0]
+    return exc
+
+
 def _run_mcp_operation(coro: Coroutine, server_name: str, op_name: str, timeout: float) -> Any:
     """Runs an async MCP operation with a timeout, unwrapping anyio's group wrapping.
 
@@ -109,14 +124,10 @@ def _run_mcp_operation(coro: Coroutine, server_name: str, op_name: str, timeout:
         # "unhandled errors in a TaskGroup" message.
         tool_error = exc.subgroup(MCPToolCallError)
         if tool_error is not None:
-            while isinstance(tool_error, BaseExceptionGroup):
-                tool_error = tool_error.exceptions[0]
-            raise tool_error from None
+            raise _innermost_exception(tool_error) from None
         if exc.subgroup((asyncio.TimeoutError, TimeoutError)) is not None:
             raise MCPToolCallError(_timed_out_message(server_name, op_name, timeout)) from exc
-        cause = exc
-        while isinstance(cause, BaseExceptionGroup):
-            cause = cause.exceptions[0]
+        cause = _innermost_exception(exc)
         raise MCPToolCallError(
             f"MCP call to '{server_name}.{op_name}' failed: {cause}"
         ) from cause
@@ -132,8 +143,8 @@ class MCPClient:
 
     Mirrors the other external-service clients in this package (e.g.
     ``OfflineWikiApiClient``): a workflow handler instantiates one and calls it. The
-    client is stateless -- the server is named per call and its connection settings are
-    loaded from ``Public/Configs/MCPServers/`` at call time -- so a single instance can
+    client is stateless (the server is named per call and its connection settings are
+    loaded from ``Public/Configs/MCPServers/`` at call time), so a single instance can
     be reused across calls and servers. Each call opens a fresh connection via the
     official ``mcp`` Python SDK, dispatches on the server's configured transport
     (stdio, sse, or streamable_http), performs the operation, and closes the connection.
@@ -158,8 +169,8 @@ class MCPClient:
             arguments (Optional[Dict[str, Any]]): The arguments to pass to the tool. ``None``
                 is treated as an empty dict.
             timeout (float): Overall per-call timeout in seconds. Bounds the entire
-                operation -- transport connect, ``session.initialize()`` handshake,
-                and the ``session.call_tool`` call -- via ``asyncio.wait_for`` (and is
+                operation (transport connect, ``session.initialize()`` handshake,
+                and the ``session.call_tool`` call) via ``asyncio.wait_for`` (and is
                 also passed to ``call_tool`` as ``read_timeout_seconds``). A stdio
                 server that spawns but never completes the MCP handshake therefore
                 cannot block the calling worker indefinitely.

@@ -2,10 +2,19 @@
 
 import logging
 import re
-from copy import deepcopy
 from typing import List, Dict
 
 logger = logging.getLogger(__name__)
+
+# Lower-cased key names whose values redact_sensitive_data() masks in log output.
+_SENSITIVE_KEYS = frozenset({
+    'apikey', 'api_key',
+    'password', 'passwd', 'pwd',
+    'token', 'access_token', 'refresh_token', 'auth_token', 'bearer_token',
+    'secret', 'client_secret', 'api_secret',
+    'authorization', 'auth',
+    'private_key', 'privatekey',
+})
 
 
 # Originally based on ruby_coder's approach on the OpenAI forums:
@@ -73,7 +82,9 @@ def reduce_text_to_token_limit(text: str, num_tokens: int) -> str:
     """
     words = text.split()
     cumulative_tokens = 0
-    start_index = len(words)
+    # When the whole text fits within the limit the loop below never breaks, so
+    # the start index must default to 0 (keep everything), not len(words).
+    start_index = 0
 
     for i in range(len(words) - 1, -1, -1):
         word = words[i]
@@ -119,7 +130,7 @@ def split_into_tokenized_chunks(text: str, chunk_size: int) -> List[str]:
     return chunks
 
 
-def chunk_messages_by_token_size(messages: List[Dict[str, str]], chunk_size: int, max_messages_before_chunk: int) -> \
+def chunk_messages_by_token_size(messages: List[Dict[str, str]], chunk_size: int) -> \
         List[List[Dict[str, str]]]:
     """Chunks messages based on a specified token size, starting from the end of the list,
     but keeps the order of messages intact within each chunk.
@@ -131,7 +142,6 @@ def chunk_messages_by_token_size(messages: List[Dict[str, str]], chunk_size: int
     Args:
         messages (List[Dict[str, str]]): The list of messages.
         chunk_size (int): The target size for each chunk, in tokens.
-        max_messages_before_chunk (int): Maximum messages needed before the token size is ignored
 
     Returns:
         List[List[Dict[str, str]]]: A list of chunks, each containing messages
@@ -140,7 +150,7 @@ def chunk_messages_by_token_size(messages: List[Dict[str, str]], chunk_size: int
     chunks = []
     current_chunk = []
     current_chunk_size = 0
-    logger.debug("Chunk size: %s", str(chunk_size))
+    logger.debug("Chunk size: %s", chunk_size)
 
     for message in reversed(messages):
         message_token_count = rough_estimate_token_length(message.get('content', ''))
@@ -152,16 +162,14 @@ def chunk_messages_by_token_size(messages: List[Dict[str, str]], chunk_size: int
             current_chunk.insert(0, message)
             current_chunk_size += message_token_count
         else:
-            logger.debug("Finalizing chunk. Size: %s", str(current_chunk_size))
+            logger.debug("Finalizing chunk. Size: %s", current_chunk_size)
             chunks.insert(0, current_chunk)
             current_chunk = [message]
             current_chunk_size = message_token_count
 
-    # After the loop, add the last remaining chunk if it's not empty.
-    # IMPORTANT: We always include this final chunk (the oldest messages) regardless of
-    # max_messages_before_chunk. The threshold is meant to control when to TRIGGER memory
-    # generation, not to DISCARD early messages once generation has started. Discarding
-    # this chunk would permanently lose the beginning of conversations.
+    # After the loop, add the last remaining chunk if it's not empty. The final
+    # chunk (the oldest messages) is always included; discarding it would
+    # permanently lose the beginning of conversations.
     if current_chunk:
         logger.debug("Adding final remaining chunk.")
         chunks.insert(0, current_chunk)
@@ -169,8 +177,7 @@ def chunk_messages_by_token_size(messages: List[Dict[str, str]], chunk_size: int
     return chunks
 
 
-def messages_into_chunked_text_of_token_size(messages: List[Dict[str, str]], chunk_size: int,
-                                             max_messages_before_chunk: int) -> List[str]:
+def messages_into_chunked_text_of_token_size(messages: List[Dict[str, str]], chunk_size: int) -> List[str]:
     """Converts messages into chunked text of a specified token size.
 
     This function chunks the messages into specified token sizes and then converts these chunks into formatted text blocks.
@@ -178,38 +185,34 @@ def messages_into_chunked_text_of_token_size(messages: List[Dict[str, str]], chu
     Args:
         messages (List[Dict[str, str]]): The list of messages.
         chunk_size (int): The target size for each chunk, in tokens.
-        max_messages_before_chunk (int): The maximum number of messages allowed before
-            chunking is triggered.
 
     Returns:
         List[str]: A list of text blocks, each corresponding to a chunk of messages.
     """
-    chunked_messages = chunk_messages_by_token_size(messages, chunk_size, max_messages_before_chunk)
+    chunked_messages = chunk_messages_by_token_size(messages, chunk_size)
     text_blocks = [messages_to_text_block(chunk) for chunk in chunked_messages]
     return text_blocks
 
 
 def messages_to_text_block(messages: List[Dict[str, str]]) -> str:
-    """Converts messages to a formatted text block.
+    """Converts messages to a plain text block.
 
-    This function takes a list of messages and formats them into a text block with
-    proper labels for each role (system, user, assistant).
+    This function joins the content of each message with newlines. Roles are
+    not included; only the message contents appear in the output.
 
     Args:
         messages (List[Dict[str, str]]): The list of messages.
 
     Returns:
-        str: A formatted text block representing the conversation.
+        str: The message contents joined by newlines.
     """
-    formatted_messages = [f"{message['content']}" for message in messages]
-    chunk = "\n".join(formatted_messages)
+    chunk = "\n".join(message['content'] for message in messages)
     logger.debug("***************************************")
-    logger.debug("Chunk created: %s", str(chunk))
+    logger.debug("Chunk created: %s", chunk)
     return chunk
 
 
-def get_message_chunks(messages: List[Dict[str, str]], lookbackStartTurn: int, chunk_size: int,
-                       max_messages_before_chunk: int = 0) -> List[str]:
+def get_message_chunks(messages: List[Dict[str, str]], lookbackStartTurn: int, chunk_size: int) -> List[str]:
     """
     Break down the conversation into chunks of a specified size for processing.
 
@@ -218,29 +221,27 @@ def get_message_chunks(messages: List[Dict[str, str]], lookbackStartTurn: int, c
         lookbackStartTurn (int): The number of turns to look back in the conversation.
             A value of 0 uses all messages except the last one.
         chunk_size (int): The maximum size of each chunk in tokens.
-        max_messages_before_chunk (int): The maximum number of messages allowed before
-            chunking is triggered. Defaults to 0.
 
     Returns:
         List[str]: The list of message chunks as formatted text blocks.
     """
-    pairs = []
-    messageCopy = deepcopy(messages)
     if lookbackStartTurn > 0:
-        pairs = messageCopy[-lookbackStartTurn:]
+        pairs = messages[-lookbackStartTurn:]
+    elif len(messages) > 1:
+        pairs = messages[:-1]
     else:
-        if len(messageCopy) > 1:
-            pairs = messageCopy[:-1]
+        pairs = []
 
-    return messages_into_chunked_text_of_token_size(pairs, chunk_size, max_messages_before_chunk)
+    return messages_into_chunked_text_of_token_size(pairs, chunk_size)
 
 
 def clear_out_user_assistant_from_chunks(search_result_chunks):
     """
     Strips role prefixes from each chunk in the given search result chunks.
 
-    Removes 'User: ', 'Assistant: ', and 'systemMes: ' prefixes (case-insensitive)
-    from each chunk so that only the raw message content remains.
+    Removes 'User: ', 'Assistant: ', and 'systemMes: ' prefixes (in their
+    title-case and upper-case spellings) from each chunk so that only the raw
+    message content remains. None entries are dropped.
 
     Args:
         search_result_chunks: A list of chunks, each representing a segment of
@@ -249,15 +250,12 @@ def clear_out_user_assistant_from_chunks(search_result_chunks):
     Returns:
         list: A new list of chunks with role prefixes removed.
     """
+    role_prefixes = ('User: ', 'USER: ', 'Assistant: ', 'ASSISTANT: ', 'systemMes: ', 'SYSTEMMES: ')
     new_chunks = []
     for chunk in search_result_chunks:
         if chunk is not None:
-            chunk = chunk.replace('User: ', '')
-            chunk = chunk.replace('USER: ', '')
-            chunk = chunk.replace('Assistant: ', '')
-            chunk = chunk.replace('ASSISTANT: ', '')
-            chunk = chunk.replace('systemMes: ', '')
-            chunk = chunk.replace('SYSTEMMES: ', '')
+            for prefix in role_prefixes:
+                chunk = chunk.replace(prefix, '')
             new_chunks.append(chunk)
     return new_chunks
 
@@ -322,8 +320,8 @@ def replace_characters_in_collection(input_list: List[Dict[str, str]], character
     """
     for item in input_list:
         content = item.get('content', '')
-        for bracket, replacement in characters_to_replace.items():
-            content = re.sub(re.escape(bracket), replacement, content)
+        for target, replacement in characters_to_replace.items():
+            content = content.replace(target, replacement)
         item['content'] = content
     return input_list
 
@@ -376,17 +374,15 @@ def replace_characters_in_string(input: str, characters_to_replace: Dict[str, st
         str: The string with replaced characters.
     """
     content = input
-    for bracket, replacement in characters_to_replace.items():
-        content = re.sub(re.escape(bracket), replacement, content)
+    for target, replacement in characters_to_replace.items():
+        content = content.replace(target, replacement)
     return content
 
 
 def tokenize(text: str) -> List[str]:
     r"""Extracts word tokens from text.
 
-    Returns all word-boundary-delimited sequences of word characters. The
-    trailing lookbehind ``(?<!:)`` is a no-op in practice because ``\w``
-    cannot match ``:``; it does not filter words followed by a colon.
+    Returns all word-boundary-delimited sequences of word characters.
 
     Args:
         text (str): The text to be tokenized.
@@ -394,7 +390,7 @@ def tokenize(text: str) -> List[str]:
     Returns:
         List[str]: A list of word tokens extracted from the text.
     """
-    return re.findall(r'\b\w+\b(?<!:)', text)
+    return re.findall(r'\b\w+\b', text)
 
 
 def replace_delimiter_in_file(filepath: str, delimit_on: str, delimit_replacer: str) -> str:
@@ -434,12 +430,13 @@ def redact_sensitive_data(data, redaction_text='***REDACTED***'):
     API keys, passwords, tokens, and secrets. The original data structure is
     not modified; a deep copy with redacted values is returned.
 
-    Sensitive keys detected (case-insensitive):
+    Sensitive keys detected (case-insensitive, see _SENSITIVE_KEYS):
     - apiKey, api_key, apikey
     - password, passwd, pwd
-    - token, access_token, refresh_token, auth_token
+    - token, access_token, refresh_token, auth_token, bearer_token
     - secret, client_secret, api_secret
     - authorization, auth
+    - private_key, privateKey
 
     Args:
         data: The data structure to redact. Can be a dict, list, or any other type.
@@ -455,26 +452,15 @@ def redact_sensitive_data(data, redaction_text='***REDACTED***'):
         >>> redact_sensitive_data(config)
         {'apiKey': '***REDACTED***', 'endpoint': 'https://api.example.local'}
     """
-    # List of sensitive key patterns (case-insensitive)
-    sensitive_keys = {
-        'apikey', 'api_key',
-        'password', 'passwd', 'pwd',
-        'token', 'access_token', 'refresh_token', 'auth_token', 'bearer_token',
-        'secret', 'client_secret', 'api_secret',
-        'authorization', 'auth',
-        'private_key', 'privatekey'
-    }
 
     def _redact_recursive(obj):
         """Recursively redact sensitive data in nested structures."""
         if isinstance(obj, dict):
             redacted = {}
             for key, value in obj.items():
-                # Check if key matches any sensitive pattern (case-insensitive)
-                if key.lower() in sensitive_keys:
+                if key.lower() in _SENSITIVE_KEYS:
                     redacted[key] = redaction_text
                 else:
-                    # Recursively process nested structures
                     redacted[key] = _redact_recursive(value)
             return redacted
         elif isinstance(obj, list):
@@ -482,7 +468,25 @@ def redact_sensitive_data(data, redaction_text='***REDACTED***'):
         elif isinstance(obj, tuple):
             return tuple(_redact_recursive(item) for item in obj)
         else:
-            # Return primitive types unchanged
             return obj
 
     return _redact_recursive(data)
+
+
+def strip_data_uri_prefix(image_str: str) -> str:
+    """
+    Strips the ``data:...;base64,`` prefix from a data URI, returning raw base64.
+
+    If the string does not start with a data URI prefix it is returned unchanged.
+    Used by the llmapis handlers whose backends (KoboldCpp, Ollama) expect raw
+    base64 image data rather than data URIs.
+
+    Args:
+        image_str (str): A base64 string or data URI.
+
+    Returns:
+        str: The raw base64 data with any data URI prefix removed.
+    """
+    if image_str.startswith("data:") and ";base64," in image_str:
+        return image_str.split(";base64,", 1)[1]
+    return image_str

@@ -1,9 +1,9 @@
 # /Middleware/workflows/models/execution_context.py
 from dataclasses import dataclass, field
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, TYPE_CHECKING
 
 # Forward reference to avoid circular imports
-if False:
+if TYPE_CHECKING:
     from Middleware.models.llm_handler import LlmHandler
     from Middleware.workflows.managers.workflow_variable_manager import WorkflowVariableManager
 

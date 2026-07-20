@@ -4,7 +4,7 @@ import json
 import logging
 import time
 from copy import deepcopy
-from typing import Dict, List, Generator, Any, Optional
+from typing import Dict, List, Generator, Any, Optional, TYPE_CHECKING
 
 from Middleware.common import instance_global_variables
 from Middleware.common.constants import VALID_NODE_TYPES
@@ -22,7 +22,7 @@ from Middleware.workflows.models.execution_context import ExecutionContext, Node
 from Middleware.workflows.streaming.response_handler import StreamingResponseHandler
 
 # Avoids circular import for type hinting
-if False:
+if TYPE_CHECKING:
     from Middleware.workflows.managers.workflow_variable_manager import WorkflowVariableManager
 
 logger = logging.getLogger(__name__)
@@ -140,6 +140,58 @@ class WorkflowProcessor:
         sensitive_log(logger, logging.DEBUG, "Reconstructing non-streaming group chat message. Prepended prompt: '%s'", generation_prompt)
         return f"{generation_prompt} {llm_output_trimmed}"
 
+    @staticmethod
+    def _extract_stream_chunk_token(chunk: str, output_format: str) -> str:
+        """
+        Extracts the content token from one client-facing stream chunk.
+
+        Sub-workflow responder nodes yield chunks already formatted for the
+        client's API type, so reconstructing the full response text (for agent
+        outputs, logging, and timestamp commits) must parse each format's own
+        chunk shape: SSE ``data:`` events for the OpenAI formats (token under
+        ``choices[0].delta.content`` for chat, ``choices[0].text`` for legacy
+        completions) and bare NDJSON lines for the Ollama formats (token under
+        ``message.content`` for chat, ``response`` for generate).
+
+        Args:
+            chunk (str): One formatted chunk as yielded to the client.
+            output_format (str): The client-facing API type
+                (instance_global_variables.get_api_type()).
+
+        Returns:
+            str: The content token carried by the chunk, or "" for terminators,
+            heartbeats, and unparseable chunks.
+        """
+        data_content = chunk.strip()
+        if output_format not in ('ollamagenerate', 'ollamaapichat'):
+            if not data_content.startswith("data:"):
+                return ""
+            data_content = data_content[len("data:"):].strip()
+        if not data_content or data_content == "[DONE]":
+            return ""
+        try:
+            parsed = json.loads(data_content)
+        except json.JSONDecodeError:
+            return ""
+        if not isinstance(parsed, dict):
+            return ""
+        if output_format == 'ollamagenerate':
+            token = parsed.get("response")
+            return token if isinstance(token, str) else ""
+        if output_format == 'ollamaapichat':
+            message = parsed.get("message")
+            token = message.get("content") if isinstance(message, dict) else None
+            return token if isinstance(token, str) else ""
+        choices = parsed.get("choices")
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            return ""
+        if output_format == 'openaicompletion':
+            token = choices[0].get("text")
+            return token if isinstance(token, str) else ""
+        delta = choices[0].get("delta")
+        token = delta.get("content") if isinstance(delta, dict) else None
+        return token if isinstance(token, str) else ""
+
     def _get_node_name(self, config: Dict) -> str:
         """
         Extracts the display name for a node from its configuration.
@@ -156,15 +208,7 @@ class WorkflowProcessor:
         Returns:
             A display string for the node, suitable for logging summaries.
         """
-        title = config.get("title")
-        if title:
-            base_name = title
-        else:
-            agent_name = config.get("agentName")
-            if agent_name:
-                base_name = agent_name
-            else:
-                base_name = "N/A"
+        base_name = config.get("title") or config.get("agentName") or "N/A"
 
         # For sub-workflow nodes, append the workflow name for easier correlation
         node_type = config.get("type", "Standard")
@@ -173,7 +217,6 @@ class WorkflowProcessor:
             if workflow_name:
                 return f"{base_name} -> {workflow_name}"
         elif node_type == "ConditionalCustomWorkflow":
-            # For conditional workflows, show the possible workflow destinations
             conditional_workflows = config.get("conditionalWorkflows", {})
             if conditional_workflows:
                 workflow_names = list(conditional_workflows.values())
@@ -183,6 +226,30 @@ class WorkflowProcessor:
                     return f"{base_name} -> [{', '.join(workflow_names[:2])}, +{len(workflow_names)-2} more]"
 
         return base_name
+
+    def _resolve_early_template(self, value: Optional[str]) -> Optional[str]:
+        """Resolves scoped-input/workflow variables in a config string value.
+
+        Only agent inputs and static workflow variables are available this early;
+        agent outputs are not, since they come from node execution. Values without
+        a ``{`` placeholder are returned unchanged without invoking the resolver.
+
+        Args:
+            value (Optional[str]): The raw config value, possibly containing
+                ``{...}`` variable references.
+
+        Returns:
+            Optional[str]: The resolved value, or the input unchanged.
+        """
+        if value and '{' in value:
+            resolved = self.workflow_variable_service.apply_early_variables(
+                value,
+                agent_inputs=self.agent_inputs,
+                workflow_config=self.workflow_file_config
+            )
+            logger.debug(f"Resolved config template '{value}' to '{resolved}'")
+            return resolved
+        return value
 
     def _get_endpoint_details(self, config: Dict) -> tuple:
         """
@@ -202,17 +269,8 @@ class WorkflowProcessor:
         if not endpoint_name_template:
             return "N/A", "N/A"
 
-        # Resolve endpoint name if it contains variables
-        if '{' in endpoint_name_template or '{{' in endpoint_name_template:
-            endpoint_name = self.workflow_variable_service.apply_early_variables(
-                endpoint_name_template,
-                agent_inputs=self.agent_inputs,
-                workflow_config=self.workflow_file_config
-            )
-        else:
-            endpoint_name = endpoint_name_template
+        endpoint_name = self._resolve_early_template(endpoint_name_template)
 
-        # Get endpoint config to extract URL
         try:
             endpoint_config = get_endpoint_config(endpoint_name)
             endpoint_url = endpoint_config.get("endpoint", "N/A")
@@ -250,13 +308,8 @@ class WorkflowProcessor:
         start_time = time.perf_counter()
         node_execution_infos: List[NodeExecutionInfo] = []
 
-        # Pre-scan all nodes to see if any of them will use timestamping.
-        is_any_node_timestamped = False
-        if self.discussion_id:
-            for node_config in self.configs:
-                if node_config.get("addDiscussionIdTimestampsForLLM", False):
-                    is_any_node_timestamped = True
-                    break
+        is_any_node_timestamped = bool(self.discussion_id) and any(
+            node_config.get("addDiscussionIdTimestampsForLLM", False) for node_config in self.configs)
 
         # Timestamp history is resolved once at the start of the entire workflow run
         # rather than once per node. This ensures that the placeholder written by the
@@ -287,7 +340,7 @@ class WorkflowProcessor:
 
                 is_post_return = returned_to_user
                 logger.info(
-                    f'------Workflow {self.workflow_config_name}; step {idx}; node type: {config.get("type", "Standard")}'
+                    f'------Workflow {self.workflow_config_name}; step {idx}; node type: {node_type}'
                     f'{" [post-returnToUser]" if is_post_return else ""}')
 
                 if "systemPrompt" in config or "prompt" in config:
@@ -300,7 +353,12 @@ class WorkflowProcessor:
 
                 combined_agent_variables = {**self.agent_inputs, **agent_outputs}
 
-                if not returned_to_user and (config.get('returnToUser', False) or idx == len(self.configs) - 1):
+                # A node is the responder if it opts in via 'is_responder' (the
+                # documented key, renamed from the original 'returnToUser', which is
+                # still honored as an alias) or, failing any explicit opt-in, if it is
+                # the last node in the workflow.
+                node_is_responder = config.get('is_responder', config.get('returnToUser', False))
+                if not returned_to_user and (node_is_responder or idx == len(self.configs) - 1):
                     returned_to_user = True
                     logger.debug("Executing a responding node flow.")
 
@@ -333,29 +391,19 @@ class WorkflowProcessor:
                         if node_type_for_stream in ["CustomWorkflow", "ConditionalCustomWorkflow"]:
                             # For sub-workflow streaming, capture timing around the generator consumption
                             # This ensures we measure the actual time spent executing the sub-workflow
+                            #
+                            # The chunks are already formatted for the client's API type, so the
+                            # full response text (for logging, agent outputs, and timestamp
+                            # commits) is reconstructed by parsing each format's own chunk shape.
+                            output_format = instance_global_variables.get_api_type()
                             full_response_list = []
                             sub_workflow_start = time.perf_counter()
                             for chunk in result_gen:
                                 yield chunk
-                                if isinstance(chunk, str) and chunk.startswith("data: "):
-                                    # Reconstruct the full response text from the SSE stream for
-                                    # logging and downstream variable assignment.  Each chunk is an
-                                    # SSE line ("data: {...}").  Parse the JSON, navigate to
-                                    # choices[0].delta.content to extract the token, and accumulate
-                                    # all tokens into full_response_list.  "[DONE]" signals the end
-                                    # of the stream and contains no content token.
-                                    try:
-                                        data_content = chunk.split("data: ")[1].strip()
-                                        if data_content and data_content != "[DONE]":
-                                            parsed = json.loads(data_content)
-                                            choices = parsed.get("choices", [])
-                                            if choices:
-                                                delta = choices[0].get("delta", {})
-                                                content = delta.get("content", "")
-                                                if content:
-                                                    full_response_list.append(content)
-                                    except (json.JSONDecodeError, IndexError, KeyError):
-                                        pass
+                                if isinstance(chunk, str):
+                                    content = self._extract_stream_chunk_token(chunk, output_format)
+                                    if content:
+                                        full_response_list.append(content)
                             sub_workflow_end = time.perf_counter()
                             # Use the sub-workflow timing for accurate measurement
                             node_start_time = sub_workflow_start
@@ -364,19 +412,7 @@ class WorkflowProcessor:
                             result = "".join(full_response_list)
                             log_prompt_content(logger, "Output from the LLM (raw SSE stream from sub-workflow)", result)
                         else:
-                            # Apply early variable substitution for endpointName if needed
-                            endpoint_name_template = config.get("endpointName")
-                            if endpoint_name_template and ('{' in endpoint_name_template or '{{' in endpoint_name_template):
-                                # Apply variable substitution
-                                endpoint_name = self.workflow_variable_service.apply_early_variables(
-                                    endpoint_name_template,
-                                    agent_inputs=self.agent_inputs,
-                                    workflow_config=self.workflow_file_config
-                                )
-                                logger.debug(f"Resolved endpointName for streaming from '{endpoint_name_template}' to '{endpoint_name}'")
-                            else:
-                                endpoint_name = endpoint_name_template
-
+                            endpoint_name = self._resolve_early_template(config.get("endpointName"))
                             endpoint_config = get_endpoint_config(endpoint_name) if endpoint_name else {}
                             logger.debug("Creating StreamingResponseHandler. lowercaseToolCallFunctionNames=%s, allowTools=%s",
                                          config.get("lowercaseToolCallFunctionNames", False),
@@ -434,7 +470,7 @@ class WorkflowProcessor:
                         is_responding_node=False
                     )
                     if is_post_return:
-                        result_preview = repr(result[:200]) if isinstance(result, str) and len(result) > 200 else repr(result)
+                        result_preview = repr(result[:200]) if isinstance(result, str) else repr(result)
                         # The result can be conversation-derived (e.g. memory text), so route it
                         # through sensitive_log to honor redactLogOutput/encryption; the surrounding
                         # step/type/name fields are metadata and stay in the message.
@@ -491,6 +527,7 @@ class WorkflowProcessor:
         "nMessagesToIncludeInVariable": 5,
         "estimatedTokensToIncludeInVariable": 2048,
         "lastMessagesToSendInsteadOfPrompt": 5,
+        "lastMessagesToSendInsteadOfPromptMaxTokenSize": None,
         "limit": 5,
         "maxTurnsToPull": None,
         "maxSummaryChunksFromFile": None,
@@ -577,37 +614,9 @@ class WorkflowProcessor:
         is_streaming_for_node = self.stream and is_responding_node
         endpoint_config = {}
 
-        if "endpointName" in config and config.get("endpointName"):
-            # Apply early variable substitution for endpointName if it contains variables
-            # Only agent inputs and static workflow variables are available at this point
-            # Agent outputs are NOT available yet since they come from node execution
-            endpoint_name_template = config["endpointName"]
-
-            # Check if endpointName contains variables
-            if '{' in endpoint_name_template or '{{' in endpoint_name_template:
-                # Use the new apply_early_variables method that doesn't need llm_handler
-                endpoint_name = self.workflow_variable_service.apply_early_variables(
-                    endpoint_name_template,
-                    agent_inputs=self.agent_inputs,
-                    workflow_config=self.workflow_file_config
-                )
-                logger.debug(f"Resolved endpointName from '{endpoint_name_template}' to '{endpoint_name}'")
-            else:
-                # No variables in endpointName, use it as-is
-                endpoint_name = endpoint_name_template
-
-            # Also apply to preset if it exists and contains variables
-            preset_template = config.get("preset")
-            if preset_template and ('{' in preset_template or '{{' in preset_template):
-                # Use the new apply_early_variables method for preset as well
-                preset = self.workflow_variable_service.apply_early_variables(
-                    preset_template,
-                    agent_inputs=self.agent_inputs,
-                    workflow_config=self.workflow_file_config
-                )
-                logger.debug(f"Resolved preset from '{preset_template}' to '{preset}'")
-            else:
-                preset = preset_template
+        if config.get("endpointName"):
+            endpoint_name = self._resolve_early_template(config["endpointName"])
+            preset = self._resolve_early_template(config.get("preset"))
 
             # maxResponseSizeInTokens is already resolved by _resolve_numeric_config_fields
             max_response_tokens = config.get("maxResponseSizeInTokens", 400)
@@ -682,5 +691,13 @@ class WorkflowProcessor:
 
         if not is_streaming_for_node and isinstance(result, str) and endpoint_config:
             result = post_process_llm_output(result, endpoint_config, config)
+        elif not is_streaming_for_node and isinstance(result, dict) and endpoint_config \
+                and isinstance(result.get('content'), str) and result['content']:
+            # Tool-call responses arrive as a dict; their text content still needs
+            # the same cleaning (think-block removal, prefix stripping) as a plain
+            # string response, with the tool_calls left untouched. The streaming
+            # path already behaves this way (text chunks run through the remover
+            # while tool-call chunks bypass it).
+            result = {**result, 'content': post_process_llm_output(result['content'], endpoint_config, config)}
 
         return result

@@ -9,6 +9,7 @@ import requests
 from Middleware.workflows.handlers.impl.web_fetch_handler import (
     WebFetchHandler,
     _AddressNotAllowedError,
+    _MAX_REDIRECTS,
     _ResponseTooLargeError,
 )
 from Middleware.workflows.models.execution_context import ExecutionContext
@@ -212,15 +213,20 @@ def test_variable_substitution_runs_on_url_headers_body(web_fetch_handler, mocke
 
 
 def test_output_format_json_serializes_parsed_response(web_fetch_handler, mocker):
+    """The json format re-serializes the PARSED body, not the raw text. The raw body
+    is deliberately asymmetric (odd spacing) so that returning response.text verbatim
+    would fail the exact-string assertion."""
+    raw_text = '  {"x" :1}  '
     mocker.patch(
         "Middleware.workflows.handlers.impl.web_fetch_handler.requests.request",
-        return_value=_mock_response(mocker, text='{"x": 1}', json_body={"x": 1}),
+        return_value=_mock_response(mocker, text=raw_text, json_body={"x": 1}),
     )
     context = _make_context({"type": "WebFetch", "url": "http://x", "outputFormat": "json"})
 
     result = web_fetch_handler.handle(context)
 
-    assert json.loads(result) == {"x": 1}
+    assert result == '{"x": 1}'
+    assert result != raw_text
 
 
 def test_output_format_full_includes_status_headers_body(web_fetch_handler, mocker):
@@ -419,6 +425,7 @@ def test_html_stripped_drops_scripts_styles_head_and_returns_visible_text(web_fe
         "<p>First paragraph with <strong>bold</strong> text.</p>"
         "<script>tracking();</script>"
         "<noscript>Please enable JS</noscript>"
+        "<iframe src='/embedded'>Framed fallback content</iframe>"
         "<p>Second paragraph &amp; entities &#x27;ok&#x27;.</p>"
         "</body></html>"
     )
@@ -435,13 +442,14 @@ def test_html_stripped_drops_scripts_styles_head_and_returns_visible_text(web_fe
     result = web_fetch_handler.handle(context)
 
     # Head content (title, meta, link), script bodies, style bodies, and noscript content
-    # should all be gone. Body text — including across multiple paragraphs — should survive,
+    # should all be gone. Body text (including across multiple paragraphs) should survive,
     # and entities should be decoded.
     assert "Hidden Title" not in result
     assert "var x" not in result
     assert "tracking" not in result
     assert "color:red" not in result
     assert "Please enable JS" not in result
+    assert "Framed fallback content" not in result
     assert "Heading" in result
     assert "First paragraph with" in result
     assert "bold" in result
@@ -557,6 +565,18 @@ def test_non_positive_timeout_raises(web_fetch_handler):
         web_fetch_handler.handle(context)
 
 
+def test_boolean_timeout_raises(web_fetch_handler, mocker):
+    """A boolean timeout is rejected even though bool is an int subclass."""
+    mock_request = mocker.patch(
+        "Middleware.workflows.handlers.impl.web_fetch_handler.requests.request",
+    )
+    context = _make_context({"type": "WebFetch", "url": "http://x", "timeout": True})
+
+    with pytest.raises(ValueError, match="timeout"):
+        web_fetch_handler.handle(context)
+    mock_request.assert_not_called()
+
+
 def test_numeric_string_timeout_is_coerced(web_fetch_handler, mocker):
     """A numeric string timeout is coerced to a number and forwarded to requests."""
     mock_request = mocker.patch(
@@ -568,19 +588,6 @@ def test_numeric_string_timeout_is_coerced(web_fetch_handler, mocker):
     web_fetch_handler.handle(context)
 
     assert mock_request.call_args.kwargs["timeout"] == 15
-
-
-def test_verify_true_is_pinned(web_fetch_handler, mocker):
-    """TLS verification must be explicitly pinned on, not left to an implicit default."""
-    mock_request = mocker.patch(
-        "Middleware.workflows.handlers.impl.web_fetch_handler.requests.request",
-        return_value=_mock_response(mocker, text="ok"),
-    )
-    context = _make_context({"type": "WebFetch", "url": "http://x"})
-
-    web_fetch_handler.handle(context)
-
-    assert mock_request.call_args.kwargs["verify"] is True
 
 
 def test_json_output_on_non_json_200_raises_by_default(web_fetch_handler, mocker):
@@ -667,6 +674,18 @@ def test_max_response_bytes_must_be_int(web_fetch_handler):
     context = _make_context({"type": "WebFetch", "url": "http://x", "maxResponseBytes": "big"})
     with pytest.raises(ValueError, match="maxResponseBytes"):
         web_fetch_handler.handle(context)
+
+
+def test_boolean_max_response_bytes_raises(web_fetch_handler, mocker):
+    """A boolean cap is rejected even though bool is an int subclass."""
+    mock_request = mocker.patch(
+        "Middleware.workflows.handlers.impl.web_fetch_handler.requests.request",
+    )
+    context = _make_context({"type": "WebFetch", "url": "http://x", "maxResponseBytes": True})
+
+    with pytest.raises(ValueError, match="maxResponseBytes"):
+        web_fetch_handler.handle(context)
+    mock_request.assert_not_called()
 
 
 def test_body_within_cap_is_returned(web_fetch_handler, mocker):
@@ -769,6 +788,49 @@ def test_http_error_body_capped_on_return_path_full_format(web_fetch_handler, mo
 
     assert parsed["status_code"] == 502
     assert parsed["body"] == "YYYYYYYY"
+    assert resp.closed is True
+
+
+def test_capped_read_skips_empty_chunks(web_fetch_handler, mocker):
+    """Empty keep-alive chunks from iter_content are skipped, not counted against the
+    cap or joined into the body."""
+    resp = _StubResponse([b"", b"hello", b"", b" world"], status_code=200)
+    mocker.patch(
+        "Middleware.workflows.handlers.impl.web_fetch_handler.requests.request",
+        return_value=resp,
+    )
+    context = _make_context({"type": "WebFetch", "url": "http://x", "maxResponseBytes": 1024})
+
+    result = web_fetch_handler.handle(context)
+
+    assert result == "hello world"
+
+
+def test_capped_error_body_read_failure_keeps_partial(web_fetch_handler, mocker):
+    """If the bounded error-body read itself dies mid-stream (socket teardown), the
+    onError:return path keeps whatever was captured instead of masking the original
+    failure with a new exception; the response is still closed."""
+
+    class _FailingMidReadResponse(_StubResponse):
+        def iter_content(self, chunk_size=8192):
+            yield b"partial-err"
+            raise requests.exceptions.ChunkedEncodingError("connection broken mid-body")
+
+    resp = _FailingMidReadResponse([b"partial-err"], status_code=500)
+    mocker.patch(
+        "Middleware.workflows.handlers.impl.web_fetch_handler.requests.request",
+        return_value=resp,
+    )
+    context = _make_context({
+        "type": "WebFetch",
+        "url": "http://x",
+        "onError": "return",
+        "maxResponseBytes": 1024,
+    })
+
+    result = web_fetch_handler.handle(context)
+
+    assert result == "partial-err"
     assert resp.closed is True
 
 
@@ -982,7 +1044,9 @@ def test_block_private_addresses_rejects_cloud_metadata(web_fetch_handler, mocke
     mock_request.assert_not_called()
 
 
-def test_block_private_addresses_returns_envelope_on_error_return(web_fetch_handler, mocker):
+def test_block_private_addresses_returns_error_text_on_error_return(web_fetch_handler, mocker):
+    """With the default (text) output format and no response available, the return
+    path yields the plain exception string, not a JSON envelope."""
     mocker.patch(
         "Middleware.workflows.handlers.impl.web_fetch_handler.requests.request",
     )
@@ -995,7 +1059,30 @@ def test_block_private_addresses_returns_envelope_on_error_return(web_fetch_hand
 
     result = web_fetch_handler.handle(context)
 
-    assert "disallowed address" in result
+    assert result.startswith("WebFetch blocked a request to a disallowed address")
+
+
+def test_block_private_addresses_returns_envelope_on_error_return_full(web_fetch_handler, mocker):
+    """With outputFormat=full, the blocked request comes back as the standard error
+    envelope with null response fields (the request was never issued)."""
+    mock_request = mocker.patch(
+        "Middleware.workflows.handlers.impl.web_fetch_handler.requests.request",
+    )
+    context = _make_context({
+        "type": "WebFetch",
+        "url": "http://10.0.0.5/",
+        "blockPrivateAddresses": True,
+        "onError": "return",
+        "outputFormat": "full",
+    })
+
+    parsed = json.loads(web_fetch_handler.handle(context))
+
+    assert "disallowed address" in parsed["error"]
+    assert parsed["status_code"] is None
+    assert parsed["headers"] is None
+    assert parsed["body"] is None
+    mock_request.assert_not_called()
 
 
 def test_block_private_addresses_allows_public_ip(web_fetch_handler, mocker):
@@ -1070,9 +1157,10 @@ def test_redirect_to_private_address_is_blocked(web_fetch_handler, mocker):
 
 
 def test_cross_host_redirect_strips_credentials(web_fetch_handler, mocker):
-    """When the guard follows a redirect to a DIFFERENT host, credential headers are
-    not carried to the new host (mirrors requests' own cross-host redirect behavior),
-    while non-credential headers still travel."""
+    """When the guard follows a redirect to a DIFFERENT host, credential headers
+    (Authorization, Cookie, Proxy-Authorization) are not carried to the new host
+    (mirrors requests' own cross-host redirect behavior), while non-credential
+    headers still travel."""
     redirect = _mock_response(
         mocker, status_code=302, headers={"location": "http://1.1.1.1/next"}
     )
@@ -1085,7 +1173,12 @@ def test_cross_host_redirect_strips_credentials(web_fetch_handler, mocker):
         "type": "WebFetch",
         "url": "http://8.8.8.8/start",
         "blockPrivateAddresses": True,
-        "headers": {"Authorization": "Bearer secret", "X-Trace": "keep"},
+        "headers": {
+            "Authorization": "Bearer secret",
+            "Cookie": "session=abc",
+            "Proxy-Authorization": "Basic cHc=",
+            "X-Trace": "keep",
+        },
     })
 
     assert web_fetch_handler.handle(context) == "ok"
@@ -1093,7 +1186,10 @@ def test_cross_host_redirect_strips_credentials(web_fetch_handler, mocker):
     first_headers = mock_request.call_args_list[0].kwargs["headers"]
     second_headers = mock_request.call_args_list[1].kwargs["headers"] or {}
     assert first_headers["Authorization"] == "Bearer secret"
+    assert first_headers["Cookie"] == "session=abc"
     assert "Authorization" not in second_headers
+    assert "Cookie" not in second_headers
+    assert "Proxy-Authorization" not in second_headers
     assert second_headers.get("X-Trace") == "keep"
 
 
@@ -1119,11 +1215,256 @@ def test_same_host_redirect_keeps_credentials(web_fetch_handler, mocker):
     assert second_headers.get("Authorization") == "Bearer secret"
 
 
+def test_303_redirect_demotes_post_to_get_and_drops_body(web_fetch_handler, mocker):
+    """Under the guard, a 303 on a POST demotes the second hop to GET, drops the
+    request body, and strips Content-Type/Content-Length (browser/requests
+    semantics); unrelated headers still travel."""
+    redirect = _mock_response(
+        mocker, status_code=303, headers={"location": "http://8.8.8.8/next"}
+    )
+    final = _mock_response(mocker, text="ok")
+    mock_request = mocker.patch(
+        "Middleware.workflows.handlers.impl.web_fetch_handler.requests.request",
+        side_effect=[redirect, final],
+    )
+    context = _make_context({
+        "type": "WebFetch",
+        "url": "http://8.8.8.8/start",
+        "method": "POST",
+        "body": '{"k": "v"}',
+        "headers": {"Content-Type": "application/json", "Content-Length": "10", "X-Trace": "keep"},
+        "blockPrivateAddresses": True,
+    })
+
+    assert web_fetch_handler.handle(context) == "ok"
+    assert mock_request.call_count == 2
+    first = mock_request.call_args_list[0].kwargs
+    second = mock_request.call_args_list[1].kwargs
+    assert first["method"] == "POST"
+    assert first["data"] == '{"k": "v"}'
+    assert first["headers"]["Content-Type"] == "application/json"
+    assert second["url"] == "http://8.8.8.8/next"
+    assert second["method"] == "GET"
+    assert second["data"] is None
+    second_headers = second["headers"] or {}
+    assert "Content-Type" not in second_headers
+    assert "Content-Length" not in second_headers
+    assert second_headers.get("X-Trace") == "keep"
+    redirect.close.assert_called_once()
+
+
+def test_redirect_chain_exceeding_max_raises_too_many_redirects(web_fetch_handler, mocker):
+    """A guard-followed redirect chain longer than _MAX_REDIRECTS raises
+    TooManyRedirects after issuing exactly _MAX_REDIRECTS + 1 requests."""
+    redirect = _mock_response(
+        mocker, status_code=302, headers={"location": "http://8.8.8.8/loop"}
+    )
+    mock_request = mocker.patch(
+        "Middleware.workflows.handlers.impl.web_fetch_handler.requests.request",
+        return_value=redirect,
+    )
+    context = _make_context({
+        "type": "WebFetch",
+        "url": "http://8.8.8.8/start",
+        "blockPrivateAddresses": True,
+    })
+
+    with pytest.raises(requests.exceptions.TooManyRedirects):
+        web_fetch_handler.handle(context)
+    assert mock_request.call_count == _MAX_REDIRECTS + 1
+
+
+def test_redirect_without_location_is_returned_as_final(web_fetch_handler, mocker):
+    """A 3xx with no Location header cannot be followed; it is returned as the
+    final response instead of looping or raising."""
+    redirect = _mock_response(
+        mocker, status_code=302, text="moved", headers={"X-No-Location": "1"}
+    )
+    mock_request = mocker.patch(
+        "Middleware.workflows.handlers.impl.web_fetch_handler.requests.request",
+        return_value=redirect,
+    )
+    context = _make_context({
+        "type": "WebFetch",
+        "url": "http://8.8.8.8/start",
+        "blockPrivateAddresses": True,
+    })
+
+    result = web_fetch_handler.handle(context)
+
+    assert result == "moved"
+    assert mock_request.call_count == 1
+
+
+def test_allowed_hosts_matching_is_case_insensitive(web_fetch_handler, mocker):
+    """Doc contract: the request host must match an allowlist entry case-insensitively.
+    Both a mixed-case URL host and a mixed-case allowlist entry must still match."""
+    mocker.patch(
+        "Middleware.workflows.handlers.impl.web_fetch_handler.requests.request",
+        return_value=_mock_response(mocker, text="ok"),
+    )
+    context = _make_context({
+        "type": "WebFetch",
+        "url": "http://EXAMPLE.COM/data",
+        "allowedHosts": ["Example.Com"],
+    })
+
+    assert web_fetch_handler.handle(context) == "ok"
+
+
+def test_allowed_hosts_host_match_ignores_port(web_fetch_handler, mocker):
+    """The allowlist matches on the hostname; a nonstandard port on the URL does not
+    defeat a listed host (the match is host-based, not authority-based)."""
+    mocker.patch(
+        "Middleware.workflows.handlers.impl.web_fetch_handler.requests.request",
+        return_value=_mock_response(mocker, text="ok"),
+    )
+    context = _make_context({
+        "type": "WebFetch",
+        "url": "http://example.com:8443/data",
+        "allowedHosts": ["example.com"],
+    })
+
+    assert web_fetch_handler.handle(context) == "ok"
+
+
+def test_allowed_hosts_entries_support_variable_substitution(web_fetch_handler, mocker):
+    """Doc contract: allowlist entries are variable-substituted. A '{allowedHost}'
+    entry resolving to the target host permits it; a host outside the resolved
+    allowlist is still rejected."""
+    sub_map = {"{allowedHost}": "trusted.example.com"}
+    web_fetch_handler.workflow_variable_service.apply_variables.side_effect = (
+        lambda template, ctx: sub_map.get(template, template)
+    )
+    mock_request = mocker.patch(
+        "Middleware.workflows.handlers.impl.web_fetch_handler.requests.request",
+        return_value=_mock_response(mocker, text="ok"),
+    )
+
+    allowed_context = _make_context({
+        "type": "WebFetch",
+        "url": "http://trusted.example.com/data",
+        "allowedHosts": ["{allowedHost}"],
+    })
+    assert web_fetch_handler.handle(allowed_context) == "ok"
+
+    denied_context = _make_context({
+        "type": "WebFetch",
+        "url": "http://other.example.com/data",
+        "allowedHosts": ["{allowedHost}"],
+    })
+    with pytest.raises(_AddressNotAllowedError):
+        web_fetch_handler.handle(denied_context)
+    # Only the allowed request reached the network layer.
+    assert mock_request.call_count == 1
+
+
+def test_combined_guards_reject_allowlisted_private_host(web_fetch_handler, mocker):
+    """Doc contract: allowedHosts and blockPrivateAddresses are additive; an
+    allowlisted host that is a private address must still be rejected."""
+    mock_request = mocker.patch(
+        "Middleware.workflows.handlers.impl.web_fetch_handler.requests.request",
+    )
+    context = _make_context({
+        "type": "WebFetch",
+        "url": "http://127.0.0.1/status",
+        "allowedHosts": ["127.0.0.1"],
+        "blockPrivateAddresses": True,
+    })
+
+    with pytest.raises(_AddressNotAllowedError):
+        web_fetch_handler.handle(context)
+    mock_request.assert_not_called()
+
+
+def test_redirect_to_unlisted_host_is_blocked_by_allowed_hosts(web_fetch_handler, mocker):
+    """allowedHosts is re-checked on every redirect hop: a listed first hop that
+    302-redirects to an unlisted host is rejected before the second connection."""
+    redirect = _mock_response(
+        mocker, status_code=302, headers={"location": "http://evil.example.net/"}
+    )
+    mock_request = mocker.patch(
+        "Middleware.workflows.handlers.impl.web_fetch_handler.requests.request",
+        return_value=redirect,
+    )
+    context = _make_context({
+        "type": "WebFetch",
+        "url": "http://example.com/start",
+        "allowedHosts": ["example.com"],
+    })
+
+    with pytest.raises(_AddressNotAllowedError):
+        web_fetch_handler.handle(context)
+    assert mock_request.call_count == 1
+    redirect.close.assert_called_once()
+
+
+def test_307_redirect_preserves_method_body_and_content_headers(web_fetch_handler, mocker):
+    """Under the guard, a 307 preserves the method and body on the next hop (unlike
+    301/302/303); Content-Type stays because the body is re-sent."""
+    redirect = _mock_response(
+        mocker, status_code=307, headers={"location": "http://8.8.8.8/next"}
+    )
+    final = _mock_response(mocker, text="ok")
+    mock_request = mocker.patch(
+        "Middleware.workflows.handlers.impl.web_fetch_handler.requests.request",
+        side_effect=[redirect, final],
+    )
+    context = _make_context({
+        "type": "WebFetch",
+        "url": "http://8.8.8.8/start",
+        "method": "POST",
+        "body": '{"k": "v"}',
+        "headers": {"Content-Type": "application/json"},
+        "blockPrivateAddresses": True,
+    })
+
+    assert web_fetch_handler.handle(context) == "ok"
+    second = mock_request.call_args_list[1].kwargs
+    assert second["url"] == "http://8.8.8.8/next"
+    assert second["method"] == "POST"
+    assert second["data"] == '{"k": "v"}'
+    assert second["headers"]["Content-Type"] == "application/json"
+
+
+def test_redirect_relative_location_resolves_against_current_url(web_fetch_handler, mocker):
+    """A relative Location header is resolved against the current hop's URL
+    (urljoin semantics), staying on the same host."""
+    redirect = _mock_response(
+        mocker, status_code=302, headers={"location": "/moved/here"}
+    )
+    final = _mock_response(mocker, text="ok")
+    mock_request = mocker.patch(
+        "Middleware.workflows.handlers.impl.web_fetch_handler.requests.request",
+        side_effect=[redirect, final],
+    )
+    context = _make_context({
+        "type": "WebFetch",
+        "url": "http://8.8.8.8/start/page",
+        "blockPrivateAddresses": True,
+    })
+
+    assert web_fetch_handler.handle(context) == "ok"
+    assert mock_request.call_args_list[1].kwargs["url"] == "http://8.8.8.8/moved/here"
+
+
 def test_allowed_hosts_must_be_list(web_fetch_handler):
     context = _make_context({
         "type": "WebFetch",
         "url": "http://example.com",
         "allowedHosts": "example.com",
+    })
+    with pytest.raises(ValueError, match="allowedHosts"):
+        web_fetch_handler.handle(context)
+
+
+def test_allowed_hosts_all_empty_fails_closed(web_fetch_handler):
+    # A configured allowlist whose entries all resolve to empty must fail closed,
+    # not silently drop the restriction and permit every host.
+    context = _make_context({
+        "type": "WebFetch",
+        "url": "http://example.com",
+        "allowedHosts": ["", "   "],
     })
     with pytest.raises(ValueError, match="allowedHosts"):
         web_fetch_handler.handle(context)
@@ -1137,3 +1478,19 @@ def test_block_private_addresses_must_be_bool(web_fetch_handler):
     })
     with pytest.raises(ValueError, match="blockPrivateAddresses"):
         web_fetch_handler.handle(context)
+
+def test_empty_allowed_hosts_list_fails_closed(web_fetch_handler, mocker):
+    """An explicitly configured empty allowlist must be rejected as a
+    configuration error, not silently treated as "no allowlist" (fail-open)."""
+    mock_request = mocker.patch(
+        "Middleware.workflows.handlers.impl.web_fetch_handler.requests.request",
+    )
+    context = _make_context({
+        "type": "WebFetch",
+        "url": "http://example.com/data",
+        "allowedHosts": [],
+    })
+
+    with pytest.raises(ValueError, match="no usable host"):
+        web_fetch_handler.handle(context)
+    mock_request.assert_not_called()

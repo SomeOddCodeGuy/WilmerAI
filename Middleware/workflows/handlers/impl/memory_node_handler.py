@@ -70,8 +70,19 @@ class MemoryNodeHandler(BaseHandler):
             keywords_input = context.config.get("input", "")
             keywords = self.workflow_variable_service.apply_variables(keywords_input, context)
             limit = context.config.get("limit", 5)
+            semantic_query_input = context.config.get("semanticQuery", "")
+            semantic_query = (self.workflow_variable_service.apply_variables(semantic_query_input, context)
+                              if semantic_query_input else None)
             return self.memory_service.search_vector_memories(
-                context.discussion_id, keywords, limit, api_key_hash=context.api_key_hash
+                context.discussion_id, keywords, limit, api_key_hash=context.api_key_hash,
+                bm25_weights=context.config.get("bm25Weights"),
+                use_recency=context.config.get("useRecencyScoring", False),
+                include_dates=context.config.get("includeDates", False),
+                search_mode=context.config.get("searchMode", "keyword"),
+                semantic_query=semantic_query,
+                embedding_endpoint_name=context.config.get("embeddingEndpointName"),
+                use_entity_expansion=context.config.get("useEntityExpansion", False),
+                request_id=context.request_id
             )
 
         elif node_type == "ConversationMemory":
@@ -127,6 +138,13 @@ class MemoryNodeHandler(BaseHandler):
                                                                   api_key_hash=context.api_key_hash)
             custom_delimiter = context.config.get("customDelimiter", "--ChunkBreak--")
             return custom_delimiter.join(memories)
+
+        elif node_type == "GetCurrentStateDocument":
+            if not context.discussion_id:
+                return "No state document has been created yet"
+            return self.memory_service.get_current_state_document(context.discussion_id,
+                                                                  encryption_key=context.encryption_key,
+                                                                  api_key_hash=context.api_key_hash)
 
         elif node_type == "chatSummarySummarizer":
             if not context.discussion_id:
@@ -235,21 +253,8 @@ class MemoryNodeHandler(BaseHandler):
         # after each batch so that each subsequent call can reference up-to-date context.
         while len(memory_chunks_with_hashes) > max_memories_per_loop:
             batch_chunks = memory_chunks_with_hashes[:max_memories_per_loop]
-            latest_memories_chunk = '\n------------\n'.join([chunk for chunk, _ in batch_chunks])
-            last_hash = batch_chunks[-1][1]
-
-            updated_system_prompt = system_prompt_template.replace("[CHAT_SUMMARY]", current_chat_summary).replace(
-                "[LATEST_MEMORIES]", latest_memories_chunk)
-            updated_prompt = prompt_template.replace("[CHAT_SUMMARY]", current_chat_summary).replace(
-                "[LATEST_MEMORIES]", latest_memories_chunk)
-
-            temp_config = {**context.config, 'systemPrompt': updated_system_prompt, 'prompt': updated_prompt}
-
-            # Create a temporary context for the dispatch call with the modified config
-            temp_context = dc_replace(context, config=temp_config)
-            summary = LLMDispatchService.dispatch(context=temp_context)
-
-            self._save_summary_to_file(context, summary_override=summary, last_hash_override=last_hash)
+            self._summarize_batch(context, batch_chunks, system_prompt_template, prompt_template,
+                                  current_chat_summary)
 
             memory_chunks_with_hashes = memory_chunks_with_hashes[max_memories_per_loop:]
             current_chat_summary = self.memory_service.get_current_summary(
@@ -259,25 +264,45 @@ class MemoryNodeHandler(BaseHandler):
         # a summary from too few new chunks would produce thin or near-duplicate output
         # relative to the existing summary. The workflow waits until the minimum
         # accumulation threshold is reached before triggering a new LLM call.
-        if 0 < len(memory_chunks_with_hashes) and len(memory_chunks_with_hashes) >= minMemoriesPerSummary:
-            latest_memories_chunk = '\n------------\n'.join([chunk for chunk, _ in memory_chunks_with_hashes])
-            last_hash = memory_chunks_with_hashes[-1][1]
-
-            updated_system_prompt = system_prompt_template.replace("[CHAT_SUMMARY]", current_chat_summary).replace(
-                "[LATEST_MEMORIES]", latest_memories_chunk)
-            updated_prompt = prompt_template.replace("[CHAT_SUMMARY]", current_chat_summary).replace(
-                "[LATEST_MEMORIES]", latest_memories_chunk)
-
-            temp_config = {**context.config, 'systemPrompt': updated_system_prompt, 'prompt': updated_prompt}
-
-            # Create another temporary context for the dispatch call
-            temp_context = dc_replace(context, config=temp_config)
-            summary = LLMDispatchService.dispatch(context=temp_context)
-
-            self._save_summary_to_file(context, summary_override=summary, last_hash_override=last_hash)
-            return summary
+        if memory_chunks_with_hashes and len(memory_chunks_with_hashes) >= minMemoriesPerSummary:
+            return self._summarize_batch(context, memory_chunks_with_hashes, system_prompt_template,
+                                         prompt_template, current_chat_summary)
 
         return current_chat_summary
+
+    def _summarize_batch(self, context: ExecutionContext, batch_chunks, system_prompt_template: str,
+                         prompt_template: str, current_chat_summary: str) -> str:
+        """
+        Dispatches one summary LLM call for a batch of memory chunks and persists it.
+
+        Substitutes [CHAT_SUMMARY] and [LATEST_MEMORIES] into the prompt templates,
+        dispatches with a temporary config, and saves the result keyed to the
+        batch's last hash.
+
+        Args:
+            context (ExecutionContext): The runtime context for the current node.
+            batch_chunks: The (text, hash) memory chunks to summarize.
+            system_prompt_template (str): The node's system prompt template.
+            prompt_template (str): The node's prompt template.
+            current_chat_summary (str): The rolling summary to substitute in.
+
+        Returns:
+            str: The new summary returned by the LLM.
+        """
+        latest_memories_chunk = '\n------------\n'.join([chunk for chunk, _ in batch_chunks])
+        last_hash = batch_chunks[-1][1]
+
+        updated_system_prompt = system_prompt_template.replace("[CHAT_SUMMARY]", current_chat_summary).replace(
+            "[LATEST_MEMORIES]", latest_memories_chunk)
+        updated_prompt = prompt_template.replace("[CHAT_SUMMARY]", current_chat_summary).replace(
+            "[LATEST_MEMORIES]", latest_memories_chunk)
+
+        temp_config = {**context.config, 'systemPrompt': updated_system_prompt, 'prompt': updated_prompt}
+        temp_context = dc_replace(context, config=temp_config)
+        summary = LLMDispatchService.dispatch(context=temp_context)
+
+        self._save_summary_to_file(context, summary_override=summary, last_hash_override=last_hash)
+        return summary
 
     def _handle_full_chat_summary(self, context: ExecutionContext):
         """
@@ -320,15 +345,27 @@ class MemoryNodeHandler(BaseHandler):
         Handles the QualityMemory node by invoking the correct memory creation process.
 
         This will trigger the full persistent memory creation workflow if a discussionId
-        is present, otherwise it falls back to a stateless in-memory parser.
+        is present. Without one it falls back to the stateless in-memory parser, but only
+        when the user actually configured 'recentMemoryToolWorkflow'; otherwise the node
+        no-ops, because a memory WRITER with no discussion to write to has nothing to do.
+        (Previously an unset tool workflow made the fallback try to load '<folder>/.json'
+        and crash the post-responder chain whenever a request arrived without a
+        [DiscussionId] tag.)
 
         Args:
             context (ExecutionContext): The runtime context for the current node.
 
         Returns:
-            Any: The result from the invoked memory creation or parsing function.
+            Any: The result from the invoked memory creation or parsing function, or a
+                benign message when there is no discussion id and no fallback workflow.
         """
         if context.discussion_id is None:
+            from Middleware.utilities.config_utils import get_active_recent_memory_tool_name
+            fallback_workflow = get_active_recent_memory_tool_name()
+            if not fallback_workflow:
+                logger.info("QualityMemory: no discussionId on this request and no "
+                            "recentMemoryToolWorkflow configured; skipping memory generation.")
+                return "No discussionId on this request; memories were not generated."
             return self._handle_recent_memory_parser(context.request_id, None, context.messages,
                                                         api_key=context.api_key)
         else:

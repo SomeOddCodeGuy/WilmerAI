@@ -1,5 +1,4 @@
 import json
-import os
 from pathlib import Path
 from unittest.mock import MagicMock, mock_open
 
@@ -10,17 +9,18 @@ from Middleware.utilities.file_utils import (
     _read_json_file,
     _write_json_file,
     ensure_json_file_exists,
-    get_logger_filename,
     load_custom_file,
     load_timestamp_file,
     read_chunks_with_hashes,
     read_condensation_tracker,
+    read_plain_text_file,
     read_vision_responses,
     save_custom_file,
     save_timestamp_file,
     update_chunks_with_hashes,
     write_chunks_with_hashes,
     write_condensation_tracker,
+    write_plain_text_file,
     write_vision_responses,
 )
 
@@ -119,6 +119,19 @@ class TestEnsureJsonFileExists:
         assert result == [{"key": "value"}]
         mock_path.open.assert_called_once()
 
+    def test_file_exists_with_non_list_json_raises_type_error(self, mocker):
+        """
+        Verifies that a corrupted file containing a JSON object (not a list)
+        raises a TypeError with a clear message instead of returning bad data.
+        """
+        mock_path = MagicMock(spec=Path)
+        mock_path.exists.return_value = True
+        mocker.patch('Middleware.utilities.file_utils._resolve_case_insensitive_path', return_value=mock_path)
+        mocker.patch.object(mock_path, 'open', mock_open(read_data=json.dumps({"not": "a list"})))
+
+        with pytest.raises(TypeError, match="Expected a JSON list"):
+            ensure_json_file_exists('/fake/path/data.json')
+
     def test_file_does_not_exist_created_with_default(self, mocker):
         """
         Verifies that a new file is created with an empty list if it doesn't exist.
@@ -207,6 +220,155 @@ class TestSaveCustomFile:
             save_custom_file("/protected/dir/output.txt", "some content")
         mock_path_instance.parent.mkdir.assert_called_once()
 
+    def test_save_custom_file_replace_swaps_all_occurrences(self, tmp_path):
+        """Replace mode should swap every occurrence and leave surrounding text intact."""
+        filepath = str(tmp_path / "notes.txt")
+        save_custom_file(filepath, "alpha X beta X gamma")
+
+        count = save_custom_file(filepath, "Y", mode="replace", find="X")
+
+        assert count == 2
+        assert Path(filepath).read_text(encoding='utf-8') == "alpha Y beta Y gamma"
+
+    def test_save_custom_file_replace_no_match_leaves_file_unchanged(self, tmp_path):
+        """Replace mode should report zero and not alter the file when find is absent."""
+        filepath = str(tmp_path / "notes.txt")
+        save_custom_file(filepath, "the original text")
+
+        count = save_custom_file(filepath, "new", mode="replace", find="missing")
+
+        assert count == 0
+        assert Path(filepath).read_text(encoding='utf-8') == "the original text"
+
+    def test_save_custom_file_replace_missing_file_is_noop(self, tmp_path):
+        """Replace mode should not create a file that does not exist."""
+        filepath = str(tmp_path / "absent.txt")
+
+        count = save_custom_file(filepath, "new", mode="replace", find="old")
+
+        assert count == 0
+        assert not Path(filepath).exists()
+
+    def test_save_custom_file_remove_deletes_matching_lines(self, tmp_path):
+        """Remove mode should delete whole lines containing the target text."""
+        filepath = str(tmp_path / "list.md")
+        save_custom_file(filepath, "keep one\ndrop this line\nkeep two\n")
+
+        count = save_custom_file(filepath, "", mode="remove", find="drop this")
+
+        assert count == 1
+        assert Path(filepath).read_text(encoding='utf-8') == "keep one\nkeep two\n"
+
+    def test_save_custom_file_remove_no_match_leaves_file_unchanged(self, tmp_path):
+        """Remove mode should report zero and not alter the file when find is absent."""
+        filepath = str(tmp_path / "list.md")
+        save_custom_file(filepath, "keep one\nkeep two\n")
+
+        count = save_custom_file(filepath, "", mode="remove", find="nothing")
+
+        assert count == 0
+        assert Path(filepath).read_text(encoding='utf-8') == "keep one\nkeep two\n"
+
+    def test_save_custom_file_remove_missing_file_is_noop(self, tmp_path):
+        """Remove mode should not create a file that does not exist."""
+        filepath = str(tmp_path / "absent.md")
+
+        count = save_custom_file(filepath, "", mode="remove", find="anything")
+
+        assert count == 0
+        assert not Path(filepath).exists()
+
+    def test_save_custom_file_replace_requires_find(self, tmp_path):
+        """Replace mode without a find value should raise a ValueError."""
+        filepath = str(tmp_path / "notes.txt")
+        save_custom_file(filepath, "content")
+
+        with pytest.raises(ValueError, match="requires a non-empty 'find'"):
+            save_custom_file(filepath, "new", mode="replace")
+
+    def test_save_custom_file_remove_requires_find(self, tmp_path):
+        """Remove mode without a find value should raise a ValueError."""
+        filepath = str(tmp_path / "notes.txt")
+        save_custom_file(filepath, "content")
+
+        with pytest.raises(ValueError, match="requires a non-empty 'find'"):
+            save_custom_file(filepath, "", mode="remove", find="")
+
+    def test_save_custom_file_trim_removes_blank_lines(self, tmp_path):
+        """Trim mode should drop blank / whitespace-only lines and keep the content lines in order."""
+        filepath = str(tmp_path / "log.md")
+        save_custom_file(filepath, "one\n\ntwo\n   \nthree\n\n")
+        removed = save_custom_file(filepath, "", mode="trim")
+        assert removed == 3
+        assert Path(filepath).read_text(encoding="utf-8") == "one\ntwo\nthree\n"
+
+    def test_save_custom_file_trim_no_blank_lines_is_noop(self, tmp_path):
+        """Trim with no blank lines returns 0 and leaves the file untouched."""
+        filepath = str(tmp_path / "log.md")
+        save_custom_file(filepath, "one\ntwo\n")
+        assert save_custom_file(filepath, "", mode="trim") == 0
+        assert Path(filepath).read_text(encoding="utf-8") == "one\ntwo\n"
+
+    def test_save_custom_file_trim_missing_file_is_noop(self, tmp_path):
+        """Trim on a missing file returns 0 and creates nothing (existing-file-only)."""
+        filepath = str(tmp_path / "absent.md")
+        assert save_custom_file(filepath, "", mode="trim") == 0
+        assert not Path(filepath).exists()
+
+    def test_save_custom_file_trim_needs_no_find_or_content(self, tmp_path):
+        """Trim requires neither 'find' nor 'content'."""
+        filepath = str(tmp_path / "log.md")
+        save_custom_file(filepath, "a\n\nb\n")
+        assert save_custom_file(filepath, None, mode="trim") == 1  # content=None is fine for trim
+
+
+class TestHomeDirectoryExpansion:
+    """A leading '~' must expand to the home directory consistently across writing, reading, and
+    existence resolution. If write expands it but a lookup does not, a file is written to the real
+    home but looked up as a literal '~' directory and never found; that is the class of bug that made the
+    chunk-cursor cold-start and re-process on every run. HOME is redirected to a temp dir in each
+    test so nothing touches the real home directory."""
+
+    def test_save_custom_file_expands_tilde_to_home(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        save_custom_file("~/wilmer_test/output.txt", "hello")
+        # Written under the EXPANDED home path...
+        assert (tmp_path / "wilmer_test" / "output.txt").read_text(encoding="utf-8") == "hello"
+        # ...and NOT as a literal '~' directory relative to the working dir.
+        assert not Path("~/wilmer_test/output.txt").exists()
+
+    def test_save_then_load_tilde_path_roundtrips(self, tmp_path, monkeypatch):
+        # The key invariant: save and load resolve the SAME '~' path to the SAME file.
+        monkeypatch.setenv("HOME", str(tmp_path))
+        save_custom_file("~/wilmer_test/notes.md", "line one")
+        assert load_custom_file("~/wilmer_test/notes.md") == "line one"
+
+    def test_load_custom_file_missing_tilde_path_reports_not_exist(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        assert load_custom_file("~/wilmer_test/absent.md") == "Custom instruction file did not exist"
+
+    def test_append_mode_expands_tilde(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        save_custom_file("~/wilmer_test/log.txt", "a")
+        save_custom_file("~/wilmer_test/log.txt", "b", mode="append")
+        assert (tmp_path / "wilmer_test" / "log.txt").read_text(encoding="utf-8") == "ab"
+
+    def test_remove_mode_acts_on_expanded_tilde_file(self, tmp_path, monkeypatch):
+        # A surgical edit must act on the same expanded file the write created (existing-file-only).
+        monkeypatch.setenv("HOME", str(tmp_path))
+        save_custom_file("~/wilmer_test/list.md", "keep\ndrop me\nkeep2\n")
+        changed = save_custom_file("~/wilmer_test/list.md", "", mode="remove", find="drop me")
+        assert changed == 1
+        assert (tmp_path / "wilmer_test" / "list.md").read_text(encoding="utf-8") == "keep\nkeep2\n"
+
+    def test_resolve_case_insensitive_path_expands_tilde(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HOME", str(tmp_path))
+        (tmp_path / "wilmer_test").mkdir()
+        (tmp_path / "wilmer_test" / "file.txt").write_text("x", encoding="utf-8")
+        resolved = _resolve_case_insensitive_path("~/wilmer_test/file.txt")
+        assert resolved is not None and resolved.exists()
+        assert "~" not in str(resolved)
+
 
 # ###############################################################
 # Section 4: Tests for Remaining Utility Functions
@@ -274,8 +436,8 @@ class TestTimestampAndCustomFileFunctions:
         mock_path = MagicMock(spec=Path)
         mock_path.exists.return_value = True
         mocker.patch('Middleware.utilities.file_utils._resolve_case_insensitive_path', return_value=mock_path)
-        mocker.patch('json.load', return_value={"key": "value"})
-        mocker.patch.object(mock_path, 'open', mock_open())
+        # Real json.load parses the file content, so the parsing path is exercised.
+        mocker.patch.object(mock_path, 'open', mock_open(read_data=json.dumps({"key": "value"})))
 
         result = load_timestamp_file('/fake/timestamps.json')
 
@@ -367,28 +529,38 @@ class TestTimestampAndCustomFileFunctions:
 
         assert result == "l1\nl2"
 
+    def test_load_custom_file_tail_count_zero_returns_empty(self, mocker):
+        """tail_count=0 keeps no chunks (and must not hit the parts[-0:] == whole-list trap)."""
+        mock_path = MagicMock(spec=Path)
+        mock_path.exists.return_value = True
+        mocker.patch('Middleware.utilities.file_utils._resolve_case_insensitive_path', return_value=mock_path)
+        mocker.patch.object(mock_path, 'open', mock_open(read_data="l1\nl2\nl3"))
 
-class TestPathConstructionFunctions:
-    """Tests for path construction functions like get_logger_filename."""
+        result = load_custom_file('/fake/file.txt', tail_count=0)
 
-    def test_get_logger_filename(self, mocker):
-        # Use platform-specific paths consistently
-        project_root = os.path.normpath('/project')
-        expected_path = os.path.join(project_root, 'logs', 'wilmerai.log')
+        assert result == ""
 
-        mocker.patch('os.path.abspath', return_value=os.path.join(project_root, 'Middleware', 'utilities', 'file_utils.py'))
-        mocker.patch('os.path.dirname', side_effect=[
-            os.path.join(project_root, 'Middleware', 'utilities'),
-            os.path.join(project_root, 'Middleware'),
-            project_root,
-        ])
-        mocker.patch('os.path.join', side_effect=os.path.join)
-        mocker.patch('Middleware.utilities.file_utils._resolve_case_insensitive_path',
-                     return_value=Path(expected_path))
+    def test_load_custom_file_negative_head_count_returns_empty(self, mocker):
+        """A negative head_count is clamped to no chunks rather than parts[:-1] dropping from the end."""
+        mock_path = MagicMock(spec=Path)
+        mock_path.exists.return_value = True
+        mocker.patch('Middleware.utilities.file_utils._resolve_case_insensitive_path', return_value=mock_path)
+        mocker.patch.object(mock_path, 'open', mock_open(read_data="l1\nl2\nl3"))
 
-        result = get_logger_filename()
+        result = load_custom_file('/fake/file.txt', head_count=-1)
 
-        assert result == expected_path
+        assert result == ""
+
+    def test_load_custom_file_empty_chunk_delimiter_falls_back_to_newline(self, mocker):
+        """An empty chunk_delimiter falls back to '\\n' instead of splitting on ''."""
+        mock_path = MagicMock(spec=Path)
+        mock_path.exists.return_value = True
+        mocker.patch('Middleware.utilities.file_utils._resolve_case_insensitive_path', return_value=mock_path)
+        mocker.patch.object(mock_path, 'open', mock_open(read_data="l1\nl2\nl3"))
+
+        result = load_custom_file('/fake/file.txt', tail_count=2, chunk_delimiter="")
+
+        assert result == "l2\nl3"
 
 
 # ###############################################################
@@ -403,8 +575,8 @@ class TestReadCondensationTracker:
         mock_path = MagicMock(spec=Path)
         mock_path.exists.return_value = True
         mocker.patch('Middleware.utilities.file_utils._resolve_case_insensitive_path', return_value=mock_path)
-        mocker.patch('json.load', return_value={"lastCondensationHash": "abc123"})
-        mocker.patch.object(mock_path, 'open', mock_open())
+        # Real json.load parses the file content, so the parsing path is exercised.
+        mocker.patch.object(mock_path, 'open', mock_open(read_data=json.dumps({"lastCondensationHash": "abc123"})))
 
         result = read_condensation_tracker('/fake/tracker.json')
 
@@ -472,8 +644,8 @@ class TestReadVisionResponses:
         mock_path = MagicMock(spec=Path)
         mock_path.exists.return_value = True
         mocker.patch('Middleware.utilities.file_utils._resolve_case_insensitive_path', return_value=mock_path)
-        mocker.patch('json.load', return_value={"hash1": "description1"})
-        mocker.patch.object(mock_path, 'open', mock_open())
+        # Real json.load parses the file content, so the parsing path is exercised.
+        mocker.patch.object(mock_path, 'open', mock_open(read_data=json.dumps({"hash1": "description1"})))
 
         result = read_vision_responses('/fake/vision_cache.json')
 
@@ -568,6 +740,27 @@ class TestEncryptedFileIO:
         result = _read_json_file(file_path, encryption_key=fake_key)
         assert result == test_data
 
+    @pytest.mark.parametrize("decrypt_error", [
+        ValueError("token is malformed"),
+        UnicodeDecodeError('utf-8', b'\x80', 0, 1, 'invalid start byte'),
+    ], ids=['ValueError', 'UnicodeDecodeError'])
+    def test_read_plaintext_fallback_on_other_decrypt_errors(self, tmp_path, mocker, decrypt_error):
+        """
+        The fallback also catches ValueError and UnicodeDecodeError from the
+        decrypt/decode step, not just InvalidToken.
+        """
+        fake_key = b'fake-fernet-key-32-bytes-long!=='
+        test_data = {"fallback": "works"}
+
+        file_path = tmp_path / "plaintext.json"
+        file_path.write_text(json.dumps(test_data))
+
+        mocker.patch('Middleware.utilities.encryption_utils.decrypt_bytes',
+                     side_effect=decrypt_error)
+
+        result = _read_json_file(file_path, encryption_key=fake_key)
+        assert result == test_data
+
     def test_corrupted_file_raises_clear_error(self, tmp_path, mocker):
         """Neither valid ciphertext nor valid JSON raises JSONDecodeError."""
         from cryptography.fernet import InvalidToken
@@ -581,3 +774,83 @@ class TestEncryptedFileIO:
 
         with pytest.raises(json.JSONDecodeError):
             _read_json_file(file_path, encryption_key=fake_key)
+
+    def test_plaintext_invalid_json_without_key_raises(self, tmp_path):
+        """With no encryption key, an invalid-JSON file surfaces JSONDecodeError
+        rather than being swallowed (the non-encrypted read error branch)."""
+        file_path = tmp_path / "broken.json"
+        file_path.write_text("{ not json")
+
+        with pytest.raises(json.JSONDecodeError):
+            _read_json_file(file_path, encryption_key=None)
+
+
+# ###############################################################
+# Section: Tests for read_plain_text_file / write_plain_text_file
+# ###############################################################
+
+class TestPlainTextFileIO:
+    """Tests for the plain-text helpers used by the state document feature."""
+
+    def test_read_missing_file_returns_empty_string(self, tmp_path):
+        assert read_plain_text_file(str(tmp_path / "missing.md")) == ''
+
+    def test_write_and_read_roundtrip_creates_parent_dirs(self, tmp_path):
+        filepath = str(tmp_path / "sub" / "state_document.md")
+
+        write_plain_text_file(filepath, "## Section\n- fact")
+
+        assert read_plain_text_file(filepath) == "## Section\n- fact"
+
+    def test_write_without_backup_suffix_creates_no_backup(self, tmp_path):
+        filepath = str(tmp_path / "doc.md")
+
+        write_plain_text_file(filepath, "v1")
+        write_plain_text_file(filepath, "v2")
+
+        assert read_plain_text_file(filepath) == "v2"
+        assert not Path(filepath + ".bak").exists()
+
+    def test_write_with_backup_preserves_previous_version(self, tmp_path):
+        filepath = str(tmp_path / "doc.md")
+
+        write_plain_text_file(filepath, "v1")
+        write_plain_text_file(filepath, "v2", backup_suffix=".bak")
+
+        assert read_plain_text_file(filepath) == "v2"
+        assert read_plain_text_file(filepath + ".bak") == "v1"
+
+    def test_backup_skipped_on_first_write(self, tmp_path):
+        filepath = str(tmp_path / "doc.md")
+
+        write_plain_text_file(filepath, "v1", backup_suffix=".bak")
+
+        assert not Path(filepath + ".bak").exists()
+
+    def test_failed_backup_aborts_write_and_keeps_current_content(self, tmp_path, mocker):
+        filepath = str(tmp_path / "doc.md")
+        write_plain_text_file(filepath, "v1")
+        mocker.patch('Middleware.utilities.file_utils.shutil.copy2', side_effect=OSError("disk full"))
+
+        with pytest.raises(OSError):
+            write_plain_text_file(filepath, "v2", backup_suffix=".bak")
+
+        assert read_plain_text_file(filepath) == "v1"
+
+    def test_encrypted_write_and_read_roundtrip(self, tmp_path):
+        from cryptography.fernet import Fernet
+        key = Fernet.generate_key()
+        filepath = str(tmp_path / "doc.md")
+
+        write_plain_text_file(filepath, "secret content", encryption_key=key)
+
+        assert b"secret content" not in (tmp_path / "doc.md").read_bytes()
+        assert read_plain_text_file(filepath, encryption_key=key) == "secret content"
+
+    def test_read_plaintext_fallback_with_encryption_key(self, tmp_path):
+        from cryptography.fernet import Fernet
+        key = Fernet.generate_key()
+        file_path = tmp_path / "doc.md"
+        file_path.write_text("plain old text")
+
+        assert read_plain_text_file(str(file_path), encryption_key=key) == "plain old text"

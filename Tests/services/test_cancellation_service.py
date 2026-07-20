@@ -9,12 +9,25 @@ from Middleware.services.cancellation_service import CancellationService, cancel
 class TestCancellationService:
     """Test suite for the CancellationService class."""
 
-    def setup_method(self):
-        """Set up test fixtures before each test method."""
-        # Clear any existing cancellations
+    @staticmethod
+    def _reset_singleton_state():
+        """Clear all cancelled ids and abort callbacks from the process-wide singleton."""
         service = CancellationService()
         for req_id in list(service.get_all_cancelled_requests()):
             service.acknowledge_cancellation(req_id)
+        # Callbacks registered for never-cancelled ids are not enumerable through
+        # the public API, so clear the registry directly to prevent state leaking
+        # into other test files.
+        with service._set_lock:
+            service._abort_callbacks.clear()
+
+    def setup_method(self):
+        """Set up test fixtures before each test method."""
+        self._reset_singleton_state()
+
+    def teardown_method(self):
+        """Ensure no cancellations or callbacks leak from the singleton after each test."""
+        self._reset_singleton_state()
 
     def test_singleton_pattern(self):
         """Test that CancellationService implements the singleton pattern correctly."""
@@ -210,10 +223,15 @@ class TestCancellationService:
         for thread in threads:
             thread.join()
 
-        # Verify consistency
+        # Deterministic invariants: odd-indexed ids are cancelled by every thread
+        # and never acknowledged, so they must all remain cancelled. Even-indexed
+        # ids race between cancel and acknowledge across threads, so their final
+        # state is unknown, but nothing outside the generated ids may appear.
         all_cancelled = service.get_all_cancelled_requests()
-        for req_id in all_cancelled:
-            assert service.is_cancelled(req_id), "Any request in the set should return True for is_cancelled"
+        all_ids = {f"{request_id}_{i}" for i in range(50)}
+        odd_ids = {f"{request_id}_{i}" for i in range(50) if i % 2 == 1}
+        assert odd_ids.issubset(all_cancelled), "Odd-indexed ids are never acknowledged and must stay cancelled"
+        assert all_cancelled.issubset(all_ids), "No unexpected ids should appear in the cancelled set"
 
     def test_register_abort_callback(self):
         """Test that abort callbacks can be registered."""
@@ -334,6 +352,62 @@ class TestCancellationService:
         service.register_abort_callback("", abort_callback)
         service.register_abort_callback(None, abort_callback)
 
+    def test_register_abort_callback_after_cancellation_fires_immediately_once(self):
+        """Test that registering a callback for an already-cancelled request invokes
+        it synchronously exactly once, and it is not stored for later invocation."""
+        service = CancellationService()
+        request_id = "late_registration_test"
+        callback_count = []
+
+        def abort_callback():
+            callback_count.append(1)
+
+        service.request_cancellation(request_id)
+        service.register_abort_callback(request_id, abort_callback)
+
+        assert len(callback_count) == 1, "Callback should fire synchronously exactly once"
+
+        # A repeat cancellation request is a no-op and must not re-fire the callback.
+        service.request_cancellation(request_id)
+        assert len(callback_count) == 1, "Callback should not fire again"
+
+    def test_register_abort_callback_after_cancellation_exception_not_propagated(self):
+        """Test that an exception from an immediately-invoked callback does not propagate."""
+        service = CancellationService()
+        request_id = "late_registration_exception_test"
+
+        def failing_callback():
+            raise RuntimeError("Test exception")
+
+        service.request_cancellation(request_id)
+        # Should not raise an exception
+        service.register_abort_callback(request_id, failing_callback)
+
+    def test_unregister_abort_callbacks_empty_request_id(self):
+        """Test that unregistering with empty request IDs is handled gracefully."""
+        service = CancellationService()
+
+        # Should not raise an exception
+        service.unregister_abort_callbacks("")
+        service.unregister_abort_callbacks(None)
+
+    def test_unregister_abort_callbacks_nonexistent_request_id(self):
+        """Test that unregistering for an id with no registered callbacks is safe."""
+        service = CancellationService()
+
+        # Should not raise an exception
+        service.unregister_abort_callbacks("never_registered")
+
+    def test_request_cancellation_with_no_callbacks_registered(self):
+        """Test that cancelling a request with no registered callbacks still marks it cancelled."""
+        service = CancellationService()
+        request_id = "no_callbacks_test"
+
+        # Should not raise an exception
+        service.request_cancellation(request_id)
+
+        assert service.is_cancelled(request_id), "Request should be marked as cancelled"
+
     def test_thread_safety_abort_callbacks(self):
         """Test thread safety of abort callback registration and execution."""
         service = CancellationService()
@@ -361,3 +435,60 @@ class TestCancellationService:
 
         # All callbacks should have been executed
         assert len(callback_count) == 50, "All 50 callbacks should have been executed"
+
+
+class TestCancellationTTLPruning:
+    """Entries that are never acknowledged (bogus ids sent to the DELETE
+    endpoints, requests that died without teardown) must be pruned after the
+    TTL so the registry cannot grow without bound."""
+
+    @staticmethod
+    def _reset_singleton_state():
+        service = CancellationService()
+        for req_id in list(service.get_all_cancelled_requests()):
+            service.acknowledge_cancellation(req_id)
+        with service._set_lock:
+            service._abort_callbacks.clear()
+
+    def setup_method(self):
+        self._reset_singleton_state()
+
+    def teardown_method(self):
+        self._reset_singleton_state()
+
+    def test_stale_entry_pruned_on_next_cancellation(self):
+        from Middleware.services.cancellation_service import CANCELLATION_TTL_SECONDS
+        service = CancellationService()
+
+        service.request_cancellation("stale-req")
+        # Age the entry past the TTL directly; we cannot wait an hour.
+        with service._set_lock:
+            service._cancelled_requests["stale-req"] -= (CANCELLATION_TTL_SECONDS + 1)
+
+        service.request_cancellation("fresh-req")
+
+        assert not service.is_cancelled("stale-req"), "Stale entry should have been pruned"
+        assert service.is_cancelled("fresh-req")
+
+    def test_stale_entry_prune_also_clears_its_abort_callbacks(self):
+        from Middleware.services.cancellation_service import CANCELLATION_TTL_SECONDS
+        service = CancellationService()
+
+        service.request_cancellation("stale-req")
+        with service._set_lock:
+            service._cancelled_requests["stale-req"] -= (CANCELLATION_TTL_SECONDS + 1)
+            service._abort_callbacks["stale-req"] = [lambda: None]
+
+        service.request_cancellation("fresh-req")
+
+        with service._set_lock:
+            assert "stale-req" not in service._abort_callbacks
+
+    def test_fresh_entries_survive_pruning(self):
+        service = CancellationService()
+
+        service.request_cancellation("recent-req")
+        service.request_cancellation("another-req")
+
+        assert service.is_cancelled("recent-req")
+        assert service.is_cancelled("another-req")

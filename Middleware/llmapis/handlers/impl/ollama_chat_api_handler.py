@@ -6,7 +6,7 @@ from typing import Dict, List, Optional, Any, Union
 
 from Middleware.llmapis.handlers.base.base_chat_completions_handler import BaseChatCompletionsHandler
 from Middleware.utilities.sensitive_logging_utils import sensitive_log_lazy, log_prompt_content
-from Middleware.utilities.text_utils import return_brackets
+from Middleware.utilities.text_utils import return_brackets, strip_data_uri_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ class OllamaChatHandler(BaseChatCompletionsHandler):
 
     def _prepare_payload(self, conversation: Optional[List[Dict[str, str]]], system_prompt: Optional[str],
                          prompt: Optional[str], *, tools: Optional[list] = None,
-                         tool_choice=None) -> Dict:
+                         tool_choice=None, structured_output_schema: Optional[Dict] = None) -> Dict:
         """
         Prepares the Ollama-specific payload for the API request.
 
@@ -75,8 +75,12 @@ class OllamaChatHandler(BaseChatCompletionsHandler):
         # Ollama reads the reasoning toggle as a top-level "think" field; every other
         # generation parameter belongs under "options". A preset can therefore set
         # "think": false (or true) and the handler lifts it out of options to the top level.
+        # The stream flag injected by set_gen_input is likewise a top-level transport
+        # field, not a valid Ollama option, so it must not ride along inside "options".
         options = dict(self.gen_input or {})
         think = options.pop("think", None)
+        if self.stream_property_name:
+            options.pop(self.stream_property_name, None)
 
         payload = {
             "model": self.model_name,
@@ -92,6 +96,7 @@ class OllamaChatHandler(BaseChatCompletionsHandler):
 
         if tools:
             payload["tools"] = tools
+        self._attach_structured_output(payload, structured_output_schema)
 
         logger.info(f"Payload prepared for {self.__class__.__name__}")
         sensitive_log_lazy(logger, logging.DEBUG, "URL: %s, Payload: %s",
@@ -99,21 +104,39 @@ class OllamaChatHandler(BaseChatCompletionsHandler):
         return payload
 
     @staticmethod
-    def _strip_data_uri_prefix(image_str: str) -> str:
+    def _convert_tool_calls_to_openai_format(tool_calls_data: List[Dict[str, Any]],
+                                             start_index: int = 0) -> List[Dict[str, Any]]:
         """
-        Strips the ``data:...;base64,`` prefix from a data URI, returning raw base64.
+        Converts Ollama tool_calls entries to OpenAI-format tool call dicts.
 
-        If the string does not start with a data URI prefix it is returned unchanged.
+        Ollama returns tool calls without ids or indexes; each converted entry
+        gets a generated id and a list position as the index, with arguments
+        JSON-serialized as OpenAI clients expect.
 
         Args:
-            image_str (str): A base64 string or data URI.
+            tool_calls_data (List[Dict[str, Any]]): The tool_calls list from an
+                Ollama message.
+            start_index (int): The index of the first converted entry. Streaming
+                passes a running offset so distinct calls from different chunks
+                never share an index; index-keyed delta accumulation (ours and
+                OpenAI clients') would otherwise merge them into one garbled call.
 
         Returns:
-            str: Raw base64 data suitable for the Ollama API.
+            List[Dict[str, Any]]: The tool calls in OpenAI format.
         """
-        if image_str.startswith("data:") and ";base64," in image_str:
-            return image_str.split(";base64,", 1)[1]
-        return image_str
+        openai_tool_calls = []
+        for i, tc in enumerate(tool_calls_data):
+            func = tc.get("function", {})
+            openai_tool_calls.append({
+                "index": start_index + i,
+                "id": f"call_{uuid.uuid4().hex[:24]}",
+                "type": "function",
+                "function": {
+                    "name": func.get("name", ""),
+                    "arguments": json.dumps(func.get("arguments", {}))
+                }
+            })
+        return openai_tool_calls
 
     def _build_messages_from_conversation(self,
                                           conversation: Optional[List[Dict[str, Any]]],
@@ -128,7 +151,7 @@ class OllamaChatHandler(BaseChatCompletionsHandler):
         data and preserves it on the corresponding message under the `images`
         key. This prepares the payload for a multimodal request.
 
-        Image data is normalized via `_strip_data_uri_prefix` so that data URIs
+        Image data is normalized via `strip_data_uri_prefix` so that data URIs
         ingested from the OpenAI endpoint are converted to the raw base64 that
         the Ollama API expects.
 
@@ -154,16 +177,17 @@ class OllamaChatHandler(BaseChatCompletionsHandler):
             for msg in conversation
         ]
 
-        # Remove empty trailing assistant messages
-        if corrected_conversation and corrected_conversation[-1]["role"] == "assistant" and not corrected_conversation[-1].get(
-                "content"):
-            corrected_conversation.pop()
+        # Apply the same addTextToStartOf{System,Prompt,Completion} /
+        # ensureTextAddedToAssistantWhenChatCompletion injections the base builder
+        # applies (and drop the empty trailing assistant marker) so these endpoint
+        # options are honored on ollamaApiChat, not just OpenAI-chat.
+        corrected_conversation = self._apply_prompt_injections(corrected_conversation)
 
         for msg in corrected_conversation:
             if msg.get("role") != "user":
                 msg.pop("images", None)
             elif "images" in msg:
-                msg["images"] = [self._strip_data_uri_prefix(img) for img in msg["images"]]
+                msg["images"] = [strip_data_uri_prefix(img) for img in msg["images"]]
 
         return_brackets(corrected_conversation)
 
@@ -202,22 +226,16 @@ class OllamaChatHandler(BaseChatCompletionsHandler):
             result = {'token': token, 'finish_reason': finish_reason}
             tool_calls_data = message.get("tool_calls")
             if tool_calls_data:
-                openai_tool_calls = []
-                for i, tc in enumerate(tool_calls_data):
-                    func = tc.get("function", {})
-                    openai_tc = {
-                        "index": i,
-                        "id": f"call_{uuid.uuid4().hex[:24]}",
-                        "type": "function",
-                        "function": {
-                            "name": func.get("name", ""),
-                            "arguments": json.dumps(func.get("arguments", {}))
-                        }
-                    }
-                    openai_tool_calls.append(openai_tc)
-                result['tool_calls'] = openai_tool_calls
+                offset = getattr(self, "_stream_tool_call_index_offset", 0)
+                converted = self._convert_tool_calls_to_openai_format(tool_calls_data,
+                                                                      start_index=offset)
+                self._stream_tool_call_index_offset = offset + len(converted)
+                result['tool_calls'] = converted
             return result
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            # TypeError/AttributeError cover chunks whose JSON parses to a non-dict,
+            # or malformed message/tool_calls entries; malformed chunks are skipped,
+            # not fatal to the stream.
             logger.warning(f"Could not parse Ollama stream data string: {data_str}")
             return None
 
@@ -242,25 +260,14 @@ class OllamaChatHandler(BaseChatCompletionsHandler):
             content = message.get('content') or ""
             tool_calls_data = message.get('tool_calls')
             if tool_calls_data:
-                openai_tool_calls = []
-                for i, tc in enumerate(tool_calls_data):
-                    func = tc.get("function", {})
-                    openai_tc = {
-                        "index": i,
-                        "id": f"call_{uuid.uuid4().hex[:24]}",
-                        "type": "function",
-                        "function": {
-                            "name": func.get("name", ""),
-                            "arguments": json.dumps(func.get("arguments", {}))
-                        }
-                    }
-                    openai_tool_calls.append(openai_tc)
                 return {
                     'content': content,
-                    'tool_calls': openai_tool_calls,
+                    'tool_calls': self._convert_tool_calls_to_openai_format(tool_calls_data),
                     'finish_reason': 'tool_calls'
                 }
             return content
-        except (KeyError, IndexError, TypeError):
+        except (KeyError, TypeError, AttributeError):
+            # AttributeError covers a non-dict 'message' value; nothing in the try
+            # block indexes by position, so IndexError was unreachable.
             logger.error(f"Could not find content in Ollama response: {response_json}")
             return ""

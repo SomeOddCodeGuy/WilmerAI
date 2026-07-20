@@ -31,7 +31,7 @@ the entire conversation history).
 ## Modular and Reusable Workflows (Nesting)
 
 WilmerAI allows you to build complex processes by breaking them down into smaller, reusable components. This is achieved
-by "nesting" workflows -- running one workflow file as a single step inside another. A **Parent** workflow uses a *
+by "nesting" workflows: running one workflow file as a single step inside another. A **Parent** workflow uses a *
 *`CustomWorkflow` node** to call a self-contained **Child** workflow.
 
 This architecture promotes reusability (e.g., creating a single `summarize.json` workflow and calling it from anywhere),
@@ -64,22 +64,26 @@ For more complex evaluations, the **`Conditional` node** can be used first to ev
 
 ## Stateful Conversation Memory
 
-WilmerAI features a three-part memory system to provide long-term, stateful context for conversations.
+WilmerAI features a four-part memory system to provide long-term, stateful context for conversations.
 This system is designed for performance by separating the slow process of writing memories from the fast process of
 reading them.
 
-The three components are:
+The four components are:
 
 1. **Long-Term Memory File**: Chronological, summarized chunks of the conversation.
 2. **Rolling Chat Summary**: A single, continuously updated high-level summary of the entire discussion.
-3. **Searchable Vector Memory**: A vector database containing structured memory objects (title, summary, entities) for
-   efficient semantic search (RAG).
+3. **Searchable Vector Memory**: A database containing structured memory objects (title, summary, entities), searched
+   by full-text keyword matching (SQLite FTS5 with BM25 ranking) by default, with optional embedding-based semantic
+   or hybrid search via the `searchMode` setting on `VectorMemorySearch`.
+4. **State Document**: A single, continuously updated markdown snapshot of what is currently true in the conversation
+   (a user profile, roleplay world state, etc.), maintained by the vector memory pipeline when `useStateDocument` is
+   enabled in the discussion's memory settings.
 
 Memory "writer" nodes like **`QualityMemory`** run in the background to create and update memories, while fast "reader"
 nodes like **`VectorMemorySearch`** or **`GetCurrentSummaryFromFile`** retrieve context to be used in a prompt.
 
 * **Key Nodes**: `QualityMemory` (writer), `VectorMemorySearch` (reader), `GetCurrentSummaryFromFile` (reader),
-  `RecentMemorySummarizerTool` (reader)
+  `RecentMemorySummarizerTool` (reader), `GetCurrentStateDocument` (reader)
 * **Detailed Documentation**:
     * `Feature Guide: WilmerAI's Memory System`
     * `WilmerAI Workflow Memory Node Catalog`
@@ -209,6 +213,22 @@ Tool call passthrough is supported for the following backend API types:
 - **Claude** (Anthropic) endpoints
 - **Ollama** endpoints
 
+Format conversion is handled automatically in both directions. Tool definitions and tool calls travel through
+WilmerAI in OpenAI's format internally; Claude and Ollama backends have their native formats converted on the way
+out and back. Frontends connected through WilmerAI's Ollama-compatible endpoints (`/api/chat`) receive tool calls in
+Ollama's native shape (complete calls with `arguments` as a JSON object), regardless of which backend produced them.
+
+**Multi-turn tool loops depend on how the node delivers the conversation.** When the frontend replays a conversation
+containing earlier tool calls and their results, those turns reach the backend as native tool messages (for Claude,
+as native `tool_use`/`tool_result` content blocks) ONLY when the node sends the conversation as a message collection,
+that is, when the node has no authored `prompt` and uses `lastMessagesToSendInsteadOfPrompt`. A node with an
+authored `prompt` sends the backend a single user message; the conversation, including any tool history, is rendered
+into that message as text. Single-shot tool calls still work through such nodes (the tool definitions are forwarded
+natively either way), but on the round after a tool result, many models respond with text that imitates a tool call
+instead of making a real one, because the history they see is text. Use `appendNativeToolExchange` (below) to fix
+this on authored-prompt nodes. Completions-paradigm backends (`/v1/completions`-style, Ollama generate) cannot carry
+tool definitions at all; `allowTools` is silently ignored there.
+
 ### Configuration
 
 Tool calling is controlled by the `allowTools` boolean property on workflow nodes. It defaults to `false`. When set to `true`, the node will include tool definitions in its LLM request if the frontend provided them.
@@ -227,9 +247,65 @@ Tool calling is controlled by the `allowTools` boolean property on workflow node
 
 ### When to Enable `allowTools`
 
-Only enable `allowTools` on nodes where tool calling makes sense. In practice, this means the final responding node -- the node whose output is sent back to the user. Enabling it on non-responding nodes (internal "thinking" steps, summarizers, categorizers, etc.) is not useful, because those nodes are not communicating with the frontend and tool call responses would have nowhere to go.
+Only enable `allowTools` on nodes where tool calling makes sense. In practice, this means the final responding node: the node whose output is sent back to the user. Enabling it on non-responding nodes (internal "thinking" steps, summarizers, categorizers, etc.) is not useful, because those nodes are not communicating with the frontend and tool call responses would have nowhere to go.
 
 If a workflow has multiple `Standard` nodes, only the responding node should have `allowTools` set to `true`. If no tools are present in the frontend request, the flag has no effect and the node behaves normally.
+
+### Delivering the Live Tool Exchange Natively: `appendNativeToolExchange`
+
+Authored-prompt nodes (nodes with a `prompt` field) render the conversation into a single user message as text. In a
+multi-round tool flow this is the round that breaks: the frontend has just executed a tool call and replayed the
+conversation with the assistant `tool_calls` turn and its `role: "tool"` result appended, expecting the model to
+continue. But the model sees that exchange as a text transcript and tends to answer in text, producing
+pseudo-tool-call JSON in its reply instead of a real call.
+
+Setting `appendNativeToolExchange: true` on such a node changes how that trailing exchange is delivered. The final
+assistant `tool_calls` turn and its contiguous `role: "tool"` result(s) are removed from the text the prompt
+variables render, and are instead appended to the outgoing request as native messages after the authored prompt:
+
+```
+system:    (the node's systemPrompt)
+user:      (the authored prompt: conversation as text, WITHOUT the trailing exchange)
+assistant: (the frontend's tool_calls turn, verbatim)
+tool:      (the tool result, verbatim)
+```
+
+The model generates from the standard position immediately after a tool result (the position tool-capable models
+are trained for) while still seeing the authored framing, and the exchange is seen exactly once. Because exactly
+one user turn is still sent, chat templates that reject consecutive same-role turns are unaffected.
+
+```json
+{
+  "title": "Respond to User",
+  "type": "Standard",
+  "endpointName": "Main-Endpoint",
+  "systemPrompt": "You are a helpful assistant.",
+  "prompt": "Consider the conversation:\n{chat_user_prompt_last_twenty}\nRespond to the latest message. If a tool call is required, make the tool call.",
+  "allowTools": true,
+  "appendNativeToolExchange": true,
+  "returnToUser": true
+}
+```
+
+Behavior details:
+
+- The flag only engages on authored-prompt nodes bound to chat-completions-paradigm backends. It is inert on
+  collection-mode nodes (they already send native tool history) and on completions-paradigm backends (which cannot
+  carry structured turns).
+- Only the TRAILING exchange is delivered natively: the call the frontend just executed. Earlier, completed tool
+  exchanges remain part of the text transcript as ordinary history.
+- If the conversation does not end with a tool exchange (a normal chat turn), the flag does nothing and the node
+  behaves exactly as before.
+- Trailing empty assistant filler (for example the bare "Assistant:" turn added by `chatCompleteAddUserAssistant`
+  setups) is recognized and excluded.
+- Enable it together with `allowTools` on the responding node. It is designed for tool-loop frontends (searches,
+  file tools, code execution, image generation retries) talking to authored-prompt workflows.
+- **Old-model escape hatch:** a backend whose chat template cannot render tool turns (older models,
+  strict-alternation templates without tool support) can opt out endpoint-wide with
+  `"backendSupportsToolTurns": false` in its endpoint config; the node then falls back to the text-transcript
+  behavior for that endpoint. This matters when a frontend lets the user switch a conversation that already
+  contains tool history onto a different model mid-chat: without the opt-out, native tool turns reaching a
+  template that does not know the `tool` role can produce a backend template error rather than a reply.
 
 ### Lowercasing Tool Call Function Names
 
@@ -250,15 +326,140 @@ This is off by default because some frontends (e.g., Claude Code) expect the ori
 }
 ```
 
+### Keeping an Agentic Frontend's Loop Alive with `injectLivenessToolCall`
+
+Agentic frontends end their autonomous loop the moment a response arrives with no tool call in it. For most responder nodes that is the correct contract: when the model finishes the task and answers in plain text, the loop should stop. But some responder nodes produce plain text on turns where the task is not finished, for example a status or report turn whose whole output is a written assessment while the surrounding workflow still has work to dispatch. If such a node's text-only response reaches the frontend unmodified, the frontend stops and the task stalls waiting on a human.
+
+Setting `"injectLivenessToolCall": true` on a responder node marks its turns as always mid-task. When that node's streamed response ends with no tool call of its own, WilmerAI appends the user-configured `livenessToolCall` (see the User config documentation), a harmless no-op valid for the frontend, and closes the response with `finish_reason: tool_calls`, so the frontend executes the no-op and calls back, and the task continues unattended.
+
+The property defaults to `false`. It requires the `livenessToolCall` user setting to be configured (without it, nothing is injected), and only applies to streamed responses in formats that carry tool calls (OpenAI chat completions and Ollama chat). A response that already contains a real tool call is never modified. Do not set this on a node that can legitimately deliver a task's final answer; the frontend would never stop looping on its own.
+
+### Ingestion Cleanup with `livenessToolCall`
+
+When the `livenessToolCall` user setting is configured (see the User config documentation), WilmerAI also cleans up incoming conversations before any workflow sees them: runs of 3 or more consecutive identical tool-call exchanges (same call, same arguments, same result) are collapsed to a single exchange with a note appended to the kept result stating how many times the call was repeated, and liveness machinery turns buried in the history are stripped out. Users without `livenessToolCall` are unaffected; their conversations are never rewritten.
+
 ### Related: Tool Call Visibility in Conversation Variables
 
 When tool calls are present in the conversation history, assistant messages with `tool_calls` but no text `content`
 appear as blank turns in conversation variables by default. Setting `includeToolCallsInConversation` to `true` on a
 node injects a text summary of each tool call (formatted as `[Tool Call: {name}] {summary}`) into those messages,
-making them visible to downstream prompts.
+and prefixes tool result messages with a `[Tool Result: {name}]` label recovered from the originating call, making
+both visible to downstream prompts.
 
 * **Key Node**: `Standard` (with `allowTools` flag)
 * **Detailed Documentation**: `A Comprehensive Guide to WilmerAI Workflow Nodes`
+
+---
+
+## Structured Output (Grammar-Constrained Responses)
+
+WilmerAI can constrain an LLM's response to a JSON schema using the backend's own constrained-decoding support
+(grammar sampling). A constrained response is guaranteed to parse as JSON matching the schema; a small model that
+cannot reliably follow a "respond only with JSON" instruction cannot escape a grammar. The capability is declared
+per API type and used in two ways: automatically, to enforce demanded tool calls, and explicitly, by workflow
+authors pinning a node's output shape.
+
+### Backend Support (declared per API type)
+
+An ApiType config declares its constraint mechanism in a declarative `structuredOutput` block. `field` is the
+request-body key the schema is written to (dotted for nesting), and `style` is the wrapper shape:
+
+```json
+"structuredOutput": {
+  "field": "response_format",
+  "style": "openaiJsonSchema"
+}
+```
+
+| ApiType | Block | Notes |
+|---|---|---|
+| `LlamaCppServer` | `field: "response_format", style: "openaiJsonSchema"` | llama.cpp `/v1/chat/completions` json_schema |
+| `Open-AI-API` | `field: "response_format", style: "openaiJsonSchema"` | Real OpenAI, LM Studio, vLLM all honor this |
+| `OllamaApiChat` | `field: "format", style: "raw"` | Ollama's top-level `format` (full JSON schema, Ollama >= 0.5.0) |
+| vLLM native (custom ApiType) | `field: "structured_outputs.json", style: "raw"` | Expressible in pure JSON, no code |
+| Claude | none needed | Anthropic enforces forced `tool_choice` natively server-side |
+| mlx-lm server, completions-paradigm types | none | mlx-lm silently ignores `response_format`; completions APIs are unsupported |
+
+Declaring no block means no mechanism: structured output requests on such endpoints send unconstrained (with a
+warning) and tool enforcement does not engage. A custom API type whose backend takes a schema at any field, in
+either wrapper style, needs only this JSON block (no Python changes).
+
+Three important caveats apply on every backend:
+
+- **The model does not see the schema.** Grammar constraint happens at decode time; the schema is not injected into
+  the prompt. Always describe the desired structure in the prompt as well: the grammar guarantees syntax, the
+  prompt supplies intent.
+- **A 200 response does not prove enforcement.** Some backends accept the constraint field and fail open (llama.cpp
+  on a schema its converter cannot translate) or ignore it silently. WilmerAI parse-checks constrained tool rounds
+  and never assumes; author-declared node schemas should be treated the same way by downstream consumers.
+- **Disable thinking on constrained nodes.** Reasoning blocks and output grammars fight each other; use endpoints
+  with thinking disabled for constrained nodes.
+
+### Automatic Tool Enforcement (forced and required `tool_choice`)
+
+When a frontend request demands a tool call (`tool_choice` is a forced-function object or the string
+`"required"`) and the responding node's endpoint declares a mechanism, WilmerAI enforces the demand instead of
+relying on the model's cooperation:
+
+1. A schema is built from the tool definitions (the pinned tool's parameter schema, or an `anyOf` across all tools
+   for `"required"`).
+2. Native `tools`/`tool_choice` are dropped from the backend payload (combining them with an explicit schema is
+   unsupported on llama.cpp and Ollama), and the tool definitions are injected as text instead.
+3. The constrained JSON output is converted back into a standard `tool_calls` response
+   (`finish_reason: "tool_calls"`).
+4. Because enforcement cannot be assumed, the output is parse-checked; a failed parse triggers exactly one redraw,
+   after which the raw text is returned with an error logged.
+
+Rounds with `tool_choice: "auto"` (the normal agentic case, where the model decides) are never touched: tools pass
+through natively exactly as before. Streaming rounds under a demanded call are buffered; the client declared the
+round machine-consumed, and the constrained output is one short JSON object.
+
+### Author-Declared Node Schemas: `structuredOutputFile`
+
+A `Standard` node can pin its own output shape. Write a JSON Schema file under
+`Public/Configs/StructuredOutputs/<your-folder>/` and reference it by name:
+
+```json
+{
+  "title": "Verdict Node",
+  "type": "Standard",
+  "endpointName": "Worker-Endpoint",
+  "systemPrompt": "Decide whether to approve the request. Respond ONLY with JSON: {\"verdict\": approve|reject|unsure, \"reason\": string}.",
+  "prompt": "Review this request:\n\n{chat_user_prompt_last_twenty}",
+  "structuredOutputFile": "RequestVerdict",
+  "returnToUser": false
+}
+```
+
+`Public/Configs/StructuredOutputs/<sub>/RequestVerdict.json`:
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "verdict": {"type": "string", "enum": ["approve", "reject", "unsure"]},
+    "reason": {"type": "string"}
+  },
+  "required": ["verdict", "reason"]
+}
+```
+
+The node's output is the constrained JSON text, flowing into `{agentNOutput}` (or to the client, for a responder)
+exactly like any other output. Resolution follows the usual named-collection rules: the file is looked up in the
+subdirectory named by the user config's `structuredOutputConfigsSubDirectory` (defaulting to the username), then in
+the `StructuredOutputs` root.
+
+This turns prompt-contract patterns (routing decisions consumed by `ConditionalCustomWorkflow`, extraction nodes,
+state-document maintenance, classification with fixed enums) into guarantees instead of carefully-prompted hopes.
+
+Details:
+
+- Supported on chat-completions-paradigm endpoints whose API type declares a mechanism. On completions-paradigm
+  endpoints the property is ignored with a warning.
+- A node cannot combine `structuredOutputFile` with an active tool-enforcement round (forced/required `tool_choice`
+  arriving through `allowTools`); this raises a configuration error rather than silently picking one constraint.
+- The schema dialect is the backend's. llama.cpp-derived backends support a documented subset of JSON Schema
+  (type/properties/required/enum/const/anyOf/arrays/nesting; no external `$ref`).
 
 ---
 

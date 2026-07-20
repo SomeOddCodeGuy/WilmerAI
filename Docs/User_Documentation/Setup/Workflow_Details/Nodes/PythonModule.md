@@ -33,10 +33,12 @@ To use this node, you must configure it in your workflow's JSON file. Below is a
 
 * `"title"`: **(String, Required)**
 
-    * **Purpose**: A unique name for this node instance. The output of this node (the string returned by your Python
-      script) will be stored in a workflow variable named after this title.
-    * **Example**: If the `title` is `"My Custom Python Tool"`, its output can be accessed in subsequent nodes using the
-      variable `{My Custom Python ToolOutput}`.
+    * **Purpose**: A descriptive name for this node instance, shown in logs.
+    * **Output variable**: The output of this node (the string returned by your Python script) is stored in a
+      *positional* workflow variable named for the node's position in the workflow, `{agent<N>Output}`, not a
+      variable named after the title.
+    * **Example**: If this is the third node in the workflow, its output is available to later nodes as
+      `{agent3Output}`.
 
 * `"type"`: **(String, Required)**
 
@@ -48,22 +50,26 @@ To use this node, you must configure it in your workflow's JSON file. Below is a
     * **Purpose**: The file path to the Python (`.py`) script you want to execute.
     * **Value**: An absolute path on the machine where the WilmerAI server is running, for example,
       `"D:/WilmerAI/MyScripts/MyTestModule.py"`, or a relative path. A relative path is resolved against the
-      current working directory first and, when not found there, against the WilmerAI install root — so a
+      current working directory first and, when not found there, against the WilmerAI install root, so a
       repo-relative path like `"Public/workflow_python_scripts/_isevendays_mcp_scripts/ensure_system_prompt.py"` works no matter which directory
-      Wilmer was launched from.
+      Wilmer was launched from. The path supports workflow variable substitution just like `args`, so a
+      user-wide variable can hold the scripts directory: `"module_path": "{python_scripts_dir}/my_module.py"`
+      with `"python_scripts_dir"` defined in the user's `userWideWorkflowVariables`.
 
 * `"args"`: **(Array, Optional)**
 
     * **Purpose**: A list of positional arguments to pass to your Python script's `Invoke` function. The order is
       preserved.
-    * **Value**: An array of strings, numbers, or other JSON values. **Crucially, any string value can contain WilmerAI
-      variables** (e.g., `{agent1Output}`), which will be resolved *before* being passed to your script.
+    * **Value**: An array of values. **Each value is converted to a string (via `str()`) and then has its WilmerAI
+      variables** (e.g., `{agent1Output}`) resolved before being passed to your script. Your `Invoke` function
+      therefore receives every argument as a string; a JSON number or object written in the config arrives as its
+      string form, not as a Python `int`/`dict`. Parse it inside your script if you need the typed value.
 
 * `"kwargs"`: **(Object, Optional)**
 
     * **Purpose**: A dictionary of keyword arguments to pass to your Python script's `Invoke` function.
-    * **Value**: A JSON object where keys are the argument names and values are the argument content. Like `args`, the
-      values here **also support WilmerAI variables**.
+    * **Value**: A JSON object where keys are the argument names. Like `args`, each value is converted to a string
+      and then has its WilmerAI variables resolved before being passed, so your script receives string values.
 
 -----
 

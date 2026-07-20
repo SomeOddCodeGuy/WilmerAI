@@ -76,7 +76,7 @@ class TestStreamingResponseHandler:
     @pytest.mark.parametrize("workflow_enabled, endpoint_enabled, expected_limit", [
         (False, False, 100), (True, False, 100), (False, True, 100), (True, True, 200),
     ])
-    def test_init_prefix_buffer_limit(self, workflow_enabled, endpoint_enabled, expected_limit):
+    def test_init_prefix_buffer_limit(self, mock_dependencies, workflow_enabled, endpoint_enabled, expected_limit):
         workflow_config = {"removeCustomTextFromResponseStart": workflow_enabled}
         endpoint_config = {"removeCustomTextFromResponseStartEndpointWide": endpoint_enabled}
         handler = StreamingResponseHandler(endpoint_config, workflow_config)
@@ -276,6 +276,15 @@ class TestStreamingResponseHandler:
                      return_value=api_type)
         mocker.patch('Middleware.workflows.streaming.response_handler.api_helpers')
         mocker.patch('Middleware.workflows.streaming.response_handler.StreamingThinkRemover')
+        # __init__ resolves these from the real user config on disk if unpatched.
+        mocker.patch('Middleware.workflows.streaming.response_handler.get_is_chat_complete_add_user_assistant',
+                     return_value=False)
+        mocker.patch('Middleware.workflows.streaming.response_handler.get_is_chat_complete_add_missing_assistant',
+                     return_value=False)
+        # The stream is empty, so the liveness guard's empty-response branch runs;
+        # left unpatched it would read the real user config from disk (hermeticity).
+        mocker.patch('Middleware.workflows.streaming.response_handler.get_liveness_tool_call',
+                     return_value=None)
         from Middleware.api import api_helpers
         mocker.patch('Middleware.workflows.streaming.response_handler.api_helpers.sse_format',
                      side_effect=api_helpers.sse_format)
@@ -352,49 +361,52 @@ class TestStreamingResponseHandler:
     # endregion
 
 
+@pytest.fixture
+def mock_deps_with_tool_calls(mocker):
+    """Mocks all external dependencies, with build_response_json supporting tool_calls kwarg.
+
+    Module-level so every tool-call-related test class can use it."""
+
+    def mock_build_response_json(token, finish_reason, **kwargs):
+        import json
+        result = {"token": token, "finish_reason": str(finish_reason) if finish_reason else "None"}
+        if kwargs.get('tool_calls') is not None:
+            result["tool_calls"] = kwargs['tool_calls']
+        return json.dumps(result)
+
+    mock_api_helpers = mocker.patch('Middleware.workflows.streaming.response_handler.api_helpers')
+    mock_api_helpers.build_response_json.side_effect = mock_build_response_json
+    mock_api_helpers.sse_format.side_effect = lambda data, output_format: f"data: {data}\n\n" if output_format not in (
+        'ollamagenerate', 'ollamaapichat') else f"{data}\n"
+
+    mock_add_assistant = mocker.patch(
+        'Middleware.workflows.streaming.response_handler.get_is_chat_complete_add_user_assistant',
+        return_value=False)
+    mock_add_missing_assistant = mocker.patch(
+        'Middleware.workflows.streaming.response_handler.get_is_chat_complete_add_missing_assistant',
+        return_value=False)
+
+    mock_remover_instance = mocker.MagicMock()
+    mock_remover_instance.process_delta.side_effect = lambda delta: delta
+    mock_remover_instance.finalize.return_value = ""
+    mocker.patch('Middleware.workflows.streaming.response_handler.StreamingThinkRemover',
+                 return_value=mock_remover_instance)
+
+    mocker.patch('Middleware.workflows.streaming.response_handler.instance_global_variables.get_api_type',
+                 return_value="openaichatcompletion")
+
+    return {
+        "api_helpers": mock_api_helpers,
+        "remover": mock_remover_instance,
+        "add_assistant": mock_add_assistant,
+        "add_missing_assistant": mock_add_missing_assistant,
+    }
+
+
 class TestToolCallStreamBypass:
     """Tests that tool call chunks in the streaming response handler bypass all text
     processing (prefix stripping, think-block removal, group chat reconstruction) and
     are emitted directly as SSE output."""
-
-    @pytest.fixture
-    def mock_deps_with_tool_calls(self, mocker):
-        """Mocks all external dependencies, with build_response_json supporting tool_calls kwarg."""
-
-        def mock_build_response_json(token, finish_reason, **kwargs):
-            import json
-            result = {"token": token, "finish_reason": str(finish_reason) if finish_reason else "None"}
-            if kwargs.get('tool_calls') is not None:
-                result["tool_calls"] = kwargs['tool_calls']
-            return json.dumps(result)
-
-        mock_api_helpers = mocker.patch('Middleware.workflows.streaming.response_handler.api_helpers')
-        mock_api_helpers.build_response_json.side_effect = mock_build_response_json
-        mock_api_helpers.sse_format.side_effect = lambda data, output_format: f"data: {data}\n\n" if output_format not in (
-            'ollamagenerate', 'ollamaapichat') else f"{data}\n"
-
-        mock_add_assistant = mocker.patch(
-            'Middleware.workflows.streaming.response_handler.get_is_chat_complete_add_user_assistant',
-            return_value=False)
-        mock_add_missing_assistant = mocker.patch(
-            'Middleware.workflows.streaming.response_handler.get_is_chat_complete_add_missing_assistant',
-            return_value=False)
-
-        mock_remover_instance = mocker.MagicMock()
-        mock_remover_instance.process_delta.side_effect = lambda delta: delta
-        mock_remover_instance.finalize.return_value = ""
-        mocker.patch('Middleware.workflows.streaming.response_handler.StreamingThinkRemover',
-                     return_value=mock_remover_instance)
-
-        mocker.patch('Middleware.workflows.streaming.response_handler.instance_global_variables.get_api_type',
-                     return_value="openaichatcompletion")
-
-        return {
-            "api_helpers": mock_api_helpers,
-            "remover": mock_remover_instance,
-            "add_assistant": mock_add_assistant,
-            "add_missing_assistant": mock_add_missing_assistant,
-        }
 
     def test_tool_call_chunk_bypasses_prefix_stripping(self, mock_deps_with_tool_calls):
         """Tool call chunks should be emitted directly without going through prefix buffering."""
@@ -844,3 +856,792 @@ class TestLowercaseToolCallFunctionNames:
         tool_events = [r for r in result if '"tool_calls"' in r]
         parsed = json.loads(tool_events[0].replace("data: ", "").strip())
         assert parsed["tool_calls"][0]["function"]["name"] == "get_weather"
+
+
+class TestLivenessToolCallInjection:
+    """Unit tests for the mid-task liveness guard: injecting a configured no-op
+    tool call when a mid-task response would otherwise end without one."""
+
+    LIVENESS_CONFIG = {
+        "toolName": "bash",
+        "arguments": {"command": "echo '[Wilmer] Task in progress; continuing autonomously.'"}
+    }
+
+    @pytest.fixture
+    def mock_deps(self, mocker):
+        def mock_build_response_json(token, finish_reason, **kwargs):
+            import json
+            result = {"token": token, "finish_reason": str(finish_reason) if finish_reason else "None"}
+            if kwargs.get('tool_calls') is not None:
+                result["tool_calls"] = kwargs['tool_calls']
+            return json.dumps(result)
+
+        mock_api_helpers = mocker.patch('Middleware.workflows.streaming.response_handler.api_helpers')
+        mock_api_helpers.build_response_json.side_effect = mock_build_response_json
+        mock_api_helpers.sse_format.side_effect = lambda data, output_format: f"data: {data}\n\n" if output_format not in (
+            'ollamagenerate', 'ollamaapichat') else f"{data}\n"
+
+        mocker.patch(
+            'Middleware.workflows.streaming.response_handler.get_is_chat_complete_add_user_assistant',
+            return_value=False)
+        mocker.patch(
+            'Middleware.workflows.streaming.response_handler.get_is_chat_complete_add_missing_assistant',
+            return_value=False)
+
+        mock_remover_instance = mocker.MagicMock()
+        mock_remover_instance.process_delta.side_effect = lambda delta: delta
+        mock_remover_instance.finalize.return_value = ""
+        mocker.patch('Middleware.workflows.streaming.response_handler.StreamingThinkRemover',
+                     return_value=mock_remover_instance)
+
+        mocker.patch('Middleware.workflows.streaming.response_handler.instance_global_variables.get_api_type',
+                     return_value="openaichatcompletion")
+
+        return {"api_helpers": mock_api_helpers}
+
+    def _patch_guard(self, mocker, config=LIVENESS_CONFIG):
+        mocker.patch(
+            'Middleware.workflows.streaming.response_handler.get_liveness_tool_call',
+            return_value=config)
+
+    def _parse_events(self, results):
+        import json
+        parsed = []
+        for r in results:
+            payload = r.replace("data: ", "").strip()
+            if payload and payload != "[DONE]":
+                parsed.append(json.loads(payload))
+        return parsed
+
+    def test_injects_tool_call_when_node_opted_in_and_none_in_stream(self, mocker, mock_deps):
+        """A text-only stream from an opted-in responder node gets the configured
+        no-op tool call appended and closes with finish_reason tool_calls."""
+        import json
+        self._patch_guard(mocker)
+        handler = StreamingResponseHandler({}, {"injectLivenessToolCall": True})
+
+        raw_stream = raw_dict_generator_factory([
+            {"token": "All findings recorded.", "finish_reason": None},
+            {"token": "", "finish_reason": "stop"},
+        ])
+        results = list(handler.process_stream(raw_stream))
+        events = self._parse_events(results)
+
+        tool_events = [e for e in events if "tool_calls" in e]
+        assert len(tool_events) == 1
+        injected = tool_events[0]["tool_calls"][0]
+        assert injected["index"] == 0
+        assert injected["id"].startswith("wilmer_liveness_")
+        assert injected["type"] == "function"
+        assert injected["function"]["name"] == "bash"
+        assert json.loads(injected["function"]["arguments"]) == self.LIVENESS_CONFIG["arguments"]
+
+        assert events[-1]["finish_reason"] == "tool_calls"
+
+    def test_injects_on_empty_response_even_without_node_opt_in(self, mocker, mock_deps):
+        """A completely empty response (no text, no tool call) is a malfunction,
+        not a completion: the keep-alive fires even for a node that did not opt in,
+        so the frontend loop survives instead of silently stranding mid-task."""
+        self._patch_guard(mocker)
+        handler = StreamingResponseHandler({}, {})
+
+        raw_stream = raw_dict_generator_factory([
+            {"token": "", "finish_reason": "stop"},
+        ])
+        events = self._parse_events(list(handler.process_stream(raw_stream)))
+
+        tool_events = [e for e in events if "tool_calls" in e]
+        assert len(tool_events) == 1
+        assert tool_events[0]["tool_calls"][0]["id"].startswith("wilmer_liveness_")
+        assert events[-1]["finish_reason"] == "tool_calls"
+
+    def test_no_injection_on_whitespace_only_when_opted_out_is_still_empty(self, mocker, mock_deps):
+        """Whitespace-only output counts as empty: the keep-alive still fires for a
+        non-opted-in node."""
+        self._patch_guard(mocker)
+        handler = StreamingResponseHandler({}, {})
+
+        raw_stream = raw_dict_generator_factory([
+            {"token": "  \n ", "finish_reason": "stop"},
+        ])
+        events = self._parse_events(list(handler.process_stream(raw_stream)))
+
+        assert [e for e in events if "tool_calls" in e]
+
+    def test_no_injection_when_node_did_not_opt_in(self, mocker, mock_deps):
+        """Without injectLivenessToolCall on the node (default), a stream with real
+        text ends normally; a finished task's answer must stop the frontend loop."""
+        self._patch_guard(mocker)
+        handler = StreamingResponseHandler({}, {})
+
+        raw_stream = raw_dict_generator_factory([
+            {"token": "Task complete.", "finish_reason": None},
+            {"token": "", "finish_reason": "stop"},
+        ])
+        events = self._parse_events(list(handler.process_stream(raw_stream)))
+
+        assert not [e for e in events if "tool_calls" in e]
+        assert events[-1]["finish_reason"] == "stop"
+
+    def test_no_injection_without_config(self, mocker, mock_deps):
+        """Node opted in but no livenessToolCall configured: no injection."""
+        self._patch_guard(mocker, config=None)
+        handler = StreamingResponseHandler({}, {"injectLivenessToolCall": True})
+
+        raw_stream = raw_dict_generator_factory([
+            {"token": "Some text.", "finish_reason": None},
+            {"token": "", "finish_reason": "stop"},
+        ])
+        events = self._parse_events(list(handler.process_stream(raw_stream)))
+
+        assert not [e for e in events if "tool_calls" in e]
+        assert events[-1]["finish_reason"] == "stop"
+
+    def test_no_injection_when_stream_already_has_tool_calls(self, mocker, mock_deps):
+        """A stream that produced its own tool call is already alive: no injection."""
+        self._patch_guard(mocker)
+        handler = StreamingResponseHandler({}, {"injectLivenessToolCall": True})
+
+        tc = [{"index": 0, "id": "call_1", "type": "function",
+               "function": {"name": "read", "arguments": "{}"}}]
+        raw_stream = raw_dict_generator_factory([
+            {"token": "", "tool_calls": tc, "finish_reason": "tool_calls"},
+        ])
+        events = self._parse_events(list(handler.process_stream(raw_stream)))
+
+        tool_events = [e for e in events if "tool_calls" in e]
+        assert len(tool_events) == 1
+        assert tool_events[0]["tool_calls"][0]["id"] == "call_1"
+
+    def test_no_injection_when_tool_calls_seen_before_text_finish(self, mocker, mock_deps):
+        """Tool calls earlier in the stream count even if the stream finishes as text."""
+        self._patch_guard(mocker)
+        handler = StreamingResponseHandler({}, {"injectLivenessToolCall": True})
+
+        tc = [{"index": 0, "id": "call_1", "type": "function",
+               "function": {"name": "read", "arguments": "{}"}}]
+        raw_stream = raw_dict_generator_factory([
+            {"token": "", "tool_calls": tc, "finish_reason": None},
+            {"token": "done", "finish_reason": "stop"},
+        ])
+        events = self._parse_events(list(handler.process_stream(raw_stream)))
+
+        injected = [e for e in events if "tool_calls" in e
+                    and e["tool_calls"][0]["id"].startswith("wilmer_liveness_")]
+        assert not injected
+        assert events[-1]["finish_reason"] == "stop"
+
+    def test_no_injection_for_formats_without_tool_calls(self, mocker, mock_deps):
+        """Output formats that cannot carry tool calls never get an injection."""
+        self._patch_guard(mocker)
+        handler = StreamingResponseHandler({}, {"injectLivenessToolCall": True})
+        handler.output_format = "openaicompletion"
+
+        raw_stream = raw_dict_generator_factory([
+            {"token": "text", "finish_reason": "stop"},
+        ])
+        events = self._parse_events(list(handler.process_stream(raw_stream)))
+
+        assert not [e for e in events if "tool_calls" in e]
+
+    def test_malformed_arguments_fall_back_to_empty_object(self, mocker, mock_deps):
+        """A non-dict arguments value serializes as an empty JSON object."""
+        self._patch_guard(mocker,
+                          config={"toolName": "bash", "arguments": "not-a-dict"})
+        handler = StreamingResponseHandler({}, {"injectLivenessToolCall": True})
+
+        raw_stream = raw_dict_generator_factory([
+            {"token": "text", "finish_reason": "stop"},
+        ])
+        events = self._parse_events(list(handler.process_stream(raw_stream)))
+
+        tool_events = [e for e in events if "tool_calls" in e]
+        assert len(tool_events) == 1
+        assert tool_events[0]["tool_calls"][0]["function"]["arguments"] == "{}"
+
+
+class TestToolCallBufferFlushing:
+    """Text held by the start-of-stream prefix buffer must be emitted BEFORE a
+    tool-call chunk (generation order) and must never be dropped when the
+    stream finishes on the tool-call chunk itself."""
+
+    def test_buffered_text_emitted_before_tool_call(self, mock_deps_with_tool_calls):
+        workflow_config = {
+            "removeCustomTextFromResponseStart": True,
+            "responseStartTextToRemove": ["Hello there"]
+        }
+        handler = StreamingResponseHandler({}, workflow_config)
+
+        tool_calls_data = [{"index": 0, "id": "call_1", "type": "function",
+                            "function": {"name": "calc", "arguments": '{"x": 1}'}}]
+
+        # "Hel" partially matches the configured prefix, so it is still buffered
+        # when the tool-call delta arrives.
+        raw_stream = raw_dict_generator_factory([
+            {"token": "Hel"},
+            {"token": "", "tool_calls": tool_calls_data},
+            {"token": "", "finish_reason": "stop"},
+        ])
+
+        result = list(handler.process_stream(raw_stream))
+
+        text_index = next(i for i, r in enumerate(result) if '"token": "Hel"' in r)
+        tool_index = next(i for i, r in enumerate(result) if '"tool_calls"' in r)
+        assert text_index < tool_index, "Buffered text must precede the tool call it was generated before"
+        assert handler.full_response_text == "Hel"
+
+    def test_buffered_text_not_dropped_when_finish_on_tool_chunk(self, mock_deps_with_tool_calls):
+        workflow_config = {
+            "removeCustomTextFromResponseStart": True,
+            "responseStartTextToRemove": ["Hello there"]
+        }
+        handler = StreamingResponseHandler({}, workflow_config)
+
+        tool_calls_data = [{"index": 0, "id": "call_1", "type": "function",
+                            "function": {"name": "calc", "arguments": '{"x": 1}'}}]
+
+        raw_stream = raw_dict_generator_factory([
+            {"token": "Hel"},
+            {"token": "", "tool_calls": tool_calls_data, "finish_reason": "tool_calls"},
+        ])
+
+        result = list(handler.process_stream(raw_stream))
+
+        assert any('"token": "Hel"' in r for r in result), \
+            "Text buffered when the stream ends on a tool-call chunk must still be emitted"
+        assert handler.full_response_text == "Hel"
+
+    def test_empty_buffer_keeps_prefix_stripping_armed_after_tool_call(self, mock_deps_with_tool_calls):
+        """A tool call arriving before any text must not disarm prefix stripping
+        for the text that follows it."""
+        workflow_config = {
+            "removeCustomTextFromResponseStart": True,
+            "responseStartTextToRemove": ["Prefix: "]
+        }
+        handler = StreamingResponseHandler({}, workflow_config)
+
+        tool_calls_data = [{"index": 0, "id": "call_1", "type": "function",
+                            "function": {"name": "calc", "arguments": '{"x": 1}'}}]
+
+        raw_stream = raw_dict_generator_factory([
+            {"token": "", "tool_calls": tool_calls_data},
+            {"token": "Prefix: real answer", "finish_reason": "stop"},
+        ])
+
+        list(handler.process_stream(raw_stream))
+        assert handler.full_response_text == "real answer"
+
+
+class TestOllamaNativeToolCallStreaming:
+    """For the ollamaapichat output format, OpenAI-style tool-call deltas must be
+    accumulated and emitted once, complete, in Ollama's native shape (arguments
+    as a JSON object), since Ollama's protocol has no delta form for tool calls."""
+
+    @pytest.fixture
+    def ollama_handler(self, mock_deps_with_tool_calls, mocker):
+        mocker.patch('Middleware.workflows.streaming.response_handler.instance_global_variables.get_api_type',
+                     return_value="ollamaapichat")
+        return StreamingResponseHandler({}, {})
+
+    def test_fragmented_deltas_emitted_as_one_complete_native_call(self, ollama_handler):
+        raw_stream = raw_dict_generator_factory([
+            {"token": "", "tool_calls": [{"index": 0, "id": "call_1", "type": "function",
+                                          "function": {"name": "get_weather", "arguments": '{"city": '}}]},
+            {"token": "", "tool_calls": [{"index": 0, "function": {"arguments": '"New York"}'}}]},
+            {"token": "", "finish_reason": "stop"},
+        ])
+
+        result = list(ollama_handler.process_stream(raw_stream))
+
+        import json
+        tool_events = [r for r in result if '"tool_calls"' in r]
+        assert len(tool_events) == 1, "Fragments must be merged into exactly one tool-call event"
+        payload = json.loads(tool_events[0])
+        assert payload["tool_calls"] == [
+            {"function": {"name": "get_weather", "arguments": {"city": "New York"}}}
+        ]
+
+    def test_finish_on_tool_chunk_emits_complete_native_call(self, ollama_handler):
+        raw_stream = raw_dict_generator_factory([
+            {"token": "", "tool_calls": [{"index": 0, "id": "call_1", "type": "function",
+                                          "function": {"name": "calc", "arguments": '{"x":'}}]},
+            {"token": "", "finish_reason": "tool_calls",
+             "tool_calls": [{"index": 0, "function": {"arguments": ' 1}'}}]},
+        ])
+
+        result = list(ollama_handler.process_stream(raw_stream))
+
+        import json
+        tool_events = [r for r in result if '"tool_calls"' in r]
+        assert len(tool_events) == 1
+        payload = json.loads(tool_events[0])
+        assert payload["tool_calls"] == [{"function": {"name": "calc", "arguments": {"x": 1}}}]
+
+    def test_multiple_tool_calls_kept_in_index_order(self, ollama_handler):
+        raw_stream = raw_dict_generator_factory([
+            {"token": "", "tool_calls": [
+                {"index": 1, "id": "call_b", "function": {"name": "second", "arguments": '{"b": 2}'}},
+                {"index": 0, "id": "call_a", "function": {"name": "first", "arguments": '{"a": 1}'}},
+            ]},
+            {"token": "", "finish_reason": "stop"},
+        ])
+
+        result = list(ollama_handler.process_stream(raw_stream))
+
+        import json
+        tool_events = [r for r in result if '"tool_calls"' in r]
+        payload = json.loads(tool_events[0])
+        assert payload["tool_calls"] == [
+            {"function": {"name": "first", "arguments": {"a": 1}}},
+            {"function": {"name": "second", "arguments": {"b": 2}}},
+        ]
+
+    def test_openai_format_still_passes_deltas_through(self, mock_deps_with_tool_calls):
+        """Non-Ollama output formats keep the existing passthrough-delta behavior."""
+        handler = StreamingResponseHandler({}, {})
+        fragment = [{"index": 0, "id": "call_1", "type": "function",
+                     "function": {"name": "calc", "arguments": '{"x":'}}]
+
+        raw_stream = raw_dict_generator_factory([
+            {"token": "", "tool_calls": fragment},
+            {"token": "", "tool_calls": [{"index": 0, "function": {"arguments": ' 1}'}}],
+             "finish_reason": "tool_calls"},
+        ])
+
+        result = list(handler.process_stream(raw_stream))
+        tool_events = [r for r in result if '"tool_calls"' in r]
+        assert len(tool_events) == 2, "OpenAI clients receive each delta as it arrives"
+
+
+class TestPrefixBufferReleaseDecisions:
+    """Pins the three distinct buffer-release policies in process_stream:
+    optimistic release on a definitive prefix mismatch, holding a whitespace-only
+    buffer, the trim-whitespace-only path, and the degenerate strip-flag-with-
+    empty-list path (buffer until full/done, content never lost)."""
+
+    def test_nonmatching_first_chunk_released_immediately(self, mock_dependencies):
+        """Optimistic matching: once the buffer definitively fails to match any
+        configured prefix, it is released at that chunk (not held until the
+        stream ends) and stripping is disarmed for the rest of the stream."""
+        workflow_config = {"removeCustomTextFromResponseStart": True,
+                           "responseStartTextToRemove": ["Prefix: "]}
+        handler = StreamingResponseHandler({}, workflow_config)
+
+        raw_stream = raw_dict_generator_factory([
+            {"token": "Zebra"}, {"token": " one"}, {"token": " two"},
+        ])
+
+        result = list(handler.process_stream(raw_stream))
+
+        # Chunk-per-event: if the buffer had been wrongly held to stream end,
+        # the first event would carry the whole concatenated text instead.
+        assert '"token": "Zebra"' in result[0]
+        assert '"token": " one"' in result[1]
+        assert '"token": " two"' in result[2]
+        assert handler.full_response_text == "Zebra one two"
+        assert handler._prefixes_processed is True
+
+    def test_whitespace_only_first_chunk_keeps_buffering(self, mock_dependencies):
+        """A whitespace-only buffer is not a mismatch: the prefix may still be
+        coming. The whitespace chunk must produce no event, and the prefix that
+        arrives afterwards must still be stripped."""
+        workflow_config = {"removeCustomTextFromResponseStart": True,
+                           "responseStartTextToRemove": ["Prefix: "]}
+        handler = StreamingResponseHandler({}, workflow_config)
+
+        raw_stream = raw_dict_generator_factory([
+            {"token": "   "},
+            {"token": "Prefix: hi", "finish_reason": "stop"},
+        ])
+
+        result = list(handler.process_stream(raw_stream))
+
+        assert '"token": "hi"' in result[0]
+        assert handler.full_response_text == "hi"
+
+    def test_trim_whitespace_only_buffering_strips_leading_whitespace(self, mock_dependencies):
+        """With only trimBeginningAndEndLineBreaks active (no prefixes, no
+        generation prompt), the handler holds whitespace-only chunks, emits the
+        first real content with its leading whitespace removed, then passes
+        subsequent chunks straight through."""
+        endpoint_config = {"trimBeginningAndEndLineBreaks": True}
+        handler = StreamingResponseHandler(endpoint_config, {})
+
+        raw_stream = raw_dict_generator_factory([
+            {"token": " \n"},
+            {"token": " Hello"},
+            {"token": " world", "finish_reason": "stop"},
+        ])
+
+        result = list(handler.process_stream(raw_stream))
+
+        assert '"token": "Hello"' in result[0]
+        assert '"token": " world"' in result[1]
+        assert handler.full_response_text == "Hello world"
+
+    def test_strip_flag_with_empty_list_buffers_until_done_without_losing_text(self, mock_dependencies):
+        """Degenerate config: removeCustomTextFromResponseStart is true but the
+        prefix list is empty. Buffering is armed with nothing to match, so the
+        buffer is held until full/done, and the content must come out intact."""
+        workflow_config = {"removeCustomTextFromResponseStart": True,
+                           "responseStartTextToRemove": []}
+        handler = StreamingResponseHandler({}, workflow_config)
+
+        raw_stream = raw_dict_generator_factory([
+            {"token": "Hello"},
+            {"token": " world", "finish_reason": "stop"},
+        ])
+
+        result = list(handler.process_stream(raw_stream))
+
+        assert '"token": "Hello world"' in result[0]
+        assert handler.full_response_text == "Hello world"
+
+
+class TestBareStringPrefixConfigs:
+    """The custom-text settings accept a bare string as well as an array; a bare
+    string must be treated as one prefix, not iterated character by character."""
+
+    def test_collect_prefixes_accepts_bare_string_configs(self, mock_dependencies):
+        endpoint_config = {"removeCustomTextFromResponseStartEndpointWide": True,
+                           "responseStartTextToRemoveEndpointWide": "  EP:  "}
+        workflow_config = {"removeCustomTextFromResponseStart": True,
+                          "responseStartTextToRemove": "WF: "}
+        handler = StreamingResponseHandler(endpoint_config, workflow_config)
+
+        # Workflow entry kept verbatim; endpoint entry whitespace-stripped.
+        assert set(handler._prefixes_to_strip) == {"WF: ", "EP:"}
+
+        raw_stream = raw_dict_generator_factory([
+            {"token": "WF: EP: hi", "finish_reason": "stop"},
+        ])
+        result = list(handler.process_stream(raw_stream))
+
+        assert '"token": "hi"' in result[0]
+        assert handler.full_response_text == "hi"
+
+
+class TestOllamaToolCallRobustness:
+    """Edge cases of the Ollama-native tool-call accumulation: text tokens riding
+    on tool-call chunks, malformed delta entries, dict-form arguments, and
+    unparseable accumulated arguments."""
+
+    @pytest.fixture
+    def ollama_handler(self, mock_deps_with_tool_calls, mocker):
+        mocker.patch('Middleware.workflows.streaming.response_handler.instance_global_variables.get_api_type',
+                     return_value="ollamaapichat")
+        return StreamingResponseHandler({}, {})
+
+    def _tool_events(self, result):
+        import json
+        return [json.loads(r) for r in result if '"tool_calls"' in r]
+
+    def test_text_token_on_tool_chunk_is_emitted_and_captured(self, ollama_handler):
+        """A tool-call chunk that also carries a text token: the text is emitted
+        as its own event ahead of the accumulated call, and it must land in
+        full_response_text (the workflow layer's captured result)."""
+        raw_stream = raw_dict_generator_factory([
+            {"token": "Checking the weather. ",
+             "tool_calls": [{"index": 0, "id": "c1", "type": "function",
+                             "function": {"name": "get_weather", "arguments": '{"city": "NYC"}'}}]},
+            {"token": "", "finish_reason": "stop"},
+        ])
+
+        result = list(ollama_handler.process_stream(raw_stream))
+
+        assert any('"token": "Checking the weather. "' in r for r in result), \
+            "Text arriving on a tool-call chunk must still reach the client"
+        tool_events = self._tool_events(result)
+        assert len(tool_events) == 1
+        assert tool_events[0]["tool_calls"] == [
+            {"function": {"name": "get_weather", "arguments": {"city": "NYC"}}}
+        ]
+        assert ollama_handler.full_response_text == "Checking the weather. ", \
+            "Text delivered to the client must not be missing from the captured result"
+
+    def test_non_dict_tool_call_entries_are_skipped(self, ollama_handler):
+        """A malformed (non-dict) entry in a tool_calls delta list is skipped
+        instead of crashing the stream; valid entries still accumulate."""
+        raw_stream = raw_dict_generator_factory([
+            {"token": "", "tool_calls": [
+                "garbage-entry",
+                {"index": 0, "id": "c1", "function": {"name": "fn", "arguments": '{"a": 1}'}},
+            ]},
+            {"token": "", "finish_reason": "stop"},
+        ])
+
+        result = list(ollama_handler.process_stream(raw_stream))
+
+        tool_events = self._tool_events(result)
+        assert len(tool_events) == 1
+        assert tool_events[0]["tool_calls"] == [{"function": {"name": "fn", "arguments": {"a": 1}}}]
+
+    def test_dict_arguments_replace_accumulated_string(self, ollama_handler):
+        """An already-complete call (arguments as a dict, e.g. converted from an
+        Ollama or Claude backend) replaces any accumulated fragment wholesale."""
+        raw_stream = raw_dict_generator_factory([
+            {"token": "", "tool_calls": [{"index": 0, "id": "c1",
+                                          "function": {"name": "fn", "arguments": '{"partial": '}}]},
+            {"token": "", "tool_calls": [{"index": 0,
+                                          "function": {"arguments": {"a": 1}}}]},
+            {"token": "", "finish_reason": "stop"},
+        ])
+
+        result = list(ollama_handler.process_stream(raw_stream))
+
+        tool_events = self._tool_events(result)
+        assert len(tool_events) == 1
+        assert tool_events[0]["tool_calls"] == [{"function": {"name": "fn", "arguments": {"a": 1}}}]
+
+    def test_invalid_json_arguments_fall_back_to_empty_object(self, ollama_handler):
+        """Accumulated arguments that never became valid JSON (stream died
+        mid-arguments) are sent as an empty object, name preserved."""
+        raw_stream = raw_dict_generator_factory([
+            {"token": "", "tool_calls": [{"index": 0, "id": "c1",
+                                          "function": {"name": "fn", "arguments": '{"x": '}}]},
+            {"token": "", "finish_reason": "stop"},
+        ])
+
+        result = list(ollama_handler.process_stream(raw_stream))
+
+        tool_events = self._tool_events(result)
+        assert tool_events[0]["tool_calls"] == [{"function": {"name": "fn", "arguments": {}}}]
+
+    def test_non_object_json_arguments_fall_back_to_empty_object(self, ollama_handler):
+        """Arguments that parse to valid JSON but not an object (e.g. a bare
+        string) are sent as an empty object."""
+        raw_stream = raw_dict_generator_factory([
+            {"token": "", "tool_calls": [{"index": 0, "id": "c1",
+                                          "function": {"name": "fn", "arguments": '"just a string"'}}]},
+            {"token": "", "finish_reason": "stop"},
+        ])
+
+        result = list(ollama_handler.process_stream(raw_stream))
+
+        tool_events = self._tool_events(result)
+        assert tool_events[0]["tool_calls"] == [{"function": {"name": "fn", "arguments": {}}}]
+
+
+class TestOpenAiTextOnToolChunkCapture:
+    """OpenAI passthrough branch: a chunk carrying both a text token and
+    tool-call deltas delivers both in one event, and the text must land in
+    full_response_text (the workflow layer's captured result)."""
+
+    def test_text_on_tool_chunk_accumulates_into_full_response_text(self, mock_deps_with_tool_calls):
+        import json
+        handler = StreamingResponseHandler({}, {})
+
+        tc = [{"index": 0, "id": "c1", "type": "function",
+               "function": {"name": "fn", "arguments": "{}"}}]
+        raw_stream = raw_dict_generator_factory([
+            {"token": "Also text", "tool_calls": tc, "finish_reason": None},
+            {"token": "", "finish_reason": "tool_calls"},
+        ])
+
+        result = list(handler.process_stream(raw_stream))
+
+        # Select events that carry a tool_calls KEY (a bare finish event whose
+        # finish_reason VALUE is "tool_calls" must not match).
+        parsed = [json.loads(r.replace("data: ", "").strip()) for r in result
+                  if "[DONE]" not in r]
+        combined = [p for p in parsed if "tool_calls" in p]
+        assert len(combined) == 1
+        assert combined[0]["token"] == "Also text"
+        assert combined[0]["tool_calls"] == tc
+        assert handler.full_response_text == "Also text", \
+            "Text delivered to the client must not be missing from the captured result"
+
+
+class TestStreamTeardown:
+    """Closing the SSE generator mid-stream (client disconnect) must propagate
+    cleanly: no exception, no further consumption of the raw stream, and the
+    upstream generator's finally block (handler teardown) must run."""
+
+    def test_close_mid_stream_propagates_cleanly_and_finalizes_upstream(self, mock_dependencies):
+        state = {"yielded": 0, "closed": False}
+
+        def raw_generator():
+            try:
+                for i in range(100):
+                    state["yielded"] += 1
+                    yield {"token": f"t{i} ", "finish_reason": None}
+            finally:
+                state["closed"] = True
+
+        handler = StreamingResponseHandler({}, {})
+        sse_gen = handler.process_stream(raw_generator())
+
+        next(sse_gen)
+        next(sse_gen)
+        sse_gen.close()
+
+        assert state["closed"] is True, "Upstream generator must be finalized on close"
+        assert state["yielded"] == 2, "No further chunks may be consumed after close"
+
+
+class TestRealThinkRemoverIntegration:
+    """Runs the handler with the REAL StreamingThinkRemover (not the passthrough
+    mock) to pin the stage-1 (think removal) to stage-2 (prefix buffer) wiring.
+    The remover itself is exhaustively tested in test_streaming_utils.py; these
+    tests prove the handler feeds and drains it correctly."""
+
+    THINK_ENDPOINT_CONFIG = {
+        "removeThinking": True,
+        "startThinkTag": "<think>",
+        "endThinkTag": "</think>",
+        "openingTagGracePeriod": 50,
+    }
+
+    @pytest.fixture
+    def real_remover_deps(self, mocker):
+        def mock_build_response_json(token, finish_reason, **kwargs):
+            import json
+            return json.dumps({"token": token,
+                               "finish_reason": str(finish_reason) if finish_reason else "None"})
+
+        mock_api_helpers = mocker.patch('Middleware.workflows.streaming.response_handler.api_helpers')
+        mock_api_helpers.build_response_json.side_effect = mock_build_response_json
+        mock_api_helpers.sse_format.side_effect = lambda data, output_format: f"data: {data}\n\n"
+
+        mocker.patch(
+            'Middleware.workflows.streaming.response_handler.get_is_chat_complete_add_user_assistant',
+            return_value=False)
+        mocker.patch(
+            'Middleware.workflows.streaming.response_handler.get_is_chat_complete_add_missing_assistant',
+            return_value=False)
+        mocker.patch(
+            'Middleware.workflows.streaming.response_handler.get_liveness_tool_call',
+            return_value=None)
+        mocker.patch('Middleware.workflows.streaming.response_handler.instance_global_variables.get_api_type',
+                     return_value="openaichatcompletion")
+        # StreamingThinkRemover deliberately NOT patched.
+
+    def test_think_block_split_across_chunks_then_prefix_stripped(self, real_remover_deps):
+        """A think block whose tags are split across chunk boundaries is removed,
+        and the workflow prefix on the text AFTER the block is then stripped by
+        the prefix buffer: both stages working on one stream."""
+        workflow_config = {"removeCustomTextFromResponseStart": True,
+                           "responseStartTextToRemove": ["Prefix: "]}
+        handler = StreamingResponseHandler(self.THINK_ENDPOINT_CONFIG, workflow_config)
+
+        raw_stream = raw_dict_generator_factory([
+            {"token": "<thi"},
+            {"token": "nk>secret plan</thi"},
+            {"token": "nk>Prefix: Hel"},
+            {"token": "lo"},
+            {"token": "", "finish_reason": "stop"},
+        ])
+
+        result = list(handler.process_stream(raw_stream))
+
+        assert handler.full_response_text == "Hello"
+        joined = "".join(result)
+        assert "secret" not in joined, "Think-block content must never reach the client"
+        assert "Prefix:" not in joined.replace('"responseStartTextToRemove"', ""), \
+            "The configured prefix must be stripped from the post-think text"
+        assert '"token": "Hello"' in result[0]
+
+    def test_unterminated_think_block_flushed_at_finalization(self, real_remover_deps):
+        """If the stream ends inside an unterminated think block, finalization
+        reconstructs and emits the original text (opening tag included) instead
+        of silently dropping it."""
+        handler = StreamingResponseHandler(self.THINK_ENDPOINT_CONFIG, {})
+
+        raw_stream = raw_dict_generator_factory([
+            {"token": "<think>never closed"},
+        ])
+
+        result = list(handler.process_stream(raw_stream))
+
+        assert handler.full_response_text == "<think>never closed"
+        assert any('"token": "<think>never closed"' in r for r in result)
+
+
+class TestReconstructionBufferingDelay:
+    """Pins _reconstruction_pending_more_data: the group-chat reconstruction
+    decision must not be made on a first tiny delta that could still grow into
+    the model's own speaker prefix (else the prefix is doubled)."""
+
+    def test_partial_prefix_across_tiny_deltas_not_doubled(self, mock_dependencies):
+        handler = StreamingResponseHandler({}, {}, generation_prompt="Roland:")
+        handler._prefix_buffer_limit = 40
+
+        raw_stream = raw_dict_generator_factory([
+            {"token": "Rol"}, {"token": "and:"}, {"token": " hi", "finish_reason": "stop"}
+        ])
+
+        list(handler.process_stream(raw_stream))
+
+        # Deciding on the 3-char "Rol" would prepend the prompt and produce
+        # "Roland: Roland: hi" once the model's own prefix completes.
+        assert handler.full_response_text == "Roland: hi"
+        assert handler._reconstruction_applied is False
+
+    def test_short_colon_free_stream_prepends_exactly_once_on_done(self, mock_dependencies):
+        handler = StreamingResponseHandler({}, {}, generation_prompt="Roland:")
+        handler._prefix_buffer_limit = 40
+
+        raw_stream = raw_dict_generator_factory([
+            {"token": "hi"}, {"token": "!", "finish_reason": "stop"}
+        ])
+
+        list(handler.process_stream(raw_stream))
+
+        assert handler.full_response_text == "Roland: hi!"
+        assert handler._reconstruction_applied is True
+
+    def test_pending_helper_edges(self, mock_dependencies):
+        handler = StreamingResponseHandler({}, {}, generation_prompt="Roland:")
+        threshold = len("Roland:") + 10
+
+        # Colon inside the prompt-length window: the decision can be made now.
+        assert handler._reconstruction_pending_more_data("Roland:") is False
+        assert handler._reconstruction_pending_more_data(":") is False
+        # Colon-free and shorter than the window: keep buffering.
+        assert handler._reconstruction_pending_more_data("Rol") is True
+        assert handler._reconstruction_pending_more_data("") is True
+        assert handler._reconstruction_pending_more_data("x" * (threshold - 1)) is True
+        # Grown past the window with no colon: no speaker prefix is coming.
+        assert handler._reconstruction_pending_more_data("x" * threshold) is False
+        # Once reconstruction has been applied the delay is inert.
+        handler._reconstruction_applied = True
+        assert handler._reconstruction_pending_more_data("Rol") is False
+
+    def test_tool_call_chunk_does_not_force_premature_reconstruction(self, mock_dependencies):
+        """A mid-stream tool-call chunk must not drain a buffer that is still
+        too short for the reconstruction decision (the drain would decide on the
+        tiny buffer and double the prefix)."""
+        handler = StreamingResponseHandler({}, {}, generation_prompt="Roland:")
+        handler._prefix_buffer_limit = 40
+        tool_call = {"id": "c1", "function": {"name": "noop", "arguments": "{}"}}
+
+        raw_stream = raw_dict_generator_factory([
+            {"token": "Rol"},
+            {"token": "", "tool_calls": [tool_call]},
+            {"token": "and: hi", "finish_reason": "stop"},
+        ])
+
+        list(handler.process_stream(raw_stream))
+
+        assert handler.full_response_text == "Roland: hi"
+        assert handler._reconstruction_applied is False
+
+
+class TestEmptyToolCallsListOnTextDelta:
+    """Pins the truthiness check at the handler layer: a text delta carrying
+    "tool_calls": [] must take the normal text path, not the tool-call bypass."""
+
+    def test_text_with_empty_tool_calls_list_takes_text_path(self, mock_dependencies):
+        handler = StreamingResponseHandler({}, {})
+
+        raw_stream = raw_dict_generator_factory([
+            {"token": "hi", "tool_calls": []},
+            {"token": " there", "finish_reason": "stop"},
+        ])
+
+        result = list(handler.process_stream(raw_stream))
+
+        assert handler.full_response_text == "hi there"
+        # The final finish must be the stream's own stop, not a tool_calls
+        # finish inherited from the bypass path.
+        assert '"finish_reason": "stop"' in "".join(result)

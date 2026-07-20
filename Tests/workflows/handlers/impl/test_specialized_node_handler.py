@@ -97,25 +97,23 @@ class TestHandleWorkflowLock:
 
     def test_acquires_lock_when_not_locked(self, specialized_handler, base_context, mock_locking_service):
         """Should acquire a lock if one is not already active."""
-        mock_locking_service.get_lock.return_value = False
+        mock_locking_service.acquire_lock.return_value = True
         base_context.config = {"workflowLockId": "test-lock"}
 
         specialized_handler.handle_workflow_lock(base_context)
 
-        mock_locking_service.get_lock.assert_called_once_with("test-lock")
-        mock_locking_service.create_node_lock.assert_called_once_with(
+        # Acquisition is a single atomic call (check-and-insert in one transaction).
+        mock_locking_service.acquire_lock.assert_called_once_with(
             instance_global_variables.INSTANCE_ID, base_context.workflow_id, "test-lock"
         )
 
     def test_terminates_when_locked(self, specialized_handler, base_context, mock_locking_service):
         """Should raise EarlyTerminationException if a lock is already active."""
-        mock_locking_service.get_lock.return_value = True
+        mock_locking_service.acquire_lock.return_value = False
         base_context.config = {"workflowLockId": "test-lock"}
 
         with pytest.raises(EarlyTerminationException, match="Workflow is locked by test-lock"):
             specialized_handler.handle_workflow_lock(base_context)
-
-        mock_locking_service.create_node_lock.assert_not_called()
 
     def test_raises_error_if_lock_id_missing(self, specialized_handler, base_context):
         """Should raise ValueError if 'workflowLockId' is missing from the config."""
@@ -156,6 +154,32 @@ class TestHandleGetCustomFile:
             filepath="/path/to/file.txt",
             delimiter="\n",
             custom_delimiter="\n"
+        )
+
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.load_custom_file', return_value="file content")
+    def test_custom_return_delimiter_only_backfills_delimiter(self, mock_load_file, specialized_handler, base_context):
+        """When only customReturnDelimiter is set, it is used for both forwarded kwargs."""
+        base_context.config = {"filepath": "/f.txt", "customReturnDelimiter": "###"}
+
+        specialized_handler.handle_get_custom_file(base_context)
+
+        mock_load_file.assert_called_once_with(
+            filepath="/f.txt",
+            delimiter="###",
+            custom_delimiter="###"
+        )
+
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.load_custom_file', return_value="file content")
+    def test_delimiter_only_backfills_custom_return_delimiter(self, mock_load_file, specialized_handler, base_context):
+        """When only delimiter is set, it is used for both forwarded kwargs."""
+        base_context.config = {"filepath": "/f.txt", "delimiter": ";"}
+
+        specialized_handler.handle_get_custom_file(base_context)
+
+        mock_load_file.assert_called_once_with(
+            filepath="/f.txt",
+            delimiter=";",
+            custom_delimiter=";"
         )
 
     def test_returns_error_if_filepath_missing(self, specialized_handler, base_context):
@@ -262,6 +286,12 @@ class TestHandleGetCustomFile:
         result = specialized_handler.handle_get_custom_file(base_context)
         assert result == "GetCustomFile: 'tailCount' must be an integer >= 1"
 
+    def test_rejects_invalid_head_count(self, specialized_handler, base_context):
+        """Should reject a non-positive headCount with the headCount-specific message."""
+        base_context.config = {"filepath": "/f.txt", "headCount": 0}
+        result = specialized_handler.handle_get_custom_file(base_context)
+        assert result == "GetCustomFile: 'headCount' must be an integer >= 1"
+
 
 class TestHandleSaveCustomFile:
     """Tests the 'SaveCustomFile' node logic."""
@@ -291,6 +321,18 @@ class TestHandleSaveCustomFile:
         """Should return an error message if 'content' is missing."""
         base_context.config = {"filepath": "/path/save.txt"}
         assert specialized_handler.handle_save_custom_file(base_context) == "No content specified"
+
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.save_custom_file')
+    def test_empty_string_content_is_valid(self, mock_save_file, specialized_handler, base_context):
+        """Documented behavior: "content": "" is valid and writes an empty file
+        (only a MISSING content key is an error). A truthiness check instead of
+        the `is None` check would break this."""
+        base_context.config = {"filepath": "/path/save.txt", "content": ""}
+
+        result = specialized_handler.handle_save_custom_file(base_context)
+
+        mock_save_file.assert_called_once_with(filepath="/path/save.txt", content="")
+        assert result == "File successfully saved to /path/save.txt"
 
     @patch('Middleware.workflows.handlers.impl.specialized_node_handler.save_custom_file',
            side_effect=IOError("Disk full"))
@@ -376,10 +418,101 @@ class TestHandleSaveCustomFile:
         assert result == "File successfully saved to /path/save.txt"
 
     def test_rejects_invalid_mode(self, specialized_handler, base_context):
-        """Should reject a mode other than overwrite/append."""
+        """Should reject a mode outside the supported set."""
         base_context.config = {"filepath": "/path/save.txt", "content": "note", "mode": "bogus"}
         result = specialized_handler.handle_save_custom_file(base_context)
-        assert result == "SaveCustomFile: 'mode' must be 'overwrite' or 'append', got 'bogus'"
+        assert result == ("SaveCustomFile: 'mode' must be one of 'overwrite', 'append', "
+                          "'replace', 'remove', or 'trim', got 'bogus'")
+
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.save_custom_file')
+    def test_passes_replace_mode_through(self, mock_save_file, specialized_handler, base_context):
+        """Should resolve and forward find + content for replace mode, and report the change count."""
+        mock_save_file.return_value = 2
+        base_context.agent_outputs = {"agent1Output": "old text", "agent2Output": "new text"}
+        base_context.config = {
+            "filepath": "/path/notes.txt",
+            "mode": "replace",
+            "find": "{agent1Output}",
+            "content": "{agent2Output}",
+        }
+
+        result = specialized_handler.handle_save_custom_file(base_context)
+
+        mock_save_file.assert_called_once_with(
+            filepath="/path/notes.txt", content="new text", mode="replace", find="old text"
+        )
+        assert result == "File successfully updated: replaced 2 occurrence(s) in /path/notes.txt"
+
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.save_custom_file')
+    def test_replace_reports_no_match(self, mock_save_file, specialized_handler, base_context):
+        """Should report an unchanged file when replace matches nothing."""
+        mock_save_file.return_value = 0
+        base_context.config = {
+            "filepath": "/path/notes.txt", "mode": "replace", "find": "gone", "content": "new"
+        }
+
+        result = specialized_handler.handle_save_custom_file(base_context)
+
+        assert result == "File unchanged: no occurrence of the target text found in /path/notes.txt"
+
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.save_custom_file')
+    def test_passes_remove_mode_without_content(self, mock_save_file, specialized_handler, base_context):
+        """Remove mode should not require content and should report removed lines."""
+        mock_save_file.return_value = 1
+        base_context.agent_outputs = {"agent1Output": "resolved entry"}
+        base_context.config = {
+            "filepath": "/path/list.md", "mode": "remove", "find": "{agent1Output}"
+        }
+
+        result = specialized_handler.handle_save_custom_file(base_context)
+
+        mock_save_file.assert_called_once_with(
+            filepath="/path/list.md", content="", mode="remove", find="resolved entry"
+        )
+        assert result == "File successfully updated: removed 1 line(s) from /path/list.md"
+
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.save_custom_file')
+    def test_remove_reports_no_match(self, mock_save_file, specialized_handler, base_context):
+        """Should report an unchanged file when remove matches no line."""
+        mock_save_file.return_value = 0
+        base_context.config = {"filepath": "/path/list.md", "mode": "remove", "find": "gone"}
+
+        result = specialized_handler.handle_save_custom_file(base_context)
+
+        assert result == "File unchanged: no line matching the target text found in /path/list.md"
+
+    def test_replace_requires_find(self, specialized_handler, base_context):
+        """Replace mode without a find value should return an error and not touch the file."""
+        base_context.config = {"filepath": "/path/notes.txt", "mode": "replace", "content": "new"}
+        result = specialized_handler.handle_save_custom_file(base_context)
+        assert result == "SaveCustomFile: mode 'replace' requires a 'find' value"
+
+    def test_remove_requires_find(self, specialized_handler, base_context):
+        """Remove mode without a find value should return an error."""
+        base_context.config = {"filepath": "/path/list.md", "mode": "remove"}
+        result = specialized_handler.handle_save_custom_file(base_context)
+        assert result == "SaveCustomFile: mode 'remove' requires a 'find' value"
+
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.save_custom_file')
+    def test_passes_trim_mode_without_content_or_find(self, mock_save_file, specialized_handler, base_context):
+        """Trim mode should require neither content nor find and should report tidied lines."""
+        mock_save_file.return_value = 2
+        base_context.config = {"filepath": "/path/log.md", "mode": "trim"}
+
+        result = specialized_handler.handle_save_custom_file(base_context)
+
+        mock_save_file.assert_called_once_with(filepath="/path/log.md", content="", mode="trim")
+        assert result == "File successfully tidied: removed 2 blank line(s) from /path/log.md"
+
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.save_custom_file')
+    def test_trim_reports_no_blanks(self, mock_save_file, specialized_handler, base_context):
+        """Should report an unchanged file when trim finds no blank lines."""
+        mock_save_file.return_value = 0
+        base_context.config = {"filepath": "/path/log.md", "mode": "trim"}
+
+        result = specialized_handler.handle_save_custom_file(base_context)
+
+        assert result == "File unchanged: no blank lines to remove in /path/log.md"
 
 
 class TestHandleImageProcessorNode:
@@ -441,22 +574,72 @@ class TestHandleImageProcessorNode:
         assert base_context.messages[1] == {"role": "assistant", "content": "reply"}
 
     @patch('Middleware.workflows.handlers.impl.specialized_node_handler.LLMDispatchService.dispatch',
-           return_value="desc")
+           return_value="a red bicycle leaning against a brick wall")
     def test_add_as_user_message_true(self, mock_dispatch, specialized_handler, base_context, mock_variable_service):
-        """Should insert a new user message with the description into the conversation history."""
+        """Should append the injected description at index 1 for a single-message history."""
         user_msg = {"role": "user", "content": "describe this", "images": ["img_data"]}
-        base_context.config = {"addAsUserMessage": True}
+        base_context.config = {"addAsUserMessage": True, "message": "Vision analysis: [IMAGE_BLOCK]"}
         base_context.messages = [user_msg]
 
-        mock_variable_service.apply_variables.side_effect = lambda t, c: t.replace('[IMAGE_BLOCK]', 'desc')
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
+
+        result = specialized_handler.handle_image_processor_node(base_context)
+
+        assert result == "a red bicycle leaning against a brick wall"
+        assert len(base_context.messages) == 2
+        # Original message stays at index 0.
+        assert base_context.messages[0]["content"] == "describe this"
+        # The injected message is appended after it for single-message histories.
+        injected = base_context.messages[1]
+        assert injected["role"] == "user"
+        assert injected["content"] == "Vision analysis: a red bicycle leaning against a brick wall"
+
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.LLMDispatchService.dispatch',
+           return_value="a tabby cat sleeping on a keyboard")
+    def test_add_as_user_message_inserts_before_last_message(self, mock_dispatch, specialized_handler, base_context,
+                                                             mock_variable_service):
+        """With more than one message, the description is inserted just before the last message."""
+        base_context.config = {"addAsUserMessage": True, "message": "Vision analysis: [IMAGE_BLOCK]"}
+        base_context.messages = [
+            {"role": "user", "content": "look at this", "images": ["img_data"]},
+            {"role": "assistant", "content": "sure, one moment"},
+            {"role": "user", "content": "what do you see?"},
+        ]
+
+        mock_variable_service.apply_variables.side_effect = lambda t, c: t
 
         specialized_handler.handle_image_processor_node(base_context)
 
-        assert len(base_context.messages) == 2
-        new_message = base_context.messages[0]
-        assert new_message["role"] == "user"
-        assert "[IMAGE_BLOCK]" not in new_message["content"]
-        assert "desc" in new_message["content"]
+        assert len(base_context.messages) == 4
+        injected = base_context.messages[2]
+        assert injected["role"] == "user"
+        assert injected["content"] == "Vision analysis: a tabby cat sleeping on a keyboard"
+        # The original last message remains last.
+        assert base_context.messages[3] == {"role": "user", "content": "what do you see?"}
+
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.LLMDispatchService.dispatch',
+           side_effect=["desc for img0", "desc for img1"])
+    def test_legacy_per_image_dispatch_targets_correct_message(self, mock_dispatch, specialized_handler, base_context):
+        """Each per-image dispatch injects only its own image into the correct message index."""
+        base_context.messages = [
+            {"role": "user", "content": "first", "images": ["img0"]},
+            {"role": "assistant", "content": "middle"},
+            {"role": "user", "content": "second", "images": ["img1"]},
+        ]
+
+        result = specialized_handler.handle_image_processor_node(base_context)
+
+        assert result == "desc for img0\n-------------\ndesc for img1"
+        assert mock_dispatch.call_count == 2
+
+        expected_targets = [(0, "img0"), (2, "img1")]
+        for call_obj, (msg_idx, image) in zip(mock_dispatch.call_args_list, expected_targets):
+            dispatched_messages = call_obj.kwargs['context'].messages
+            assert dispatched_messages[msg_idx]["images"] == [image]
+            for i, msg in enumerate(dispatched_messages):
+                if i != msg_idx:
+                    assert "images" not in msg
+            assert call_obj.kwargs['llm_takes_images'] is True
 
 
 class TestHandleImageProcessorNodeWithCaching:
@@ -580,7 +763,7 @@ class TestHandleImageProcessorNodeWithCaching:
     @patch('Middleware.workflows.handlers.impl.specialized_node_handler.get_discussion_vision_responses_file_path',
            return_value='/mock/disc_vision_responses.json')
     @patch('Middleware.workflows.handlers.impl.specialized_node_handler.LLMDispatchService.dispatch',
-           return_value="desc")
+           return_value="vision-desc-42")
     def test_add_as_user_message_per_message_injection(self, mock_dispatch, mock_get_path, mock_read, mock_write,
                                                        specialized_handler, base_context, mock_variable_service):
         """With caching and addAsUserMessage=true, descriptions are injected after each image message."""
@@ -598,8 +781,60 @@ class TestHandleImageProcessorNodeWithCaching:
         assert base_context.messages[0]["content"] == "first"
         assert base_context.messages[1]["content"] == "has image"
         assert "[IMAGE_BLOCK]" not in base_context.messages[2]["content"]
+        assert "vision-desc-42" in base_context.messages[2]["content"]
         assert base_context.messages[2]["role"] == "user"
         assert base_context.messages[3]["content"] == "last message"
+
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.write_vision_responses')
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.read_vision_responses', return_value={})
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.get_discussion_vision_responses_file_path',
+           return_value='/mock/disc_vision_responses.json')
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.LLMDispatchService.dispatch',
+           side_effect=["descX", "descY"])
+    def test_cached_path_dispatch_context_isolates_single_image(self, mock_dispatch, mock_get_path, mock_read,
+                                                                mock_write, specialized_handler, base_context):
+        """Each cached-path dispatch context carries exactly one image on the correct message."""
+        base_context.config = {"saveVisionResponsesToDiscussionId": True}
+        base_context.messages = [
+            {"role": "user", "content": "m0", "images": ["imgX"]},
+            {"role": "assistant", "content": "m1"},
+            {"role": "user", "content": "m2", "images": ["imgY"]},
+        ]
+
+        specialized_handler.handle_image_processor_node(base_context)
+
+        assert mock_dispatch.call_count == 2
+        expected_targets = [(0, "imgX"), (2, "imgY")]
+        for call_obj, (msg_idx, image) in zip(mock_dispatch.call_args_list, expected_targets):
+            dispatched_messages = call_obj.kwargs['context'].messages
+            assert dispatched_messages[msg_idx]["images"] == [image]
+            for i, msg in enumerate(dispatched_messages):
+                if i != msg_idx:
+                    assert "images" not in msg
+            assert call_obj.kwargs['llm_takes_images'] is True
+
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.write_vision_responses')
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.read_vision_responses', return_value={})
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.get_discussion_vision_responses_file_path',
+           return_value='/mock/disc_vision_responses.json')
+    @patch('Middleware.workflows.handlers.impl.specialized_node_handler.LLMDispatchService.dispatch',
+           return_value="recent desc")
+    def test_custom_vision_scan_message_limit(self, mock_dispatch, mock_get_path, mock_read, mock_write,
+                                              specialized_handler, base_context):
+        """A custom visionScanMessageLimit restricts the image scan window."""
+        messages = [{"role": "user", "content": f"msg{i}"} for i in range(4)]
+        messages[1]["images"] = ["old_img"]
+        messages[3]["images"] = ["new_img"]
+        base_context.config = {"saveVisionResponsesToDiscussionId": True, "visionScanMessageLimit": 2}
+        base_context.messages = messages
+
+        result = specialized_handler.handle_image_processor_node(base_context)
+
+        assert result == "recent desc"
+        mock_dispatch.assert_called_once()
+        dispatched_messages = mock_dispatch.call_args.kwargs['context'].messages
+        assert dispatched_messages[3]["images"] == ["new_img"]
+        assert "images" not in dispatched_messages[1]
 
     @patch('Middleware.workflows.handlers.impl.specialized_node_handler.write_vision_responses')
     @patch('Middleware.workflows.handlers.impl.specialized_node_handler.read_vision_responses', return_value={})
@@ -699,21 +934,12 @@ class TestHandleStaticResponse:
 
 
 class TestStreamStaticContentUtil:
-    """Tests the 'stream_static_content' utility function."""
+    """Tab-handling test for the 'stream_static_content' utility.
 
-    @patch('time.sleep')
-    def test_streams_tokens_correctly(self, mock_sleep):
-        """Should yield dictionaries for each token (word and whitespace)."""
-        content = "word1 word2"
-        generator = stream_static_content(content)
-        results = list(generator)
-
-        assert len(results) == 4
-        assert results[0] == {'token': 'word1', 'finish_reason': None}
-        assert results[1] == {'token': ' ', 'finish_reason': None}
-        assert results[2] == {'token': 'word2', 'finish_reason': None}
-        assert results[3] == {'token': '', 'finish_reason': 'stop'}
-        assert mock_sleep.call_count == 2
+    The canonical tests for this utility live in
+    Tests/utilities/test_streaming_utils.py::TestStreamStaticContent. Only the
+    tab-containing case is kept here because that file does not exercise tabs.
+    """
 
     @patch('time.sleep')
     def test_streams_preserves_whitespace_and_newlines(self, mock_sleep):
@@ -733,17 +959,6 @@ class TestStreamStaticContentUtil:
         assert results[9] == {'token': '', 'finish_reason': 'stop'}
 
         assert mock_sleep.call_count == 5
-
-    @patch('time.sleep')
-    def test_streams_empty_string(self, mock_sleep):
-        """Should yield a single 'stop' token for empty content."""
-        content = ""
-        generator = stream_static_content(content)
-        results = list(generator)
-
-        assert len(results) == 1
-        assert results[0] == {'token': '', 'finish_reason': 'stop'}
-        mock_sleep.assert_not_called()
 
 
 class TestHandleArithmeticProcessor:
@@ -883,6 +1098,9 @@ class TestHandleConditionalComplex:
         ("(5 > 3", "Mismatched parentheses: missing ')'"),
         ("5 > < 3", "Syntax error: Operator '<' must follow a single value."),
         ("5 OR AND 3", "Syntax error: Not enough operands for 'OR'"),
+        ("5 > 3)", "Mismatched parentheses: missing '('"),
+        ("(5 6)", "Invalid comparison format: 5 6"),
+        ("(TRUE) (FALSE)", "Invalid expression format."),
     ])
     def test_malformed_expressions(self, specialized_handler, base_context, mock_variable_service,
                                    condition, warning_msg):
@@ -1697,7 +1915,7 @@ class TestJsonExtractorEdgeCases:
         assert result == "val1"
 
     def test_dot_notation_field_does_not_do_nested_access(self, specialized_handler, base_context, mock_variable_service):
-        """Should not do nested access with dot notation — treats field name literally."""
+        """Should not do nested access with dot notation; treats field name literally."""
         base_context.config = {
             "jsonToExtractFrom": '{"details": {"name": "inner"}}',
             "fieldToExtract": "details.name"
@@ -1979,6 +2197,24 @@ class TestHandleDelimitedChunker:
         result = specialized_handler.handle_delimited_chunker(base_context)
 
         assert result == "x,y"
+
+    def test_delimiter_resolving_to_empty_returns_error(self, specialized_handler, base_context,
+                                                        mock_variable_service):
+        """A delimiter that RESOLVES to an empty string is a misconfiguration and must be
+        reported, not passed to str.split('') (which raises ValueError)."""
+        base_context.config = {
+            "content": "a,b,c",
+            "delimiter": "{agent1Output}",
+            "mode": "head",
+            "count": 2
+        }
+        mock_variable_service.apply_variables.side_effect = (
+            lambda t, c: "" if t == "{agent1Output}" else t
+        )
+
+        result = specialized_handler.handle_delimited_chunker(base_context)
+
+        assert result == "Invalid delimiter: must resolve to a non-empty string"
 
     def test_variable_substitution_in_delimiter(self, specialized_handler, base_context, mock_variable_service):
         """Should resolve variables in the delimiter field."""

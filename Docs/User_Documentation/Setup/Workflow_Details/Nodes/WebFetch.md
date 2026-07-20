@@ -41,9 +41,10 @@ unless you specifically need shell semantics or a feature that only the `curl` b
 
     * A human-readable name for the node, used in logging.
 
-* `"agentName"`: **(String, Required)**
+* `"agentName"`: **(String, Optional)**
 
-    * The output variable name. The node's return value becomes `{agentName}` for downstream nodes.
+    * A fallback display name used in logs when `title` is not set. It does not create a named output variable;
+      the node's return value is available to later nodes only positionally, as `{agent#Output}`.
 
 * `"url"`: **(String, Required)**
 
@@ -91,17 +92,17 @@ unless you specifically need shell semantics or a feature that only the `curl` b
         * `"raise"` aborts the workflow with the underlying exception.
         * `"return"` causes the node to emit an error payload as its output, allowing a later `Conditional` node to
           branch on the failure. The shape of the payload matches `outputFormat`:
-            * `"text"` or `"json"` — returns the response body if any, otherwise the error message.
-            * `"full"` — returns a JSON string with `error`, `status_code`, `headers`, and `body` keys; missing values
+            * `"text"` or `"json"`: returns the response body if any, otherwise the error message.
+            * `"full"`: returns a JSON string with `error`, `status_code`, `headers`, and `body` keys; missing values
               are `null`.
 
 * `"proxy"`: **(String, Optional)**
 
     * A proxy URL routed through both `http` and `https` traffic. Any scheme `requests` supports works:
-        * `socks5://host:port` — SOCKS5 with local DNS resolution.
-        * `socks5h://host:port` — SOCKS5 with remote DNS (resolves at the proxy; useful for Tor/onion endpoints).
-        * `socks4://host:port` — SOCKS4.
-        * `http://host:port` or `https://host:port` — standard HTTP proxy.
+        * `socks5://host:port`: SOCKS5 with local DNS resolution.
+        * `socks5h://host:port`: SOCKS5 with remote DNS (resolves at the proxy; useful for Tor/onion endpoints).
+        * `socks4://host:port`: SOCKS4.
+        * `http://host:port` or `https://host:port`: standard HTTP proxy.
     * Auth: include credentials inline, e.g., `socks5://user:pass@host:1080`.
     * Supports variable substitution. An empty string is treated as "no proxy".
     * **Dependency note:** SOCKS schemes require the `PySocks` package, which ships in Wilmer's `requirements.txt` and
@@ -119,7 +120,7 @@ unless you specifically need shell semantics or a feature that only the `curl` b
 * `"verify"`: **(Boolean, Optional, default `true`)**
 
     * Whether the server's TLS certificate is verified. The default (`true`) verifies against the default CA store
-      (the bundled `certifi` roots — note this is **not** the operating system's certificate store, so a certificate
+      (the bundled `certifi` roots; note this is **not** the operating system's certificate store, so a certificate
       trusted only by the OS keychain will still fail unless you supply `caBundle`). Set it to `false` to disable
       certificate verification entirely.
     * **Security warning:** `verify: false` exposes the connection to man-in-the-middle attacks. Prefer `caBundle`
@@ -131,10 +132,10 @@ unless you specifically need shell semantics or a feature that only the `curl` b
 * `"allowRedirects"`: **(Boolean, Optional, default `true`)**
 
     * Whether HTTP 3xx redirects are followed. The default (`true`) preserves the historical behavior. Set it to
-      `false` to stop a remote redirect from bouncing the request to a different host — see "Privacy and Network
+      `false` to stop a remote redirect from bouncing the request to a different host; see "Privacy and Network
       Behavior" below for why this matters when any part of the `url` comes from a variable.
 
-* `"maxResponseBytes"`: **(Integer, Optional, default `10485760` — 10 MiB)**
+* `"maxResponseBytes"`: **(Integer, Optional, default `10485760`, 10 MiB)**
 
     * Caps how many bytes of the response body are read into memory. The body is streamed and the read is aborted once
       the cap is exceeded, so a very large or chunked-infinite response cannot exhaust memory. When the cap is exceeded
@@ -144,8 +145,8 @@ unless you specifically need shell semantics or a feature that only the `curl` b
 * `"blockPrivateAddresses"`: **(Boolean, Optional, default `false`)**
 
     * Opt-in SSRF guard. When `true`, the request is rejected if its host is, or resolves to, an address that is not
-      globally routable — loopback/link-local/private/reserved (e.g. `127.0.0.1`, the cloud metadata endpoint
-      `169.254.169.254`, and the `10.x` / `172.16–31.x` / `192.168.x` ranges), plus shared CGNAT space (`100.64.0.0/10`)
+      globally routable: loopback/link-local/private/reserved (e.g. `127.0.0.1`, the cloud metadata endpoint
+      `169.254.169.254`, and the `10.x` / `172.16-31.x` / `192.168.x` ranges), plus shared CGNAT space (`100.64.0.0/10`)
       and the TEST-NET ranges. The check is re-applied to every redirect hop *before* the connection is made. A blocked
       target is treated like any other failure (honoring `onError`). Default `false` preserves the historical behavior.
       See "Privacy and Network Behavior" below.
@@ -155,6 +156,9 @@ unless you specifically need shell semantics or a feature that only the `curl` b
     * Opt-in host allowlist. When non-empty, the request host must match (case-insensitively) one of the listed hosts;
       any other host is rejected (and re-checked on every redirect hop). Entries support variable substitution. Combine
       with `blockPrivateAddresses` to require both an allowlisted host *and* a non-private address.
+    * Entries must be hostnames only (no port). Matching runs against the URL's hostname with any port stripped, so an
+      entry written as `"example.com:8080"` can never match and every request to it will be rejected. Write
+      `"example.com"` instead; the port in the URL itself is unaffected.
 
 -----
 
@@ -164,7 +168,6 @@ All string fields are passed through Wilmer's standard variable resolver before 
 can reference any of:
 
 * Other agent outputs: `{agent1Output}`, `{agent2Output}`, ...
-* Named agents: `{MyAgent}` (matching an earlier node's `agentName`)
 * Built-in variables: `{Discussion_Id}`, `{YYYY_MM_DD}`, `{userInput}`, etc.
 * Custom workflow variables defined at the top of the workflow JSON.
 
@@ -208,13 +211,13 @@ What it does **not** do:
 * It does not strip `<nav>`, `<header>`, `<footer>`, `<aside>`, advertising blocks, cookie banners, or other body-level
   chrome. Those are real, semantically-valid body content, and removing them aggressively would also drop legitimate
   sidebars on some sites. As a result, the stripped output of a typical content site still includes the visible
-  navigation text alongside the article body. An LLM can still work with this — the script/style noise was the part
-  blowing out the context window — but the output is not "article body only" in the Mozilla-Readability sense.
+  navigation text alongside the article body. An LLM can still work with this (the script/style noise was the part
+  blowing out the context window), but the output is not "article body only" in the Mozilla-Readability sense.
 * It is not a sanitizer. Do not use the output as HTML.
 * It will not crash on malformed HTML; `html.parser` is lenient. Broken pages may leak a small amount of unintended
   text into the output.
 
-For a typical content-heavy web page (e.g., a Wikipedia article), `html-stripped` produces output roughly **1–3% the
+For a typical content-heavy web page (e.g., a Wikipedia article), `html-stripped` produces output roughly **1-3% the
 size of the raw HTML**, which is what makes it useful for LLM pipelines.
 
 For pages where you need true main-content extraction, run the response through a `PythonModule` node with a
@@ -230,11 +233,11 @@ body you have written into the node configuration (after variable substitution).
 
 For HTTPS, certificate verification is on by default and uses the bundled `certifi` CA roots (not the operating
 system's certificate store). To trust a private or internal CA, set `caBundle` to a PEM file (verification stays on);
-to disable verification entirely for a trusted host, set `verify: false`. Both are opt-in — see the `caBundle` and
+to disable verification entirely for a trusted host, set `verify: false`. Both are opt-in; see the `caBundle` and
 `verify` fields above.
 
 **Treat substituted `url` values as trusted input (SSRF).** By default the node sends the request to whatever the `url`
-resolves to after variable substitution — with no guard enabled there is no host, IP, or scheme allowlist. If any part
+resolves to after variable substitution; with no guard enabled there is no host, IP, or scheme allowlist. If any part
 of the `url` (or a variable inside it) is derived from the conversation (e.g. `{userInput}`), an attacker-controlled
 value could point the request at an internal address (`127.0.0.1:<port>`, the cloud metadata endpoint
 `169.254.169.254`, other LAN hosts) and, with arbitrary `method`/`headers`/`body`, turn the node into a server-side
@@ -247,13 +250,13 @@ to restrict requests to a fixed host list. Both are re-checked on every redirect
 `3xx` cannot bounce the request to an internal host. (When neither control is enabled, redirects are still followed by
 default; set `"allowRedirects": false` to stop a redirect from reaching another host.) Note that `blockPrivateAddresses`
 resolves the hostname here, but the OS resolves it again at connect time, so a hostile DNS that answers
-public-then-private (DNS rebinding) can still slip past — pin to fixed names with `allowedHosts` when that residual risk
+public-then-private (DNS rebinding) can still slip past. Pin to fixed names with `allowedHosts` when that residual risk
 matters.
 
 `WebFetch` is the node to prefer when a URL can be filled from untrusted/conversation-derived data: it parses the URL
 and resolves DNS with the same Python stack it then connects with, so the host the guard screened is the host actually
-dialed (rebinding aside). `CurlCommand`'s equivalent guard is best-effort only — it validates in Python but the `curl`
-binary re-parses and re-resolves independently — so route untrusted URLs here rather than through `CurlCommand`. See the
+dialed (rebinding aside). `CurlCommand`'s equivalent guard is best-effort only (it validates in Python but the `curl`
+binary re-parses and re-resolves independently), so route untrusted URLs here rather than through `CurlCommand`. See the
 `CurlCommand` node's "SSRF address guard" note for details.
 
 -----
@@ -262,6 +265,6 @@ binary re-parses and re-resolves independently — so route untrusted URLs here 
 
 * Use `WebFetch` for HTTP and HTTPS calls that fit the standard request/response model. It is cross-platform, has no
   external binary dependency, and integrates cleanly with the workflow variable system.
-* Use `CurlCommand` only when you specifically need the `curl` binary itself — for example, to use a `curl`-only flag
+* Use `CurlCommand` only when you specifically need the `curl` binary itself, for example to use a `curl`-only flag
   (such as `--data-binary @file`), to call protocols `requests` does not support, or to mirror a shell command exactly
   as a user would run it.

@@ -75,15 +75,11 @@ def get_config_property_if_exists(config_property, config_data):
         config_data (dict): The dictionary containing the configuration data.
 
     Returns:
-        str or None: The value of the property if it exists and is not an empty string, otherwise None.
+        str or None: The value of the property if it is present and truthy, otherwise None.
     """
-    # Handle cases where config_data might be None
     if config_data is None:
         return None
-    if config_data.get(config_property) and config_data.get(config_property) != "":
-        return config_data.get(config_property)
-    else:
-        return None
+    return config_data.get(config_property) or None
 
 
 def get_current_username():
@@ -92,9 +88,9 @@ def get_current_username():
 
     Checks the following in order:
     1. Request-scoped user (set from the model field for multi-user mode)
-    2. USERS list has exactly one entry (single-user mode) -- return that entry
-    3. USERS list has multiple entries but no request user -- raise RuntimeError
-    4. USERS is None -- fall back to _current-user.json (legacy, no --User arg)
+    2. USERS list has exactly one entry (single-user mode): return that entry
+    3. USERS list has multiple entries but no request user: raise RuntimeError
+    4. USERS is None: fall back to _current-user.json (legacy, no --User arg)
 
     Returns:
         str: The name of the current user.
@@ -112,10 +108,10 @@ def get_current_username():
             return users[0]
         raise RuntimeError(
             f"Multi-user mode active with {len(users)} users but no request-scoped user set. "
-            f"This is a bug -- every request must identify a user. "
+            f"This is a bug: every request must identify a user. "
             f"Configured users: {users}"
         )
-    config_dir = str(get_root_config_directory())
+    config_dir = get_root_config_directory()
     config_file = os.path.join(config_dir, 'Users', '_current-user.json')
     with open(config_file) as file:
         data = json.load(file)
@@ -132,7 +128,7 @@ def get_user_config_for(username):
     Returns:
         dict: The specified user's configuration data.
     """
-    config_dir = str(get_root_config_directory())
+    config_dir = get_root_config_directory()
     config_path = os.path.join(config_dir, 'Users', f'{username.lower()}.json')
     with open(config_path) as file:
         config_data = json.load(file)
@@ -167,6 +163,40 @@ def get_config_value(key):
     """
     main_config = get_user_config()
     return main_config.get(key)
+
+
+def get_liveness_tool_call():
+    """
+    Retrieves the user's liveness tool call configuration, if any.
+
+    Agentic frontends end their autonomous loop whenever a response arrives
+    with no tool call in it. When Wilmer is mid-way through a multi-turn task,
+    a response that is words alone therefore strands the task until a human
+    types something. The ``livenessToolCall`` user setting names a harmless
+    tool call (valid for the user's frontend) that the streaming response
+    handler injects into such responses so the frontend calls back and the
+    task keeps moving.
+
+    Expected shape in the user config::
+
+        "livenessToolCall": {
+            "toolName": "bash",
+            "arguments": {"command": "echo '[Wilmer] task in progress'"}
+        }
+
+    Returns:
+        dict or None: The validated configuration, or None if unset or malformed
+        (a malformed value is logged and treated as disabled rather than raised,
+        because liveness injection is an enhancement that must never break the
+        response path).
+    """
+    value = get_config_value('livenessToolCall')
+    if not value:
+        return None
+    if not isinstance(value, dict) or not isinstance(value.get('toolName'), str) or not value.get('toolName').strip():
+        logger.warning("livenessToolCall config is malformed (need at least a non-empty 'toolName' string); ignoring it")
+        return None
+    return value
 
 
 def get_root_public_directory():
@@ -250,7 +280,7 @@ def get_config_path(sub_directory, file_name):
     Returns:
         str: The full path to the configuration file.
     """
-    config_dir = str(get_root_config_directory())
+    config_dir = get_root_config_directory()
     config_file = os.path.join(config_dir, sub_directory, f'{file_name}.json')
     return config_file
 
@@ -289,12 +319,10 @@ def get_config_with_subdirectory(directory, sub_directory, file_name, secondary_
     Returns:
         str: The full path to the configuration file.
     """
-    config_dir = str(get_root_config_directory())
-    if (not secondary_subdirectory):
-        config_file = os.path.join(config_dir, directory, sub_directory, f'{file_name}.json')
-    else:
-        config_file = os.path.join(config_dir, directory, sub_directory, secondary_subdirectory, f'{file_name}.json')
-    return config_file
+    config_dir = get_root_config_directory()
+    if secondary_subdirectory:
+        return os.path.join(config_dir, directory, sub_directory, secondary_subdirectory, f'{file_name}.json')
+    return os.path.join(config_dir, directory, sub_directory, f'{file_name}.json')
 
 
 def _resolve_discussions_root():
@@ -309,7 +337,7 @@ def _resolve_discussions_root():
     3. ``{get_root_public_directory()}/DiscussionIds``.
 
     Discussion data is a sibling of ``Configs`` under the ``Public`` root,
-    not a child of ``Configs`` -- resolving from
+    not a child of ``Configs``; resolving from
     :func:`get_root_public_directory` keeps configs and runtime data
     separated even when a shared install overrides only
     ``--PublicDirectory``.
@@ -328,7 +356,7 @@ def _resolve_discussions_root():
     config_override = get_config_value('discussionDirectory')
     if config_override:
         return _expand_user_path(config_override)
-    return os.path.join(str(get_root_public_directory()), 'DiscussionIds')
+    return os.path.join(get_root_public_directory(), 'DiscussionIds')
 
 
 def _legacy_discussions_root():
@@ -372,6 +400,14 @@ def get_discussion_folder_path(discussion_id, api_key_hash=None):
     """
     if discussion_id is None:
         raise ValueError("discussion_id is required for discussion folder path construction")
+
+    # Defense in depth: the id is normally sanitized at extraction, but any caller
+    # that constructs one from elsewhere must not be able to escape the discussions
+    # root (or a per-api-key isolation subdir) via a separator, drive colon, or '..'.
+    # An empty id is left to the pre-existing behavior (it is guarded by truthiness
+    # checks at the call sites); only a non-empty traversal value is rejected here.
+    if discussion_id and not _is_safe_flat_config_name(discussion_id):
+        raise ValueError("discussion_id contains path-unsafe characters")
 
     target_root = _resolve_discussions_root()
     legacy_root = _legacy_discussions_root()
@@ -492,14 +528,14 @@ def get_custom_dblite_filepath():
     3. ``{get_root_public_directory()}/SqlLiteDBs``.
 
     SQLite databases live alongside ``Configs`` and ``DiscussionIds`` under
-    the ``Public`` root, not inside ``Configs`` -- resolving from
+    the ``Public`` root, not inside ``Configs``; resolving from
     :func:`get_root_public_directory` keeps configs and runtime data
     separated.
 
     This function only returns the *target* write directory. Callers
     (see :class:`LockingService`) apply legacy-path stickiness separately:
     if a database file already exists at either pre-refactor default
-    location -- the current working directory or the project root -- that
+    location (the current working directory or the project root), that
     existing file keeps being used so no automatic migration is performed.
 
     Returns:
@@ -513,7 +549,7 @@ def get_custom_dblite_filepath():
     if config_override:
         return _expand_user_path(config_override)
 
-    return os.path.join(str(get_root_public_directory()), 'SqlLiteDBs')
+    return os.path.join(get_root_public_directory(), 'SqlLiteDBs')
 
 
 def get_application_port():
@@ -555,19 +591,6 @@ def get_allow_shared_workflows() -> bool:
     """
     value = get_config_value('allowSharedWorkflows')
     return bool(value) if value is not None else False
-
-
-def get_default_parallel_processor_name():
-    """
-    Retrieves the name of the default parallel processor workflow.
-
-    This function gets the 'defaultParallelProcessWorkflow' setting from the
-    user configuration.
-
-    Returns:
-        str: The name of the default parallel processor workflow.
-    """
-    return get_config_value('defaultParallelProcessWorkflow')
 
 
 def get_discussion_id_workflow_name():
@@ -645,11 +668,7 @@ def get_endpoint_subdirectory():
     Returns:
         str: The name of the subdirectory for endpoint configurations, or an empty string.
     """
-    sub_directory = get_config_value('endpointConfigsSubDirectory')
-    if sub_directory:
-        return sub_directory
-    else:
-        return ""
+    return get_config_value('endpointConfigsSubDirectory') or ""
 
 
 def get_preset_subdirectory_override():
@@ -663,11 +682,7 @@ def get_preset_subdirectory_override():
     Returns:
         str: The name of the preset subdirectory, or the current username.
     """
-    sub_directory = get_config_value('presetConfigsSubDirectoryOverride')
-    if sub_directory:
-        return sub_directory
-    else:
-        return get_current_username()
+    return get_config_value('presetConfigsSubDirectoryOverride') or get_current_username()
 
 
 def get_active_recent_memory_tool_name():
@@ -688,16 +703,16 @@ def get_workflow_subdirectory_override():
     Retrieves the subdirectory override for workflow configurations.
 
     This function gets the 'workflowConfigsSubDirectoryOverride' from the
-    user configuration. If set, it returns '_overrides/<override>' to load
-    workflows from a subfolder within the overrides folder.
-    If not set, it returns the current username as the default subdirectory.
+    user configuration. If set, it returns that value directly, loading
+    workflows from 'Workflows/<override>/'. If not set, it returns the
+    current username as the default subdirectory.
 
     Returns:
-        str: The path to the workflow subdirectory ('_overrides/<override>' or username).
+        str: The name of the workflow subdirectory (the override value or username).
     """
     sub_directory = get_config_value('workflowConfigsSubDirectoryOverride')
     if sub_directory:
-        return os.path.join('_overrides', sub_directory)
+        return sub_directory
     else:
         return get_current_username()
 
@@ -744,7 +759,7 @@ def get_categories_config():
     return load_config(config_path)
 
 
-def get_openai_preset_path(config_name, type="OpenAiCompatibleApis", use_subdirectory=False):
+def get_openai_preset_path(config_name, preset_type="OpenAiCompatibleApis", use_subdirectory=False):
     """
     Retrieves the file path to a preset configuration file.
 
@@ -753,19 +768,17 @@ def get_openai_preset_path(config_name, type="OpenAiCompatibleApis", use_subdire
 
     Args:
         config_name (str): The name of the preset configuration.
-        type (str, optional): The subdirectory within `Presets`, generally named
-                              by the API type. Defaults to "OpenAiCompatibleApis".
+        preset_type (str, optional): The subdirectory within `Presets`, generally named
+                                     by the API type. Defaults to "OpenAiCompatibleApis".
         use_subdirectory (bool, optional): Specifies whether to use a user-specific
                                            subdirectory override. Defaults to False.
 
     Returns:
         str: The full path to the preset configuration file.
     """
-    if (use_subdirectory):
-        subdirectory = get_preset_subdirectory_override()
-        return get_config_with_subdirectory("Presets", type, config_name, subdirectory)
-    else:
-        return get_config_with_subdirectory("Presets", type, config_name)
+    if use_subdirectory:
+        return get_config_with_subdirectory("Presets", preset_type, config_name, get_preset_subdirectory_override())
+    return get_config_with_subdirectory("Presets", preset_type, config_name)
 
 
 def get_endpoint_config(endpoint):
@@ -1044,7 +1057,7 @@ def get_default_tool_prompt_path():
     Returns:
         str: The full path to the default tool prompt file.
     """
-    config_dir = str(get_root_config_directory())
+    config_dir = get_root_config_directory()
     config_file = os.path.join(config_dir, 'default_tool_prompt.txt')
     return config_file
 
@@ -1097,11 +1110,8 @@ def get_workflow_path(workflow_name, user_folder_override=None):
     Returns:
         str: The full path to the workflow configuration file.
     """
-    if user_folder_override:
-        user_name = user_folder_override
-    else:
-        user_name = get_workflow_subdirectory_override()
-    config_dir = str(get_root_config_directory())
+    user_name = user_folder_override or get_workflow_subdirectory_override()
+    config_dir = get_root_config_directory()
     config_file = os.path.join(config_dir, 'Workflows', user_name, f'{workflow_name}.json')
     return config_file
 
@@ -1120,13 +1130,10 @@ def get_shared_workflows_folder():
     Returns:
         str: The name of the shared workflows folder (override value or '_shared').
     """
-    override = get_config_value('sharedWorkflowsSubDirectoryOverride')
-    if override:
-        return override
-    return '_shared'
+    return get_config_value('sharedWorkflowsSubDirectoryOverride') or '_shared'
 
 
-def get_available_shared_workflow_folders(shared_folder_override=None):
+def get_available_shared_workflows(shared_folder_override=None):
     """
     Retrieves a list of available workflow folder names from the shared workflows folder.
 
@@ -1142,8 +1149,8 @@ def get_available_shared_workflow_folders(shared_folder_override=None):
     Returns:
         list: A list of folder names available in the shared folder.
     """
-    config_dir = str(get_root_config_directory())
-    shared_folder = shared_folder_override if shared_folder_override else get_shared_workflows_folder()
+    config_dir = get_root_config_directory()
+    shared_folder = shared_folder_override or get_shared_workflows_folder()
     workflows_path = os.path.join(config_dir, 'Workflows', shared_folder)
 
     folders = []
@@ -1151,7 +1158,6 @@ def get_available_shared_workflow_folders(shared_folder_override=None):
         if os.path.isdir(workflows_path):
             for item in os.listdir(workflows_path):
                 item_path = os.path.join(workflows_path, item)
-                # Only include directories that don't start with _
                 if os.path.isdir(item_path) and not item.startswith('_'):
                     folders.append(item)
     except OSError as e:
@@ -1160,52 +1166,27 @@ def get_available_shared_workflow_folders(shared_folder_override=None):
     return sorted(folders)
 
 
-def workflow_folder_exists_in_shared(folder_name):
-    """
-    Checks if a workflow folder exists in the shared workflows folder.
-
-    Args:
-        folder_name (str): The name of the folder to check.
-
-    Returns:
-        bool: True if the folder exists, False otherwise.
-    """
-    config_dir = str(get_root_config_directory())
-    shared_folder = get_shared_workflows_folder()
-    folder_path = os.path.join(config_dir, 'Workflows', shared_folder, folder_name)
-    return os.path.isdir(folder_path)
-
-
-# Backwards compatibility aliases
-def get_available_shared_workflows(shared_folder_override=None):
-    """
-    Retrieves a list of available workflow folder names from the shared workflows folder.
-
-    This is an alias for get_available_shared_workflow_folders().
-
-    Args:
-        shared_folder_override (str, optional): If provided, uses this folder name
-            instead of resolving via the current user's config.
-
-    Returns:
-        list: A list of folder names available in the shared folder.
-    """
-    return get_available_shared_workflow_folders(shared_folder_override=shared_folder_override)
-
-
 def workflow_exists_in_shared_folder(folder_name):
     """
     Checks if a workflow folder exists in the shared workflows folder.
 
-    This is an alias for workflow_folder_exists_in_shared().
-
     Args:
         folder_name (str): The name of the folder to check.
 
     Returns:
         bool: True if the folder exists, False otherwise.
     """
-    return workflow_folder_exists_in_shared(folder_name)
+    # The folder name comes from the request model field and is used to select a
+    # workflow folder (and thus which workflow, including PythonModule/CurlCommand
+    # nodes, executes). Reject a traversal/absolute name before the isdir check so a
+    # crafted value cannot resolve outside the shared workflows folder.
+    if not _is_safe_flat_config_name(folder_name):
+        return False
+
+    config_dir = get_root_config_directory()
+    shared_folder = get_shared_workflows_folder()
+    folder_path = os.path.join(config_dir, 'Workflows', shared_folder, folder_name)
+    return os.path.isdir(folder_path)
 
 
 def get_discussion_id_workflow_path():
@@ -1295,6 +1276,28 @@ def get_discussion_chat_summary_file_path(discussion_id, api_key_hash=None):
         str: The full path to the discussion's chat summary file.
     """
     return get_discussion_file_path(discussion_id, 'chat_summary', api_key_hash=api_key_hash)
+
+
+def get_discussion_state_document_file_path(discussion_id, api_key_hash=None):
+    """
+    Retrieves the file path for a discussion's state document.
+
+    The state document is a single, continuously updated document holding the
+    current ground-truth state of the conversation's subject matter (for
+    example a user profile for an assistant persona, or world state for a
+    roleplay). Unlike the other discussion artefacts it is stored as markdown
+    (``state_document.md``) so users can read and hand-edit it directly when
+    encryption is not active.
+
+    Args:
+        discussion_id (str): The ID of the discussion.
+        api_key_hash (str, optional): Hash of the API key for per-user isolation.
+
+    Returns:
+        str: The full path to the discussion's state document file.
+    """
+    discussion_dir = get_discussion_folder_path(discussion_id, api_key_hash=api_key_hash)
+    return os.path.join(discussion_dir, 'state_document.md')
 
 
 

@@ -2,7 +2,6 @@
 
 import logging
 import re
-from copy import deepcopy
 from datetime import datetime
 from typing import Dict, Any, List
 
@@ -127,8 +126,8 @@ class WorkflowVariableManager:
         # are present, leaving unresolved placeholders intact for later substitution.
         try:
             return return_brackets_in_string(prompt.format(**variables))
-        except KeyError as e:
-            # Handle partial substitution - try to substitute what we can
+        except KeyError:
+            # Handle partial substitution: try to substitute what we can
             result = prompt
             for key, value in variables.items():
                 result = result.replace('{' + key + '}', str(value))
@@ -181,9 +180,16 @@ class WorkflowVariableManager:
             # Second pass: resolve nested variables (e.g., a workflow-level variable
             # whose value itself contains {Discussion_Id} or other placeholders).
             # A single extra pass is sufficient since variable values are not expected
-            # to nest more than one level deep.
+            # to nest more than one level deep. The variables must be re-generated
+            # against the partially resolved string: generate_variables gates its
+            # expensive groups on substrings of the prompt it is given, and a
+            # placeholder that arrived through a variable VALUE (workflow-config and
+            # user-wide values are left unescaped for exactly this) was invisible to
+            # the gates on the first pass.
             if '{' in result:
                 try:
+                    variables = self.generate_variables(context, remove_all_system_override, prompt=result)
+                    variables['messages'] = context.messages
                     result = result.format(**variables)
                 except KeyError:
                     pass
@@ -215,8 +221,8 @@ class WorkflowVariableManager:
         # A 'userWideWorkflowVariables' object in the user config exposes operator-defined values
         # (e.g. a base directory for a workflow's on-disk state files) as {placeholders}
         # available to EVERY workflow, so a path is set once in the user config instead of
-        # repeated in each workflow JSON. Added at the LOWEST precedence -- the date/time,
-        # workflow-config, conversation, and agent-output variables below all override it --
+        # repeated in each workflow JSON. Added at the LOWEST precedence (the date/time,
+        # workflow-config, conversation, and agent-output variables below all override it),
         # so a custom key can only fill a name nothing else defines and can never shadow a
         # built-in. Left unescaped (like the workflow-config values below) so a value may
         # itself reference another placeholder (e.g. "{Discussion_Id}") via the second
@@ -315,27 +321,41 @@ class WorkflowVariableManager:
                     CONTEXT_WINDOW_BUDGET_HEADROOM_TOKENS)
                 if clamp_enabled else None)
 
-            prompt_configurations = self.generate_conversation_turn_variables(
-                originalMessages=display_messages,
-                llm_handler=context.llm_handler,
-                remove_all_system_override=remove_all_system_override,
-                add_role_tags=add_role_tags,
-                separator=separator,
-                token_limit=variable_window_budget
-            )
-            variables.update(prompt_configurations)
+            # The last-N-turn variables (chat_/templated_user_prompt_last_*) each
+            # re-load the prompt-template JSON from disk, and format_system_prompts
+            # deep-copies the non-system conversation twice. Both were built on every
+            # apply_variables call regardless of whether the prompt used them; gate
+            # them on an actual reference (same approach as the slice variables below)
+            # so a prompt that names none of them pays nothing. prompt is None only
+            # when the caller wants the full set, so build everything in that case.
+            if not prompt or 'user_prompt_last_' in prompt:
+                prompt_configurations = self.generate_conversation_turn_variables(
+                    originalMessages=display_messages,
+                    llm_handler=context.llm_handler,
+                    remove_all_system_override=remove_all_system_override,
+                    add_role_tags=add_role_tags,
+                    separator=separator,
+                    token_limit=variable_window_budget
+                )
+                variables.update(prompt_configurations)
 
-            variables.update(format_system_prompts(
-                messages=context.messages,
-                llm_handler=context.llm_handler,
-                chat_prompt_template_name=get_chat_template_name()
-            ))
+            # Outputs: chat_system_prompt, templated_system_prompt,
+            # templated_user_prompt_without_system, chat_user_prompt_without_system
+            # (all contain 'system_prompt' or 'without_system').
+            if not prompt or 'system_prompt' in prompt or 'without_system' in prompt:
+                variables.update(format_system_prompts(
+                    messages=context.messages,
+                    llm_handler=context.llm_handler,
+                    chat_prompt_template_name=get_chat_template_name()
+                ))
 
             # --- Configurable conversation-slice variables ---
             # These are only computed when the prompt actually references them
             # (or when prompt is None, meaning we don't know what's needed).
+            # The extraction helpers never mutate and the template formatter
+            # deep-copies before mutating, so no defensive copy is needed here.
             include_sysmes = context.llm_handler.takes_message_collection
-            messages_copy = deepcopy(display_messages)
+            messages_copy = display_messages
 
             # N-messages variables
             if not prompt or 'chat_user_prompt_n_messages' in prompt or 'templated_user_prompt_n_messages' in prompt:
@@ -463,6 +483,10 @@ class WorkflowVariableManager:
 
         return variables
 
+    _CATEGORY_ATTRIBUTES = ("category_list", "category_descriptions", "category_colon_descriptions",
+                            "categoriesSeparatedByOr", "category_colon_descriptions_newline_bulletpoint",
+                            "categoryNameBulletpoints")
+
     def extract_additional_attributes(self) -> Dict[str, Any]:
         """
         Extracts a predefined list of category attributes from the instance.
@@ -471,11 +495,8 @@ class WorkflowVariableManager:
             Dict[str, Any]: A dictionary of category-related attributes.
         """
         attributes = {}
-        attribute_list = ["category_list", "category_descriptions", "category_colon_descriptions",
-                          "categoriesSeparatedByOr", "category_colon_descriptions_newline_bulletpoint",
-                          "categoryNameBulletpoints"]
-        for attribute in attribute_list:
-            if hasattr(self, attribute) and getattr(self, attribute) is not None:
+        for attribute in self._CATEGORY_ATTRIBUTES:
+            if getattr(self, attribute, None) is not None:
                 attributes[attribute] = getattr(self, attribute)
         return attributes
 
@@ -486,19 +507,9 @@ class WorkflowVariableManager:
         Args:
             **kwargs (Any): The keyword arguments passed to the constructor.
         """
-        if 'category_descriptions' in kwargs:
-            self.category_descriptions = kwargs['category_descriptions']
-        if 'category_colon_descriptions' in kwargs:
-            self.category_colon_descriptions = kwargs['category_colon_descriptions']
-        if 'categoriesSeparatedByOr' in kwargs:
-            self.categoriesSeparatedByOr = kwargs['categoriesSeparatedByOr']
-        if 'category_colon_descriptions_newline_bulletpoint' in kwargs:
-            self.category_colon_descriptions_newline_bulletpoint = kwargs[
-                'category_colon_descriptions_newline_bulletpoint']
-        if 'categoryNameBulletpoints' in kwargs:
-            self.categoryNameBulletpoints = kwargs['categoryNameBulletpoints']
-        if 'category_list' in kwargs:
-            self.category_list = kwargs['category_list']
+        for attribute in self._CATEGORY_ATTRIBUTES:
+            if attribute in kwargs:
+                setattr(self, attribute, kwargs[attribute])
 
     @staticmethod
     def generate_conversation_turn_variables(originalMessages: List[Dict[str, str]], llm_handler: Any,
@@ -530,60 +541,21 @@ class WorkflowVariableManager:
             Dict[str, str]: A dictionary of all generated conversation turn variables.
         """
         include_sysmes = llm_handler.takes_message_collection
-        messages = deepcopy(originalMessages)
+        # The extraction helpers never mutate and the template formatter deep-copies
+        # before mutating, so no defensive copy is needed here.
+        messages = originalMessages
         if token_limit is not None:
             messages = extract_last_turns_by_estimated_token_limit(
                 messages, token_limit, include_sysmes, remove_all_system_override)
-        return {
-            "templated_user_prompt_last_twenty": get_formatted_last_n_turns_as_string(
-                messages, 20, template_file_name=llm_handler.prompt_template_file_name,
-                isChatCompletion=llm_handler.takes_message_collection),
-            "chat_user_prompt_last_twenty": extract_last_n_turns_as_string(messages, 20,
-                                                                           include_sysmes, remove_all_system_override,
-                                                                           add_role_tags=add_role_tags,
-                                                                           separator=separator),
-            "templated_user_prompt_last_ten": get_formatted_last_n_turns_as_string(
-                messages, 10, template_file_name=llm_handler.prompt_template_file_name,
-                isChatCompletion=llm_handler.takes_message_collection),
-            "chat_user_prompt_last_ten": extract_last_n_turns_as_string(messages, 10,
-                                                                        include_sysmes, remove_all_system_override,
-                                                                        add_role_tags=add_role_tags,
-                                                                        separator=separator),
-            "templated_user_prompt_last_five": get_formatted_last_n_turns_as_string(
-                messages, 5, template_file_name=llm_handler.prompt_template_file_name,
-                isChatCompletion=llm_handler.takes_message_collection),
-            "chat_user_prompt_last_five": extract_last_n_turns_as_string(messages, 5,
-                                                                         include_sysmes, remove_all_system_override,
-                                                                         add_role_tags=add_role_tags,
-                                                                         separator=separator),
-            "templated_user_prompt_last_four": get_formatted_last_n_turns_as_string(
-                messages, 4, template_file_name=llm_handler.prompt_template_file_name,
-                isChatCompletion=llm_handler.takes_message_collection),
-            "chat_user_prompt_last_four": extract_last_n_turns_as_string(messages, 4,
-                                                                         include_sysmes, remove_all_system_override,
-                                                                         add_role_tags=add_role_tags,
-                                                                         separator=separator),
-            "templated_user_prompt_last_three": get_formatted_last_n_turns_as_string(
-                messages, 3, template_file_name=llm_handler.prompt_template_file_name,
-                isChatCompletion=llm_handler.takes_message_collection),
-            "chat_user_prompt_last_three": extract_last_n_turns_as_string(messages, 3,
-                                                                          include_sysmes, remove_all_system_override,
-                                                                          add_role_tags=add_role_tags,
-                                                                          separator=separator),
-            "templated_user_prompt_last_two": get_formatted_last_n_turns_as_string(
-                messages, 2, template_file_name=llm_handler.prompt_template_file_name,
-                isChatCompletion=llm_handler.takes_message_collection),
-            "chat_user_prompt_last_two": extract_last_n_turns_as_string(messages, 2,
-                                                                        include_sysmes, remove_all_system_override,
-                                                                        add_role_tags=add_role_tags,
-                                                                        separator=separator),
-            "templated_user_prompt_last_one": get_formatted_last_n_turns_as_string(
-                messages, 1, template_file_name=llm_handler.prompt_template_file_name,
-                isChatCompletion=llm_handler.takes_message_collection),
-            "chat_user_prompt_last_one": extract_last_n_turns_as_string(messages, 1,
-                                                                        include_sysmes,
-                                                                        remove_all_system_override,
-                                                                        add_role_tags=add_role_tags,
-                                                                        separator=separator)
-        }
+
+        turn_counts = {"twenty": 20, "ten": 10, "five": 5, "four": 4, "three": 3, "two": 2, "one": 1}
+        variables = {}
+        for count_word, n in turn_counts.items():
+            variables[f"templated_user_prompt_last_{count_word}"] = get_formatted_last_n_turns_as_string(
+                messages, n, template_file_name=llm_handler.prompt_template_file_name,
+                isChatCompletion=llm_handler.takes_message_collection)
+            variables[f"chat_user_prompt_last_{count_word}"] = extract_last_n_turns_as_string(
+                messages, n, include_sysmes, remove_all_system_override,
+                add_role_tags=add_role_tags, separator=separator)
+        return variables
 

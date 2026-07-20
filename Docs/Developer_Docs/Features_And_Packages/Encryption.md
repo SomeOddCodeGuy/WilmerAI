@@ -101,10 +101,10 @@ username is available. The iteration count of 100,000 adds computational cost to
 
 Two convenience wrappers handle the common pattern of "derive if present, else None":
 
-- `get_encryption_key_if_available(api_key) -> Optional[bytes]` -- Returns a Fernet key only if `api_key` is
+- `get_encryption_key_if_available(api_key) -> Optional[bytes]`: Returns a Fernet key only if `api_key` is
   non-empty **and** `encryptUsingApiKey` is `true` in the user config. This function internally calls
   `config_utils.get_encrypt_using_api_key()` to check the config.
-- `get_api_key_hash_if_available(api_key) -> Optional[str]` -- Returns the directory hash whenever an API key is
+- `get_api_key_hash_if_available(api_key) -> Optional[str]`: Returns the directory hash whenever an API key is
   present. This is independent of the encryption config setting.
 
 ### Lazy Loading
@@ -353,13 +353,13 @@ greenlet-local, so each greenlet has its own context.
 
 **Logging helpers:**
 
-- `sensitive_log(logger, level, msg, *args, **kwargs)` -- Logs normally when redaction is inactive; emits a short
+- `sensitive_log(logger, level, msg, *args, **kwargs)`: Logs normally when redaction is inactive; emits a short
   `[Redacted]` placeholder when active.
-- `sensitive_log_lazy(logger, level, msg, *arg_fns)` -- Like `sensitive_log`, but accepts zero-arg callables instead
+- `sensitive_log_lazy(logger, level, msg, *arg_fns)`: Like `sensitive_log`, but accepts zero-arg callables instead
   of pre-computed values. The callables are only invoked when redaction is inactive, avoiding expensive
   serialization (e.g., `json.dumps`) when the result would be redacted anyway. Used at API handler entry points
   where request payloads would otherwise be serialized unconditionally.
-- `log_prompt_content(logger, label, content)` -- Replaces the common three-line separator pattern
+- `log_prompt_content(logger, label, content)`: Replaces the common three-line separator pattern
   (`***...` / `Formatted_Prompt: ...` / `***...`) with a single redacted marker when active.
 
 ### What Is Redacted
@@ -474,7 +474,7 @@ changes and their previously encrypted files become unreadable without a re-key 
 ### The `encryptUsingApiKey` Config Setting
 
 The `encryptUsingApiKey` boolean in the user config (default: `false`) controls whether `get_encryption_key_if_available`
-returns a key or `None`. Directory isolation via `get_api_key_hash_if_available` is unaffected by this setting -- it
+returns a key or `None`. Directory isolation via `get_api_key_hash_if_available` is unaffected by this setting; it
 always returns a hash when an API key is present.
 
 The config check is performed inside `get_encryption_key_if_available` via a lazy import of

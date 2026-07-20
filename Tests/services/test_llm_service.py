@@ -137,6 +137,51 @@ def test_initialize_llm_handler_with_defaults(
     assert result == mock_llm_handler_instance
 
 
+@patch('Middleware.services.llm_service.get_chat_template_name')
+@patch('Middleware.services.llm_service.LlmHandler')
+@patch('Middleware.services.llm_service.LlmApiService')
+@patch('Middleware.services.llm_service.get_api_type_config')
+def test_initialize_llm_handler_reads_true_from_config(
+        mock_get_api_type_config,
+        mock_LlmApiService,
+        mock_LlmHandler,
+        mock_get_chat_template_name,
+        llm_handler_service
+):
+    """
+    Tests that when addGenerationPrompt=None, the value is read from the config,
+    using a config where it is True so the config-read branch is distinguishable
+    from the hardcoded False fallback.
+    """
+    # Arrange
+    mock_get_api_type_config.return_value = MOCK_API_TYPE_CONFIG
+    mock_llm_api_instance = MagicMock(spec=LlmApiService)
+    mock_LlmApiService.return_value = mock_llm_api_instance
+    mock_llm_handler_instance = MagicMock(spec=LlmHandler)
+    mock_LlmHandler.return_value = mock_llm_handler_instance
+
+    # Act
+    result = llm_handler_service.initialize_llm_handler(
+        config_data=MOCK_ENDPOINT_CONFIG,  # addGenerationPrompt is True here
+        preset="test_preset",
+        endpoint="test_endpoint",
+        stream=False,
+        truncate_length=4096,
+        max_tokens=1024,
+        addGenerationPrompt=None
+    )
+
+    # Assert
+    mock_get_chat_template_name.assert_not_called()
+    mock_LlmHandler.assert_called_once_with(
+        mock_llm_api_instance,
+        "TestTemplate.json",
+        True,
+        "openAIChatCompletion"
+    )
+    assert result == mock_llm_handler_instance
+
+
 @patch('Middleware.services.llm_service.get_endpoint_config')
 @patch.object(LlmHandlerService, 'initialize_llm_handler')
 def test_load_model_from_config_success(
@@ -173,6 +218,43 @@ def test_load_model_from_config_success(
         8192,
         123,
         True
+    )
+    assert result == mock_handler_instance
+
+
+@patch('Middleware.services.llm_service.get_endpoint_config')
+@patch.object(LlmHandlerService, 'initialize_llm_handler')
+def test_load_model_from_config_forwards_documented_defaults(
+        mock_initialize_llm_handler,
+        mock_get_endpoint_config,
+        llm_handler_service
+):
+    """
+    Tests that calling load_model_from_config with only the required arguments
+    forwards the documented defaults (stream=False, truncate_length=4096,
+    max_tokens=400, addGenerationPrompt=None) to initialize_llm_handler.
+    """
+    # Arrange
+    mock_get_endpoint_config.return_value = MOCK_ENDPOINT_CONFIG
+    mock_handler_instance = MagicMock()
+    mock_initialize_llm_handler.return_value = mock_handler_instance
+
+    # Act
+    result = llm_handler_service.load_model_from_config(
+        config_name="test_config",
+        preset="test_preset"
+    )
+
+    # Assert
+    mock_get_endpoint_config.assert_called_once_with("test_config")
+    mock_initialize_llm_handler.assert_called_once_with(
+        MOCK_ENDPOINT_CONFIG,
+        "test_preset",
+        "test_config",
+        False,
+        4096,
+        400,
+        None
     )
     assert result == mock_handler_instance
 

@@ -3,7 +3,7 @@
 ## What WilmerAI Is
 
 WilmerAI is middleware between a frontend (chat UI, coding assistant, etc.) and LLM backends. It exposes
-OpenAI-compatible and Ollama-compatible API endpoints. Internally, it runs a **workflow** -- a JSON file defining a
+OpenAI-compatible and Ollama-compatible API endpoints. Internally, it runs a **workflow**: a JSON file defining a
 sequence of **nodes** that execute top-to-bottom. Each node does one thing: call an LLM, search memory, run a script,
 extract data, etc. The output of each node is available to all subsequent nodes.
 
@@ -14,10 +14,10 @@ a normal LLM.
 
 WilmerAI serves:
 
-- `/v1/chat/completions` -- OpenAI chat completions. The frontend sends a messages array; WilmerAI runs the workflow.
-- `/v1/completions`, `/api/generate` -- Text/Ollama completion. Requires tag-formatted prompt:
+- `/v1/chat/completions`: OpenAI chat completions. The frontend sends a messages array; WilmerAI runs the workflow.
+- `/v1/completions`, `/api/generate`: Text/Ollama completion. Requires tag-formatted prompt:
   `[Beg_Sys]system text[Beg_User]username: msg[Beg_Assistant]assistant: msg[Beg_User]username: next msg[Beg_Assistant]`
-- `/v1/models`, `/api/tags` -- Lists available workflows as selectable "models."
+- `/v1/models`, `/api/tags`: Lists available workflows as selectable "models."
 
 Generation parameters (temperature, top_k, etc.) are controlled per-node via **presets**, not by the frontend.
 
@@ -32,15 +32,15 @@ Generation parameters (temperature, top_k, etc.) are controlled per-node via **p
 
 ```
 Public/Configs/
-  ApiTypes/        -- API schema definitions (OpenAI, Ollama, etc.)
-  Endpoints/       -- LLM connection configs (URL, API type, model name)
-  Presets/         -- Generation parameters (temperature, top_k, etc.)
-  PromptTemplates/ -- Chat templates for different model families
-  Routing/         -- Prompt router config (domains -> workflows)
-  Users/           -- Per-user settings (port, paths, features)
-  Workflows/       -- Workflow JSON files
-    _shared/       -- Shared workflows listed by models endpoint
-    <username>/    -- User-specific workflows
+  ApiTypes/        # API schema definitions (OpenAI, Ollama, etc.)
+  Endpoints/       # LLM connection configs (URL, API type, model name)
+  Presets/         # Generation parameters (temperature, top_k, etc.)
+  PromptTemplates/ # Chat templates for different model families
+  Routing/         # Prompt router config (domains -> workflows)
+  Users/           # Per-user settings (port, paths, features)
+  Workflows/       # Workflow JSON files
+    _shared/       # Shared workflows listed by models endpoint
+    <username>/    # User-specific workflows
 ```
 
 Each workflow node specifies an `endpointName` (which LLM to call) and optionally a `preset` (generation params).
@@ -83,7 +83,7 @@ workflows from all users. Requests route to the correct user via the model field
 ## Responder Node
 
 The last node in the top-level workflow automatically becomes the responder (its output goes to the frontend). You
-rarely need `"returnToUser": true` -- that flag overrides the default and is only for niche cases where you want a
+rarely need `"returnToUser": true`; that flag overrides the default and is only for niche cases where you want a
 mid-workflow node to respond while later nodes continue running (e.g., memory generation after response).
 
 ## Tool Call Passthrough
@@ -91,6 +91,11 @@ mid-workflow node to respond while later nodes continue running (e.g., memory ge
 Set `"allowTools": true` on the responding `Standard` node to forward tool definitions from the frontend to the backend
 LLM and relay tool call responses back. Only useful on the responding node. Add `"lowercaseToolCallFunctionNames": true`
 if the backend LLM produces capitalized function names (common with local models like Gemma and Qwen).
+
+For multi-round tool loops through authored-prompt responders, add `"appendNativeToolExchange": true` (delivers the
+trailing tool exchange natively). On backends declaring a `structuredOutput` mechanism in their ApiType, demanded
+calls (`tool_choice` forced/`"required"`) are grammar-enforced automatically, and `"structuredOutputFile"` pins any
+node's output to a JSON Schema from `Configs/StructuredOutputs/`. See 2_Features_Reference for details.
 
 ---
 

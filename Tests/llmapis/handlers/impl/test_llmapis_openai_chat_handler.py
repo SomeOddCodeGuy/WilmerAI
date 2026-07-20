@@ -1,7 +1,10 @@
+import base64
+import io
 import json
 import logging
 
 import pytest
+from PIL import Image
 
 from Middleware.llmapis.handlers.impl.openai_api_handler import OpenAiApiHandler
 
@@ -139,6 +142,8 @@ class TestParseNonStreamResponse:
         ({}, "response with missing 'choices' key"),
         ({'choices': []}, "response with empty 'choices' list"),
         ({'choices': [{}]}, "response with choice missing 'message' key"),
+        ({'choices': [{'message': 'not-a-dict'}]}, "response with a non-dict message"),
+        ({'choices': 5}, "response with a non-list choices value"),
     ])
     def test_malformed_responses(self, openai_handler, malformed_response, error_msg, mocker):
         """
@@ -247,6 +252,17 @@ class TestProcessStreamData:
         assert result is None
         mock_logger_warning.assert_called_once()
         assert f"Could not parse OpenAI stream data string: {malformed_json_str}" in mock_logger_warning.call_args[0][0]
+
+    @pytest.mark.parametrize("non_dict_chunk", ["123", '["a"]', '{"choices": 5}', '{"choices": [5]}'])
+    def test_non_dict_json_chunks_are_skipped_not_fatal(self, openai_handler, non_dict_chunk, mocker):
+        """
+        Tests that chunks whose JSON is not the expected dict shape are warned
+        and skipped instead of escaping as TypeError/AttributeError.
+        """
+        mock_logger_warning = mocker.patch.object(
+            logging.getLogger('Middleware.llmapis.handlers.impl.openai_api_handler'), 'warning')
+        assert openai_handler._process_stream_data(non_dict_chunk) is None
+        mock_logger_warning.assert_called_once()
 
 
 class TestBuildMessagesFromConversation:
@@ -384,23 +400,25 @@ class TestBuildMessagesFromConversation:
 
     def test_fallback_strips_images_keys(self, openai_handler):
         """
-        The _build_fallback_conversation method should strip leftover
+        The shared text-only fallback should strip leftover
         images keys from all messages when cleaning up after an error.
         """
+        from Middleware.llmapis.handlers.base.image_injection import build_text_only_fallback
         messages = [
             {"role": "user", "content": "Hello", "images": ["leftover_data"]},
             {"role": "user", "content": "World"},
         ]
-        result = openai_handler._build_fallback_conversation(messages)
+        result = build_text_only_fallback(messages, "unused fallback text")
 
         for msg in result:
             assert "images" not in msg
 
     def test_fallback_reverts_multimodal_content_to_string(self, openai_handler):
         """
-        The _build_fallback_conversation method should revert partially converted
+        The shared text-only fallback should revert partially converted
         multimodal content back to plain text strings.
         """
+        from Middleware.llmapis.handlers.base.image_injection import build_text_only_fallback
         messages = [
             {"role": "user", "content": [
                 {"type": "text", "text": "Original text"},
@@ -408,11 +426,187 @@ class TestBuildMessagesFromConversation:
             ], "images": ["stray"]},
             {"role": "user", "content": "Follow-up"},
         ]
-        result = openai_handler._build_fallback_conversation(messages)
+        result = build_text_only_fallback(messages, "unused fallback text")
 
         assert result[0]["content"] == "Original text"
         assert "images" not in result[0]
-        assert "error processing" in result[1]["content"]
+        assert result[1]["content"] == (
+            "Follow-up\n\n[System note: There was an error processing the provided image(s). "
+            "I will respond based on the text alone.]"
+        )
+
+    def test_image_processing_error_routes_to_fallback(self, openai_handler, mocker):
+        """
+        When _process_single_image_source raises, _build_messages_from_conversation
+        must route through the shared text-only fallback and return a text-only
+        conversation with the system note appended to the last user message.
+        """
+        mocker.patch.object(openai_handler, '_process_single_image_source',
+                            side_effect=RuntimeError("image processing exploded"))
+
+        conversation = [
+            {"role": "assistant", "content": "Earlier reply."},
+            {"role": "user", "content": "Look at this", "images": ["data:image/png;base64,abc"]},
+        ]
+        result = openai_handler._build_messages_from_conversation(conversation, None, None)
+
+        assert all(isinstance(msg["content"], str) for msg in result)
+        assert all("images" not in msg for msg in result)
+        assert result[-1]["content"] == (
+            "Look at this\n\n[System note: There was an error processing the provided image(s). "
+            "I will respond based on the text alone.]"
+        )
+
+    def test_assistant_empty_tool_calls_key_stripped(self, openai_handler):
+        """
+        Assistant messages replayed with an empty tool_calls array must have the
+        key removed before hitting the payload: the OpenAI API rejects an
+        assistant message whose tool_calls is []. Content is preserved.
+        """
+        conversation = [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Earlier reply.", "tool_calls": []},
+            {"role": "user", "content": "Continue"},
+        ]
+        result = openai_handler._build_messages_from_conversation(conversation, None, None)
+
+        assistant = [m for m in result if m["role"] == "assistant"][0]
+        assert "tool_calls" not in assistant
+        assert assistant["content"] == "Earlier reply."
+
+    def test_assistant_null_tool_calls_key_stripped(self, openai_handler):
+        """A null tool_calls value on an assistant message is residue too, so it is stripped."""
+        conversation = [
+            {"role": "assistant", "content": "Earlier reply.", "tool_calls": None},
+            {"role": "user", "content": "Continue"},
+        ]
+        result = openai_handler._build_messages_from_conversation(conversation, None, None)
+
+        assistant = [m for m in result if m["role"] == "assistant"][0]
+        assert "tool_calls" not in assistant
+
+    def test_assistant_populated_tool_calls_preserved(self, openai_handler):
+        """
+        A populated tool_calls list is a real tool round-trip and must pass
+        through untouched; stripping it would break tool-result replays.
+        """
+        tool_calls = [{"id": "call_1", "type": "function",
+                       "function": {"name": "get_weather", "arguments": "{}"}}]
+        conversation = [
+            {"role": "assistant", "content": "", "tool_calls": tool_calls},
+            {"role": "tool", "content": "72F", "tool_call_id": "call_1"},
+            {"role": "user", "content": "Thanks"},
+        ]
+        result = openai_handler._build_messages_from_conversation(conversation, None, None)
+
+        assistant = [m for m in result if m["role"] == "assistant"][0]
+        assert assistant["tool_calls"] == tool_calls
+
+    def test_non_assistant_empty_tool_calls_untouched(self, openai_handler):
+        """The strip is assistant-only; other roles pass through unmodified."""
+        conversation = [
+            {"role": "user", "content": "Hi", "tool_calls": []},
+        ]
+        result = openai_handler._build_messages_from_conversation(conversation, None, None)
+
+        user = [m for m in result if m["role"] == "user"][0]
+        assert user.get("tool_calls") == []
+
+
+class TestProcessSingleImageSource:
+    """
+    Tests the _process_single_image_source static method, which converts
+    various image source formats into OpenAI image_url content blocks.
+    """
+
+    def test_data_uri_passed_through(self):
+        """A data URI is wrapped directly without re-encoding."""
+        source = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+        result = OpenAiApiHandler._process_single_image_source(source)
+        assert result == {"type": "image_url", "image_url": {"url": source}}
+
+    def test_file_uri_returns_none(self):
+        """File URIs are rejected for security reasons (no local file reads)."""
+        result = OpenAiApiHandler._process_single_image_source("file:///etc/passwd")
+        assert result is None
+
+    def test_raw_base64_becomes_data_uri_with_detected_format(self):
+        """
+        A raw base64 image is decoded, its format detected via PIL, and wrapped
+        in a data URI with the matching MIME type.
+        """
+        buffer = io.BytesIO()
+        Image.new("RGB", (16, 16), color=(255, 0, 0)).save(buffer, format="PNG")
+        b64 = base64.b64encode(buffer.getvalue()).decode("ascii")
+        assert len(b64) >= 100, "Guard: source must be long enough to pass the base64 heuristic"
+
+        result = OpenAiApiHandler._process_single_image_source(b64)
+
+        assert result == {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
+
+    def test_base64_that_is_not_an_image_returns_none(self):
+        """Valid base64 that decodes to non-image bytes is skipped (PIL cannot identify it)."""
+        source = "A" * 200
+        result = OpenAiApiHandler._process_single_image_source(source)
+        assert result is None
+
+    def test_http_url_passed_through(self):
+        """An HTTP URL is wrapped directly as an image_url block."""
+        source = "http://example.local/photo.jpg"
+        result = OpenAiApiHandler._process_single_image_source(source)
+        assert result == {"type": "image_url", "image_url": {"url": source}}
+
+    def test_https_url_passed_through(self):
+        """An HTTPS URL is wrapped directly as an image_url block."""
+        source = "https://example.local/photo.jpg"
+        result = OpenAiApiHandler._process_single_image_source(source)
+        assert result == {"type": "image_url", "image_url": {"url": source}}
+
+    def test_short_string_returns_none(self):
+        """A string shorter than 100 chars is not treated as base64."""
+        result = OpenAiApiHandler._process_single_image_source("AAAA")
+        assert result is None
+
+    def test_invalid_base64_chars_returns_none(self):
+        """A long string with invalid base64 characters is unrecognized."""
+        result = OpenAiApiHandler._process_single_image_source("!" * 200)
+        assert result is None
+
+    def test_non_mod4_length_returns_none(self):
+        """A string whose length is not a multiple of 4 fails the base64 heuristic."""
+        result = OpenAiApiHandler._process_single_image_source("A" * 201)
+        assert result is None
+
+
+class TestPreparePayloadTools:
+    """
+    Tests that tools and tool_choice are included in the payload when set
+    and absent when None.
+    """
+
+    def test_tools_and_tool_choice_included_when_set(self, openai_handler):
+        conversation = [{"role": "user", "content": "Hi!"}]
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get the weather",
+                    "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}
+                }
+            }
+        ]
+        payload = openai_handler._prepare_payload(conversation=conversation, system_prompt=None, prompt=None,
+                                                  tools=tools, tool_choice="auto")
+        assert payload["tools"] == tools
+        assert payload["tool_choice"] == "auto"
+
+    def test_tools_and_tool_choice_absent_when_none(self, openai_handler):
+        conversation = [{"role": "user", "content": "Hi!"}]
+        payload = openai_handler._prepare_payload(conversation=conversation, system_prompt=None, prompt=None,
+                                                  tools=None, tool_choice=None)
+        assert "tools" not in payload
+        assert "tool_choice" not in payload
 
 
 class TestProcessStreamDataToolCalls:
@@ -518,6 +712,23 @@ class TestProcessStreamDataToolCalls:
         result = openai_handler._process_stream_data(data_str)
         assert 'tool_calls' not in result
         assert result['token'] == 'Hello world'
+
+    def test_empty_tool_calls_list_on_delta_not_forwarded(self, openai_handler):
+        """
+        Some OpenAI-compatible backends attach 'tool_calls': [] to ordinary text
+        deltas. Forwarding the empty list would make the streaming layer treat
+        plain text as a tool-call chunk, so it must be dropped and the text
+        token kept (regression pin for the falsy-check in _process_stream_data).
+        """
+        data_str = json.dumps({
+            "choices": [{
+                "delta": {"content": "Hello", "tool_calls": []},
+                "finish_reason": None
+            }]
+        })
+        result = openai_handler._process_stream_data(data_str)
+        assert result == {'token': 'Hello', 'finish_reason': None}
+        assert 'tool_calls' not in result
 
 
 class TestParseNonStreamResponseToolCalls:

@@ -1,0 +1,4 @@
+{
+  "nameForDisplayOnly": "Ollama native embeddings endpoint (/api/embed). Use with embedding models such as nomic-embed-text.",
+  "type": "ollamaEmbeddings"
+}

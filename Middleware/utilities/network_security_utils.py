@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 # (e.g. 169.254.169.254 is reported as link-local rather than private).
 _NON_PUBLIC_FAMILIES = (
     ("is_loopback", "loopback"),
-    ("is_link_local", "link-local"),  # 169.254.0.0/16 — incl. the cloud metadata endpoint
+    ("is_link_local", "link-local"),  # 169.254.0.0/16, incl. the cloud metadata endpoint
     ("is_unspecified", "unspecified"),
     ("is_multicast", "multicast"),
     ("is_reserved", "reserved"),
@@ -23,7 +23,7 @@ def _non_public_family(ip) -> Optional[str]:
     """Classifies an address, returning why it must not be reached or None if it is fine.
 
     The block decision is "not globally routable": any address whose ``is_global`` is
-    False is rejected. That is deliberately broader than the named families below -- it
+    False is rejected. That is deliberately broader than the named families below; it
     also catches shared CGNAT space (100.64.0.0/10), the IETF TEST-NET / documentation /
     benchmarking ranges, and future-reserved space, none of which ``is_private`` flags
     (e.g. 100.64.0.0/10 has both is_private and is_global False). The family table is
@@ -95,7 +95,7 @@ def check_url_allowed(
     - ``allowed_hosts``: when non-empty, the URL host must match (case-insensitive) one
       of the listed hosts; any other host is rejected. This needs no DNS lookup.
     - ``block_private_addresses``: the host is rejected if it is, or resolves to, an
-      address that is not globally routable -- loopback/link-local/private/reserved/
+      address that is not globally routable: loopback/link-local/private/reserved/
       multicast/unspecified, plus shared CGNAT space (100.64.0.0/10) and the TEST-NET/
       documentation ranges. This is what blocks SSRF to 127.0.0.1, the 169.254.169.254
       cloud-metadata endpoint, and the 10/172.16/192.168 ranges.
@@ -140,7 +140,11 @@ def check_url_allowed(
     if block_private_addresses:
         try:
             addresses, via_dns = _addresses_for_host(host)
-        except socket.gaierror:
+        except (socket.gaierror, UnicodeError, ValueError):
+            # A malformed host can raise UnicodeError/ValueError from resolution, not
+            # just gaierror. Treat any of these as unresolvable (fail closed) so the
+            # guard returns a violation reason rather than raising out of a WebFetch
+            # configured with onError:"return".
             return f"host {host!r} could not be resolved"
         for ip in addresses:
             family = _non_public_family(ip)

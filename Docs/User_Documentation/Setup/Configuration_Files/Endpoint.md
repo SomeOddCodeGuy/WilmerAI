@@ -12,6 +12,35 @@ Each Endpoint JSON file contains a single object with the following key-value pa
 
 -----
 
+#### **Embeddings Endpoints**
+
+An endpoint whose `apiTypeConfigFileName` references an embeddings ApiType (`OpenAI-Embeddings` or
+`Ollama-Embeddings`; see the ApiTypes documentation) is an **embeddings endpoint**, used by the memory system's
+semantic search rather than for text generation. Workflow nodes cannot reference it as a generation endpoint;
+attempting to do so fails with a clear error. Only four fields apply: `endpoint`, `apiTypeConfigFileName`,
+`modelNameToSendToAPI`, and optionally `apiKey` (plus `dontIncludeModel`). Presets, prompt templates, and all
+injection/cleaning fields are ignored.
+
+*Complete example (`Embedding-Endpoint.json`):*
+
+```json
+{
+  "modelNameForDisplayOnly": "Embeddings (for semantic memory search; point at a llama.cpp server started with --embedding, or any /v1/embeddings server)",
+  "endpoint": "http://127.0.0.1:8081",
+  "apiTypeConfigFileName": "OpenAI-Embeddings",
+  "modelNameToSendToAPI": "nomic-embed-text",
+  "dontIncludeModel": false,
+  "apiKey": ""
+}
+```
+
+Reference it from the discussion memory settings (`embeddingEndpointName`) to embed memories as they are written,
+and from a `VectorMemorySearch` node (`embeddingEndpointName` with `searchMode: "semantic"` or `"hybrid"`) to
+search them. Working examples ship in `Endpoints/_example_users/Embedding-Endpoint.json` and
+`Endpoints/_example-endpoints/embeddings-*.json`.
+
+-----
+
 #### **Core Connection Details**
 
 These fields are essential for establishing a connection to the LLM server.
@@ -146,14 +175,14 @@ These fields control how the model is identified in the API request.
   any exception during a request (for example, a connection refusal, the remote host being unreachable, an HTTP 5xx
   response that cannot be recovered, or any other error from the backend), the middleware will transparently retry
   the same request against the backup endpoint. The backup's JSON is loaded independently, so the backup may point to
-  a completely different server, API type, model, and even its own `backupEndpointName` to chain further — for
+  a completely different server, API type, model, and even its own `backupEndpointName` to chain further: for
   example, `General-Endpoint` -> `General-Backup-Endpoint` -> `General-Second-Backup-Endpoint`. Cycles are detected;
   if a chain loops back on itself (e.g., `A` -> `B` -> `A`), the request is aborted with a clear error. Any backend
-  exception — including connection errors and request timeouts — triggers failover. To avoid prematurely switching
+  exception, including connection errors and request timeouts, triggers failover. To avoid prematurely switching
   away from slow local models that legitimately take many minutes to respond, the backend read timeout is configured
   generously, so a model that is still generating is not cut off mid-response. (This is distinct from the
   concurrency slot-wait timeout, which does not trigger failover.) For streaming requests, failover is only possible
-  before the first token is sent to the client — once any part of the response has been streamed, the original
+  before the first token is sent to the client; once any part of the response has been streamed, the original
   failure is reported rather than retried against a backup.
 * **Data Type**: `string`
 * **Required**: No
@@ -162,11 +191,11 @@ These fields control how the model is identified in the API request.
 ##### `backupPresetName`
 
 * **Description**: The preset name the backup endpoint should load when failover delegates to it. By default the
-  backup is constructed with the **originating request's preset name** — the same name the primary was called with.
+  backup is constructed with the **originating request's preset name**, the same name the primary was called with.
   That name is then resolved against the *backup's own* preset type (its `Presets/<presetType>/` directory). This is
   fine when the same preset name exists for every API type involved (the shipped example configs mirror identical
-  preset filenames across each type directory), but a heterogeneous failover — say an OpenAI primary failing over to a
-  Claude backup — breaks if the originating preset name has no file in the backup type's directory: construction would
+  preset filenames across each type directory), but a heterogeneous failover (say an OpenAI primary failing over to a
+  Claude backup) breaks if the originating preset name has no file in the backup type's directory: construction would
   raise `FileNotFoundError` mid-failover. Set `backupPresetName` on the primary endpoint to the preset the backup
   should use instead, and the backup will load that name rather than inheriting the primary's. Leave it unset to keep
   the inherited-name behavior.
@@ -178,10 +207,10 @@ These fields control how the model is identified in the API request.
 
 * **Description**: Opt-in acknowledgement that this endpoint may receive failover traffic even though its host is a
   public address. Failover forwards the full conversation and prompt to the backup, so Wilmer **blocks failover to a
-  backup whose host is a public IP by default** (safe-by-default) — a primary that fails over to such a backup raises a
+  backup whose host is a public IP by default** (safe-by-default): a primary that fails over to such a backup raises a
   clear error instead of silently sending the prompt off-machine. Set `allowRemoteBackup` to `true` on the **backup
   endpoint** to permit it. This flag is only needed for a backup at a *public IP literal*: a backup on loopback or a
-  private/LAN address (`127.0.0.1`, `10.x`, `172.16–31.x`, `192.168.x`, `localhost`) is treated as local and never
+  private/LAN address (`127.0.0.1`, `10.x`, `172.16-31.x`, `192.168.x`, `localhost`) is treated as local and never
   blocked, and a backup referenced by *hostname* (which cannot be classified without DNS) is allowed but logged loudly
   as possible off-machine egress.
 * **Data Type**: `boolean`
@@ -261,6 +290,19 @@ These settings allow for adding text to different parts of the prompt before it 
 * **Required**: Yes
 * **Example**: `true`
 
+##### `backendSupportsToolTurns`
+
+* **Description**: Declares whether the backing model's chat template can render native tool turns (assistant
+  `tool_calls` messages and `role: "tool"` results). Defaults to `true` when absent. Set to `false` for backends
+  whose templates lack tool support (older models, strict-alternation templates): any workflow node with
+  `appendNativeToolExchange` enabled then falls back to the text-transcript behavior for this endpoint instead of
+  sending tool turns the template would reject. This lets one old backend opt out without editing every workflow
+  that sets the flag, which is relevant when frontends allow switching a tool-history conversation onto a different
+  model mid-chat.
+* **Data Type**: `boolean`
+* **Required**: No (default `true`)
+* **Example**: `false`
+
 -----
 
 #### **Response Cleaning & Filtering**
@@ -271,9 +313,11 @@ Block Removal, 2) Custom Prefix Removal, 3) Whitespace Trimming.
 ##### `removeThinking`
 
 * **Description**: The master switch for the thinking block removal feature. If `true`, the system will attempt to find
-  and remove text between `startThinkTag` and `endThinkTag`.
+  and remove text between `startThinkTag` and `endThinkTag`. Only the first thinking block in a response is removed;
+  if a matching `endThinkTag` is never found, the response is left unmodified.
 * **Data Type**: `boolean`
-* **Required**: Yes
+* **Required**: No
+* **Default**: `false`
 * **Example**: `true`
 
 ##### `startThinkTag`
@@ -281,30 +325,34 @@ Block Removal, 2) Custom Prefix Removal, 3) Whitespace Trimming.
 * **Description**: The opening tag that marks the beginning of a "thinking" block to be removed from the response.
   Case-insensitive.
 * **Data Type**: `string`
-* **Required**: Yes
+* **Required**: Only when `removeThinking` is `true` (if missing, the feature disables itself with a warning).
 * **Example**: `"<think>"`
 
 ##### `endThinkTag`
 
 * **Description**: The closing tag that marks the end of a "thinking" block. Case-insensitive.
 * **Data Type**: `string`
-* **Required**: Yes
+* **Required**: Only when `removeThinking` is `true` (if missing, the feature disables itself with a warning).
 * **Example**: `"</think>"`
 
 ##### `openingTagGracePeriod`
 
-* **Description**: The number of characters at the start of the response to scan for a `startThinkTag`. If the tag is
-  not found within this window, removal is skipped for that response.
+* **Description**: The size, in characters, of the window at the start of the response in which a `startThinkTag` must
+  **begin** for the thinking block to be removed. The tag only needs to start inside this window; it may end beyond
+  it. If no tag starts within the window, removal is skipped for that response.
 * **Data Type**: `integer`
-* **Required**: Yes
+* **Required**: No
+* **Default**: `100`
 * **Example**: `100`
 
 ##### `expectOnlyClosingThinkTag`
 
 * **Description**: A special mode for models that may omit the opening tag. If `true`, the system buffers and discards
-  all text until it finds the `endThinkTag`, then begins streaming the subsequent text.
+  all text up to and including the first `endThinkTag`, then begins streaming the subsequent text. If the tag never
+  appears, the full response is returned unmodified.
 * **Data Type**: `boolean`
-* **Required**: Yes
+* **Required**: No
+* **Default**: `false`
 * **Example**: `false`
 
 ##### `removeCustomTextFromResponseStartEndpointWide`
@@ -360,7 +408,7 @@ A workflow node's `preset` value is resolved as an **endpoint name** first:
 
 The common case is a node pointing its `preset` at the same endpoint it is calling. Because the block
 is stored in canonical form, one endpoint can also **borrow** another endpoint's samplers just by
-naming it (`"preset": "Some-Other-Endpoint"`), even across different API types — the values are
+naming it (`"preset": "Some-Other-Endpoint"`), even across different API types; the values are
 translated to whichever endpoint is actually being called.
 
 > Existing setups are unaffected: legacy preset names (e.g. `General-Preset`) do not match any
@@ -384,7 +432,7 @@ translated to whichever endpoint is actually being called.
   seed  stop  samplers  logit_bias  ignore_eos  n_probs  min_keep  grammar  json_schema
   ```
   Plus two special keys: `thinkingMode` and `chat_template_kwargs` (below). Max-tokens, the streaming
-  flag, and context size are **not** sampler keys — they come from the node/endpoint as before.
+  flag, and context size are **not** sampler keys; they come from the node/endpoint as before.
 
 ##### `thinkingMode`
 

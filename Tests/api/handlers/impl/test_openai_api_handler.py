@@ -1,5 +1,33 @@
 import pytest
 
+from Middleware.common import instance_global_variables
+
+_HANDLER = 'Middleware.api.handlers.impl.openai_api_handler'
+
+
+@pytest.fixture(autouse=True)
+def isolate_user_config(mocker):
+    """Pin the per-user config reads to benign defaults so these endpoint tests
+    cannot be broken (or silently repurposed) by edits to the repo's
+    Public/Configs user files, which the handler would otherwise read for the
+    _current-user.json user. Tests that need other values re-patch locally."""
+    mocker.patch(f'{_HANDLER}.get_is_chat_complete_add_user_assistant', return_value=False)
+    mocker.patch(f'{_HANDLER}.get_is_chat_complete_add_missing_assistant', return_value=False)
+    mocker.patch(f'{_HANDLER}.get_encrypt_using_api_key', return_value=False)
+    mocker.patch(f'{_HANDLER}.get_redact_log_output', return_value=False)
+    mocker.patch(f'{_HANDLER}.check_openwebui_tool_request', return_value=None)
+
+
+@pytest.fixture
+def multi_user_mode():
+    """Configure two users for the duration of a test, restoring afterwards."""
+    original_users = instance_global_variables.USERS
+    instance_global_variables.USERS = ['user-one', 'user-two']
+    yield
+    instance_global_variables.USERS = original_users
+    instance_global_variables.clear_request_user()
+    instance_global_variables.clear_workflow_override()
+
 
 def test_get_models(client, mocker):
     """Tests the /v1/models endpoint."""
@@ -394,17 +422,18 @@ def test_completions_streaming_runs_post_return_nodes_after_done(client, mocker)
 def test_eventlet_path_runs_post_return_nodes_to_completion(app, mocker):
     """Direct test of the Eventlet streaming path (ISS-035 + ISS-026).
 
-    The Flask test harness never monkey-patches eventlet, so `_stream_with_eventlet_optimized`
-    is otherwise unexercised. We call it directly and let the hub run.
+    The Flask test harness never monkey-patches eventlet, so the shared eventlet streamer
+    is otherwise unexercised. We call it directly with this handler's config and let the hub run.
 
     The generator sleeps between the [DONE] terminator and a post-return chunk so the
     client-facing generator returns (running its `finally`) *first*. With the ISS-026 fix the
     generator does not send `stop_signal` on natural completion, so the reader keeps draining
     and the post-return node runs to completion. Under the old behavior the `finally` would have
     signaled stop, the reader would `break` on the next chunk, and the post-return node would
-    never execute (`executed` would stay empty) — so this test distinguishes the fix.
+    never execute (`executed` would stay empty), so this test distinguishes the fix.
     """
     eventlet = pytest.importorskip("eventlet")
+    from Middleware.api.handlers.base import base_streaming
     from Middleware.api.handlers.impl import openai_api_handler as h
 
     executed = []
@@ -423,7 +452,9 @@ def test_eventlet_path_runs_post_return_nodes_to_completion(app, mocker):
     mocker.patch.object(h, 'handle_user_prompt', return_value=stream_generator())
 
     with app.test_request_context('/v1/chat/completions'):
-        response = h._stream_with_eventlet_optimized('req-evt', [{"role": "user", "content": "hi"}], True)
+        response = base_streaming.stream_with_eventlet_optimized(
+            h._STREAMING_CONFIG, h.handle_user_prompt,
+            'req-evt', [{"role": "user", "content": "hi"}], True)
         client_chunks = list(response.response)
 
     # Give the background reader greenlet time to drain the generator and run the post-return node.
@@ -845,3 +876,218 @@ def test_completions_returns_400_on_empty_body(client, mocker):
     response = client.post('/completions', data=b'', content_type='application/json')
     assert response.status_code == 400
     assert "Invalid JSON" in response.json["error"]
+
+
+def test_chat_completions_missing_messages_returns_400(client, mocker):
+    """The 'messages' field is required; its absence is a 400, not a crash."""
+    mock_handle_prompt = mocker.patch(f'{_HANDLER}.handle_user_prompt')
+
+    response = client.post('/chat/completions', json={"stream": False})
+
+    assert response.status_code == 400
+    assert "messages" in response.json["error"]
+    mock_handle_prompt.assert_not_called()
+
+
+def test_chat_completions_message_missing_role_returns_400(client, mocker):
+    """Each message must carry a 'role'; a role-less message is a 400."""
+    mock_handle_prompt = mocker.patch(f'{_HANDLER}.handle_user_prompt')
+
+    payload = {"messages": [{"content": "hi"}], "stream": False}
+    response = client.post('/chat/completions', json=payload)
+
+    assert response.status_code == 400
+    assert "role" in response.json["error"]
+    mock_handle_prompt.assert_not_called()
+
+
+def test_chat_completions_message_missing_content_and_tool_calls_returns_400(client, mocker):
+    """A message with neither 'content' nor 'tool_calls' is a 400."""
+    mock_handle_prompt = mocker.patch(f'{_HANDLER}.handle_user_prompt')
+
+    payload = {"messages": [{"role": "user"}], "stream": False}
+    response = client.post('/chat/completions', json=payload)
+
+    assert response.status_code == 400
+    assert "content" in response.json["error"]
+    mock_handle_prompt.assert_not_called()
+
+
+def test_chat_completions_assistant_tool_calls_without_content_accepted(client, mocker):
+    """An assistant message may omit 'content' when it carries 'tool_calls';
+    the tool-call fields (tool_calls, tool_call_id, name) must survive the
+    transformation into the internal message format."""
+    mock_handle_prompt = mocker.patch(f'{_HANDLER}.handle_user_prompt', return_value="ok")
+    mock_builder = mocker.patch(f'{_HANDLER}.response_builder')
+    mock_builder.build_openai_chat_completion_response.return_value = {"id": "test"}
+
+    tool_calls = [{"id": "call_1", "type": "function",
+                   "function": {"name": "get_weather", "arguments": '{"city":"Oslo"}'}}]
+    payload = {
+        "messages": [
+            {"role": "user", "content": "Weather in Oslo?"},
+            {"role": "assistant", "tool_calls": tool_calls},
+            {"role": "tool", "content": "12C", "tool_call_id": "call_1", "name": "get_weather"},
+        ],
+        "stream": False,
+    }
+    response = client.post('/chat/completions', json=payload)
+
+    assert response.status_code == 200
+    called_messages = mock_handle_prompt.call_args[0][1]
+    assert called_messages[1] == {"role": "assistant", "content": "", "tool_calls": tool_calls}
+    assert called_messages[2] == {"role": "tool", "content": "12C",
+                                  "tool_call_id": "call_1", "name": "get_weather"}
+
+
+def test_chat_completions_multi_user_unidentified_returns_400(client, mocker, multi_user_mode):
+    """In multi-user mode a request whose model resolves to no configured user
+    is rejected with a 400 listing the available users, before any dispatch."""
+    mock_handle_prompt = mocker.patch(f'{_HANDLER}.handle_user_prompt')
+
+    payload = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}], "stream": False}
+    response = client.post('/chat/completions', json=payload)
+
+    assert response.status_code == 400
+    assert 'user-one' in response.json["error"]
+    assert 'user-two' in response.json["error"]
+    mock_handle_prompt.assert_not_called()
+
+
+def test_chat_completions_multi_user_model_routes_request_user(client, mocker, multi_user_mode):
+    """In multi-user mode a model field naming a configured user sets the
+    request-scoped user for the duration of the dispatch."""
+    seen = {}
+
+    def capture(*args, **kwargs):
+        seen['request_user'] = instance_global_variables.get_request_user()
+        return "ok"
+
+    mocker.patch(f'{_HANDLER}.handle_user_prompt', side_effect=capture)
+    mock_builder = mocker.patch(f'{_HANDLER}.response_builder')
+    mock_builder.build_openai_chat_completion_response.return_value = {"id": "test"}
+
+    payload = {"model": "user-two", "messages": [{"role": "user", "content": "hi"}], "stream": False}
+    response = client.post('/chat/completions', json=payload)
+
+    assert response.status_code == 200
+    assert seen['request_user'] == 'user-two'
+
+
+def test_chat_completions_non_streaming_dict_result_builds_tool_call_response(client, mocker):
+    """A dict result from the gateway (tool-call surface) must be unpacked into
+    full_text + tool_calls for the response builder, not stringified."""
+    tool_calls = [{"id": "call_9", "type": "function",
+                   "function": {"name": "lookup", "arguments": "{}"}}]
+    mocker.patch(f'{_HANDLER}.handle_user_prompt',
+                 return_value={"content": "the answer", "tool_calls": tool_calls})
+    mock_builder = mocker.patch(f'{_HANDLER}.response_builder')
+    mock_builder.build_openai_chat_completion_response.return_value = {"id": "test"}
+
+    payload = {"messages": [{"role": "user", "content": "hi"}], "stream": False}
+    response = client.post('/chat/completions', json=payload)
+
+    assert response.status_code == 200
+    mock_builder.build_openai_chat_completion_response.assert_called_once_with(
+        full_text="the answer", tool_calls=tool_calls)
+
+
+def test_chat_completions_passes_tools_and_tool_choice_to_gateway(client, mocker):
+    """Client-supplied tools/tool_choice must reach the workflow gateway intact."""
+    mock_handle_prompt = mocker.patch(f'{_HANDLER}.handle_user_prompt', return_value="ok")
+    mock_builder = mocker.patch(f'{_HANDLER}.response_builder')
+    mock_builder.build_openai_chat_completion_response.return_value = {"id": "test"}
+
+    tools = [{"type": "function", "function": {"name": "get_weather", "parameters": {}}}]
+    payload = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "stream": False,
+        "tools": tools,
+        "tool_choice": "auto",
+    }
+    client.post('/chat/completions', json=payload)
+
+    kwargs = mock_handle_prompt.call_args[1]
+    assert kwargs["tools"] == tools
+    assert kwargs["tool_choice"] == "auto"
+
+
+def test_chat_completions_stream_defaults_to_false(client, mocker):
+    """/v1/chat/completions defaults to non-streaming when 'stream' is omitted
+    (matching the OpenAI spec)."""
+    mock_handle_prompt = mocker.patch(f'{_HANDLER}.handle_user_prompt', return_value="ok")
+    mock_builder = mocker.patch(f'{_HANDLER}.response_builder')
+    mock_builder.build_openai_chat_completion_response.return_value = {"id": "test"}
+
+    response = client.post('/chat/completions', json={"messages": [{"role": "user", "content": "hi"}]})
+
+    assert response.status_code == 200
+    assert 'application/json' in response.content_type
+    assert mock_handle_prompt.call_args[1]["stream"] is False
+    mock_builder.build_openai_chat_completion_response.assert_called_once()
+
+
+def test_completions_stream_defaults_to_true(client, mocker):
+    """/v1/completions deliberately deviates from the OpenAI spec: legacy
+    front-ends assume streaming and omit the flag, so the default is True."""
+
+    def stream_generator():
+        yield 'data: [DONE]\n\n'
+
+    mock_handle_prompt = mocker.patch(f'{_HANDLER}.handle_user_prompt',
+                                      return_value=stream_generator())
+
+    response = client.post('/v1/completions', json={"prompt": "hi"})
+
+    assert response.status_code == 200
+    assert 'text/event-stream' in response.content_type
+    # Positional stream argument is True on the streaming dispatch.
+    assert mock_handle_prompt.call_args[0][2] is True
+
+
+def test_chat_completions_encryption_context_true_with_bearer_key(client, mocker):
+    """With encryptUsingApiKey enabled and a Bearer key present, the request's
+    encryption context must be activated."""
+    mocker.patch(f'{_HANDLER}.get_encrypt_using_api_key', return_value=True)
+    spy = mocker.patch(f'{_HANDLER}.set_encryption_context')
+    mocker.patch(f'{_HANDLER}.handle_user_prompt', return_value="ok")
+    mock_builder = mocker.patch(f'{_HANDLER}.response_builder')
+    mock_builder.build_openai_chat_completion_response.return_value = {"id": "test"}
+
+    payload = {"messages": [{"role": "user", "content": "hi"}], "stream": False}
+    client.post('/chat/completions', json=payload, headers={'Authorization': 'Bearer secret-key'})
+
+    spy.assert_called_once_with(True)
+
+
+def test_chat_completions_encryption_context_false_without_bearer_key(client, mocker):
+    """encryptUsingApiKey without an actual key must NOT activate encryption
+    (and redaction is off), so the context is set to False."""
+    mocker.patch(f'{_HANDLER}.get_encrypt_using_api_key', return_value=True)
+    spy = mocker.patch(f'{_HANDLER}.set_encryption_context')
+    mocker.patch(f'{_HANDLER}.handle_user_prompt', return_value="ok")
+    mock_builder = mocker.patch(f'{_HANDLER}.response_builder')
+    mock_builder.build_openai_chat_completion_response.return_value = {"id": "test"}
+
+    payload = {"messages": [{"role": "user", "content": "hi"}], "stream": False}
+    client.post('/chat/completions', json=payload)
+
+    spy.assert_called_once_with(False)
+
+
+class TestChunkSignalsDone:
+    """The stream terminator predicate must match the [DONE] event exactly,
+    never a '[DONE]' substring inside generated content."""
+
+    def test_true_for_exact_terminator_event(self):
+        from Middleware.api.handlers.impl.openai_api_handler import _chunk_signals_done
+        assert _chunk_signals_done(b'data: [DONE]\n\n') is True
+
+    def test_false_for_done_inside_content(self):
+        from Middleware.api.handlers.impl.openai_api_handler import _chunk_signals_done
+        chunk = b'data: {"choices":[{"delta":{"content":"the stream ends with data: [DONE] on its own line"}}]}\n\n'
+        assert _chunk_signals_done(chunk) is False
+
+    def test_false_for_ordinary_content_chunk(self):
+        from Middleware.api.handlers.impl.openai_api_handler import _chunk_signals_done
+        assert _chunk_signals_done(b'data: {"choices":[{"delta":{"content":"hello"}}]}\n\n') is False

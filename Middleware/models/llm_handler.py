@@ -34,8 +34,13 @@ class LlmHandler:
         self.add_generation_prompt = add_generation_prompt
         self.api_key = api_key
 
-        # Completions-style APIs don't take message collections
-        if llm_type in ("openAIV1Completion", "koboldCppGenerate", "ollamaApiGenerate"):
+        # Completions-style APIs don't take message collections.
+        # koboldCppGenerateImageSpecific is a deprecated alias kept only so
+        # pre-existing user ApiType configs keep working after an update; it
+        # routes to the same completions handler as koboldCppGenerate and must
+        # classify identically (see ApiType.md "Deprecated types").
+        if llm_type in ("openAIV1Completion", "koboldCppGenerate", "koboldCppGenerateImageSpecific",
+                        "ollamaApiGenerate"):
             self.takes_message_collection = False
         else:
             self.takes_message_collection = True

@@ -4,32 +4,14 @@ import json
 import logging
 import uuid
 
-# Dynamic eventlet imports
-try:
-    import eventlet
-    # Import Queue and Empty specifically from eventlet.queue
-    from eventlet.queue import Queue as EventletQueue, Empty as EventletQueueEmpty
-    # greenlet is a hard dependency of eventlet; only needed on the eventlet path
-    from greenlet import GreenletExit
-
-    EVENTLET_AVAILABLE = True
-except ImportError:
-    EVENTLET_AVAILABLE = False
-    # Fallback for non-Eventlet environments (like Waitress or Flask dev server)
-    import queue
-
-    Queue = queue.Queue
-    # Use standard queue.Empty for fallback type compatibility, assign it to the Eventlet name for unified handling
-    EventletQueueEmpty = queue.Empty
-
 from typing import Any, Dict, Union, List
 
-from flask import jsonify, request, Response, g, stream_with_context
+from flask import jsonify, request, Response, g
 from flask.views import MethodView
-from werkzeug.exceptions import ClientDisconnected
 
 from Middleware.api import api_helpers
 from Middleware.api.app import app
+from Middleware.api.handlers.base import base_streaming
 from Middleware.api.handlers.base.base_api_handler import BaseApiHandler
 from Middleware.api.workflow_gateway import handle_user_prompt, _sanitize_log_data, check_openwebui_tool_request
 from Middleware.common import instance_global_variables
@@ -39,179 +21,57 @@ from Middleware.utilities.config_utils import get_is_chat_complete_add_user_assi
 from Middleware.common.instance_global_variables import clear_api_type
 from Middleware.utilities.prompt_extraction_utils import parse_conversation
 from Middleware.utilities.sensitive_logging_utils import (
-    set_encryption_context, clear_encryption_context, is_encryption_active, sensitive_log_lazy,
+    set_encryption_context, clear_encryption_context, sensitive_log_lazy,
 )
 
 logger = logging.getLogger(__name__)
 response_builder = ResponseBuilderService()
 
-# Configuration for the heartbeat mechanism
-# 1 second was chosen because Wilmer won't react to an abort from the front-end until the next interval.
-# In an attempt to save the user some tokens, we want that reaction as fast as possible so we dont risk
-# kicking off another workflow node and processing another prompt.
-HEARTBEAT_INTERVAL = 1  # seconds
-# Send a proper Ollama-format JSON heartbeat with empty content. This keeps the TCP
-# connection alive for disconnect detection. The stream-complete detection (return after
-# "done":true) ensures heartbeats are never sent after stream completion, so the
-# "done":false here cannot contradict a prior "done":true.
-HEARTBEAT_MESSAGE = b'{"model":"","created_at":"","message":{"role":"assistant","content":""},"done":false}\n'
 
-
-def _stream_with_eventlet_optimized(request_id: str, messages: List[Dict], stream: bool, api_key: str = None,
-                                    tools: list = None, tool_choice=None) -> Response:
-    """
-    Optimized streaming implementation for Eventlet with disconnect detection during prefill.
-
-    Uses a queue-based approach where a background greenlet reads from handle_user_prompt()
-    and the main generator uses timeouts to detect when heartbeats are needed.
+def _chunk_signals_done(encoded: bytes) -> bool:
+    """Reports whether an encoded NDJSON chunk carries the done:true terminator.
 
     Args:
-        request_id (str): The unique identifier for this request.
-        messages (List[Dict]): The conversation history in the internal message format.
-        stream (bool): Whether streaming mode is active.
-        api_key (str, optional): The API key for encryption context scoping.
-        tools (list, optional): Tool definitions from the incoming request.
-        tool_choice: Tool selection policy from the incoming request.
+        encoded (bytes): One encoded response chunk.
 
     Returns:
-        Response: A Flask streaming Response with NDJSON content type.
+        bool: True when the chunk signals stream completion.
     """
-    logger.info(f"Ollama starting Eventlet optimized streaming for request_id: {request_id}")
-    from Middleware.services.cancellation_service import cancellation_service
-
-    # Capture request-scoped state before spawning greenlet, since the finally
-    # block in the calling function will clear them before the greenlet runs
-    captured_workflow_override = api_helpers.get_active_workflow_override()
-    captured_api_type = instance_global_variables.get_api_type()
-    captured_encryption_active = is_encryption_active()
-    captured_request_user = instance_global_variables.get_request_user()
-
-    event_queue = EventletQueue()
-    stop_signal = eventlet.event.Event()
-    reader_greenlet = None
-
-    def backend_reader():
-        """Background greenlet that reads from handle_user_prompt and queues chunks."""
-        instance_global_variables.set_workflow_override(captured_workflow_override)
-        instance_global_variables.set_api_type(captured_api_type)
-        instance_global_variables.set_request_user(captured_request_user)
-        set_encryption_context(captured_encryption_active)
-        try:
-            for chunk in handle_user_prompt(request_id, messages, stream, api_key=api_key,
-                                            tools=tools, tool_choice=tool_choice):
-                if stop_signal.ready():
-                    break
-                event_queue.put(("data", chunk))
-        except Exception as e:
-            if request_id and cancellation_service.is_cancelled(request_id):
-                logger.info(f"Backend streaming stopped due to cancellation for request_id {request_id}.")
-            else:
-                logger.error(f"Error in backend reader greenlet for request_id {request_id}: {e}", exc_info=True)
-                event_queue.put(("error", e))
-        except GreenletExit:
-            # Routine teardown: the streaming generator kills this reader on client
-            # disconnect/error, so a GreenletExit here is expected lifecycle, not an
-            # application failure. Log quietly and let the greenlet exit.
-            logger.info(f"Backend reader greenlet for request_id {request_id} was killed during stream teardown.")
-            raise
-        except (KeyboardInterrupt, SystemExit):
-            # Process-level signals (Ctrl-C / interpreter shutdown) must propagate,
-            # not be swallowed as a reader error.
-            raise
-        except BaseException as e:
-            logger.error(f"BaseException in backend_reader for request_id {request_id}: "
-                         f"{type(e).__name__}: {e}", exc_info=True)
-        finally:
-            if not stop_signal.ready():
-                stop_signal.send(True)
-
-    # Start the backend reader greenlet
-    reader_greenlet = eventlet.spawn(backend_reader)
-
-    def streaming_generator():
-        """Main generator consumed by Eventlet WSGI."""
-        should_kill_reader = False
-        try:
-            while not stop_signal.ready() or not event_queue.empty():
-                try:
-                    # Wait for data with timeout (enables heartbeat during prefill)
-                    msg_type, data = event_queue.get(timeout=HEARTBEAT_INTERVAL)
-
-                    if msg_type == "error":
-                        raise data
-                    elif msg_type == "data":
-                        if isinstance(data, str):
-                            encoded = data.encode('utf-8')
-                        else:
-                            encoded = data
-                        yield encoded
-
-                        # If this chunk signals stream completion (done:true), return
-                        # immediately. The backend_reader greenlet continues running
-                        # so that post-returnToUser workflow nodes can finish.
-                        if b'"done": true' in encoded or b'"done":true' in encoded:
-                            return
-
-                        # Force immediate socket write
-                        eventlet.sleep(0)
-
-                except EventletQueueEmpty:
-                    # Timeout - no data from backend, send heartbeat
-                    if not stop_signal.ready():
-                        yield HEARTBEAT_MESSAGE
-                        eventlet.sleep(0)
-
-        except (GeneratorExit, ClientDisconnected, BrokenPipeError, ConnectionError) as e:
-            # Client disconnected - trigger cancellation
-            logger.info(f"Client disconnected from Ollama streaming request {request_id}. Error: {type(e).__name__}.")
-            if request_id and not cancellation_service.is_cancelled(request_id):
-                cancellation_service.request_cancellation(request_id)
-            should_kill_reader = True
-            raise
-        except Exception as e:
-            if request_id and cancellation_service.is_cancelled(request_id):
-                logger.info(f"Backend streaming stopped due to cancellation for request_id {request_id}.")
-            else:
-                logger.error(f"Unexpected error in Ollama streaming generator: {e}", exc_info=True)
-            should_kill_reader = True
-            raise
-        finally:
-            # Only stop the backend reader when tearing it down due to a client
-            # disconnect or error. On natural completion (we returned at done:true) the
-            # reader is left running so post-returnToUser nodes finish; it sends
-            # stop_signal itself from its own finally. Signaling here on natural
-            # completion would cut off a future post-return node that yields.
-            if should_kill_reader:
-                if not stop_signal.ready():
-                    stop_signal.send(True)
-                if reader_greenlet:
-                    eventlet.spawn(reader_greenlet.kill)
-
-    response = Response(
-        streaming_generator(),
-        mimetype='application/x-ndjson',
-        headers={
-            'Cache-Control': 'no-cache',
-            'X-Accel-Buffering': 'no',
-        }
-    )
-    # Force connection teardown after streaming completes. Some front-ends (notably Node.js-based apps)
-    # can have their HTTP connection pool corrupted by keep-alive connections that outlive a streaming response.
-    response.headers['Connection'] = 'close'
-    return response
+    return b'"done": true' in encoded or b'"done":true' in encoded
 
 
-def _stream_response_fallback(request_id: str, messages: List[Dict], stream: bool, api_key: str = None,
+# The heartbeats are proper Ollama-format JSON chunks with empty content. They keep the
+# TCP connection alive for disconnect detection. The stream-complete detection (return
+# after "done":true) ensures heartbeats are never sent after stream completion, so the
+# "done":false here cannot contradict a prior "done":true. The two routes need
+# different chunk shapes: /api/chat wraps content in a "message" object while
+# /api/generate uses a flat "response" field, and a strict generate client would
+# reject a chat-shaped heartbeat.
+_CHAT_STREAMING_CONFIG = base_streaming.StreamingApiConfig(
+    api_label="Ollama Chat",
+    heartbeat_message=b'{"model":"","created_at":"","message":{"role":"assistant","content":""},"done":false}\n',
+    mimetype='application/x-ndjson',
+    chunk_signals_done=_chunk_signals_done,
+)
+
+_GENERATE_STREAMING_CONFIG = base_streaming.StreamingApiConfig(
+    api_label="Ollama Generate",
+    heartbeat_message=b'{"model":"","created_at":"","response":"","done":false}\n',
+    mimetype='application/x-ndjson',
+    chunk_signals_done=_chunk_signals_done,
+)
+
+
+def _handle_streaming_request(config: base_streaming.StreamingApiConfig, request_id: str, messages: List[Dict],
+                              stream: bool, api_key: str = None,
                               tools: list = None, tool_choice=None) -> Response:
     """
-    Fallback streaming implementation for non-Eventlet environments.
+    Streams the workflow response using the shared API streaming machinery.
 
-    Used when Eventlet is not installed or monkey-patching is not active (e.g., when
-    running under Waitress, Gunicorn, or the Flask development server). Disconnect
-    detection during the LLM prefill phase is unreliable in this mode because the
-    generator is driven synchronously by the WSGI server without a heartbeat mechanism.
+    handle_user_prompt is passed at call time so tests can patch it on this module.
 
     Args:
+        config (StreamingApiConfig): The route's streaming values (chat or generate).
         request_id (str): The unique identifier for this request.
         messages (List[Dict]): The conversation history in the internal message format.
         stream (bool): Whether streaming mode is active.
@@ -222,115 +82,9 @@ def _stream_response_fallback(request_id: str, messages: List[Dict], stream: boo
     Returns:
         Response: A Flask streaming Response with NDJSON content type.
     """
-    logger.info(f"Ollama starting fallback (synchronous) streaming for request_id: {request_id}")
-    from Middleware.services.cancellation_service import cancellation_service  # Import inside function
-
-    # Capture request-scoped state before creating generator, since the finally
-    # block in the calling function will clear them before the generator runs
-    captured_workflow_override = api_helpers.get_active_workflow_override()
-    captured_api_type = instance_global_variables.get_api_type()
-    captured_encryption_active = is_encryption_active()
-    captured_request_user = instance_global_variables.get_request_user()
-
-    def streaming_generator():
-        instance_global_variables.set_workflow_override(captured_workflow_override)
-        instance_global_variables.set_api_type(captured_api_type)
-        instance_global_variables.set_request_user(captured_request_user)
-        set_encryption_context(captured_encryption_active)
-        logger.debug(f"Ollama Fallback Generator starting for request_id: {request_id}")
-        try:
-            done_sent = False
-            for chunk in handle_user_prompt(request_id, messages, stream, api_key=api_key,
-                                            tools=tools, tool_choice=tool_choice):
-                if isinstance(chunk, str):
-                    encoded = chunk.encode('utf-8')
-                else:
-                    encoded = chunk
-                if done_sent:
-                    # After stream completion, consume remaining chunks without
-                    # yielding so post-returnToUser workflow nodes can finish.
-                    continue
-                yield encoded
-                if b'"done": true' in encoded or b'"done":true' in encoded:
-                    done_sent = True
-        except (GeneratorExit, ClientDisconnected, BrokenPipeError, ConnectionError) as e:
-            if request_id:
-                if not cancellation_service.is_cancelled(request_id):
-                    logger.warning(
-                        f"Client disconnected from Ollama (Fallback) streaming request {request_id}. Error: {type(e).__name__}. Cancellation might be delayed during prefill.")
-                    cancellation_service.request_cancellation(request_id)
-            raise
-        except Exception as e:
-            if request_id and cancellation_service.is_cancelled(request_id):
-                logger.info(
-                    f"Backend streaming stopped due to cancellation for request_id {request_id}. Exiting generator.")
-                return
-            if done_sent:
-                # The client already received the done:true terminator; a failure in a
-                # post-returnToUser node must not propagate out of the WSGI generator
-                # (it would corrupt connection teardown after a visually-complete
-                # stream). Log and swallow, mirroring the eventlet reader's handling.
-                logger.error(
-                    f"Post-stream node failed after the terminator in Ollama fallback streaming "
-                    f"for request_id {request_id}: {e}", exc_info=True)
-                return
-            logger.error(f"Unexpected error in Ollama streaming response: {e}", exc_info=True)
-            raise
-
-    response = Response(
-        stream_with_context(streaming_generator()),
-        mimetype='application/x-ndjson',
-        headers={
-            'Cache-Control': 'no-cache',
-            'X-Accel-Buffering': 'no',
-        }
-    )
-    # Force connection teardown after streaming completes. Some front-ends (notably Node.js-based apps)
-    # can have their HTTP connection pool corrupted by keep-alive connections that outlive a streaming response.
-    response.headers['Connection'] = 'close'
-    return response
-
-
-def _handle_streaming_request(request_id: str, messages: List[Dict], stream: bool, api_key: str = None,
-                              tools: list = None, tool_choice=None) -> Response:
-    """
-    Selects and invokes the appropriate streaming implementation.
-
-    Checks whether Eventlet is both installed and actively monkey-patching the
-    socket layer. If so, uses the optimized queue-based Eventlet implementation
-    which supports heartbeats and disconnect detection during LLM prefill. Otherwise,
-    falls back to synchronous streaming.
-
-    Args:
-        request_id (str): The unique identifier for this request.
-        messages (List[Dict]): The conversation history in the internal message format.
-        stream (bool): Whether streaming mode is active.
-        api_key (str, optional): The API key for encryption context scoping.
-        tools (list, optional): Tool definitions from the incoming request.
-        tool_choice: Tool selection policy from the incoming request.
-
-    Returns:
-        Response: A Flask streaming Response with NDJSON content type.
-    """
-    # Check if Eventlet is available AND if monkey-patching is active
-    # We must check eventlet.patcher dynamically as it's only available if EVENTLET_AVAILABLE is True
-    is_eventlet_active = EVENTLET_AVAILABLE and eventlet.patcher.is_monkey_patched('socket')
-
-    if is_eventlet_active:
-        # Call the optimized version
-        return _stream_with_eventlet_optimized(request_id, messages, stream, api_key=api_key,
-                                               tools=tools, tool_choice=tool_choice)
-    else:
-        # Provide warnings if Eventlet is expected but not active
-        if not EVENTLET_AVAILABLE:
-            logger.warning(
-                "Eventlet not installed. Falling back to synchronous streaming. Disconnect detection during prefill may be unreliable.")
-        else:
-            # This case handles running under Gunicorn/Waitress/Flask Dev Server
-            logger.debug(
-                "Eventlet installed but monkey patching is not active (not running via run_eventlet.py). Falling back to synchronous streaming.")
-        return _stream_response_fallback(request_id, messages, stream, api_key=api_key,
-                                          tools=tools, tool_choice=tool_choice)
+    return base_streaming.handle_streaming_request(config, handle_user_prompt, request_id,
+                                                   messages, stream, api_key=api_key,
+                                                   tools=tools, tool_choice=tool_choice)
 
 
 class GenerateAPI(MethodView):
@@ -415,7 +169,8 @@ class GenerateAPI(MethodView):
                     messages.append({"role": "user", "content": "", "images": list(images)})
 
             if stream:
-                return _handle_streaming_request(request_id, messages, stream, api_key=api_key)
+                return _handle_streaming_request(_GENERATE_STREAMING_CONFIG, request_id, messages, stream,
+                                                 api_key=api_key)
             else:
                 # Pass request_id. Use the model name from api_helpers to get username:workflow format
                 return_response: str = handle_user_prompt(request_id, messages, stream=False, api_key=api_key)
@@ -533,8 +288,8 @@ class ApiChatAPI(MethodView):
                 stream = stream.lower() == 'true'
 
             if stream:
-                return _handle_streaming_request(request_id, transformed_messages, stream, api_key=api_key,
-                                                  tools=tools, tool_choice=tool_choice)
+                return _handle_streaming_request(_CHAT_STREAMING_CONFIG, request_id, transformed_messages, stream,
+                                                 api_key=api_key, tools=tools, tool_choice=tool_choice)
             else:
                 # Pass request_id. Use the model name from api_helpers to get username:workflow format
                 response_data = handle_user_prompt(request_id, transformed_messages, stream, api_key=api_key,
@@ -588,35 +343,45 @@ class VersionAPI(MethodView):
         return jsonify(response_builder.build_ollama_version_response())
 
 
+def _handle_cancellation_request() -> Response:
+    """
+    Shared implementation for the WilmerAI-specific cancellation DELETE endpoints.
+
+    Clients send a request_id in the JSON body to identify which request to
+    cancel; the id is forwarded to the CancellationService.
+
+    Returns:
+        Response: A JSON response confirming cancellation, or an error response
+            for a missing/unparsable request_id.
+    """
+    from Middleware.services.cancellation_service import cancellation_service
+
+    try:
+        request_data: Dict[str, Any] = request.get_json(force=True)
+    except Exception as e:
+        logger.error(f"Failed to parse JSON: {e}")
+        return jsonify({"error": "Invalid JSON data"}), 400
+
+    request_id = request_data.get("request_id")
+    if not request_id:
+        return jsonify({"error": "The 'request_id' field is required."}), 400
+
+    cancellation_service.request_cancellation(request_id)
+    logger.info(f"Cancellation requested for request_id: {request_id}")
+
+    return jsonify({"status": "cancelled", "request_id": request_id}), 200
+
+
 class CancelChatAPI(MethodView):
     @staticmethod
     def delete() -> Response:
         """
         Handles DELETE requests for the /api/chat endpoint to cancel a request.
 
-        This is a WilmerAI-specific extension to handle request cancellation
-        in a multi-request environment. Clients should send a request_id in
-        the JSON body to identify which request to cancel.
-
         Returns:
             Response: A JSON response confirming cancellation.
         """
-        from Middleware.services.cancellation_service import cancellation_service
-
-        try:
-            request_data: Dict[str, Any] = request.get_json(force=True)
-        except Exception as e:
-            logger.error(f"Failed to parse JSON: {e}")
-            return jsonify({"error": "Invalid JSON data"}), 400
-
-        request_id = request_data.get("request_id")
-        if not request_id:
-            return jsonify({"error": "The 'request_id' field is required."}), 400
-
-        cancellation_service.request_cancellation(request_id)
-        logger.info(f"Cancellation requested for request_id: {request_id}")
-
-        return jsonify({"status": "cancelled", "request_id": request_id}), 200
+        return _handle_cancellation_request()
 
 
 class CancelGenerateAPI(MethodView):
@@ -625,29 +390,10 @@ class CancelGenerateAPI(MethodView):
         """
         Handles DELETE requests for the /api/generate endpoint to cancel a request.
 
-        This is a WilmerAI-specific extension to handle request cancellation
-        in a multi-request environment. Clients should send a request_id in
-        the JSON body to identify which request to cancel.
-
         Returns:
             Response: A JSON response confirming cancellation.
         """
-        from Middleware.services.cancellation_service import cancellation_service
-
-        try:
-            request_data: Dict[str, Any] = request.get_json(force=True)
-        except Exception as e:
-            logger.error(f"Failed to parse JSON: {e}")
-            return jsonify({"error": "Invalid JSON data"}), 400
-
-        request_id = request_data.get("request_id")
-        if not request_id:
-            return jsonify({"error": "The 'request_id' field is required."}), 400
-
-        cancellation_service.request_cancellation(request_id)
-        logger.info(f"Cancellation requested for request_id: {request_id}")
-
-        return jsonify({"status": "cancelled", "request_id": request_id}), 200
+        return _handle_cancellation_request()
 
 
 class OllamaApiHandler(BaseApiHandler):

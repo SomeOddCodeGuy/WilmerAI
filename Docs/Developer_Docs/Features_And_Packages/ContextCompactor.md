@@ -93,7 +93,10 @@ The `handle(context)` method follows this sequence:
 2. **Validate discussion ID**: Returns early with an empty string if `context.discussion_id` is `None`.
 
 3. **Apply lookback**: Slices `context.messages` to exclude the last `lookbackStartTurn` messages from the working
-   set. This prevents recent, potentially incomplete exchanges from being summarized. If fewer than 2 messages remain
+   set. This prevents recent, potentially incomplete exchanges from being summarized. The slice only applies when
+   `len(messages) > lookbackStartTurn`; conversations at or below that length are processed in full (benign: they
+   produce an empty Old window under default token budgets, and the behavior is pinned by
+   `test_lookback_exceeding_message_count_uses_all_messages`). If fewer than 2 messages remain
    after the trim, returns cached output (or empty string).
 
 4. **Calculate boundaries**: Calls `_calculate_boundaries()` to determine the token-based window indices that divide the
@@ -259,7 +262,7 @@ XML-tagged string:
 
 Either section may be absent if its summary is empty. If both are empty, an empty string is returned.
 
-The `__boundary__` marker in the Old state file is skipped during output formatting -- only the first non-boundary entry
+The `__boundary__` marker in the Old state file is skipped during output formatting; only the first non-boundary entry
 is used as the Old summary.
 
 This output format is compatible with `TagTextExtractor` for downstream extraction in workflows. A workflow can use a
@@ -376,4 +379,4 @@ To add a third summary section beyond Old and Oldest:
 ### Add New Settings Fields
 
 Add the field to the settings file JSON. Read it in the handler via `settings.get("fieldName", default_value)`. No
-registration in `config_utils.py` is needed -- settings fields are read directly from the loaded settings dict.
+registration in `config_utils.py` is needed; settings fields are read directly from the loaded settings dict.

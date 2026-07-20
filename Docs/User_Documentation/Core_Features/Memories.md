@@ -8,20 +8,31 @@ The system separates memory creation from retrieval to maintain response speed. 
 `[DiscussionId]` tag must be included in a user or system message. It can be anywhere and
 Wilmer will find it.
 
+The discussion id names on-disk files, so it must be path-safe: an id containing `/`, `\`, or `:` (for example a
+timestamp with colons) is rejected with a log warning and the request is treated as stateless: no memories are
+read or written for it. Use ids made of letters, digits, dots, dashes, and underscores.
+
 -----
 
-## System Architecture: The Three Memory Components
+## System Architecture: The Four Memory Components
 
-WilmerAI's memory consists of three components. Each is stored in a separate file and linked by a unique discussion ID.
+WilmerAI's memory consists of four components. Each is stored in a separate file and linked by a unique discussion ID.
 
 * **Long-Term Memory File (`<id>_memories.json`)**: This file stores chronological summaries of the conversation. The
   system periodically reviews the chat history, divides it into chunks, and uses an LLM to summarize each chunk. This
   forms the backbone of the conversation's timeline.
 * **Rolling Chat Summary (`<id>_chat_summary.json`)**: This file contains a single, continuously updated summary of the
   entire conversation. It synthesizes the chunks from the Long-Term Memory File to provide a high-level overview.
-* **Searchable Vector Memory (`<id>_vector_memory.db`)**: A dedicated full-text search database for the discussion. When
+* **Searchable Vector Memory (`vector_memory.db`, stored in the discussion's folder; a legacy `<id>_vector_memory.db`
+  at the old `Public/` location keeps being used if present)**: A dedicated full-text search database for the discussion. When
   a memory is created, it can be stored here with structured metadata (**title, summary, entities, key phrases**) and
   indexed for full-text keyword search (SQLite FTS5 with BM25 ranking) to retrieve relevant information based on a query.
+* **State Document (`state_document.md`)**: An optional, continuously updated markdown document holding the current,
+  ground-truth state of the conversation's subject matter, a "what is true right now" snapshot. Where the other
+  components record history, the state document records the present: when a fact changes, its entry is replaced. It is
+  designed to be injected into every response rather than searched, and its structure (a user profile, roleplay world
+  state, project status, etc.) is defined entirely by the prompts of a user-configured merge workflow. The file is
+  plain, hand-editable markdown, updated by the vector memory pipeline when `useStateDocument` is enabled.
 
 -----
 
@@ -149,7 +160,23 @@ memories before reading.
   ```
 
   *Note: Search keywords must be separated by a semicolon (`;`). The query uses `OR` logic and is limited to a maximum
-  of 60 keywords.*
+  of 60 keywords. Optional ranking fields (`bm25Weights`, `useRecencyScoring`, and `includeDates`) improve result
+  quality for long-running conversations. The optional `useEntityExpansion` flag runs a second keyword pass seeded
+  with entities found in the top results, bridging facts connected by an entity the query could not name (a search
+  about "the user's sister" also surfaces facts stored under her name). See the node's documentation for details.*
+
+* **`GetCurrentStateDocument`** (Pure/Fast Reader)
+  Performs a direct read of the State Document (`state_document.md`) and returns its full text. Inject this into the
+  system prompts of thinking and responder nodes so that core, always-relevant facts are present on every response
+  without depending on a search.
+
+  ```json
+  {
+    "id": "get_state_document_node",
+    "type": "GetCurrentStateDocument",
+    "name": "Get the Current State Document"
+  }
+  ```
 
 -----
 
@@ -183,7 +210,7 @@ File-based memory generation is controlled by two thresholds that work together:
 In normal operation (when the memory file exists on disk), the system uses **whichever threshold is reached first**. For
 example, if `chunkEstimatedTokenSize` is 1000 and `maxMessagesBetweenChunks` is 20, memories will generate either when
 ~1000 tokens of new messages accumulate or when 20 new messages are added, whichever happens first. The memory file does
-not need to contain any chunks for both thresholds to be active -- it just needs to exist. In a new conversation, the
+not need to contain any chunks for both thresholds to be active; it just needs to exist. In a new conversation, the
 file is automatically created on the first memory check (around message 3), so both thresholds are active from that
 point on.
 
@@ -239,6 +266,33 @@ timeline with other nodes in the same workflow.
   "vectorMemoryMaxResponseSizeInTokens": 1024,
   "vectorMemoryChunkEstimatedTokenSize": 1000,
   "vectorMemoryMaxMessagesBetweenChunks": 5,
+  // When true, each memory's "topics" metadata is folded into the searchable
+  // index as it is written, so keyword searches can find a memory by its
+  // conversation-level topic (the campaign, project, or event a fact belongs
+  // to) even when the memory text never restates it. Off by default, which
+  // indexes exactly what was indexed historically.
+  "vectorMemoryIndexTopics": true,
+  // ====================================================================
+  // == Embedding Configuration (vector memory path only, optional)
+  // ====================================================================
+  // When set, newly stored vector memories are also embedded via this
+  // endpoint (an Endpoints config whose ApiType is openAIEmbeddings or
+  // ollamaEmbeddings), enabling semantic/hybrid search on VectorMemorySearch.
+  "embeddingEndpointName": "Embedding-Endpoint",
+  // Each processed chunk also embeds up to this many older, not-yet-embedded
+  // memories (a single memory pass may process several chunks), so an
+  // existing database heals gradually. Set 0 to disable.
+  "embeddingBackfillBatchSize": 20,
+  // ====================================================================
+  // == State Document Configuration (vector memory path only)
+  // ====================================================================
+  // When enabled, newly stored vector memories are also merged into the
+  // discussion's state document by the named workflow.
+  "useStateDocument": true,
+  "stateDocumentWorkflowName": "my-state-document-workflow",
+  // Reject merge outputs smaller than this fraction of the current document.
+  // Set to 0 to disable the shrink guard.
+  "stateDocumentMinRetentionRatio": 0.5,
   // ====================================================================
   // == File-based Memory Configuration
   // ====================================================================
@@ -262,6 +316,44 @@ timeline with other nodes in the same workflow.
   "maxResponseSizeInTokens": 400
 }
 ```
+
+### Semantic Search with Embeddings
+
+By default, memory search is keyword-based (FTS5 with BM25 ranking). Optionally, memories can also be embedded
+(turned into vectors that capture meaning) so that `VectorMemorySearch` can match memories by concept even when no
+words overlap (searchMode `"semantic"`, or `"hybrid"` to combine both, which is the recommended mode).
+
+Requirements and behavior:
+
+* **An embeddings endpoint**: an ordinary Endpoints config file whose ApiType is `openAIEmbeddings` (OpenAI,
+  llama.cpp server with `--embedding`, most compatible servers) or `ollamaEmbeddings` (Ollama with an embedding
+  model such as `nomic-embed-text`). No preset is needed.
+* **Vectors are written by the memory pipeline**: when `embeddingEndpointName` is set in the discussion settings,
+  each new vector memory is embedded as it is stored, and a small batch of older memories is backfilled with every
+  processed chunk (a single memory pass may process several chunks). Existing databases gain the (purely additive)
+  embedding table automatically; nothing about existing memories is modified.
+* **Bulk backfill (optional)**: users with years of memories can embed the whole backlog at once with the
+  standalone `Scripts/backfill_embeddings.py` script, pointing it directly at a `vector_memory.db`
+  file. This is a convenience only; the lazy backfill reaches the same state over time.
+* **Model switches are safe**: embeddings are stored per-model. Changing embedding models never destroys previous
+  vectors: search simply uses the current model's vectors, un-embedded memories remain findable via keyword
+  search, and switching back to a previous model reuses its stored vectors immediately.
+* **Graceful degradation everywhere**: if the embeddings endpoint is down or unset, writes skip embedding (memories
+  stay fully searchable by keyword) and semantic/hybrid searches fall back to keyword results. Embeddings are
+  derived data, always recomputable from the memory text.
+
+### The State Document
+
+When `useStateDocument` is `true` and the vector memory path is active, every batch of newly stored vector memories is
+also merged into `state_document.md` by the workflow named in `stateDocumentWorkflowName`. The merge workflow receives
+the new facts as `{agent1Input}` and the current document as `{agent2Input}`, and its final output replaces the
+document on disk. Safety guards reject empty or drastically shrunken merge outputs, and the previous version is always
+kept as `state_document.md.bak`. Retrieval is done with the `GetCurrentStateDocument` node.
+
+The document's sections are defined by the merge workflow's prompts, so the same mechanism supports an assistant
+maintaining a profile of the user's life, a roleplay maintaining world state and characters, or any other "current
+state" a persona needs to keep straight. See the memory nodes guide (`Setup/Workflow_Details/Workflow_Nodes_Memories.md`)
+for full details, and the `_example_assistant_with_vector_memory` workflow folder for a working example.
 
 -----
 
@@ -320,7 +412,8 @@ To regenerate all memories for a discussion, **delete the corresponding memory f
 
 1. `<id>_memories.json` (Long-Term Memory)
 2. `<id>_chat_summary.json` (Rolling Summary)
-3. `<id>_vector_memory.db` (Searchable Vector Memory)
+3. `vector_memory.db` (Searchable Vector Memory; older discussions may instead have a legacy
+   `<id>_vector_memory.db` under `Public/`)
 
 If per-user encryption is active (i.e., an `Authorization: Bearer <key>` header is being sent), these files are
 located under a hash-based subdirectory within the discussion directory (e.g.,

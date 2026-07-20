@@ -13,9 +13,10 @@ from Middleware.workflows.models.execution_context import ExecutionContext
 def mock_dependencies(mocker):
     """Mocks the dependencies of ToolNodeHandler for isolated testing."""
     # Mock the tool classes to prevent their __init__ from running real logic
-    mocker.patch('Middleware.workflows.handlers.impl.tool_node_handler.SlowButQualityRAGTool')
-    mocker.patch('Middleware.workflows.handlers.impl.tool_node_handler.OfflineWikiApiClient')
-    mocker.patch('Middleware.workflows.handlers.impl.tool_node_handler.OfflineResearcherApiClient')
+    mock_rag_tool_cls = mocker.patch('Middleware.workflows.handlers.impl.tool_node_handler.SlowButQualityRAGTool')
+    mock_wiki_client_cls = mocker.patch('Middleware.workflows.handlers.impl.tool_node_handler.OfflineWikiApiClient')
+    mock_researcher_client_cls = mocker.patch(
+        'Middleware.workflows.handlers.impl.tool_node_handler.OfflineResearcherApiClient')
 
     # Mock the dynamic module loader function
     mock_run_dynamic_module = mocker.patch('Middleware.workflows.handlers.impl.tool_node_handler.run_dynamic_module')
@@ -28,7 +29,10 @@ def mock_dependencies(mocker):
     return {
         "workflow_manager": MagicMock(),
         "workflow_variable_service": mock_variable_service,
-        "run_dynamic_module": mock_run_dynamic_module
+        "run_dynamic_module": mock_run_dynamic_module,
+        "rag_tool_cls": mock_rag_tool_cls,
+        "wiki_client_cls": mock_wiki_client_cls,
+        "researcher_client_cls": mock_researcher_client_cls
     }
 
 
@@ -71,9 +75,9 @@ def test_tool_node_handler_initialization(mock_dependencies):
         workflow_variable_service=mock_dependencies["workflow_variable_service"]
     )
     # These assertions verify that the __init__ method correctly instantiates the tool classes
-    assert handler.slow_but_quality_rag_service is not None
-    assert handler.offline_wiki_api_client is not None
-    assert handler.offline_researcher_api_client is not None
+    assert handler.slow_but_quality_rag_service is mock_dependencies["rag_tool_cls"].return_value
+    assert handler.offline_wiki_api_client is mock_dependencies["wiki_client_cls"].return_value
+    assert handler.offline_researcher_api_client is mock_dependencies["researcher_client_cls"].return_value
 
 
 @pytest.mark.parametrize(
@@ -130,9 +134,9 @@ def test_handle_python_module_success(tool_node_handler, execution_context, mock
 
     result = tool_node_handler._handle_python_module(execution_context)
 
-    # Verify that variables were applied to args and kwargs
+    # Verify that variables were applied to module_path, args, and kwargs
     variable_service = tool_node_handler.workflow_variable_service
-    assert variable_service.apply_variables.call_count == 4
+    assert variable_service.apply_variables.call_count == 5
 
     # Instead of asserting the exact context object, we inspect the calls made to the mock.
     # This is robust against the `deepcopy` used in the implementation.
@@ -142,6 +146,7 @@ def test_handle_python_module_success(tool_node_handler, execution_context, mock
     called_strings = [c.args[0] for c in calls]
 
     # 2. Assert that all expected strings were processed. The order of calls to kwargs is not guaranteed.
+    assert "/path/to/module.py" in called_strings
     assert "first_arg" in called_strings
     assert "{var1}" in called_strings
     assert "value1" in called_strings
@@ -153,13 +158,35 @@ def test_handle_python_module_success(tool_node_handler, execution_context, mock
         # You can optionally add a sanity check on the content of the copied context
         assert c.args[1].request_id == "test_req_id"
 
-    # Verify the dynamic module runner was called with resolved values
+    # Verify the dynamic module runner was called with resolved values, including the
+    # resolved module path (a raw path would mean module_path skipped variable resolution)
     expected_args = ('resolved_first_arg', 'resolved_{var1}')
     expected_kwargs = {'key1': 'resolved_value1', 'key2': 'resolved_{var2}'}
     mock_dependencies["run_dynamic_module"].assert_called_once_with(
-        "/path/to/module.py", *expected_args, **expected_kwargs
+        "resolved_/path/to/module.py", *expected_args, **expected_kwargs
     )
     assert result == "dynamic module success"
+
+
+def test_handle_python_module_resolves_variables_in_module_path(tool_node_handler, execution_context,
+                                                                mock_dependencies):
+    """
+    Tests that workflow variables inside 'module_path' (e.g. a user-wide
+    {python_scripts_dir}) are resolved before the module is loaded.
+    """
+    execution_context.config = {
+        "type": "PythonModule",
+        "module_path": "{python_scripts_dir}/text_contains.py",
+        "args": [],
+    }
+    mock_dependencies["run_dynamic_module"].return_value = "ok"
+
+    result = tool_node_handler._handle_python_module(execution_context)
+
+    mock_dependencies["run_dynamic_module"].assert_called_once_with(
+        "resolved_{python_scripts_dir}/text_contains.py"
+    )
+    assert result == "ok"
 
 
 def test_handle_python_module_raises_no_module_path(tool_node_handler, execution_context):
@@ -169,6 +196,32 @@ def test_handle_python_module_raises_no_module_path(tool_node_handler, execution
     execution_context.config = {"type": "PythonModule"}  # Missing module_path
     with pytest.raises(ValueError, match="No 'module_path' specified for PythonModule node."):
         tool_node_handler._handle_python_module(execution_context)
+
+
+def test_handle_python_module_arg_resolution_failure_reraises_and_skips_module(tool_node_handler,
+                                                                               execution_context,
+                                                                               mock_dependencies):
+    """
+    A variable-resolution failure on an arg must propagate (the node config is broken)
+    and the dynamic module must NOT be executed with half-resolved arguments.
+    """
+    execution_context.config = {
+        "type": "PythonModule",
+        "module_path": "/path/to/module.py",
+        "args": ["{bad_var}"],
+    }
+
+    def apply_vars(s, c, **kwargs):
+        if s == "{bad_var}":
+            raise KeyError("bad_var")
+        return f"resolved_{s}"
+
+    tool_node_handler.workflow_variable_service.apply_variables.side_effect = apply_vars
+
+    with pytest.raises(KeyError):
+        tool_node_handler._handle_python_module(execution_context)
+
+    mock_dependencies["run_dynamic_module"].assert_not_called()
 
 
 # --- Tests for _handle_offline_wiki_node ---
@@ -265,6 +318,72 @@ def test_handle_offline_wiki_top_n_articles(tool_node_handler, execution_context
 
     expected_output = "Title: Deep Learning\nText about DL.\n\n--- END ARTICLE ---\n\nTitle: Transformers\nText about transformers."
     assert result == expected_output
+
+
+def test_handle_offline_wiki_top_n_articles_default_optional_args(tool_node_handler, execution_context):
+    """
+    Tests that TopN articles uses documented defaults when optional config keys are omitted.
+    """
+    execution_context.config = {"type": "OfflineWikiApiTopNFullArticles", "promptToSearch": "AI History"}
+    tool_node_handler.offline_wiki_api_client.get_top_n_full_wiki_articles_by_prompt.return_value = [
+        {"title": "Deep Learning", "text": "Text about DL."}
+    ]
+
+    result = tool_node_handler._handle_offline_wiki_node(execution_context)
+
+    tool_node_handler.offline_wiki_api_client.get_top_n_full_wiki_articles_by_prompt.assert_called_once_with(
+        "resolved_AI History", percentile=0.5, num_results=10, top_n_articles=3
+    )
+    assert result == "Title: Deep Learning\nText about DL."
+
+
+def test_handle_offline_wiki_partial_article_default_optional_args(tool_node_handler, execution_context):
+    """
+    Tests that Partial Article uses documented defaults when optional config keys are omitted.
+    """
+    execution_context.config = {"type": "OfflineWikiApiPartialArticle", "promptToSearch": "AI Summary"}
+    tool_node_handler.offline_wiki_api_client.get_wiki_summary_by_prompt.return_value = [
+        {"title": "Summary One", "text": "This is the summary."}
+    ]
+
+    result = tool_node_handler._handle_offline_wiki_node(execution_context)
+
+    tool_node_handler.offline_wiki_api_client.get_wiki_summary_by_prompt.assert_called_once_with(
+        "resolved_AI Summary", percentile=0.5, num_results=1
+    )
+    assert result == "Title: Summary One\nThis is the summary."
+
+
+def test_handle_offline_wiki_top_n_articles_surfaces_non_dict_notice_strings(tool_node_handler, execution_context):
+    """
+    When the offline wiki API is disabled or a fallback fires, TopN entries can be plain
+    notice strings instead of article dicts. They must be surfaced as-is, not crash on .get().
+    """
+    execution_context.config = {"type": "OfflineWikiApiTopNFullArticles", "promptToSearch": "AI History"}
+    tool_node_handler.offline_wiki_api_client.get_top_n_full_wiki_articles_by_prompt.return_value = [
+        {"title": "Deep Learning", "text": "Text about DL."},
+        "The offline wiki API is currently disabled.",
+    ]
+
+    result = tool_node_handler._handle_offline_wiki_node(execution_context)
+
+    expected_output = ("Title: Deep Learning\nText about DL."
+                       "\n\n--- END ARTICLE ---\n\n"
+                       "The offline wiki API is currently disabled.")
+    assert result == expected_output
+
+
+def test_handle_offline_wiki_partial_article_non_list_result(tool_node_handler, execution_context):
+    """
+    A non-list return from the summary client (e.g. a bare notice string) must degrade to
+    the 'No summary found' message rather than iterating over the string.
+    """
+    execution_context.config = {"type": "OfflineWikiApiPartialArticle", "promptToSearch": "AI Summary"}
+    tool_node_handler.offline_wiki_api_client.get_wiki_summary_by_prompt.return_value = "not-a-list"
+
+    result = tool_node_handler._handle_offline_wiki_node(execution_context)
+
+    assert result == "No summary found for 'resolved_AI Summary'."
 
 
 def test_handle_offline_wiki_top_n_articles_no_results(tool_node_handler, execution_context):
@@ -430,6 +549,35 @@ def test_handle_offline_researcher_includes_sources_when_requested(tool_node_han
     assert "Sources:" in result
     assert "- wikipedia_en :: Decorator" in result
     assert "- python_docs :: PEP 318" in result
+
+
+@pytest.mark.parametrize(
+    "sources",
+    [
+        [],  # Empty list
+        "not-a-list",  # Non-list value
+        [1, "string-entry", None],  # List with only non-dict entries
+    ]
+)
+def test_handle_offline_researcher_malformed_sources_degrade_to_answer(tool_node_handler, execution_context, sources):
+    """
+    Malformed 'sources' payloads with includeSources=True degrade to the bare answer.
+    """
+    execution_context.config = {
+        "type": "OfflineResearcherApiQuickSearch",
+        "promptToSearch": "anything",
+        "includeSources": True,
+    }
+    tool_node_handler.offline_researcher_api_client.search.return_value = {
+        "status": "answered",
+        "answer": "The answer.",
+        "no_information_found": False,
+        "sources": sources,
+    }
+
+    result = tool_node_handler._handle_offline_researcher_node(execution_context)
+
+    assert result == "The answer."
 
 
 def test_handle_offline_researcher_missing_answer_returns_sentinel(tool_node_handler, execution_context):

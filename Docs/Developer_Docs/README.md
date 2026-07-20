@@ -1,4 +1,4 @@
-### **WilmerAI – Developer Documentation**
+### **WilmerAI Developer Documentation**
 
 `NOTE: Pass one or more of these documents with your prompt to an LLM to help give context to the codebase.`
 
@@ -7,14 +7,14 @@
 WilmerAI is a Python-based **middleware system** designed to act as a bridge between user-facing clients (e.g.,
 SillyTavern, OpenWebUI) and various Large Language Model (LLM) backends (e.g., OpenAI, Anthropic Claude, Ollama,
 KoboldCPP). Its primary
-function is to process user prompts by leveraging a modular and extensible **node-based workflow engine**.
+function is to process user prompts using a modular and extensible **node-based workflow engine**.
 
 The architecture is centered on the **`$ExecutionContext$`** object. This data structure encapsulates all runtime
-information for a single operational step -- including the full conversation history, the current node's configuration, and
+information for a single operational step, including the full conversation history, the current node's configuration, and
 outputs from previous nodes. The core engine creates a new `ExecutionContext` for each node in a workflow and passes it
 as the sole argument to a specialized **Node Handler**.
 
-This state-driven design makes the system clean and easy to extend. Each node in a workflow performs a specific task and
+This state-driven design makes the system straightforward to extend. Each node in a workflow performs a specific task and
 is designated as either a **responder** (its output is sent to the user) or a **non-responder** (its output is saved as
 a variable for subsequent nodes). Nodes can call an LLM, run a Python script (tool), manage conversational memory, or
 trigger another workflow. This architecture enables developers to create dynamic and stateful
@@ -25,7 +25,7 @@ conversational agents.
 * **Multi-Step, State-Driven Workflows:** Chains multiple LLMs and tools together using a central `$ExecutionContext$`
   to manage state between nodes.
 * **Extensible Node System:** New functionality is added by creating new Node Handler classes that operate on the
-  `$ExecutionContext$`, making the system highly adaptable.
+  `$ExecutionContext$`.
 * **Flexible API Compatibility:** Exposes OpenAI- and Ollama-compatible endpoints. It uses a dedicated
   **`$ResponseBuilderService$`** as the single source of truth for all outgoing API schemas, ensuring responses match
   the
@@ -35,6 +35,11 @@ conversational agents.
   vector database for keyword-based retrieval.
 * **Dynamic Tool Use:** Integrates external tools, APIs, and custom Python scripts directly into workflows, allowing for
   capabilities like Retrieval-Augmented Generation (RAG) and API interactions.
+* **Tool Calling & Structured Output:** OpenAI-style tool passthrough with native multi-round tool-loop delivery
+  (`appendNativeToolExchange`), grammar-enforced tool calls on demanded `tool_choice` via per-ApiType
+  structured-output mechanisms, and author-declared JSON Schema constraints on any node's output
+  (`structuredOutputFile`). See `Features_And_Packages/Workflows.md` (Data Flow steps 3a-3c) and the user doc
+  `Core_Features/Tool_Calling_And_Structured_Output.md`.
 * **Streaming Responses:** Natively supports both streaming (`stream=true`) and single-block (`stream=false`) responses
   from responder nodes.
 * **Flexible Variable System:** Supports inter-node variables (`{agent1Output}`), date/time variables, and custom
@@ -79,8 +84,8 @@ A typical request in WilmerAI follows this path, transforming a client request i
 8. **Response Cleaning:** The `$WorkflowProcessor$` receives the raw output from the designated **responder node** and
    orchestrates the final cleaning:
    a. For **streaming** responses (`stream=true`), it passes the raw data generator to the
-   **`$StreamingResponseHandler$`**. This handler processes the stream chunk-by-chunk -- removing `<think>` tags and
-   stripping prefixes -- to produce a clean stream.
+   **`$StreamingResponseHandler$`**. This handler processes the stream chunk-by-chunk (removing `<think>` tags and
+   stripping prefixes) to produce a clean stream.
    b. For **non-streaming** responses (`stream=false`), it passes the complete raw text to the `post_process_llm_output`
    utility function, which applies the identical cleaning logic all at once.
 
@@ -103,7 +108,8 @@ WilmerAI
 │   │   ├── handlers/
 │   │   │   ├── base/
 │   │   │   │   ├── __init__.py
-│   │   │   │   └── base_api_handler.py
+│   │   │   │   ├── base_api_handler.py
+│   │   │   │   └── base_streaming.py
 │   │   │   ├── impl/
 │   │   │   │   ├── __init__.py
 │   │   │   │   ├── ollama_api_handler.py
@@ -118,7 +124,9 @@ WilmerAI
 │   ├── common/
 │   │   ├── __init__.py
 │   │   ├── constants.py
-│   │   └── instance_global_variables.py
+│   │   ├── instance_global_variables.py
+│   │   ├── launch_arguments.py
+│   │   └── server_startup.py
 │   ├── exceptions/
 │   │   ├── __init__.py
 │   │   └── early_termination_exception.py
@@ -126,12 +134,15 @@ WilmerAI
 │   │   ├── handlers/
 │   │   │   ├── base/
 │   │   │   │   ├── __init__.py
+│   │   │   │   ├── base_api_transport.py
 │   │   │   │   ├── base_chat_completions_handler.py
 │   │   │   │   ├── base_completions_handler.py
-│   │   │   │   └── base_llm_api_handler.py
+│   │   │   │   ├── base_llm_api_handler.py
+│   │   │   │   └── image_injection.py
 │   │   │   ├── impl/
 │   │   │   │   ├── __init__.py
 │   │   │   │   ├── claude_api_handler.py
+│   │   │   │   ├── embedding_api_handler.py
 │   │   │   │   ├── koboldcpp_api_handler.py
 │   │   │   │   ├── ollama_chat_api_handler.py
 │   │   │   │   ├── ollama_generate_api_handler.py
@@ -139,13 +150,28 @@ WilmerAI
 │   │   │   │   └── openai_completions_api_handler.py
 │   │   │   └── __init__.py
 │   │   ├── __init__.py
-│   │   └── llm_api.py
+│   │   ├── llm_api.py
+│   │   └── sampler_translation.py
+│   ├── manager/
+│   │   ├── __init__.py
+│   │   ├── app.py
+│   │   ├── configs_repo.py
+│   │   ├── connectivity.py
+│   │   ├── constants.py
+│   │   ├── doctor.py
+│   │   ├── inspection.py
+│   │   ├── registry.py
+│   │   ├── samplers.py
+│   │   ├── stamping.py
+│   │   ├── static/
+│   │   └── templates/
 │   ├── models/
 │   │   ├── __init__.py
 │   │   └── llm_handler.py
 │   ├── services/
 │   │   ├── __init__.py
 │   │   ├── cancellation_service.py
+│   │   ├── embedding_service.py
 │   │   ├── llm_dispatch_service.py
 │   │   ├── llm_service.py
 │   │   ├── locking_service.py
@@ -162,13 +188,13 @@ WilmerAI
 │   │   ├── hashing_utils.py
 │   │   ├── network_security_utils.py
 │   │   ├── prompt_extraction_utils.py
-│   │   ├── prompt_manipulation_utils.py
 │   │   ├── prompt_template_utils.py
 │   │   ├── search_utils.py
 │   │   ├── sensitive_logging_utils.py
 │   │   ├── streaming_utils.py
 │   │   ├── text_utils.py
-│   │   └── vector_db_utils.py
+│   │   ├── vector_db_utils.py
+│   │   └── vector_math_utils.py
 │   ├── workflows/
 │   │   ├── handlers/
 │   │   │   ├── base/
@@ -178,6 +204,7 @@ WilmerAI
 │   │   │   │   ├── __init__.py
 │   │   │   │   ├── context_compactor_handler.py
 │   │   │   │   ├── curl_command_handler.py
+│   │   │   │   ├── extension_node_helpers.py
 │   │   │   │   ├── mcp_tool_call_handler.py
 │   │   │   │   ├── memory_node_handler.py
 │   │   │   │   ├── specialized_node_handler.py
@@ -204,7 +231,6 @@ WilmerAI
 │   │   │   ├── dynamic_module_loader.py
 │   │   │   ├── mcp_client_tool.py
 │   │   │   ├── offline_wikipedia_api_tool.py
-│   │   │   ├── parallel_llm_processing_tool.py
 │   │   │   └── slow_but_quality_rag_tool.py
 │   │   └── __init__.py
 │   └── __init__.py
@@ -229,6 +255,7 @@ WilmerAI
 │        └─ ...
 ├── Scripts/
 │   ├── __init__.py
+│   ├── backfill_embeddings.py
 │   ├── rekey_encrypted_files.bat
 │   ├── rekey_encrypted_files.py
 │   └── rekey_encrypted_files.sh
@@ -246,28 +273,46 @@ WilmerAI
 │   │   └── test_workflow_gateway.py
 │   ├── common/
 │   │   ├── __init__.py
-│   │   └── test_instance_global_variables.py
+│   │   ├── test_instance_global_variables.py
+│   │   └── test_launch_arguments.py
 │   ├── integration/
 │   │   └── test_nested_workflow_cancellation.py
 │   ├── llmapis/
+│   │   ├── conftest.py
 │   │   ├── handlers/
 │   │   │   ├── base/
 │   │   │   │   ├── test_base_chat_completions_handler.py
 │   │   │   │   └── test_base_llm_api_handler_cancellation.py
 │   │   │   └── impl/
 │   │   │       ├── test_llmapis_claude_api_handler.py
+│   │   │       ├── test_llmapis_embedding_api_handler.py
 │   │   │       ├── test_llmapis_koboldcpp_api_handler.py
 │   │   │       ├── test_llmapis_ollama_chat_api_handler.py
 │   │   │       ├── test_llmapis_ollama_generate_api_handler.py
 │   │   │       ├── test_llmapis_openai_chat_handler.py
 │   │   │       └── test_llmapis_openai_completions_api_handler.py
+│   │   ├── test_endpoint_preset_resolution.py
 │   │   ├── test_llm_api.py
 │   │   ├── test_llm_api_concurrency_gate.py
-│   │   └── test_llm_api_failover.py
+│   │   ├── test_llm_api_embedding_guard.py
+│   │   ├── test_llm_api_failover.py
+│   │   └── test_sampler_translation.py
+│   ├── manager/
+│   │   ├── __init__.py
+│   │   ├── conftest.py
+│   │   ├── test_configs_repo.py
+│   │   ├── test_connectivity.py
+│   │   ├── test_doctor.py
+│   │   ├── test_inspection.py
+│   │   ├── test_manager_app.py
+│   │   ├── test_registry.py
+│   │   ├── test_samplers.py
+│   │   └── test_stamping.py
 │   ├── models/
 │   │   └── test_llm_handler.py
 │   ├── services/
 │   │   ├── test_cancellation_service.py
+│   │   ├── test_embedding_service.py
 │   │   ├── test_llm_dispatch_service.py
 │   │   ├── test_llm_service.py
 │   │   ├── test_locking_service.py
@@ -280,19 +325,29 @@ WilmerAI
 │   │   └── test_rekey_encrypted_files.py
 │   ├── utilities/
 │   │   ├── test_config_utils.py
+│   │   ├── test_config_utils_hardening.py
 │   │   ├── test_datetime_utils.py
+│   │   ├── test_encryption_utils.py
 │   │   ├── test_file_utils.py
 │   │   ├── test_hashing_utils.py
 │   │   ├── test_network_security_utils.py
 │   │   ├── test_prompt_extraction_utils.py
-│   │   ├── test_prompt_manipulation_utils.py
 │   │   ├── test_prompt_template_utils.py
 │   │   ├── test_search_utils.py
 │   │   ├── test_sensitive_logging_utils.py
-│   │   ├── test_encryption_utils.py
 │   │   ├── test_streaming_utils.py
 │   │   ├── test_text_utils.py
-│   │   └── test_vector_db_utils.py
+│   │   ├── test_vector_db_utils.py
+│   │   └── test_vector_math_utils.py
+│   ├── workflow_python_scripts/
+│   │   └── _isevendays_mcp_scripts/
+│   │       ├── test_ensure_system_prompt.py
+│   │       ├── test_mcp_prompt_utils.py
+│   │       ├── test_mcp_service_discoverer.py
+│   │       ├── test_mcp_tool_executor.py
+│   │       ├── test_mcp_workflow_integration.py
+│   │       ├── test_sanitize_llm_response.py
+│   │       └── test_workflow_utils.py
 │   ├── workflows/
 │   │   ├── handlers/
 │   │   │   └── impl/
@@ -348,6 +403,9 @@ This is the application's core logic.
   responses, abstracting away API differences. This layer's job is to return **raw, unformatted data** from the backing
   APIs. The `$LlmApiService$` in `llm_api.py` is the main entry point, acting as a factory to select the correct handler
   from `handlers/impl/`.
+* **`common/`**: Shared process-level state and startup plumbing: `instance_global_variables.py` (request-scoped
+  context, concurrency globals), `launch_arguments.py` (the single command-line parser shared by all three server
+  entry points), and `server_startup.py` (logging/startup helpers shared by the entry points).
 * **`services/`**: Contains stateless, reusable business logic. Key services include:
   \* `$response_builder_service.py$`: The **single source of truth** for constructing all API-specific JSON responses
   and streaming chunks, ensuring schema compliance.
@@ -379,8 +437,10 @@ This is the application's core logic.
   handler.
   * **`handlers/`**: Contains classes that implement the logic for each node `type` (e.g., `$StandardNodeHandler$`,
   `$ToolNodeHandler$`). This is the **primary extension point** for adding new capabilities. Also contains
-  `context_compactor_handler.py`, the handler for the `ContextCompactor` node type. See `ContextCompactor.md` for
-  details on the compaction algorithm and file format.
+  `context_compactor_handler.py`, the handler for the `ContextCompactor` node type (see `ContextCompactor.md` for
+  details on the compaction algorithm and file format), and `extension_node_helpers.py`, the shared helper module
+  (config-field validation, `allowedHosts` resolution with variable substitution, and streaming wrap-up) used by the
+  `WebFetch`, `CurlCommand`, and `MCPToolCall` handlers.
   * **`streaming/`**: Contains the crucial **`$StreamingResponseHandler$`**. This class encapsulates all logic for
   cleaning and formatting a raw LLM stream into a final, client-ready SSE stream.
   * **`models/`**: Defines core data structures. The key file is **`$execution_context.py$`**, which defines the
@@ -412,52 +472,68 @@ Contains all user-facing JSON configuration files.
       are listed by the `/v1/models` and `/api/tags` endpoints when `allowSharedWorkflows` is enabled, allowing
       front-end applications to select them via the model dropdown. The folder name can be customized via
       `sharedWorkflowsSubDirectoryOverride` in the User config.
-    * **`_overrides/`**: A folder for user-specific workflow folder overrides. When `workflowConfigsSubDirectoryOverride`
-      is set in the User config (e.g., to `coding-workflows`), workflows are loaded from `_overrides/coding-workflows/`
-      instead of the user's default folder.
+    * **Shared/override workflow folders**: When `workflowConfigsSubDirectoryOverride` is set in the User config (e.g., to
+      `coding-workflows`), workflows are loaded from that named folder under `Workflows/` (e.g.,
+      `Workflows/coding-workflows/`) instead of the user's default (username) folder. This lets multiple users share one
+      workflow set.
 
 ### **`run_macos/run_windows`**
 
 Scripts to automatically generate a venv, install the requirements.txt for the app, and run the application by calling
 server.py. Takes two optional parameters:
 
-* `--PublicDirectory` - String input that specifies where the `Public/` folder is at (the parent of `Configs`,
+* `--PublicDirectory`: String input that specifies where the `Public/` folder is at (the parent of `Configs`,
   `DiscussionIds`, `SqlLiteDBs`, and `logs`). When set, all runtime data defaults to subfolders under this path unless
   overridden individually. This is the recommended flag for shared installations because it keeps user-specific data
   together and out of the application tree.
-* `--ConfigDirectory` - String input that specifies where the `Public/Configs` folder is at. Kept for backwards
+* `--ConfigDirectory`: String input that specifies where the `Public/Configs` folder is at. Kept for backwards
   compatibility; when both are set, `--ConfigDirectory` wins for config resolution but `--PublicDirectory` still
   governs runtime-data subfolders. New installations should prefer `--PublicDirectory`.
-* `--User` - Specifies the user(s) to start the app as. Can be repeated for multi-user mode
+* `--User`: Specifies the user(s) to start the app as. Can be repeated for multi-user mode
   (e.g., `--User user-one --User user-two`). The concurrency gate serializes all requests across all users.
-* `--port` - The port to listen on. In single-user mode, falls back to the user's config. In multi-user mode,
+* `--port`: The port to listen on. In single-user mode, falls back to the user's config. In multi-user mode,
   per-user port settings are ignored and this defaults to `5050` if not specified.
-* `--listen` - Listen on the network. Without a value, binds to `0.0.0.0` (all interfaces). Optionally accepts
+* `--listen`: Listen on the network. Without a value, binds to `0.0.0.0` (all interfaces). Optionally accepts
   a specific address (e.g., `--listen 192.168.1.5`). If omitted, defaults to `127.0.0.1` (localhost only).
-* `--concurrency` - Integer input that sets the max concurrent requests (or LLM calls in endpoint mode). 0 = no limit. Default: 1.
-* `--concurrency-timeout` - Integer input that sets the seconds to wait for a concurrency slot before returning 503. Default: 900.
-* `--concurrency-level` - `wilmer` or `endpoint`. `wilmer` (default) gates incoming requests via WSGI middleware. `endpoint` lifts the request-level gate and instead serializes outbound LLM API calls inside `LlmApiService.get_response_from_llm`, preventing reentrant deadlocks when a workflow calls back into the same Wilmer instance. See `Features_And_Packages/Api.md` section 7 for implementation details.
-* `--file-logging` - Enable file logging. In single-user mode, falls back to the user's `useFileLogging` config setting. In multi-user mode, defaults to off.
-* `--LoggingDirectory` - Directory for log files. When unset, defaults to `{PublicDirectory}/logs/` if
+* `--concurrency`: Integer input that sets the max concurrent requests (or LLM calls in endpoint mode). 0 = no limit. Default: 1.
+* `--concurrency-timeout`: Integer input that sets the seconds to wait for a concurrency slot before returning 503. Default: 900.
+* `--concurrency-level`: `wilmer` or `endpoint`. `wilmer` (default) gates incoming requests via WSGI middleware. `endpoint` lifts the request-level gate and instead serializes outbound LLM API calls inside `LlmApiService.get_response_from_llm`, preventing reentrant deadlocks when a workflow calls back into the same Wilmer instance. See `Features_And_Packages/Api.md` section 7 for implementation details.
+* `--file-logging`: Enable file logging. In single-user mode, falls back to the user's `useFileLogging` config setting. In multi-user mode, defaults to off.
+* `--LoggingDirectory`: Directory for log files. When unset, defaults to `{PublicDirectory}/logs/` if
   `--PublicDirectory` is provided, otherwise `{install_dir}/Public/logs/`. The default is install-pinned (derived from
   the location of `server.py` on disk) and does not depend on the current working directory, so log files never
   quietly drop into a user's home directory or a daemon's working directory. Supports a `<user>` token for single-user
   mode.
-* `--UserLevelSqlLiteDirectory` - Override directory for per-user SQLite databases (workflow locks). Takes precedence
+* `--UserLevelSqlLiteDirectory`: Override directory for per-user SQLite databases (workflow locks). Takes precedence
   over the `sqlLiteDirectory` user config setting. Default: `{PublicDirectory}/SqlLiteDBs/`.
-* `--DiscussionDirectory` - Override directory for per-discussion data files (memories, summaries, vector DBs). Takes
+* `--DiscussionDirectory`: Override directory for per-discussion data files (memories, summaries, vector DBs). Takes
   precedence over the `discussionDirectory` user config setting. Default: `{PublicDirectory}/DiscussionIds/`.
 
 When `--PublicDirectory` is set, all runtime files that WilmerAI creates (logs, lock databases, per-discussion data)
 live in sibling subfolders under that directory by default, so a shared install never writes back into the project
-tree. Configs and runtime data are peers under `Public/` -- runtime data never lives inside `Configs/`. For backwards
+tree. Configs and runtime data are peers under `Public/`; runtime data never lives inside `Configs/`. For backwards
 compatibility, if pre-refactor data is found at the legacy locations (`{project_root}/Public/DiscussionIds/`,
 `./WilmerDb.<user>.sqlite`, `{project_root}/Public/{id}_vector_memory.db`), WilmerAI keeps reading and writing to the
-legacy location -- no automatic migration is performed.
+legacy location; no automatic migration is performed.
 
 ### **`server.py`**
 
 Main script of the app.
+
+All three entry points (`server.py`, `run_eventlet.py`, `run_waitress.py`) accept the same command-line arguments;
+the parser and the stamping of parsed values onto `instance_global_variables` (including `<user>` token resolution
+in the logging directory) are implemented once in `Middleware/common/launch_arguments.py`. `run_eventlet.py` imports
+that module only after `eventlet.monkey_patch()` has run.
+
+### **`Scripts/backfill_embeddings.py`**
+
+Standalone one-time bulk embedding backfill for an existing vector memory database, used by the optional
+semantic/hybrid memory search tier. Takes the database path and embeddings endpoint directly on the command line
+(`--db`, `--url`, `--model`, `--api-shape openai|ollama`) so it requires no running Wilmer instance and works on
+databases at current or legacy locations. It writes only to the additive `memory_embeddings` table; the `memories`
+and `memories_fts` tables are never touched. Wilmer does not need this script to use embeddings: the write path
+lazily backfills a small batch per memory cycle (`embeddingBackfillBatchSize`); this script just clears the whole
+backlog at once. See `Features_And_Packages/Memories.md`.
 
 -----
 
@@ -503,9 +579,8 @@ Main script of the app.
 
 ## 5\. Request Cancellation Feature
 
-WilmerAI includes a comprehensive request cancellation system that allows clients to abort in-progress workflows
-gracefully. This feature is critical for improving user experience and resource management, enabling clients to
-terminate long-running requests that are no longer needed.
+WilmerAI includes a request cancellation system that allows clients to abort in-progress workflows. This lets
+clients terminate long-running requests that are no longer needed, freeing backend resources.
 
 ### Architecture Overview
 
@@ -733,11 +808,11 @@ for line in response.iter_lines():
 
 Comprehensive unit tests are provided in:
 
-- `tests/services/test_cancellation_service.py` - Service-level tests
-- `tests/api/handlers/impl/test_api_cancellation.py` - API handler tests
-- `tests/workflows/processors/test_workflow_processor_cancellation.py` - Workflow processor tests
-- `tests/llmapis/handlers/base/test_base_llm_api_handler_cancellation.py` - LLM API layer tests
-- `tests/integration/test_nested_workflow_cancellation.py` - End-to-end integration tests
+- `tests/services/test_cancellation_service.py`: Service-level tests
+- `tests/api/handlers/impl/test_api_cancellation.py`: API handler tests
+- `tests/workflows/processors/test_workflow_processor_cancellation.py`: Workflow processor tests
+- `tests/llmapis/handlers/base/test_base_llm_api_handler_cancellation.py`: LLM API layer tests
+- `tests/integration/test_nested_workflow_cancellation.py`: End-to-end integration tests
 
 Run tests with:
 

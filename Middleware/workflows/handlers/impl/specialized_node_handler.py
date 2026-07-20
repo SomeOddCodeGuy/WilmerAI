@@ -21,11 +21,33 @@ from Middleware.workflows.models.execution_context import ExecutionContext
 
 logger = logging.getLogger(__name__)
 
+# Default template for the message injected into the conversation when an
+# ImageProcessor node runs with addAsUserMessage enabled.
+_DEFAULT_VISION_MESSAGE_TEMPLATE = (
+    "[SYSTEM: The user recently added one or more images to the conversation. "
+    "The images have been analyzed by an advanced vision AI, which has described them"
+    " in detail. The descriptions of the images can be found below:\n\n"
+    "<vision_llm_response>\n[IMAGE_BLOCK]\n</vision_llm_response>]")
+
 
 class SpecializedNodeHandler(BaseHandler):
     """
     A router for miscellaneous workflow nodes like "WorkflowLock", "GetCustomFile", and "SaveCustomFile".
     """
+
+    _NODE_HANDLER_NAMES = {
+        "WorkflowLock": "handle_workflow_lock",
+        "GetCustomFile": "handle_get_custom_file",
+        "SaveCustomFile": "handle_save_custom_file",
+        "ImageProcessor": "handle_image_processor_node",
+        "StaticResponse": "handle_static_response",
+        "ArithmeticProcessor": "handle_arithmetic_processor",
+        "Conditional": "handle_conditional",
+        "StringConcatenator": "handle_string_concatenator",
+        "JsonExtractor": "handle_json_extractor",
+        "TagTextExtractor": "handle_tag_text_extractor",
+        "DelimitedChunker": "handle_delimited_chunker",
+    }
 
     def __init__(self, **kwargs):
         """
@@ -53,30 +75,10 @@ class SpecializedNodeHandler(BaseHandler):
         node_type = context.config.get("type")
         logger.debug(f"Handling specialized node of type: {node_type}")
 
-        if node_type == "WorkflowLock":
-            return self.handle_workflow_lock(context)
-        elif node_type == "GetCustomFile":
-            return self.handle_get_custom_file(context)
-        elif node_type == "SaveCustomFile":
-            return self.handle_save_custom_file(context)
-        elif node_type == "ImageProcessor":
-            return self.handle_image_processor_node(context)
-        elif node_type == "StaticResponse":
-            return self.handle_static_response(context)
-        elif node_type == "ArithmeticProcessor":
-            return self.handle_arithmetic_processor(context)
-        elif node_type == "Conditional":
-            return self.handle_conditional(context)
-        elif node_type == "StringConcatenator":
-            return self.handle_string_concatenator(context)
-        elif node_type == "JsonExtractor":
-            return self.handle_json_extractor(context)
-        elif node_type == "TagTextExtractor":
-            return self.handle_tag_text_extractor(context)
-        elif node_type == "DelimitedChunker":
-            return self.handle_delimited_chunker(context)
-
-        raise ValueError(f"Unknown specialized node type: {node_type}")
+        handler_name = self._NODE_HANDLER_NAMES.get(node_type)
+        if handler_name is None:
+            raise ValueError(f"Unknown specialized node type: {node_type}")
+        return getattr(self, handler_name)(context)
 
     def _parse_operand(self, s: str) -> Union[float, str, bool]:
         """
@@ -95,10 +97,6 @@ class SpecializedNodeHandler(BaseHandler):
         s = s.strip()
         s_upper = s.upper()
 
-        # Parsing priority: boolean literals → quoted strings → float → fallback string.
-        # Booleans are checked first to prevent "TRUE"/"FALSE" from being parsed as floats.
-        # Quoted strings are stripped of their surrounding quote characters.
-        # Float parsing handles both integer and decimal numeric strings.
         if s_upper == 'TRUE':
             return True
         if s_upper == 'FALSE':
@@ -268,7 +266,7 @@ class SpecializedNodeHandler(BaseHandler):
 
         token_regex = re.compile(r"""
             \s*(
-            \d+(?:\.\d+)?|       # Numbers (int or float)
+            -?\d+(?:\.\d+)?|     # Numbers (int or float, optional leading minus sign)
             '[^']*'|             # Single-quoted strings
             "[^"]*"|             # Double-quoted strings
             ==|!=|>=|<=|>|<|     # Comparison operators
@@ -469,14 +467,13 @@ class SpecializedNodeHandler(BaseHandler):
         if not workflow_lock_id:
             raise ValueError("A WorkflowLock node must have a 'workflowLockId'.")
 
-        if self.locking_service.get_lock(workflow_lock_id):
+        acquired = self.locking_service.acquire_lock(
+            instance_global_variables.INSTANCE_ID, context.workflow_id, workflow_lock_id)
+        if not acquired:
             logger.info(f"Lock for {workflow_lock_id} is active, terminating workflow.")
             raise EarlyTerminationException(f"Workflow is locked by {workflow_lock_id}.")
-        else:
-            self.locking_service.create_node_lock(instance_global_variables.INSTANCE_ID, context.workflow_id,
-                                                  workflow_lock_id)
-            logger.info(
-                f"Lock for {workflow_lock_id} acquired by Instance '{instance_global_variables.INSTANCE_ID}' / Workflow '{context.workflow_id}'.")
+        logger.info(
+            f"Lock for {workflow_lock_id} acquired by Instance '{instance_global_variables.INSTANCE_ID}' / Workflow '{context.workflow_id}'.")
 
     def handle_get_custom_file(self, context: ExecutionContext) -> str:
         """
@@ -496,7 +493,6 @@ class SpecializedNodeHandler(BaseHandler):
         if not filepath_template:
             return "No filepath specified"
 
-        # Apply variable substitution to the filepath
         filepath = self.workflow_variable_service.apply_variables(filepath_template, context)
 
         delimiter = context.config.get("delimiter")
@@ -547,32 +543,58 @@ class SpecializedNodeHandler(BaseHandler):
         if not filepath_template:
             return "No filepath specified"
 
+        mode = context.config.get("mode")
+        if mode is not None and mode not in ("overwrite", "append", "replace", "remove", "trim"):
+            return (f"SaveCustomFile: 'mode' must be one of 'overwrite', 'append', "
+                    f"'replace', 'remove', or 'trim', got '{mode}'")
+
+        needs_find = mode in ("replace", "remove")
+
+        # "remove" and "trim" edit whole lines and have no use for 'content'; every other
+        # mode writes it, so it stays required there.
         content_template = context.config.get("content")
-        if content_template is None:
+        if mode not in ("remove", "trim") and content_template is None:
             return "No content specified"
 
-        mode = context.config.get("mode")
-        if mode is not None and mode not in ("overwrite", "append"):
-            return f"SaveCustomFile: 'mode' must be 'overwrite' or 'append', got '{mode}'"
+        # "replace"/"remove" act on an existing entry, so they need the text to find. "trim" does not.
+        find_template = context.config.get("find")
+        if needs_find and not find_template:
+            return f"SaveCustomFile: mode '{mode}' requires a 'find' value"
 
-        # Apply variable substitution to both filepath and content
         resolved_filepath = self.workflow_variable_service.apply_variables(
             filepath_template, context
         )
         resolved_content = self.workflow_variable_service.apply_variables(
             content_template, context
-        )
+        ) if content_template is not None else ""
 
         save_kwargs = {"filepath": resolved_filepath, "content": resolved_content}
         if mode is not None:
             save_kwargs["mode"] = mode
+        if needs_find:
+            save_kwargs["find"] = self.workflow_variable_service.apply_variables(
+                find_template, context
+            )
 
         try:
-            save_custom_file(**save_kwargs)
-            return f"File successfully saved to {resolved_filepath}"
+            change_count = save_custom_file(**save_kwargs)
         except Exception as e:
             logger.error(f"Failed to save file to {resolved_filepath}. Error: {e}")
             return f"Error saving file: {e}"
+
+        if mode == "replace":
+            if change_count:
+                return f"File successfully updated: replaced {change_count} occurrence(s) in {resolved_filepath}"
+            return f"File unchanged: no occurrence of the target text found in {resolved_filepath}"
+        if mode == "remove":
+            if change_count:
+                return f"File successfully updated: removed {change_count} line(s) from {resolved_filepath}"
+            return f"File unchanged: no line matching the target text found in {resolved_filepath}"
+        if mode == "trim":
+            if change_count:
+                return f"File successfully tidied: removed {change_count} blank line(s) from {resolved_filepath}"
+            return f"File unchanged: no blank lines to remove in {resolved_filepath}"
+        return f"File successfully saved to {resolved_filepath}"
 
     def handle_image_processor_node(self, context: ExecutionContext) -> str:
         """
@@ -632,7 +654,7 @@ class SpecializedNodeHandler(BaseHandler):
 
         # Deep copy once to produce a clean messages list with all images stripped.
         # Each per-image dispatch then shallow-copies that list and injects only its
-        # own image, avoiding O(n_messages × n_images) deep copies.
+        # own image, avoiding O(n_messages * n_images) deep copies.
         stripped_messages = deepcopy(context.messages)
         for m in stripped_messages:
             m.pop("images", None)
@@ -649,11 +671,7 @@ class SpecializedNodeHandler(BaseHandler):
         image_descriptions = "\n-------------\n".join(filter(None, llm_responses))
 
         if context.config.get("addAsUserMessage", False):
-            message_template = context.config.get("message",
-                                                  "[SYSTEM: The user recently added one or more images to the conversation. "
-                                                  "The images have been analyzed by an advanced vision AI, which has described them"
-                                                  " in detail. The descriptions of the images can be found below:\n\n"
-                                                  "<vision_llm_response>\n[IMAGE_BLOCK]\n</vision_llm_response>]")
+            message_template = context.config.get("message", _DEFAULT_VISION_MESSAGE_TEMPLATE)
 
             final_message = self.workflow_variable_service.apply_variables(message_template, context)
             final_message = final_message.replace("[IMAGE_BLOCK]", image_descriptions)
@@ -696,6 +714,14 @@ class SpecializedNodeHandler(BaseHandler):
             logger.debug("No images found in conversation (cached path).")
             return "There were no images attached to the message"
 
+        # Built lazily on the first cache miss: one clean messages list with all
+        # images stripped. Each per-image dispatch then shallow-copies that list and
+        # injects only its own image, mirroring the legacy path and avoiding the
+        # O(n_messages * n_images) deep copy of the whole context (which also copied
+        # every base64 image and the llm_handler's requests.Session). An all-hit run
+        # copies nothing.
+        stripped_messages = None
+
         per_message_descriptions = {}
         for orig_idx, msg in image_messages:
             msg_hash = hash_message_with_images(msg)
@@ -705,12 +731,16 @@ class SpecializedNodeHandler(BaseHandler):
                 per_message_descriptions[orig_idx] = cache[msg_hash]
             else:
                 logger.debug("Vision cache miss for message at index %d, calling LLM", orig_idx)
+                if stripped_messages is None:
+                    stripped_messages = deepcopy(context.messages)
+                    for m in stripped_messages:
+                        m.pop("images", None)
+
                 llm_responses = []
                 for single_image in msg["images"]:
-                    temp_context = deepcopy(context)
-                    for m in temp_context.messages:
-                        m.pop("images", None)
-                    temp_context.messages[orig_idx]["images"] = [single_image]
+                    per_image_messages = [dict(m) for m in stripped_messages]
+                    per_image_messages[orig_idx]["images"] = [single_image]
+                    temp_context = dc_replace(context, messages=per_image_messages)
 
                     response = LLMDispatchService.dispatch(context=temp_context, llm_takes_images=True)
                     llm_responses.append(response)
@@ -725,11 +755,7 @@ class SpecializedNodeHandler(BaseHandler):
             write_vision_responses(cache_path, cache, encryption_key=context.encryption_key)
 
         if context.config.get("addAsUserMessage", False):
-            message_template = context.config.get("message",
-                                                  "[SYSTEM: The user recently added one or more images to the conversation. "
-                                                  "The images have been analyzed by an advanced vision AI, which has described them"
-                                                  " in detail. The descriptions of the images can be found below:\n\n"
-                                                  "<vision_llm_response>\n[IMAGE_BLOCK]\n</vision_llm_response>]")
+            message_template = context.config.get("message", _DEFAULT_VISION_MESSAGE_TEMPLATE)
 
             # Insert per-message descriptions in reverse order to avoid index shifting
             for orig_idx in sorted(per_message_descriptions.keys(), reverse=True):
@@ -738,25 +764,24 @@ class SpecializedNodeHandler(BaseHandler):
                 final_message = final_message.replace("[IMAGE_BLOCK]", desc)
                 context.messages.insert(orig_idx + 1, {"role": "user", "content": final_message})
 
-        if not context.config.get("addAsUserMessage", False):
-            # When not injecting descriptions back into the message history we still
-            # want to limit what we return, because older image descriptions may be
-            # for images the user has long since stopped discussing. Limiting to the
-            # last 10 messages keeps the returned string focused on recent context
-            # without discarding it entirely.
-            last_10_start = max(0, len(messages) - 10)
-            filtered_descriptions = [
+            all_descriptions = [
                 per_message_descriptions[idx]
                 for idx in sorted(per_message_descriptions.keys())
-                if idx >= last_10_start
             ]
-            return "\n-------------\n".join(filter(None, filtered_descriptions))
+            return "\n-------------\n".join(filter(None, all_descriptions))
 
-        all_descriptions = [
+        # When not injecting descriptions back into the message history we still
+        # want to limit what we return, because older image descriptions may be
+        # for images the user has long since stopped discussing. Limiting to the
+        # last 10 messages keeps the returned string focused on recent context
+        # without discarding it entirely.
+        last_10_start = max(0, len(messages) - 10)
+        filtered_descriptions = [
             per_message_descriptions[idx]
             for idx in sorted(per_message_descriptions.keys())
+            if idx >= last_10_start
         ]
-        return "\n-------------\n".join(filter(None, all_descriptions))
+        return "\n-------------\n".join(filter(None, filtered_descriptions))
 
     def _strip_markdown_code_block(self, text: str) -> str:
         """
@@ -939,6 +964,12 @@ class SpecializedNodeHandler(BaseHandler):
 
         if not resolved_content:
             return ""
+
+        if not resolved_delimiter:
+            # str.split("") raises ValueError; a delimiter that resolved to empty is a
+            # misconfiguration, so report it like the other validation branches above.
+            logger.warning("DelimitedChunker 'delimiter' resolved to empty; cannot split.")
+            return "Invalid delimiter: must resolve to a non-empty string"
 
         chunks = resolved_content.split(resolved_delimiter)
 

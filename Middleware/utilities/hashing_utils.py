@@ -8,8 +8,7 @@ from Middleware.utilities.text_utils import chunk_messages_by_token_size, messag
 logger = logging.getLogger(__name__)
 
 def chunk_messages_with_hashes(messages: List[Dict[str, str]], chunk_size: int = 500,
-                               use_first_message_hash: bool = False, max_messages_before_chunk: int = 0) -> List[
-    Tuple[str, str]]:
+                               use_first_message_hash: bool = False) -> List[Tuple[str, str]]:
     """
     Chunk messages and generate a hash for each chunk based on the first or last message.
 
@@ -24,8 +23,6 @@ def chunk_messages_with_hashes(messages: List[Dict[str, str]], chunk_size: int =
         chunk_size (int): The maximum token size for each chunk.
         use_first_message_hash (bool): If True, the hash is generated from the first message
                                        of the chunk. If False, it's from the last message.
-        max_messages_before_chunk (int): The maximum number of messages allowed before
-                                         the chunking process begins.
 
     Returns:
         List[Tuple[str, str]]: A list of tuples, where each tuple contains a text block
@@ -33,8 +30,7 @@ def chunk_messages_with_hashes(messages: List[Dict[str, str]], chunk_size: int =
                                corresponding hash.
     """
     logger.debug("In chunk messages with hash")
-    logger.debug("max_messages_before_chunk: %s", str(max_messages_before_chunk))
-    chunked_messages = chunk_messages_by_token_size(messages, chunk_size, max_messages_before_chunk)
+    chunked_messages = chunk_messages_by_token_size(messages, chunk_size)
 
     # Build (text_block, hash) tuples for each non-empty chunk.
     # The hash is taken from the chunk's first message when use_first_message_hash=True,
@@ -61,10 +57,7 @@ def extract_text_blocks_from_hashed_chunks(chunked_texts_and_hashes: List[Tuple[
     Returns:
         List[str]: A list of strings, where each string is a text block from the input.
     """
-    text_blocks = []
-    for text_block, _ in chunked_texts_and_hashes:
-        text_blocks.append(text_block)
-    return text_blocks
+    return [text_block for text_block, _ in chunked_texts_and_hashes]
 
 
 def hash_single_message(message: Dict[str, str]) -> str:
@@ -80,9 +73,19 @@ def hash_single_message(message: Dict[str, str]) -> str:
     Returns:
         str: The SHA-256 hash of the message content as a hexadecimal string.
     """
-    message_hash = hash_content(message['content'])
+    content = message['content']
+    if not content.strip() and message.get('images'):
+        # Image-only messages all share empty content; a content-only hash would
+        # give every one of them the SAME value, letting the memory systems'
+        # backward hash search anchor on the wrong message and silently
+        # under-count new messages. Fold the image payload in so each is
+        # distinct. Messages with real content must keep the content-only hash:
+        # hashes already stored in existing memory files have to keep matching.
+        message_hash = hash_content(content + "".join(sorted(message['images'])))
+    else:
+        message_hash = hash_content(content)
     sensitive_log(logger, logging.DEBUG, "Hashing message: %s", message['content'])
-    logger.debug("Hash is: %s", str(message_hash))
+    logger.debug("Hash is: %s", message_hash)
     logger.debug("***************************************")
     return message_hash
 
@@ -133,8 +136,8 @@ def find_last_matching_hash_message(messagesOriginal: List[Dict[str, str]],
 
     Returns:
         int: The number of NEW messages to process (after the last memorized message,
-             up to the lookback boundary). If no match is found, returns the count of
-             all messages up to the lookback boundary.
+             up to the lookback boundary). Never negative. If no match is found,
+             returns the count of all messages up to the lookback boundary.
     """
     logger.debug("Searching for hashes")
 
@@ -144,7 +147,7 @@ def find_last_matching_hash_message(messagesOriginal: List[Dict[str, str]],
 
     current_message_hashes = [hash_single_message(message) for message in filtered_messages]
 
-    # The search boundary - we don't look at the "junk" messages at the end.
+    # The search boundary: we don't look at the "junk" messages at the end.
     # Clamped to 0 so a short conversation never produces a negative boundary,
     # which would cause Python negative-index access into the skip zone.
     search_boundary = max(0, len(current_message_hashes) - turns_to_skip_looking_back)
@@ -152,20 +155,27 @@ def find_last_matching_hash_message(messagesOriginal: List[Dict[str, str]],
     # Pre-compute set of stored hashes for O(1) lookup instead of O(n) per iteration
     stored_hashes = {hash_tuple[1] for hash_tuple in hashed_chunks_original}
 
-    # Iterate from the search boundary backwards to find the last memorized message
-    for i in range(search_boundary, -1, -1):
+    # Iterate backwards from the search boundary to find the last memorized message.
+    # The boundary index itself (the oldest skip-zone message) is deliberately included:
+    # when a conversation shrinks by one message (e.g. a regeneration), the memorized
+    # message slides into the skip zone, and matching it there correctly reports
+    # "nothing new" instead of missing the match and reprocessing the whole window.
+    # The start is clamped to the last valid index so a zero/short lookback (boundary
+    # == list length) or an empty conversation cannot read past the end of the list.
+    start_index = min(search_boundary, len(current_message_hashes) - 1)
+    for i in range(start_index, -1, -1):
         message_hash = current_message_hashes[i]
-        logger.debug(f"Searching for Hash {i}: {message_hash}")
+        logger.debug("Searching for Hash %s: %s", i, message_hash)
 
         if message_hash in stored_hashes:
-            # Return count of NEW messages: from (matched + 1) to search_boundary (exclusive)
-            # Message at index i was already memorized, so new messages start at i+1
-            # Count = search_boundary - (i + 1) = search_boundary - i - 1
-            new_message_count = search_boundary - i - 1
-            logger.debug(f"Found match at index {i}. New messages to process: {new_message_count}")
+            # Count of NEW messages inside the window: from (matched + 1) up to
+            # search_boundary (exclusive). A match at the boundary itself means the
+            # window holds nothing new, so the count clamps to 0 rather than -1.
+            new_message_count = max(0, search_boundary - i - 1)
+            logger.debug("Found match at index %s. New messages to process: %s", i, new_message_count)
             return new_message_count
 
-    # No match found - all messages up to the boundary are "new"
+    # No match found; all messages up to the boundary are "new"
     return search_boundary
 
 

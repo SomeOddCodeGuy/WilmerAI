@@ -1,13 +1,28 @@
 # tests/api/handlers/impl/test_api_cancellation.py
 
 import pytest
-from unittest.mock import MagicMock, patch, Mock
-from flask import Flask, g
+from unittest.mock import patch
+from flask import Flask
 from werkzeug.exceptions import ClientDisconnected
 
 from Middleware.api.handlers.impl.ollama_api_handler import CancelChatAPI, CancelGenerateAPI
 from Middleware.api.handlers.impl.openai_api_handler import ChatCompletionsAPI, CompletionsAPI
 from Middleware.services.cancellation_service import cancellation_service
+
+
+_HANDLER = 'Middleware.api.handlers.impl.openai_api_handler'
+
+
+@pytest.fixture(autouse=True)
+def isolate_user_config(mocker):
+    """Pin the per-user config reads to benign defaults so these view tests
+    cannot be broken (or silently repurposed) by edits to the repo's
+    Public/Configs user files."""
+    mocker.patch(f'{_HANDLER}.get_is_chat_complete_add_user_assistant', return_value=False)
+    mocker.patch(f'{_HANDLER}.get_is_chat_complete_add_missing_assistant', return_value=False)
+    mocker.patch(f'{_HANDLER}.get_encrypt_using_api_key', return_value=False)
+    mocker.patch(f'{_HANDLER}.get_redact_log_output', return_value=False)
+    mocker.patch(f'{_HANDLER}.check_openwebui_tool_request', return_value=None)
 
 
 @pytest.fixture
@@ -141,12 +156,17 @@ class TestOpenAIAPIDisconnectHandling:
             response = api_instance.post()
 
             # Try to iterate through the response and expect the ClientDisconnected exception
-            with pytest.raises(ClientDisconnected):
-                for chunk in response.response:
-                    pass
+            with patch.object(cancellation_service, 'request_cancellation',
+                              wraps=cancellation_service.request_cancellation) as spy:
+                with pytest.raises(ClientDisconnected):
+                    for chunk in response.response:
+                        pass
 
-            # Verify cancellation was requested
-            assert cancellation_service.is_cancelled(request_id), "Request should be cancelled after disconnect"
+            # Verify cancellation was requested by the disconnect handler, and then
+            # acknowledged (cleared) by the stream teardown so the id doesn't leak.
+            spy.assert_called_once_with(request_id)
+            assert not cancellation_service.is_cancelled(request_id), \
+                "Stream teardown must acknowledge the cancellation it requested"
 
     @patch('Middleware.api.handlers.impl.openai_api_handler.uuid.uuid4')
     @patch('Middleware.api.handlers.impl.openai_api_handler.handle_user_prompt')
@@ -174,11 +194,15 @@ class TestOpenAIAPIDisconnectHandling:
             api_instance = ChatCompletionsAPI()
             response = api_instance.post()
 
-            with pytest.raises(BrokenPipeError):
-                for chunk in response.response:
-                    pass
+            with patch.object(cancellation_service, 'request_cancellation',
+                              wraps=cancellation_service.request_cancellation) as spy:
+                with pytest.raises(BrokenPipeError):
+                    for chunk in response.response:
+                        pass
 
-            assert cancellation_service.is_cancelled(request_id), "Request should be cancelled after broken pipe"
+            spy.assert_called_once_with(request_id)
+            assert not cancellation_service.is_cancelled(request_id), \
+                "Stream teardown must acknowledge the cancellation it requested"
 
     @patch('Middleware.api.handlers.impl.openai_api_handler.uuid.uuid4')
     @patch('Middleware.api.handlers.impl.openai_api_handler.handle_user_prompt')
@@ -206,11 +230,15 @@ class TestOpenAIAPIDisconnectHandling:
             api_instance = ChatCompletionsAPI()
             response = api_instance.post()
 
-            with pytest.raises(GeneratorExit):
-                for chunk in response.response:
-                    pass
+            with patch.object(cancellation_service, 'request_cancellation',
+                              wraps=cancellation_service.request_cancellation) as spy:
+                with pytest.raises(GeneratorExit):
+                    for chunk in response.response:
+                        pass
 
-            assert cancellation_service.is_cancelled(request_id), "Request should be cancelled after GeneratorExit"
+            spy.assert_called_once_with(request_id)
+            assert not cancellation_service.is_cancelled(request_id), \
+                "Stream teardown must acknowledge the cancellation it requested"
 
     @patch('Middleware.api.handlers.impl.openai_api_handler.uuid.uuid4')
     @patch('Middleware.api.handlers.impl.openai_api_handler.handle_user_prompt')
@@ -238,37 +266,70 @@ class TestOpenAIAPIDisconnectHandling:
             api_instance = CompletionsAPI()
             response = api_instance.post()
 
-            with pytest.raises(ClientDisconnected):
-                for chunk in response.response:
-                    pass
+            with patch.object(cancellation_service, 'request_cancellation',
+                              wraps=cancellation_service.request_cancellation) as spy:
+                with pytest.raises(ClientDisconnected):
+                    for chunk in response.response:
+                        pass
 
-            assert cancellation_service.is_cancelled(request_id), "Request should be cancelled after disconnect"
+            spy.assert_called_once_with(request_id)
+            assert not cancellation_service.is_cancelled(request_id), \
+                "Stream teardown must acknowledge the cancellation it requested"
 
-    @patch('Middleware.api.handlers.impl.openai_api_handler.handle_user_prompt')
-    @patch('Middleware.api.handlers.impl.openai_api_handler.instance_global_variables')
-    def test_no_request_id_in_context(self, mock_globals, mock_handle_prompt, app, setup_cancellation_service):
-        """Test that disconnect without request_id in context logs warning but doesn't crash."""
-        def mock_generator():
-            """Mock generator that raises ClientDisconnected."""
-            yield "data: chunk1\n\n"
-            raise ClientDisconnected()
+class TestCancellationAcknowledgedOnStreamTeardown:
+    """A cancellation that lands during the final responder node has no later
+    node boundary to acknowledge it; the streaming teardown must clear it so
+    the registry cannot grow forever."""
 
-        mock_handle_prompt.return_value = mock_generator()
+    @staticmethod
+    def _test_config():
+        from Middleware.api.handlers.base import base_streaming
+        return base_streaming.StreamingApiConfig(
+            api_label="Test", heartbeat_message=b':\n\n', mimetype='text/event-stream',
+            chunk_signals_done=lambda encoded: False)
 
-        with app.test_request_context(
-            '/chat/completions',
-            method='POST',
-            json={
-                'messages': [{'role': 'user', 'content': 'test'}],
-                'stream': True
-            }
-        ):
-            # Deliberately don't set g.current_request_id
+    def test_fallback_stream_acknowledges_cancellation_on_teardown(self, app, setup_cancellation_service):
+        from Middleware.api.handlers.base import base_streaming
 
-            api_instance = ChatCompletionsAPI()
-            response = api_instance.post()
+        request_id = "req-teardown-fallback"
 
-            # Should not crash, just log a warning
-            with pytest.raises(ClientDisconnected):
-                for chunk in response.response:
-                    pass
+        def backend(req_id, messages, stream, api_key=None, tools=None, tool_choice=None):
+            yield 'data: {"choices":[{"delta":{"content":"tok"}}]}\n\n'
+            # Cancellation lands mid-stream and the backend stops without any
+            # later node boundary running to acknowledge it.
+            cancellation_service.request_cancellation(req_id)
+
+        with app.test_request_context('/v1/chat/completions'):
+            response = base_streaming.stream_response_fallback(
+                self._test_config(), backend, request_id,
+                [{"role": "user", "content": "hi"}], True)
+            list(response.response)
+
+        assert not cancellation_service.is_cancelled(request_id), \
+            "Stream teardown must acknowledge the pending cancellation"
+
+    def test_eventlet_stream_acknowledges_cancellation_on_teardown(self, app, setup_cancellation_service):
+        eventlet = pytest.importorskip("eventlet")
+        from Middleware.api.handlers.base import base_streaming
+
+        request_id = "req-teardown-eventlet"
+
+        def backend(req_id, messages, stream, api_key=None, tools=None, tool_choice=None):
+            yield 'data: {"choices":[{"delta":{"content":"tok"}}]}\n\n'
+            cancellation_service.request_cancellation(req_id)
+
+        with app.test_request_context('/v1/chat/completions'):
+            response = base_streaming.stream_with_eventlet_optimized(
+                self._test_config(), backend, request_id,
+                [{"role": "user", "content": "hi"}], True)
+            list(response.response)
+
+        # The reader greenlet's finally may run just after the client generator
+        # finishes; give it a moment.
+        for _ in range(200):
+            if not cancellation_service.is_cancelled(request_id):
+                break
+            eventlet.sleep(0.01)
+
+        assert not cancellation_service.is_cancelled(request_id), \
+            "Reader teardown must acknowledge the pending cancellation"

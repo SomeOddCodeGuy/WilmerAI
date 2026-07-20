@@ -43,6 +43,20 @@ def test_missing_tool_raises(mcp_handler):
         mcp_handler.handle(context)
 
 
+def test_empty_string_server_raises(mcp_handler):
+    """An empty server string is as invalid as a missing one."""
+    context = _make_context({"type": "MCPToolCall", "server": "", "tool": "read_file"})
+    with pytest.raises(ValueError, match="requires a 'server' field"):
+        mcp_handler.handle(context)
+
+
+def test_empty_string_tool_raises(mcp_handler):
+    """An empty tool string is as invalid as a missing one."""
+    context = _make_context({"type": "MCPToolCall", "server": "filesystem", "tool": ""})
+    with pytest.raises(ValueError, match="requires a 'tool' field"):
+        mcp_handler.handle(context)
+
+
 def test_invalid_on_error_raises(mcp_handler):
     context = _make_context({
         "type": "MCPToolCall",
@@ -80,6 +94,23 @@ def test_non_positive_timeout_raises(mcp_handler):
     })
     with pytest.raises(ValueError, match="timeout"):
         mcp_handler.handle(context)
+
+
+def test_boolean_timeout_raises(mcp_handler, mocker):
+    """A boolean timeout is rejected even though bool is an int subclass."""
+    mock_call = mocker.patch.object(
+        MCPClient, "call_tool",
+        return_value="ok",
+    )
+    context = _make_context({
+        "type": "MCPToolCall",
+        "server": "filesystem",
+        "tool": "read_file",
+        "timeout": True,
+    })
+    with pytest.raises(ValueError, match="timeout"):
+        mcp_handler.handle(context)
+    mock_call.assert_not_called()
 
 
 def test_arguments_must_be_object(mcp_handler):
@@ -238,6 +269,26 @@ def test_mcp_failure_returns_message_when_on_error_return(mcp_handler, mocker):
 
     result = mcp_handler.handle(context)
     assert "server unreachable" in result
+
+
+def test_unexpected_exception_propagates_even_with_on_error_return(mcp_handler, mocker):
+    """onError only governs MCPToolCallError; an unexpected plain RuntimeError from
+    the client must propagate rather than be swallowed into the return path."""
+    mocker.patch.object(
+        MCPClient, "call_tool",
+        side_effect=RuntimeError("unexpected bug"),
+    )
+    context = _make_context({
+        "type": "MCPToolCall",
+        "server": "filesystem",
+        "tool": "read_file",
+        "onError": "return",
+    })
+
+    with pytest.raises(RuntimeError, match="unexpected bug") as excinfo:
+        mcp_handler.handle(context)
+    # A plain RuntimeError, not the caught-and-returned MCPToolCallError subclass.
+    assert type(excinfo.value) is RuntimeError
 
 
 def test_streaming_response_returns_generator(mcp_handler, mocker):

@@ -4,290 +4,66 @@ import json
 import logging
 import uuid
 
-# Dynamic eventlet imports
-try:
-    import eventlet
-    from eventlet.queue import Queue as EventletQueue, Empty as EventletQueueEmpty
-    # greenlet is a hard dependency of eventlet; only needed on the eventlet path
-    from greenlet import GreenletExit
+from typing import Any, Dict, Optional, Union, List
 
-    EVENTLET_AVAILABLE = True
-except ImportError:
-    EVENTLET_AVAILABLE = False
-    import queue
-
-    Queue = queue.Queue
-    EventletQueueEmpty = queue.Empty
-
-from typing import Any, Dict, Union, List
-
-from flask import jsonify, request, Response, g, stream_with_context
+from flask import jsonify, request, Response, g
 from flask.views import MethodView
-from werkzeug.exceptions import ClientDisconnected
 
 from Middleware.api import api_helpers
 from Middleware.api.app import app
+from Middleware.api.handlers.base import base_streaming
 from Middleware.api.handlers.base.base_api_handler import BaseApiHandler
 from Middleware.api.workflow_gateway import handle_user_prompt, _sanitize_log_data, check_openwebui_tool_request
 from Middleware.common import instance_global_variables
+from Middleware.services.cancellation_service import cancellation_service
+from Middleware.services.idempotency_service import idempotency_service
 from Middleware.services.response_builder_service import ResponseBuilderService
 from Middleware.utilities.config_utils import get_is_chat_complete_add_user_assistant, \
     get_is_chat_complete_add_missing_assistant, get_encrypt_using_api_key, get_redact_log_output
+from Middleware.utilities.encryption_utils import get_api_key_hash_if_available
 from Middleware.common.instance_global_variables import clear_api_type
 from Middleware.utilities.prompt_extraction_utils import parse_conversation
 from Middleware.utilities.sensitive_logging_utils import (
-    set_encryption_context, clear_encryption_context, is_encryption_active, sensitive_log_lazy,
+    set_encryption_context, clear_encryption_context, sensitive_log_lazy,
 )
 
 logger = logging.getLogger(__name__)
 response_builder = ResponseBuilderService()
 
-# Configuration for the heartbeat mechanism
-# 1 second was chosen because Wilmer won't react to an abort from the front-end until the next interval.
-# In an attempt to save the user some tokens, we want that reaction as fast as possible so we dont risk
-# kicking off another workflow node and processing another prompt.
-HEARTBEAT_INTERVAL = 1  # seconds
-HEARTBEAT_MESSAGE = b':\n\n'
 
+def _chunk_signals_done(encoded: bytes) -> bool:
+    """Reports whether an encoded SSE chunk IS the [DONE] terminator.
 
-def _stream_with_eventlet_optimized(request_id: str, messages: List[Dict], stream: bool, api_key: str = None,
-                                    tools: list = None, tool_choice=None) -> Response:
-    """
-    Optimized streaming implementation for Eventlet with disconnect detection during prefill.
-
-    Uses a queue-based approach where a background greenlet reads from handle_user_prompt()
-    and the main generator uses timeouts to detect when heartbeats are needed.
+    This must be an exact match against the terminator event, not a substring
+    check: each chunk is one SSE event, and a model that writes the literal
+    text "[DONE]" in its response (e.g. explaining the SSE protocol) would
+    otherwise terminate the client stream mid-response.
 
     Args:
-        request_id (str): The unique identifier for this request.
-        messages (List[Dict]): The conversation history in the internal message format.
-        stream (bool): Whether streaming mode is active.
-        api_key (str, optional): The API key for encryption context scoping.
-        tools (list, optional): Tool definitions from the incoming request.
-        tool_choice: Tool selection policy from the incoming request.
+        encoded (bytes): One encoded response chunk.
 
     Returns:
-        Response: A Flask streaming Response with SSE (text/event-stream) content type.
+        bool: True when the chunk signals stream completion.
     """
-    logger.info(f"OpenAI starting Eventlet optimized streaming for request_id: {request_id}")
-    from Middleware.services.cancellation_service import cancellation_service
-
-    # Capture request-scoped state before spawning greenlet, since the finally
-    # block in the calling function will clear them before the greenlet runs
-    captured_workflow_override = api_helpers.get_active_workflow_override()
-    captured_api_type = instance_global_variables.get_api_type()
-    captured_encryption_active = is_encryption_active()
-    captured_request_user = instance_global_variables.get_request_user()
-
-    event_queue = EventletQueue()
-    stop_signal = eventlet.event.Event()
-    reader_greenlet = None
-
-    def backend_reader():
-        """Background greenlet that reads from handle_user_prompt and queues chunks."""
-        instance_global_variables.set_workflow_override(captured_workflow_override)
-        instance_global_variables.set_api_type(captured_api_type)
-        instance_global_variables.set_request_user(captured_request_user)
-        set_encryption_context(captured_encryption_active)
-        try:
-            for chunk in handle_user_prompt(request_id, messages, stream, api_key=api_key,
-                                            tools=tools, tool_choice=tool_choice):
-                if stop_signal.ready():
-                    break
-                event_queue.put(("data", chunk))
-        except Exception as e:
-            if request_id and cancellation_service.is_cancelled(request_id):
-                logger.info(f"Backend streaming stopped due to cancellation for request_id {request_id}.")
-            else:
-                logger.error(f"Error in backend reader greenlet for request_id {request_id}: {e}", exc_info=True)
-                event_queue.put(("error", e))
-        except GreenletExit:
-            # Routine teardown: the streaming generator kills this reader on client
-            # disconnect/error, so a GreenletExit here is expected lifecycle, not an
-            # application failure. Log quietly and let the greenlet exit.
-            logger.info(f"Backend reader greenlet for request_id {request_id} was killed during stream teardown.")
-            raise
-        except (KeyboardInterrupt, SystemExit):
-            # Process-level signals (Ctrl-C / interpreter shutdown) must propagate,
-            # not be swallowed as a reader error.
-            raise
-        except BaseException as e:
-            logger.error(f"BaseException in backend_reader for request_id {request_id}: "
-                         f"{type(e).__name__}: {e}", exc_info=True)
-        finally:
-            if not stop_signal.ready():
-                stop_signal.send(True)
-
-    reader_greenlet = eventlet.spawn(backend_reader)
-
-    def streaming_generator():
-        """Main generator consumed by Eventlet WSGI."""
-        should_kill_reader = False
-        try:
-            while not stop_signal.ready() or not event_queue.empty():
-                try:
-                    msg_type, data = event_queue.get(timeout=HEARTBEAT_INTERVAL)
-
-                    if msg_type == "error":
-                        raise data
-                    elif msg_type == "data":
-                        if isinstance(data, str):
-                            encoded = data.encode('utf-8')
-                        else:
-                            encoded = data
-                        yield encoded
-
-                        # If this chunk is the SSE stream terminator, return immediately.
-                        # The backend_reader greenlet continues running so that
-                        # post-returnToUser workflow nodes can finish processing.
-                        if b'[DONE]' in encoded:
-                            return
-
-                        eventlet.sleep(0)
-
-                except EventletQueueEmpty:
-                    if not stop_signal.ready():
-                        yield HEARTBEAT_MESSAGE
-                        eventlet.sleep(0)
-
-        except (GeneratorExit, ClientDisconnected, BrokenPipeError, ConnectionError) as e:
-            logger.info(f"Client disconnected from OpenAI streaming request {request_id}. Error: {type(e).__name__}.")
-            if request_id and not cancellation_service.is_cancelled(request_id):
-                cancellation_service.request_cancellation(request_id)
-            should_kill_reader = True
-            raise
-        except Exception as e:
-            if request_id and cancellation_service.is_cancelled(request_id):
-                logger.info(f"Backend streaming stopped due to cancellation for request_id {request_id}.")
-            else:
-                logger.error(f"Unexpected error in OpenAI streaming generator: {e}", exc_info=True)
-            should_kill_reader = True
-            raise
-        finally:
-            # Only stop the backend reader when tearing it down due to a client
-            # disconnect or error. On natural completion (we returned at [DONE]) the
-            # reader is left running so post-returnToUser nodes finish; it sends
-            # stop_signal itself from its own finally. Signaling here on natural
-            # completion would cut off a future post-return node that yields.
-            if should_kill_reader:
-                if not stop_signal.ready():
-                    stop_signal.send(True)
-                if reader_greenlet:
-                    eventlet.spawn(reader_greenlet.kill)
-
-    response = Response(
-        streaming_generator(),
-        mimetype='text/event-stream',
-        headers={
-            'Cache-Control': 'no-cache',
-            'X-Accel-Buffering': 'no',
-        }
-    )
-    # Force connection teardown after streaming completes. Some front-ends (notably Node.js-based apps)
-    # can have their HTTP connection pool corrupted by keep-alive connections that outlive a streaming response.
-    response.headers['Connection'] = 'close'
-    return response
+    return encoded.strip() == b'data: [DONE]'
 
 
-def _stream_response_fallback(request_id: str, messages: List[Dict], stream: bool, api_key: str = None,
-                              tools: list = None, tool_choice=None) -> Response:
-    """
-    Fallback streaming implementation for non-Eventlet environments.
-
-    Used when Eventlet is not installed or monkey-patching is not active (e.g., when
-    running under Waitress, Gunicorn, or the Flask development server). Disconnect
-    detection during the LLM prefill phase is unreliable in this mode because the
-    generator is driven synchronously by the WSGI server without a heartbeat mechanism.
-
-    Args:
-        request_id (str): The unique identifier for this request.
-        messages (List[Dict]): The conversation history in the internal message format.
-        stream (bool): Whether streaming mode is active.
-        api_key (str, optional): The API key for encryption context scoping.
-        tools (list, optional): Tool definitions from the incoming request.
-        tool_choice: Tool selection policy from the incoming request.
-
-    Returns:
-        Response: A Flask streaming Response with SSE (text/event-stream) content type.
-    """
-    logger.info(f"OpenAI starting fallback (synchronous) streaming for request_id: {request_id}")
-    from Middleware.services.cancellation_service import cancellation_service
-
-    # Capture request-scoped state before creating generator, since the finally
-    # block in the calling function will clear them before the generator runs
-    captured_workflow_override = api_helpers.get_active_workflow_override()
-    captured_api_type = instance_global_variables.get_api_type()
-    captured_encryption_active = is_encryption_active()
-    captured_request_user = instance_global_variables.get_request_user()
-
-    def streaming_generator():
-        instance_global_variables.set_workflow_override(captured_workflow_override)
-        instance_global_variables.set_api_type(captured_api_type)
-        instance_global_variables.set_request_user(captured_request_user)
-        set_encryption_context(captured_encryption_active)
-        logger.debug(f"OpenAI Fallback Generator starting for request_id: {request_id}")
-        try:
-            done_sent = False
-            for chunk in handle_user_prompt(request_id, messages, stream, api_key=api_key,
-                                            tools=tools, tool_choice=tool_choice):
-                if isinstance(chunk, str):
-                    encoded = chunk.encode('utf-8')
-                else:
-                    encoded = chunk
-                if done_sent:
-                    # After stream terminator, consume remaining chunks without
-                    # yielding so post-returnToUser workflow nodes can finish.
-                    continue
-                yield encoded
-                if b'[DONE]' in encoded:
-                    done_sent = True
-        except (GeneratorExit, ClientDisconnected, BrokenPipeError, ConnectionError) as e:
-            if request_id:
-                if not cancellation_service.is_cancelled(request_id):
-                    logger.warning(
-                        f"Client disconnected from OpenAI (Fallback) streaming request {request_id}. Error: {type(e).__name__}. Cancellation might be delayed during prefill.")
-                    cancellation_service.request_cancellation(request_id)
-            raise
-        except Exception as e:
-            if request_id and cancellation_service.is_cancelled(request_id):
-                logger.info(
-                    f"Backend streaming stopped due to cancellation for request_id {request_id}. Exiting generator.")
-                return
-            if done_sent:
-                # The client already received [DONE]; a failure in a post-returnToUser
-                # node must not propagate out of the WSGI generator (it would corrupt
-                # connection teardown after a visually-complete stream). Log and
-                # swallow, mirroring the eventlet reader's contained handling.
-                logger.error(
-                    f"Post-stream node failed after [DONE] in OpenAI fallback streaming "
-                    f"for request_id {request_id}: {e}", exc_info=True)
-                return
-            logger.error(f"Unexpected error in OpenAI streaming response: {e}", exc_info=True)
-            raise
-
-    response = Response(
-        stream_with_context(streaming_generator()),
-        mimetype='text/event-stream',
-        headers={
-            'Cache-Control': 'no-cache',
-            'X-Accel-Buffering': 'no',
-        }
-    )
-    # Force connection teardown after streaming completes. Some front-ends (notably Node.js-based apps)
-    # can have their HTTP connection pool corrupted by keep-alive connections that outlive a streaming response.
-    response.headers['Connection'] = 'close'
-    return response
+# The heartbeat is an SSE comment line: it keeps the TCP connection alive for
+# disconnect detection without delivering any content to the client.
+_STREAMING_CONFIG = base_streaming.StreamingApiConfig(
+    api_label="OpenAI",
+    heartbeat_message=b':\n\n',
+    mimetype='text/event-stream',
+    chunk_signals_done=_chunk_signals_done,
+)
 
 
 def _handle_streaming_request(request_id: str, messages: List[Dict], stream: bool, api_key: str = None,
                               tools: list = None, tool_choice=None) -> Response:
     """
-    Selects and invokes the appropriate streaming implementation.
+    Streams the workflow response using the shared API streaming machinery.
 
-    Checks whether Eventlet is both installed and actively monkey-patching the
-    socket layer. If so, uses the optimized queue-based Eventlet implementation
-    which supports heartbeats and disconnect detection during LLM prefill. Otherwise,
-    falls back to synchronous streaming.
+    handle_user_prompt is passed at call time so tests can patch it on this module.
 
     Args:
         request_id (str): The unique identifier for this request.
@@ -300,20 +76,50 @@ def _handle_streaming_request(request_id: str, messages: List[Dict], stream: boo
     Returns:
         Response: A Flask streaming Response with SSE (text/event-stream) content type.
     """
-    is_eventlet_active = EVENTLET_AVAILABLE and eventlet.patcher.is_monkey_patched('socket')
+    return base_streaming.handle_streaming_request(_STREAMING_CONFIG, handle_user_prompt, request_id,
+                                                   messages, stream, api_key=api_key,
+                                                   tools=tools, tool_choice=tool_choice)
 
-    if is_eventlet_active:
-        return _stream_with_eventlet_optimized(request_id, messages, stream, api_key=api_key,
-                                               tools=tools, tool_choice=tool_choice)
-    else:
-        if not EVENTLET_AVAILABLE:
-            logger.warning(
-                "Eventlet not installed. Falling back to synchronous streaming. Disconnect detection during prefill may be unreliable.")
-        else:
-            logger.debug(
-                "Eventlet installed but monkey patching is not active (not running via run_eventlet.py). Falling back to synchronous streaming.")
-        return _stream_response_fallback(request_id, messages, stream, api_key=api_key,
-                                          tools=tools, tool_choice=tool_choice)
+
+def _admit_idempotency_key(request_id: str, api_key: Optional[str]) -> Optional[str]:
+    """
+    Registers this request under its client idempotency key and cancels any
+    still-in-flight original that reused the same key.
+
+    The chat client sends the same ``X-Idempotency-Key`` across every retry of
+    one logical request, and only retries after an attempt failed before its
+    response began. So when the incoming key is already bound to an in-flight
+    request, that original's client is gone by definition: its downstream work
+    is cancelled immediately (rather than waiting for the streaming layer to
+    notice the dead socket) and the new arrival is served fresh.
+
+    Registry entries are scoped per client API key (by hash, never the raw
+    key) so two independent clients that happen to reuse the same idempotency
+    key value cannot cancel each other's requests. Clients that send no API
+    key share a single anonymous scope.
+
+    Args:
+        request_id (str): The unique identifier generated for this request.
+        api_key (Optional[str]): The client's Bearer API key, when supplied.
+
+    Returns:
+        Optional[str]: The idempotency key when the client supplied one (so the
+        caller knows an entry was registered and must be released), or None for
+        a legacy client that sent no key.
+    """
+    idempotency_key = api_helpers.extract_idempotency_key()
+    if not idempotency_key:
+        return None
+
+    scope = get_api_key_hash_if_available(api_key) or "anon"
+    logger.info(f"Request {request_id} admitted with idempotency key {idempotency_key}")
+    displaced = idempotency_service.register(f"{scope}:{idempotency_key}", request_id)
+    if displaced:
+        logger.info(
+            f"Idempotency key {idempotency_key} was already in flight as request {displaced}; "
+            f"cancelling the orphan and serving {request_id} fresh.")
+        cancellation_service.request_cancellation(displaced)
+    return idempotency_key
 
 
 class ModelsAPI(MethodView):
@@ -348,6 +154,12 @@ class CompletionsAPI(MethodView):
         request_id = str(uuid.uuid4())
         g.current_request_id = request_id
 
+        # Idempotency bookkeeping. For a streaming response the registry entry is
+        # released by the streaming teardown (which owns the full backend
+        # lifetime); for a non-streaming response it is released in this finally.
+        idempotency_key: Optional[str] = None
+        handed_to_stream = False
+
         try:
             instance_global_variables.set_api_type("openaicompletion")
             api_key = api_helpers.extract_api_key()
@@ -376,16 +188,27 @@ class CompletionsAPI(MethodView):
             set_encryption_context((bool(api_key) and get_encrypt_using_api_key()) or get_redact_log_output())
 
             prompt: str = data.get("prompt", "")
+            # Deliberate deviation from the OpenAI spec (whose default is false):
+            # the legacy front-ends this endpoint serves assume streaming and do
+            # not always send the flag. Changing this default would break them.
             stream: bool = data.get("stream", True)
             messages = parse_conversation(prompt)
 
+            idempotency_key = _admit_idempotency_key(request_id, api_key)
+
             if stream:
-                return _handle_streaming_request(request_id, messages, stream, api_key=api_key)
+                response = _handle_streaming_request(request_id, messages, stream, api_key=api_key)
+                handed_to_stream = True
+                return response
             else:
                 return_response: str = handle_user_prompt(request_id, messages, False, api_key=api_key)
                 response = response_builder.build_openai_completion_response(return_response)
                 return jsonify(response)
         finally:
+            # Streaming releases in its own teardown; only the non-streaming and
+            # error-before-dispatch paths release here (a no-op when no key).
+            if idempotency_key and not handed_to_stream:
+                idempotency_service.release(request_id)
             api_helpers.clear_workflow_override()
             clear_encryption_context()
             clear_api_type()
@@ -406,15 +229,20 @@ class ChatCompletionsAPI(MethodView):
             Union[Response, Dict[str, Any]]: A Flask response containing the
                                              chat completion result, which is
                                              either a streaming response or a
-                                             JSON object.
-
-        Raises:
-            ValueError: If the request payload lacks a 'messages' field, or if
-                        any message is missing 'role' or 'content'.
+                                             JSON object. Payload validation
+                                             failures (missing 'messages',
+                                             'role', or 'content'/'tool_calls')
+                                             return a 400 error response.
         """
         # Generate Request ID immediately and store it in the context
         request_id = str(uuid.uuid4())
         g.current_request_id = request_id
+
+        # Idempotency bookkeeping. For a streaming response the registry entry is
+        # released by the streaming teardown (which owns the full backend
+        # lifetime); for a non-streaming response it is released in this finally.
+        idempotency_key: Optional[str] = None
+        handed_to_stream = False
 
         try:
             instance_global_variables.set_api_type("openaichatcompletion")
@@ -520,10 +348,14 @@ class ChatCompletionsAPI(MethodView):
                 elif messages and messages[-1]["role"] != "assistant":
                     transformed_messages.append({"role": "assistant", "content": ""})
 
+            idempotency_key = _admit_idempotency_key(request_id, api_key)
+
             if stream:
                 logger.info(f"ChatCompletionsAPI starting streaming response for request_id: {request_id}")
-                return _handle_streaming_request(request_id, transformed_messages, stream, api_key=api_key,
-                                                  tools=tools, tool_choice=tool_choice)
+                response = _handle_streaming_request(request_id, transformed_messages, stream, api_key=api_key,
+                                                     tools=tools, tool_choice=tool_choice)
+                handed_to_stream = True
+                return response
             else:
                 return_response = handle_user_prompt(request_id, transformed_messages, stream=False, api_key=api_key,
                                                      tools=tools, tool_choice=tool_choice)
@@ -536,6 +368,10 @@ class ChatCompletionsAPI(MethodView):
                     response = response_builder.build_openai_chat_completion_response(return_response)
                 return jsonify(response)
         finally:
+            # Streaming releases in its own teardown; only the non-streaming and
+            # error-before-dispatch paths release here (a no-op when no key).
+            if idempotency_key and not handed_to_stream:
+                idempotency_service.release(request_id)
             api_helpers.clear_workflow_override()
             clear_encryption_context()
             clear_api_type()

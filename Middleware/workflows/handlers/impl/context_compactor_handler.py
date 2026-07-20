@@ -290,7 +290,16 @@ class ContextCompactorHandler(BaseHandler):
         old_chunks = [(old_summary, recent_boundary_hash), (_BOUNDARY_SENTINEL, f"{old_start_idx}:{old_boundary_hash}")]
         self._save_state(discussion_id, "old", old_chunks, context=context)
 
-        if has_boundary_shifted and old_start_idx > 0:
+        if old_start_idx > 0:
+            # Fold everything before the current Old window into the rolling Oldest
+            # summary. This runs whenever an Oldest region exists (old_start_idx > 0),
+            # not only on a boundary shift: on the FIRST compaction of an
+            # already-large conversation there is no prior boundary (old_state is
+            # empty) yet messages[0:old_start_idx] still predate the Old window, and
+            # without this they would never be summarized into any section. The
+            # empty-slice guard below makes a genuine no-shift cycle (prev boundary ==
+            # current) a no-op, so no redundant summary is generated.
+            #
             # Find where the previous Old boundary was. The stored value now
             # includes the message index for precise lookup, falling back to
             # a linear scan if the index no longer matches (conversation mutation).
@@ -301,25 +310,17 @@ class ContextCompactorHandler(BaseHandler):
                     idx_str, stored_boundary_hash = stored_value.split(':', 1)
                     try:
                         idx = int(idx_str)
-                        if idx < len(messages) and self._hash_message_content(messages[idx].get("content", "")) == stored_boundary_hash:
+                    except ValueError:
+                        prev_old_start_idx = self._find_message_index_by_hash(messages, stored_value)
+                    else:
+                        if 0 <= idx < len(messages) and self._hash_message_content(
+                                messages[idx].get("content", "")) == stored_boundary_hash:
                             prev_old_start_idx = idx
                         else:
-                            # Index no longer valid — fall back to scan
-                            for i, msg in enumerate(messages):
-                                if self._hash_message_content(msg.get("content", "")) == stored_boundary_hash:
-                                    prev_old_start_idx = i
-                                    break
-                    except (ValueError, IndexError):
-                        for i, msg in enumerate(messages):
-                            if self._hash_message_content(msg.get("content", "")) == stored_value:
-                                prev_old_start_idx = i
-                                break
+                            prev_old_start_idx = self._find_message_index_by_hash(messages, stored_boundary_hash)
                 else:
-                    # Legacy format without index — scan
-                    for i, msg in enumerate(messages):
-                        if self._hash_message_content(msg.get("content", "")) == stored_value:
-                            prev_old_start_idx = i
-                            break
+                    # Legacy format without index
+                    prev_old_start_idx = self._find_message_index_by_hash(messages, stored_value)
 
             shifted_messages = messages[prev_old_start_idx:old_start_idx]
 
@@ -475,6 +476,39 @@ class ContextCompactorHandler(BaseHandler):
                 request_id=context.request_id
             )
 
+    def _find_message_index_by_hash(self, messages: List[Dict[str, str]], target_hash: str) -> int:
+        """
+        Finds the index of the first message whose content hashes to target_hash.
+
+        Args:
+            messages: The messages to scan.
+            target_hash: The stored hash to match.
+
+        Returns:
+            int: The matching index, or 0 when no message matches.
+        """
+        for i, msg in enumerate(messages):
+            if self._hash_message_content(msg.get("content", "")) == target_hash:
+                return i
+        return 0
+
+    @staticmethod
+    def _state_filepath(discussion_id: str, section: str, api_key_hash: Optional[str]) -> str:
+        """
+        Resolves the persistence file path for a section (old or oldest).
+
+        Args:
+            discussion_id: The discussion ID.
+            section: Either "old" or "oldest".
+            api_key_hash: The API key hash for per-user isolation, or None.
+
+        Returns:
+            str: The section's file path.
+        """
+        if section == "old":
+            return get_discussion_context_compactor_old_file_path(discussion_id, api_key_hash=api_key_hash)
+        return get_discussion_context_compactor_oldest_file_path(discussion_id, api_key_hash=api_key_hash)
+
     def _load_state(self, discussion_id: str, section: str, context: 'ExecutionContext' = None) -> List[Tuple[str, str]]:
         """
         Loads the persisted state for a section (old or oldest) from its file.
@@ -487,13 +521,8 @@ class ContextCompactorHandler(BaseHandler):
         Returns:
             List of (text_block, hash) tuples, or empty list if no file exists.
         """
-        api_key_hash = context.api_key_hash if context else None
-        encryption_key = context.encryption_key if context else None
-        if section == "old":
-            filepath = get_discussion_context_compactor_old_file_path(discussion_id, api_key_hash=api_key_hash)
-        else:
-            filepath = get_discussion_context_compactor_oldest_file_path(discussion_id, api_key_hash=api_key_hash)
-        return read_chunks_with_hashes(filepath, encryption_key=encryption_key)
+        filepath = self._state_filepath(discussion_id, section, context.api_key_hash if context else None)
+        return read_chunks_with_hashes(filepath, encryption_key=context.encryption_key if context else None)
 
     def _save_state(self, discussion_id: str, section: str,
                     chunks: List[Tuple[str, str]], context: 'ExecutionContext' = None) -> None:
@@ -506,13 +535,9 @@ class ContextCompactorHandler(BaseHandler):
             chunks: List of (text_block, hash) tuples to save.
             context: Optional ExecutionContext providing pre-computed encryption_key and api_key_hash.
         """
-        api_key_hash = context.api_key_hash if context else None
-        encryption_key = context.encryption_key if context else None
-        if section == "old":
-            filepath = get_discussion_context_compactor_old_file_path(discussion_id, api_key_hash=api_key_hash)
-        else:
-            filepath = get_discussion_context_compactor_oldest_file_path(discussion_id, api_key_hash=api_key_hash)
-        update_chunks_with_hashes(chunks, filepath, mode="overwrite", encryption_key=encryption_key)
+        filepath = self._state_filepath(discussion_id, section, context.api_key_hash if context else None)
+        update_chunks_with_hashes(chunks, filepath, mode="overwrite",
+                                  encryption_key=context.encryption_key if context else None)
 
     def _return_cached_output(self, discussion_id: str, context: 'ExecutionContext' = None) -> str:
         """

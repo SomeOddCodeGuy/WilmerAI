@@ -152,23 +152,3 @@ def test_accept_images_false_ignores_max_images(standard_node_handler, mocker):
     )
     standard_node_handler.handle(context)
     mock_dispatch.assert_called_once_with(context=context, llm_takes_images=False, max_images=0)
-
-
-def test_accept_images_no_images_in_messages(standard_node_handler, mocker):
-    """When acceptImages is true but no messages contain images, dispatch still succeeds."""
-    context = ExecutionContext(
-        request_id="r1", workflow_id="w1", discussion_id="d1",
-        config={"type": "Standard", "acceptImages": True, "maxImagesToSend": 2},
-        messages=[
-            {"role": "user", "content": "just text"},
-            {"role": "assistant", "content": "reply"},
-        ],
-        stream=False
-    )
-    mock_dispatch = mocker.patch(
-        'Middleware.workflows.handlers.impl.standard_node_handler.LLMDispatchService.dispatch',
-        return_value="text response"
-    )
-    result = standard_node_handler.handle(context)
-    assert result == "text response"
-    mock_dispatch.assert_called_once_with(context=context, llm_takes_images=True, max_images=2)

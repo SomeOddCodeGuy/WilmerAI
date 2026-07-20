@@ -74,6 +74,25 @@ def test_format_tools_skips_entries_without_llm_schema():
     assert _format_mcp_tools_for_llm_prompt({"broken_tool": {"service": "x"}}) == ""
 
 
+def test_format_tools_unserializable_schema_returns_empty_string():
+    """
+    Tests that a tools map whose llm_schema cannot be JSON-serialized yields
+    an empty prompt section (logged error) instead of a TypeError escaping
+    into the workflow.
+    """
+    tools_map = {
+        "bad_tool": {
+            "llm_schema": {
+                "type": "function",
+                "name": "bad_tool",
+                "description": "d",
+                "parameters": {"unserializable": {1, 2}},
+            }
+        }
+    }
+    assert _format_mcp_tools_for_llm_prompt(tools_map) == ""
+
+
 def test_integrate_tools_appends_when_no_existing_section():
     """
     Tests that the tools section is appended to a prompt that has no
@@ -119,3 +138,96 @@ def test_integrate_tools_with_empty_section_returns_original():
     """
     original = "You are a helpful assistant."
     assert _integrate_tools_into_prompt(original, "") == original
+
+
+def test_integrate_tools_is_idempotent():
+    """
+    Re-enhancing an already-enhanced prompt must replace the whole previous
+    section in place, not append a second <required_format> block. This is the
+    regression test for the historical duplicating behavior.
+    """
+    base = "You are a helpful assistant."
+    section = _format_mcp_tools_for_llm_prompt(_sample_tools_map())
+
+    once = _integrate_tools_into_prompt(base, section)
+    twice = _integrate_tools_into_prompt(once, section)
+
+    assert twice == once
+    assert twice.count("<required_format>") == 1
+    assert twice.count("Available Tools:") == 1
+    assert twice.count("CRITICAL:") == 1
+
+
+def test_integrate_tools_preserves_text_after_enhanced_section():
+    """
+    Content that follows a fully-enhanced section (e.g. a persona suffix) must
+    survive re-enhancement intact.
+    """
+    base = "You are a helpful assistant."
+    section = _format_mcp_tools_for_llm_prompt(_sample_tools_map())
+    once = _integrate_tools_into_prompt(base, section)
+    with_suffix = once + "\n\nAlways answer in French."
+
+    updated = _integrate_tools_into_prompt(with_suffix, section)
+
+    assert updated.endswith("Always answer in French.")
+    assert updated.count("<required_format>") == 1
+
+
+def test_integrate_tools_heals_previously_duplicated_sections():
+    """
+    Prompts corrupted by the old behavior (multiple stacked enhanced sections)
+    collapse back to a single section on the next enhancement.
+    """
+    base = "You are a helpful assistant."
+    section = _format_mcp_tools_for_llm_prompt(_sample_tools_map())
+    once = _integrate_tools_into_prompt(base, section)
+    # Simulate the historical duplication: two full sections back to back.
+    corrupted = once + "\n\n" + section.strip()
+    assert corrupted.count("<required_format>") == 2
+
+    healed = _integrate_tools_into_prompt(corrupted, section)
+
+    assert healed.count("<required_format>") == 1
+    assert healed.count("Available Tools:") == 1
+
+
+def test_integrate_tools_heals_headerless_duplicate_format_blocks():
+    """
+    The historical duplication actually left ONE "Available Tools:" header
+    followed by stacked header-less format blocks: the old code replaced only
+    the text before <required_format>, leaving a block + CRITICAL trailer
+    behind on every re-enhancement. That real shape must heal too.
+    """
+    base = "You are a helpful assistant."
+    section = _format_mcp_tools_for_llm_prompt(_sample_tools_map())
+    once = _integrate_tools_into_prompt(base, section)
+    leftover = "\n\n" + section[section.index("<required_format>"):].strip()
+    corrupted = once + leftover + leftover
+    assert corrupted.count("Available Tools:") == 1
+    assert corrupted.count("<required_format>") == 3
+    assert corrupted.count("CRITICAL:") == 3
+
+    healed = _integrate_tools_into_prompt(corrupted, section)
+
+    assert healed.count("<required_format>") == 1
+    assert healed.count("Available Tools:") == 1
+    assert healed.count("CRITICAL:") == 1
+    assert healed == once
+
+
+def test_integrate_tools_orphan_cleanup_stops_at_unrelated_content():
+    """
+    Orphan-block cleanup is anchored to the front of the tail: a format block
+    that sits after other content is user-authored, not duplication residue,
+    and must survive re-enhancement.
+    """
+    base = "You are a helpful assistant."
+    section = _format_mcp_tools_for_llm_prompt(_sample_tools_map())
+    once = _integrate_tools_into_prompt(base, section)
+    suffix = "\n\nCustom rules.\n\n<required_format>user-authored</required_format>"
+
+    updated = _integrate_tools_into_prompt(once + suffix, section)
+
+    assert updated.endswith(suffix)
+    assert updated.count("<required_format>") == 2

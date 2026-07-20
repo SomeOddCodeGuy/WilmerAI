@@ -51,7 +51,7 @@ class TestLlmHandlerContract:
             llm=mock_llm,
             prompt_template_filepath="test_template.json",
             add_generation_prompt=True,
-            llm_type="openAiApiChat",
+            llm_type="openAIChatCompletion",
             api_key="test_key"
         )
 
@@ -69,7 +69,7 @@ class TestLlmHandlerContract:
             llm=mock_llm,
             prompt_template_filepath="test_template.json",
             add_generation_prompt=True,
-            llm_type="openAiApiChat",
+            llm_type="openAIChatCompletion",
             api_key="test_key"
         )
 
@@ -93,13 +93,18 @@ class TestLlmHandlerTakesMessageCollection:
         # Completions-style APIs (takes_message_collection = False)
         ("openAIV1Completion", False),
         ("koboldCppGenerate", False),
+        # Deprecated alias routed to the same completions-style KoboldCppApiHandler,
+        # so it must classify identically to koboldCppGenerate.
+        ("koboldCppGenerateImageSpecific", False),
         ("ollamaApiGenerate", False),
-        # Chat-style APIs (takes_message_collection = True)
-        ("openAiApiChat", True),
+        # Chat-style APIs (takes_message_collection = True); these are the type
+        # strings registered in the LlmApiService.create_api_handler factory.
+        ("openAIChatCompletion", True),
+        ("openAIApiChatImageSpecific", True),
+        ("claudeMessages", True),
         ("ollamaApiChat", True),
-        ("claudeApiChat", True),
-        ("genericOpenAiCompatibleChat", True),
-        # Unknown types default to True (chat-style)
+        ("ollamaApiChatImageSpecific", True),
+        # Unknown/unregistered types default to True (chat-style)
         ("unknownApiType", True),
     ])
     def test_takes_message_collection_based_on_llm_type(
@@ -139,7 +144,7 @@ class TestLlmHandlerInitialization:
             llm=mock_llm,
             prompt_template_filepath="my_template.json",
             add_generation_prompt=True,
-            llm_type="openAiApiChat",
+            llm_type="openAIChatCompletion",
             api_key="secret_key_123"
         )
 
@@ -154,8 +159,8 @@ class TestLlmHandlerInitialization:
             llm=mock_llm,
             prompt_template_filepath="test.json",
             add_generation_prompt=False,
-            llm_type="openAiApiChat"
-            # api_key not provided - should default to ""
+            llm_type="openAIChatCompletion"
+            # api_key not provided; should default to ""
         )
 
         assert handler.api_key == ""

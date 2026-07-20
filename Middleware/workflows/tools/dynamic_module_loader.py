@@ -6,14 +6,14 @@ import logging
 import sys
 
 from Middleware.utilities.config_utils import get_project_root_directory_path
+from Middleware.utilities.file_utils import resolve_file_path
 
-# Base exception for errors occurring within dynamically loaded modules
 class DynamicModuleError(Exception):
     """Base class for exceptions raised by dynamically loaded workflow modules."""
     def __init__(self, message, module_name=None, details=None):
         super().__init__(message)
         self.module_name = module_name
-        self.details = details # Optional structured details
+        self.details = details
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ def _resolve_module_path(module_path):
     Resolves the on-disk location of a dynamic module path.
 
     A relative path is honored as-is when it resolves against the current
-    working directory — the original behavior, so an existing setup that
+    working directory (the original behavior), so an existing setup that
     launches Wilmer from a directory where the path already resolves keeps
     working unchanged. Only when that fails is the path retried relative to
     the project root, which makes the repo-relative paths used by shipped
@@ -32,12 +32,16 @@ def _resolve_module_path(module_path):
 
     Args:
         module_path (str): Absolute or relative path from the node config.
+            A leading ``~``/``~user`` is expanded to the home directory via
+            :func:`Middleware.utilities.file_utils.resolve_file_path`, matching
+            how every other file-path field in workflow configs behaves.
 
     Returns:
         str: The resolved path, or the original path unchanged when nothing
             matched (the caller's existence check then raises with the path
             the workflow author wrote).
     """
+    module_path = resolve_file_path(module_path)
     if os.path.isabs(module_path) or os.path.isfile(module_path):
         return module_path
     root_candidate = os.path.join(get_project_root_directory_path(), module_path)
@@ -57,7 +61,7 @@ def run_dynamic_module(module_path, *args, **kwargs):
 
     Args:
         module_path (str): The file path to the module to load. May be
-            absolute, or relative — a relative path that does not exist
+            absolute, or relative; a relative path that does not exist
             against the current working directory is retried relative to
             the project root (see ``_resolve_module_path``).
         *args: Variable length argument list to pass to the 'Invoke' function.
@@ -99,30 +103,25 @@ def run_dynamic_module(module_path, *args, **kwargs):
     spec.loader.exec_module(module)
 
     if not hasattr(module, "Invoke"):
-        raise AttributeError(f"The module does not have a function named 'Invoke'")
+        raise AttributeError("The module does not have a function named 'Invoke'")
 
     func = getattr(module, "Invoke")
 
     if not callable(func):
-        raise TypeError(f"'Invoke' is not callable")
+        raise TypeError("'Invoke' is not callable")
 
     try:
-        response = func(*args, **kwargs)
-        return response
-    # Handle errors raised by the dynamic module itself
+        return func(*args, **kwargs)
     except DynamicModuleError as dme:
-        module_name_str = f" '{dme.module_name or os.path.basename(module_path)}'" if dme.module_name or module_path else ""
+        module_name = dme.module_name or os.path.basename(module_path)
         details_str = f". Details: {dme.details}" if dme.details else ""
-        error_message = f"Error in dynamic module{module_name_str}: {dme}{details_str}"
-        logger.error(error_message)
-        return f"Error processing request in module{module_name_str}. {dme}{details_str}"
-
-    # Handle other potential errors during dynamic module execution
+        logger.error(f"Error in dynamic module '{module_name}': {dme}{details_str}")
+        return f"Error processing request in module '{module_name}'. {dme}{details_str}"
     except FileNotFoundError:
-        raise # Re-raise FileNotFoundError as it indicates a setup issue
+        raise  # A missing file mid-execution indicates a setup issue the caller must see.
     except (AttributeError, TypeError) as e:
         logger.error(f"Error setting up or calling 'Invoke' in dynamic module '{os.path.basename(module_path)}': {e}")
         return f"Error: Module '{os.path.basename(module_path)}' setup issue. Please check logs."
     except Exception as e:
-        logger.exception(f"Unexpected error executing 'Invoke' in dynamic module '{os.path.basename(module_path)}': {e}") # Log full traceback
+        logger.exception(f"Unexpected error executing 'Invoke' in dynamic module '{os.path.basename(module_path)}': {e}")
         return "Error: An unexpected error occurred while processing your request. Please check system logs."

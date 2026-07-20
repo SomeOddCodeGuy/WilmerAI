@@ -141,7 +141,7 @@ This section details the responsibility of each key file in the `Middleware/work
     - `web_fetch_handler.py`: Handles the `"WebFetch"` node type, which issues HTTP/HTTPS requests via the `requests`
       library and returns the response as text, parsed JSON, a full status/headers/body envelope, or HTML stripped to
       visible text. The HTML stripper is a small `html.parser` subclass (`_HtmlTextExtractor`) defined in the same
-      module — no third-party HTML parsing dependency. Supports `onError: "return"` so the workflow can branch on
+      module, so there is no third-party HTML parsing dependency. Supports `onError: "return"` so the workflow can branch on
       failures. Optional `proxy` field forwards a single URL to `requests` as `proxies={"http": ..., "https": ...}`;
       any scheme `requests` supports works, including SOCKS via the `PySocks` extra.
     - `curl_command_handler.py`: Handles the `"CurlCommand"` node type, which shells out to the system `curl` binary
@@ -158,11 +158,16 @@ This section details the responsibility of each key file in the `Middleware/work
       delegated to `Middleware/workflows/tools/mcp_client_tool.py`, which uses the official `mcp` Python SDK and bridges
       sync-to-async via `asyncio.run` (one fresh connection per call; no pooling in v1). `MCPClient.call_tool` rejects a
       `server_name` containing path separators or a `:` drive-letter prefix (path-traversal guard), and bounds the
-      whole operation — transport connect, the `initialize` handshake, and the tool call — with
+      whole operation (transport connect, the `initialize` handshake, and the tool call) with
       `asyncio.wait_for(timeout)` so a server that connects but never finishes the handshake cannot wedge the worker.
       Note that `asyncio.run` drives its loop synchronously, so the call blocks the calling eventlet greenlet for up to
       `timeout` seconds (pre-existing; the `wait_for` bound makes the worst case finite). Same `onError` semantics as
       `WebFetch`.
+    - `extension_node_helpers.py`: Shared helper module for the three extension-node handlers above (`WebFetch`,
+      `CurlCommand`, `MCPToolCall`): config-field validation (`validate_timeout`, `validate_bool`,
+      `validate_max_bytes`), `resolve_allowed_hosts` (resolves the optional `allowedHosts` allowlist with per-entry
+      variable substitution), and `maybe_stream` (wraps the result string in a static-content generator when the
+      node is streaming).
 
 #### `streaming/`
 
@@ -214,16 +219,66 @@ in a workflow.
    dataclass, making them available to every node.
 3. **Dispatch Gate:** `$LLMDispatchService.dispatch()$` reads `allowTools` from the node config. If `true`, it
    forwards `context.tools` and `context.tool_choice` to the LLM handler. If `false`, it passes `None` for both.
+   Note that `allowTools` only governs the tool DEFINITIONS; how the conversation's tool HISTORY reaches the
+   backend depends on the node's delivery mode. Collection-mode nodes (no authored `prompt`) send the assistant
+   `tool_calls` turns and `role: "tool"` results as native messages. Authored-prompt nodes render them into the
+   single user message as text, which degrades multi-round tool calling; see `appendNativeToolExchange` below.
+3b. **Tool Enforcement (structured output):** when `tool_choice` is a forced-function object or `"required"` AND
+   the endpoint's ApiType declares a `structuredOutput` mechanism, `dispatch()` constrains the round instead of
+   steering it: `build_tool_enforcement_schema()` (utilities/structured_output_utils.py) derives a JSON schema
+   from the tool definitions, native `tools`/`tool_choice` are DROPPED from the payload (the combination with an
+   explicit schema is unsupported on llama.cpp and Ollama), `build_tools_description_text()` injects the tool
+   definitions as text into the system prompt, and the schema rides the call as `structured_output_schema`
+   (threaded through `LlmApiService.get_response_from_llm` -> handler `handle_*` -> `_prepare_payload`, where
+   `LlmApiHandler._attach_structured_output()` writes it per the ApiType's declarative block: `field` names the
+   payload key (dotted for nesting), `style` the wrapper, "openaiJsonSchema" or "raw"; new API types reusing an
+   existing style need JSON only). The constrained output is parsed by
+   `parse_constrained_tool_response()` (strict: known tool name, dict arguments) and converted to the standard
+   tool-call dict by `build_tool_calls_result()`; a failed parse redraws exactly once, then returns the raw text
+   with an error (fail-open backends exist: llama.cpp bad-grammar 200s, servers that ignore the field).
+   Streaming rounds are buffered and re-emitted as synthetic tool-call chunks (the client declared the round
+   machine-consumed by demanding a call). `tool_choice: "auto"` NEVER engages this path; Claude endpoints never
+   engage it either (no mechanism declared; Anthropic enforces natively). Executor:
+   `LLMDispatchService._execute_constrained_tool_round()`. Tests: Tests/services/test_llm_dispatch_service.py
+   (`TestToolEnforcementDispatch`), Tests/utilities/test_structured_output_utils.py,
+   Tests/llmapis/test_structured_output_attachment.py.
+3c. **Author-Declared Node Schemas (`structuredOutputFile`):** a node may pin its own output shape to a schema
+   loaded by `load_structured_output_schema()` from `Configs/StructuredOutputs/<sub>/<name>.json` (sub = user
+   config `structuredOutputConfigsSubDirectory`, default username, root fallback; path-unsafe names rejected).
+   The schema rides the same `structured_output_schema` plumbing; the node output IS the constrained JSON text
+   (no conversion). Colliding with an engaged tool-enforcement round raises ValueError; completions-paradigm
+   endpoints log a warning and ignore the property. Tests: `TestNodeStructuredOutputDispatch`,
+   `TestLoadStructuredOutputSchema`.
+3a. **Native Trailing Exchange (`appendNativeToolExchange`, optional):** For authored-prompt nodes on
+   chat-completions backends, this node property makes `dispatch()` detect the conversation's trailing tool
+   exchange via `_extract_trailing_tool_exchange()` (the final assistant `tool_calls` turn plus its contiguous
+   `role: "tool"` results, skipping trailing empty/"Assistant:" filler). When found, the exchange is (a) excluded
+   from the messages the prompt variables render (context.messages is swapped to a trimmed copy around the
+   `apply_variables` calls and restored in a `finally`), and (b) appended verbatim as native messages after the
+   authored-prompt user message in the outgoing collection. The model therefore generates from the standard
+   post-tool-result position while the authored wrapper still carries the earlier conversation as text, and the
+   exchange is delivered exactly once. Exactly one user turn is still sent, preserving compatibility with chat
+   templates that reject consecutive same-role turns. The flag is inert on collection-mode nodes (native turns
+   already flow), on completions-paradigm backends (no structured turns possible), when the conversation does
+   not end with a tool exchange, and on endpoints that declare `"backendSupportsToolTurns": false` in their
+   endpoint config (the escape hatch for models whose chat template cannot render the `tool` role: one old
+   backend opts out endpoint-wide instead of every workflow dropping the flag; read in `dispatch()` from
+   `llm_handler.llm.endpoint_file`, defaulting to true). Tests: `Tests/services/test_llm_dispatch_service.py`
+   (`TestExtractTrailingToolExchange`, `TestAppendNativeToolExchangeDispatch`).
 4. **LLM Handler:** `$LlmApiService.get_response_from_llm()$` includes the tool definitions in the payload sent to
    the backend. The internal canonical format is OpenAI's tool format; the Claude and Ollama handlers convert as
    needed (see the LLM APIs developer documentation).
 5. **Response:** Tool call responses from the LLM are returned as structured dictionaries rather than plain strings.
    For streaming, `$StreamingResponseHandler$` detects `tool_calls` in the chunk data and emits them directly as SSE
-   output, bypassing the text processing pipeline (prefix stripping, think-block removal). For non-streaming, the
-   dispatch service returns a `Dict` with `content`, `tool_calls`, and `finish_reason` keys instead of a plain string.
+   output, bypassing the text processing pipeline (prefix stripping, think-block removal); text already buffered by
+   that pipeline is flushed ahead of the tool call so ordering is preserved, and for Ollama front-ends the deltas
+   are accumulated and emitted as complete native calls (see the Remove Unwanted Text developer doc). For
+   non-streaming, the dispatch service returns a `Dict` with `content`, `tool_calls`, and `finish_reason` keys
+   instead of a plain string; `$WorkflowProcessor$` runs the dict's text `content` through the same
+   `post_process_llm_output` cleaning as a plain string response, leaving the `tool_calls` untouched.
 6. **Name Normalization (optional):** If the node config has `lowercaseToolCallFunctionNames` set to `true`, function
    names in tool call responses are lowercased before being sent to the client. For streaming, this happens in
-   `$StreamingResponseHandler.process_stream()$` when it detects `tool_calls` in the chunk delta -- the `function.name`
+   `$StreamingResponseHandler.process_stream()$` when it detects `tool_calls` in the chunk delta: the `function.name`
    field is lowercased in place before building the SSE response JSON. For non-streaming, the lowercasing happens in
    `$WorkflowProcessor.execute()$` after the handler returns a dict result with `tool_calls`, before the result is
    yielded to the API layer. This is off by default to preserve the original casing for frontends that require it
@@ -252,7 +307,7 @@ following the same pattern as `_apply_image_limit`:
 
 Both methods modify the message list in place and are tool-call-aware: the standard sequence
 `assistant(tool_calls) -> tool(result) -> assistant(response)` is NOT considered consecutive because the `tool`
-role message separates the assistant messages. This is critical -- that sequence is valid per the OpenAI API spec.
+role message separates the assistant messages. This is critical: that sequence is valid per the OpenAI API spec.
 
 ### Integration Point
 
@@ -297,7 +352,7 @@ Adding new functionality typically involves one of the following methods.
 
 ### A. Add a New Node Type
 
-This is the most flexible way to extend the system and has been streamlined by the `ExecutionContext` architecture.
+This is the most flexible way to extend the system.
 
 1. **Define the Node Configuration:** Decide on the JSON parameters your node will need in the workflow file.
 

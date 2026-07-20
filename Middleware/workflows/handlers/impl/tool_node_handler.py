@@ -1,6 +1,5 @@
 import logging
 import traceback
-from copy import deepcopy
 from typing import Any
 
 from Middleware.workflows.handlers.base.base_workflow_node_handler import BaseHandler
@@ -132,23 +131,23 @@ class ToolNodeHandler(BaseHandler):
         config = context.config
         if "module_path" not in config:
             raise ValueError("No 'module_path' specified for PythonModule node.")
-        module_path = config["module_path"]
+        # module_path supports workflow variables (e.g. a user-wide {python_scripts_dir}),
+        # resolved the same way as args/kwargs below.
+        module_path = self.workflow_variable_service.apply_variables(str(config["module_path"]), context)
 
-        # Use deepcopy to prevent variable application from modifying the original message list.
-        context_for_variables = deepcopy(context)
         args = list(config.get("args", ()))
         kwargs = config.get("kwargs", {})
 
         for i, arg in enumerate(args):
             try:
-                args[i] = self.workflow_variable_service.apply_variables(str(arg), context_for_variables)
+                args[i] = self.workflow_variable_service.apply_variables(str(arg), context)
             except Exception as e:
                 logger.error(f"Arg could not have variable applied. Exception: {e}")
                 traceback.print_exc()
                 raise
 
         for key, value in kwargs.items():
-            kwargs[key] = self.workflow_variable_service.apply_variables(str(value), context_for_variables)
+            kwargs[key] = self.workflow_variable_service.apply_variables(str(value), context)
 
         return run_dynamic_module(module_path, *tuple(args), **kwargs)
 
@@ -171,8 +170,7 @@ class ToolNodeHandler(BaseHandler):
         prompt = config["promptToSearch"]
         node_type = config.get("type")
 
-        # Use deepcopy here as well to ensure the context for variable application is isolated.
-        variabled_prompt = self.workflow_variable_service.apply_variables(str(prompt), deepcopy(context))
+        variabled_prompt = self.workflow_variable_service.apply_variables(str(prompt), context)
 
         try:
             if node_type == "OfflineWikiApiBestFullArticle":
@@ -189,12 +187,18 @@ class ToolNodeHandler(BaseHandler):
                 if not results:
                     return f"No articles found for '{variabled_prompt}' in the offline database."
 
-                # Format each article with title and text, joined by delimiter
                 formatted_articles = []
                 for article in results:
-                    title = article.get("title", "Untitled Article")
-                    text = article.get("text", "No text available.")
-                    formatted_articles.append(f"Title: {title}\n{text}")
+                    if isinstance(article, dict):
+                        title = article.get("title", "Untitled Article")
+                        text = article.get("text", "No text available.")
+                        formatted_articles.append(f"Title: {title}\n{text}")
+                    else:
+                        # When the offline wiki API is disabled (or a fallback path
+                        # fires) this endpoint returns plain notice strings rather
+                        # than article dicts; surface the notice instead of calling
+                        # .get() on a str and raising AttributeError.
+                        formatted_articles.append(str(article))
 
                 return "\n\n--- END ARTICLE ---\n\n".join(formatted_articles)
 
@@ -207,7 +211,6 @@ class ToolNodeHandler(BaseHandler):
                 if not results or not isinstance(results, list):
                     return f"No summary found for '{variabled_prompt}'."
 
-                # Format each summary with title and text, joined by delimiter
                 formatted_summaries = []
                 for summary in results:
                     title = summary.get("title", "Untitled Summary")
@@ -253,7 +256,7 @@ class ToolNodeHandler(BaseHandler):
         prompt = config["promptToSearch"]
         node_type = config.get("type")
 
-        variabled_prompt = self.workflow_variable_service.apply_variables(str(prompt), deepcopy(context))
+        variabled_prompt = self.workflow_variable_service.apply_variables(str(prompt), context)
 
         if node_type == "OfflineResearcherApiDeepResearch":
             mode = "deep"

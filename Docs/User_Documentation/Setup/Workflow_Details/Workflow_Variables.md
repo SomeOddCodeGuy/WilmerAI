@@ -63,11 +63,11 @@ You **CAN** use variables in fields that are treated as content for the node to 
 **`endpointName`** and **`preset`** now support a LIMITED form of variable substitution. These fields use **early variable substitution**, which means they are processed BEFORE nodes execute. This creates important limitations:
 
 **ONLY these variables work in `endpointName` and `preset`:**
-* `{agent#Input}` - Values passed from parent workflows via `scoped_variables`
-* `{custom_variable}` - Static variables defined at the top level of your workflow JSON
+* `{agent#Input}`: Values passed from parent workflows via `scoped_variables`
+* `{custom_variable}`: Static variables defined at the top level of your workflow JSON
 
 **These variables DO NOT work in `endpointName` and `preset`:**
-* No: `{agent#Output}` - These don't exist yet since nodes haven't executed!
+* No: `{agent#Output}`. These don't exist yet since nodes haven't executed!
 * No: Any variable that depends on the output of another node
 
 **Example of CORRECT usage:**
@@ -87,7 +87,7 @@ You **CAN** use variables in fields that are treated as content for the node to 
 {
   "nodes": [{
     "type": "Standard",
-    "endpointName": "{agent1Output}",  // WILL FAIL - agent1Output doesn't exist yet!
+    "endpointName": "{agent1Output}",  // WILL FAIL: agent1Output doesn't exist yet!
     "prompt": "..."
   }]
 }
@@ -178,8 +178,9 @@ Both options can be combined. For example, with `addUserAssistantTags` set to `t
 **Tool call visibility:** When the conversation contains assistant messages with `tool_calls` but empty `content`
 (common with agentic frontends), these messages appear as blank turns in the conversation variables by default.
 Setting the node-level property **`includeToolCallsInConversation`** to `true` injects a text summary of each tool
-call into the message content, formatted as `[Tool Call: {name}] {summary}`. This allows downstream prompts to see
-what tools were invoked without the full tool output. See the
+call into the message content, formatted as `[Tool Call: {name}] {summary}`. Tool result messages (`role: "tool"`)
+are likewise labeled `[Tool Result: {name}] {content}`, with the name resolved from the matching tool call's id.
+This allows downstream prompts to see what tools were invoked without the full tool output. See the
 [Standard Node](Nodes/Standard_Conversational.md) documentation for details.
 
 * **`{chat_user_prompt_n_messages}`**: Raw text of the last N messages, where N is set by the node property

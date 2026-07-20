@@ -3,6 +3,7 @@
 import pytest
 
 from Middleware.common import instance_global_variables
+from Middleware.services import response_builder_service as rbs_module
 from Middleware.services.response_builder_service import ResponseBuilderService
 
 
@@ -80,6 +81,8 @@ def test_build_ollama_generate_response(service):
     response = service.build_ollama_generate_response("Test output", model="test-ollama-model")
     assert response["model"] == "test-ollama-model"
     assert response["response"] == "Test output"
+    assert response["done"] is True
+    assert response["done_reason"] == "stop"
 
 
 def test_build_ollama_chat_response(service):
@@ -113,8 +116,8 @@ def test_build_ollama_tags_response_no_workflows(service_no_workflows):
 
 def test_build_openai_models_response_ignores_active_workflow_override(mocker):
     """
-    Tests that the models endpoint uses username only, not username:workflow,
-    even when there's an active workflow override.
+    Tests that the models endpoint derives its ids from the username and shared
+    workflow list, ignoring any active workflow override in get_model_name().
     """
     mocker.patch('Middleware.api.api_helpers.get_model_name', return_value="test-user:active-workflow")
     mocker.patch('Middleware.utilities.config_utils.get_current_username', return_value="test-user")
@@ -463,3 +466,362 @@ def test_build_ollama_chat_chunk_no_tool_calls(service):
     message = response["message"]
     assert "tool_calls" not in message
     assert message["content"] == "token"
+
+
+class TestOllamaToolCallConversion:
+    """Ollama clients expect {"function": {"name", "arguments": {...}}} with
+    arguments as a JSON object; Wilmer's internal OpenAI shape (id/type/index
+    envelope, arguments as a JSON string) must be converted at the builder."""
+
+    def test_openai_format_converted_to_native(self, service):
+        openai_calls = [{"index": 0, "id": "call_abc", "type": "function",
+                         "function": {"name": "get_weather", "arguments": '{"city": "Tokyo"}'}}]
+        response = service.build_ollama_chat_response("", model_name="m", tool_calls=openai_calls)
+        assert response["message"]["tool_calls"] == [
+            {"function": {"name": "get_weather", "arguments": {"city": "Tokyo"}}}
+        ]
+
+    def test_chunk_converts_openai_format(self, service):
+        openai_calls = [{"index": 0, "id": "call_abc", "type": "function",
+                         "function": {"name": "lookup", "arguments": '{"id": 1}'}}]
+        response = service.build_ollama_chat_chunk("", finish_reason=None, tool_calls=openai_calls)
+        assert response["message"]["tool_calls"] == [
+            {"function": {"name": "lookup", "arguments": {"id": 1}}}
+        ]
+
+    def test_native_format_passes_through_unchanged(self, service):
+        native_calls = [{"function": {"name": "do_thing", "arguments": {"key": "val"}}}]
+        response = service.build_ollama_chat_response("", model_name="m", tool_calls=native_calls)
+        assert response["message"]["tool_calls"] == native_calls
+
+    def test_unparseable_arguments_degrade_to_empty_object(self, service):
+        bad_calls = [{"function": {"name": "broken", "arguments": '{"unterminated'}}]
+        response = service.build_ollama_chat_response("", model_name="m", tool_calls=bad_calls)
+        assert response["message"]["tool_calls"] == [
+            {"function": {"name": "broken", "arguments": {}}}
+        ]
+
+    def test_empty_and_missing_arguments_become_empty_object(self, service):
+        calls = [{"function": {"name": "no_args", "arguments": ""}},
+                 {"function": {"name": "none_args"}}]
+        response = service.build_ollama_chat_response("", model_name="m", tool_calls=calls)
+        assert response["message"]["tool_calls"] == [
+            {"function": {"name": "no_args", "arguments": {}}},
+            {"function": {"name": "none_args", "arguments": {}}},
+        ]
+
+
+# --- Exact-schema tests for builders with pinned time/uuid/datetime ---
+#
+# These payload shapes are the client-facing API contract (OpenAI/Ollama
+# clients parse them); each builder is asserted as a complete dict so any
+# schema drift fails loudly.
+
+FROZEN_TIME = 1234567890
+FROZEN_UUID = "abcd1234-0000-0000-0000-000000000000"
+FROZEN_CREATED_AT = "2024-01-01T00:00:00Z"
+
+
+@pytest.fixture
+def frozen_service(mocker):
+    """ResponseBuilderService with model name, time, uuid, and datetime pinned."""
+    mocker.patch('Middleware.api.api_helpers.get_model_name', return_value="test-model")
+    mock_time = mocker.patch.object(rbs_module, 'time')
+    mock_time.time.return_value = FROZEN_TIME
+    mock_uuid = mocker.patch.object(rbs_module, 'uuid')
+    mock_uuid.uuid4.return_value = FROZEN_UUID
+    mock_datetime = mocker.patch.object(rbs_module, 'datetime')
+    mock_datetime.now.return_value.isoformat.return_value = "2024-01-01T00:00:00+00:00"
+    return ResponseBuilderService()
+
+
+def test_build_openai_completion_response_exact_schema(frozen_service):
+    response = frozen_service.build_openai_completion_response("Full text")
+    assert response == {
+        "id": f"cmpl-{FROZEN_TIME}",
+        "object": "text_completion",
+        "created": FROZEN_TIME,
+        "model": "test-model",
+        "system_fingerprint": "wmr_123456789",
+        "choices": [
+            {
+                "text": "Full text",
+                "index": 0,
+                "logprobs": None,
+                "finish_reason": "stop"
+            }
+        ],
+        "usage": {}
+    }
+
+
+def test_build_openai_chat_completion_response_exact_schema(frozen_service):
+    response = frozen_service.build_openai_chat_completion_response("Hello, world!")
+    assert response == {
+        "id": f"chatcmpl-{FROZEN_TIME}",
+        "object": "chat.completion",
+        "created": FROZEN_TIME,
+        "model": "test-model",
+        "system_fingerprint": "wmr_123456789",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello, world!"},
+                "logprobs": None,
+                "finish_reason": "stop"
+            }
+        ],
+        "usage": {}
+    }
+
+
+@pytest.mark.parametrize("finish_reason", ["stop", None])
+def test_build_openai_completion_chunk_exact_schema(frozen_service, finish_reason):
+    response = frozen_service.build_openai_completion_chunk("tok", finish_reason)
+    assert response == {
+        "id": f"cmpl-{FROZEN_UUID}",
+        "object": "text_completion",
+        "created": FROZEN_TIME,
+        "choices": [
+            {
+                "text": "tok",
+                "index": 0,
+                "logprobs": None,
+                "finish_reason": finish_reason
+            }
+        ],
+        "model": "test-model",
+        "system_fingerprint": "fp_44709d6fcb"
+    }
+
+
+def test_build_openai_chat_completion_chunk_exact_schema(frozen_service):
+    response = frozen_service.build_openai_chat_completion_chunk("Hello", "stop")
+    assert response == {
+        "id": f"chatcmpl-{FROZEN_UUID}",
+        "object": "chat.completion.chunk",
+        "created": FROZEN_TIME,
+        "model": "test-model",
+        "system_fingerprint": "fp_44709d6fcb",
+        "choices": [
+            {
+                "index": 0,
+                "delta": {"content": "Hello"},
+                "logprobs": None,
+                "finish_reason": "stop"
+            }
+        ]
+    }
+
+
+def test_build_openai_chat_completion_chunk_empty_token_has_empty_delta(frozen_service):
+    """An empty token with no tool_calls must produce an empty delta dict."""
+    response = frozen_service.build_openai_chat_completion_chunk("", finish_reason="stop")
+    assert response["choices"][0]["delta"] == {}
+
+
+def test_build_openai_tool_call_response_exact_schema(frozen_service):
+    response = frozen_service.build_openai_tool_call_response()
+    assert response == {
+        "id": f"chatcmpl-opnwui-tool-{FROZEN_TIME}",
+        "object": "chat.completion",
+        "created": FROZEN_TIME,
+        "model": "test-model",
+        "system_fingerprint": "wmr_123456789",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": None, "tool_calls": []},
+                "logprobs": None,
+                "finish_reason": "tool_calls"
+            }
+        ],
+        "usage": {}
+    }
+
+
+def test_build_ollama_version_response_exact_schema(frozen_service):
+    assert frozen_service.build_ollama_version_response() == {"version": "0.9"}
+
+
+def test_build_ollama_tool_call_response_exact_schema(frozen_service):
+    response = frozen_service.build_ollama_tool_call_response("my-model")
+    assert response == {
+        "model": "my-model",
+        "created_at": FROZEN_CREATED_AT,
+        "message": {"role": "assistant", "content": ""},
+        "done_reason": "stop",
+        "done": True,
+        "total_duration": 0,
+        "load_duration": 0,
+        "prompt_eval_count": 0,
+        "prompt_eval_duration": 0,
+        "eval_count": 0,
+        "eval_duration": 0
+    }
+
+
+@pytest.mark.parametrize("finish_reason,expected_done,expected_done_reason", [
+    ("stop", True, "stop"),
+    (None, False, None),
+    ("length", True, "length"),
+    ("tool_calls", True, "stop"),
+])
+def test_build_ollama_generate_chunk_done_logic(frozen_service, finish_reason, expected_done, expected_done_reason):
+    """'done' must be True for ANY terminal finish_reason (an Ollama client reads
+    the stream until done: true, so a length cutoff or tool call must still
+    terminate it), with done_reason mapped to Ollama's stop/length vocabulary."""
+    response = frozen_service.build_ollama_generate_chunk("tok", finish_reason)
+    expected = {
+        "model": "test-model",
+        "created_at": FROZEN_CREATED_AT,
+        "response": "tok",
+        "done": expected_done
+    }
+    if expected_done:
+        expected["done_reason"] = expected_done_reason
+    assert response == expected
+
+
+@pytest.mark.parametrize("finish_reason,expected_done,expected_done_reason", [
+    ("stop", True, "stop"),
+    (None, False, None),
+    ("length", True, "length"),
+    ("tool_calls", True, "stop"),
+])
+def test_build_ollama_chat_chunk_done_logic(frozen_service, finish_reason, expected_done, expected_done_reason):
+    """'done' must be True for ANY terminal finish_reason (an Ollama client reads
+    the stream until done: true, so a length cutoff or tool call must still
+    terminate it), with done_reason mapped to Ollama's stop/length vocabulary."""
+    response = frozen_service.build_ollama_chat_chunk("tok", finish_reason)
+    expected = {
+        "model": "test-model",
+        "created_at": FROZEN_CREATED_AT,
+        "message": {"role": "assistant", "content": "tok"},
+        "done": expected_done
+    }
+    if expected_done:
+        expected["done_reason"] = expected_done_reason
+    assert response == expected
+
+
+# --- request_id passthrough across all Ollama builders ---
+
+@pytest.mark.parametrize("builder,kwargs", [
+    ("build_ollama_generate_response", {"full_text": "t", "model": "m"}),
+    ("build_ollama_chat_response", {"full_text": "t", "model_name": "m"}),
+    ("build_ollama_generate_chunk", {"token": "t", "finish_reason": None}),
+    ("build_ollama_chat_chunk", {"token": "t", "finish_reason": None}),
+])
+def test_ollama_builders_include_request_id_when_provided(frozen_service, builder, kwargs):
+    response = getattr(frozen_service, builder)(request_id="req-42", **kwargs)
+    assert response["request_id"] == "req-42"
+
+
+@pytest.mark.parametrize("builder,kwargs", [
+    ("build_ollama_generate_response", {"full_text": "t", "model": "m"}),
+    ("build_ollama_chat_response", {"full_text": "t", "model_name": "m"}),
+    ("build_ollama_generate_chunk", {"token": "t", "finish_reason": None}),
+    ("build_ollama_chat_chunk", {"token": "t", "finish_reason": None}),
+])
+def test_ollama_builders_omit_request_id_when_none(frozen_service, builder, kwargs):
+    response = getattr(frozen_service, builder)(request_id=None, **kwargs)
+    assert "request_id" not in response
+
+
+def test_build_ollama_chat_response_exact_schema(frozen_service):
+    """Pins the complete non-streaming /api/chat payload, including the fixed
+    done/done_reason flags and the hardcoded duration/eval telemetry fields that
+    Ollama clients parse."""
+    response = frozen_service.build_ollama_chat_response(
+        "Hi there", model_name="chat-model", request_id="req-7")
+    assert response == {
+        "model": "chat-model",
+        "created_at": FROZEN_CREATED_AT,
+        "message": {"role": "assistant", "content": "Hi there"},
+        "done_reason": "stop",
+        "done": True,
+        "total_duration": 4505727700,
+        "load_duration": 23500100,
+        "prompt_eval_count": 15,
+        "prompt_eval_duration": 4000000,
+        "eval_count": 392,
+        "eval_duration": 4476000000,
+        "request_id": "req-7",
+    }
+
+
+def test_build_ollama_tags_model_entry_exact_schema(mocker):
+    """Pins the complete /api/tags model entry: name, ':latest' model id, fixed
+    modified_at/size, sha256-of-id digest (hardcoded literal, independently
+    computed), and the details block Ollama clients display."""
+    mocker.patch('Middleware.api.api_helpers.get_model_name', return_value="solo-user")
+    mocker.patch('Middleware.utilities.config_utils.get_current_username', return_value="solo-user")
+    mocker.patch('Middleware.utilities.config_utils.get_user_config_for',
+                 return_value={'allowSharedWorkflows': True})
+    mocker.patch('Middleware.utilities.config_utils.get_config_property_if_exists',
+                 side_effect=[True, None])  # allowSharedWorkflows, then no folder override
+    mocker.patch('Middleware.utilities.config_utils.get_available_shared_workflows',
+                 return_value=['wf'])
+
+    service = ResponseBuilderService()
+    response = service.build_ollama_tags_response()
+
+    assert response == {
+        "models": [
+            {
+                "name": "solo-user:wf",
+                "model": "solo-user:wf:latest",
+                "modified_at": "2024-11-23T00:00:00Z",
+                "size": 1,
+                "digest": "6c5450fd68ca66971c0bb924ff792de9ace0ae1c05d4423a57697cdbd9c5eaca",
+                "details": {
+                    "format": "gguf",
+                    "family": "wilmer",
+                    "families": None,
+                    "parameter_size": "N/A",
+                    "quantization_level": "Q8",
+                },
+            }
+        ]
+    }
+
+
+def test_build_ollama_generate_response_exact_schema(frozen_service):
+    response = frozen_service.build_ollama_generate_response("Test output", model="gen-model")
+    assert response == {
+        "id": f"gen-{FROZEN_TIME}",
+        "object": "text_completion",
+        "created": FROZEN_TIME,
+        "model": "gen-model",
+        "response": "Test output",
+        "done_reason": "stop",
+        "done": True,
+        "choices": [
+            {
+                "text": "Test output",
+                "index": 0,
+                "logprobs": None,
+                "finish_reason": "stop"
+            }
+        ],
+        "usage": {}
+    }
+
+
+def test_shared_folder_defaults_to_underscore_shared(mocker):
+    """When a user has no sharedWorkflowsSubDirectoryOverride, workflows are read from '_shared'."""
+    mocker.patch('Middleware.api.api_helpers.get_model_name', return_value="solo-user")
+    mocker.patch('Middleware.utilities.config_utils.get_current_username', return_value="solo-user")
+    mocker.patch('Middleware.utilities.config_utils.get_user_config_for',
+                 return_value={'allowSharedWorkflows': True})
+    mocker.patch('Middleware.utilities.config_utils.get_config_property_if_exists',
+                 side_effect=[True, None])  # allowSharedWorkflows, then no folder override
+    mock_get_workflows = mocker.patch(
+        'Middleware.utilities.config_utils.get_available_shared_workflows',
+        return_value=['wf'])
+
+    service = ResponseBuilderService()
+    service.build_openai_models_response()
+
+    assert mock_get_workflows.call_args.kwargs['shared_folder_override'] == '_shared'

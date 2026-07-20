@@ -6,6 +6,13 @@ from Middleware.utilities.config_utils import get_user_config
 
 logger = logging.getLogger(__name__)
 
+# Split connect/read timeouts (seconds) so a host that accepts the connection but
+# never responds cannot hang the workflow (and the client request) indefinitely.
+# Mirrors the offline researcher client. The read budget is generous because a
+# top-N full-article fetch can return a large body from the local API.
+_CONNECT_TIMEOUT_SECONDS = 5
+_READ_TIMEOUT_SECONDS = 60
+
 
 class OfflineWikiApiClient:
     """
@@ -25,33 +32,28 @@ class OfflineWikiApiClient:
         self.use_offline_wiki_api = config.get('useOfflineWikiApi', activateWikiApi)
         self.base_url = f"http://{config.get('offlineWikiApiHost', baseurl)}:{config.get('offlineWikiApiPort', port)}"
 
-    def get_full_article_by_title(self, title):
+    def _get_logged(self, path, params):
         """
-        Get the full Wikipedia article text by title.
+        Performs a GET against the API and logs the response.
 
         Args:
-            title (str): The title of the Wikipedia article.
+            path (str): The endpoint path under the base URL, without a leading slash.
+            params (dict): Query string parameters for the request.
 
         Returns:
-            str: The text of the Wikipedia article if found, or a message if not.
+            requests.Response: The response; always has status 200 or 404.
 
         Raises:
-            Exception: If the API request fails (except for 404s which return a not found message).
+            Exception: If the response status is anything other than 200 or 404.
         """
-        if not self.use_offline_wiki_api:
-            return "No additional information provided"
-
-        url = f"{self.base_url}/articles/{title}"
-        response = requests.get(url)
+        response = requests.get(f"{self.base_url}/{path}", params=params,
+                                timeout=(_CONNECT_TIMEOUT_SECONDS, _READ_TIMEOUT_SECONDS))
         logger.info(f"Response Status Code: {response.status_code}")
-        logger.info(f"Response Text: {response.text}")
-        if response.status_code == 200:
-            return response.json().get('text', "No text element found")
-        elif response.status_code == 404:
-            # For 404 errors, return a message about article not being found
-            return f"No article found with title '{title}'. The information may not be available in the offline database."
-        else:
+        # Full article bodies can be large; keep them out of INFO-level logs.
+        logger.debug(f"Response Text: {response.text}")
+        if response.status_code not in (200, 404):
             raise Exception(f"Error: {response.status_code}, {response.text}")
+        return response
 
     def get_wiki_summary_by_prompt(self, prompt, percentile=0.5, num_results=1):
         """
@@ -63,7 +65,8 @@ class OfflineWikiApiClient:
             num_results (int): The number of results to return. Default is 1.
 
         Returns:
-            list: A list of summary objects (dict) or a list with a single error string.
+            list: A list of summary dicts, or a single-item fallback list (also dicts)
+                when the API is disabled or nothing matched.
 
         Raises:
             Exception: If the API request fails (except for 404s which return a not found message).
@@ -71,23 +74,15 @@ class OfflineWikiApiClient:
         if not self.use_offline_wiki_api:
             return [{"title": "Offline Wiki Disabled", "text": "No additional information provided"}]
 
-        url = f"{self.base_url}/summaries"
-        params = {
+        response = self._get_logged("summaries", {
             'prompt': prompt,
             'percentile': percentile,
             'num_results': num_results
-        }
-        response = requests.get(url, params=params)
-        logger.info(f"Response Status Code: {response.status_code}")
-        logger.info(f"Response Text: {response.text}")
-        if response.status_code == 200:
-            return response.json()
-        elif response.status_code == 404:
-            # For 404 errors, return a message about article not being found
+        })
+        if response.status_code == 404:
             return [{"title": "Not Found",
                      "text": f"No summaries found for '{prompt}'. The information may not be available in the offline database."}]
-        else:
-            raise Exception(f"Error: {response.status_code}, {response.text}")
+        return response.json()
 
     # DEPRECATED. REMOVING SOON
     def get_full_wiki_article_by_prompt(self, prompt, percentile=0.5, num_results=1):
@@ -108,23 +103,14 @@ class OfflineWikiApiClient:
         if not self.use_offline_wiki_api:
             return ["No additional information provided"]
 
-        url = f"{self.base_url}/articles"
-        params = {
+        response = self._get_logged("articles", {
             'prompt': prompt,
             'percentile': percentile,
             'num_results': num_results
-        }
-        response = requests.get(url, params=params)
-        logger.info(f"Response Status Code: {response.status_code}")
-        logger.info(f"Response Text: {response.text}")
-        if response.status_code == 200:
-            results = response.json()
-            return [result.get('text', "No text element found") for result in results]
-        elif response.status_code == 404:
-            # For 404 errors, return a message about article not being found
+        })
+        if response.status_code == 404:
             return [f"No articles found for '{prompt}'. The information may not be available in the offline database."]
-        else:
-            raise Exception(f"Error: {response.status_code}, {response.text}")
+        return [result.get('text', "No text element found") for result in response.json()]
 
     def get_top_full_wiki_article_by_prompt(self, prompt, percentile=0.5, num_results=10):
         """
@@ -144,24 +130,14 @@ class OfflineWikiApiClient:
         if not self.use_offline_wiki_api:
             return ["No additional information provided"]
 
-        url = f"{self.base_url}/top_article"
-        params = {
+        response = self._get_logged("top_article", {
             'prompt': prompt,
             'percentile': percentile,
             'num_results': num_results
-        }
-        response = requests.get(url, params=params)
-        logger.info(f"Response Status Code: {response.status_code}")
-        logger.info(f"Response Text: {response.text}")
-
-        if response.status_code == 200:
-            result = response.json()
-            return [result.get('text', "No text element found")]  # Wrap the single text in a list
-        elif response.status_code == 404:
-            # For 404 errors, return a message about article not being found
+        })
+        if response.status_code == 404:
             return [f"No article found for '{prompt}'. The information may not be available in the offline database."]
-        else:
-            raise Exception(f"Error: {response.status_code}, {response.text}")
+        return [response.json().get('text', "No text element found")]
 
     def get_top_n_full_wiki_articles_by_prompt(self, prompt, percentile=0.5, num_results=10, top_n_articles=3):
         """
@@ -174,7 +150,8 @@ class OfflineWikiApiClient:
             top_n_articles (int): The number of top articles to return. Default is 3.
 
         Returns:
-            list: A list containing the article text.
+            list: The full result dicts (title/text) reported by the API, or a
+                single-item fallback list when the API is disabled or nothing matched.
 
         Raises:
             Exception: If the API request fails (except for 404s which return a not found message).
@@ -182,22 +159,12 @@ class OfflineWikiApiClient:
         if not self.use_offline_wiki_api:
             return ["No additional information provided"]
 
-        url = f"{self.base_url}/top_n_articles"
-        params = {
+        response = self._get_logged("top_n_articles", {
             'prompt': prompt,
             'percentile': percentile,
             'num_results': num_results,
             'num_top_articles': top_n_articles
-        }
-        response = requests.get(url, params=params)
-        logger.info(f"Response Status Code: {response.status_code}")
-        logger.info(f"Response Text: {response.text}")
-
-        if response.status_code == 200:
-            results = response.json()
-            # ✅ Return full results (list of dicts), not just text!
-            return results
-        elif response.status_code == 404:
+        })
+        if response.status_code == 404:
             return [f"No articles found for '{prompt}'. The information may not be available in the offline database."]
-        else:
-            raise Exception(f"Error: {response.status_code}, {response.text}")
+        return response.json()

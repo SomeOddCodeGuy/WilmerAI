@@ -3,6 +3,8 @@ from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 
+from Middleware.common import instance_global_variables
+from Middleware.common.constants import VALID_NODE_TYPES
 from Middleware.workflows.managers.workflow_manager import WorkflowManager
 
 
@@ -20,6 +22,10 @@ def mock_dependencies(mocker):
     mocker.patch("Middleware.workflows.managers.workflow_manager.SpecializedNodeHandler")
     mocker.patch("Middleware.workflows.managers.workflow_manager.SubWorkflowHandler")
     mocker.patch("Middleware.workflows.managers.workflow_manager.StandardNodeHandler")
+    mocker.patch("Middleware.workflows.managers.workflow_manager.ContextCompactorHandler")
+    mocker.patch("Middleware.workflows.managers.workflow_manager.WebFetchHandler")
+    mocker.patch("Middleware.workflows.managers.workflow_manager.CurlCommandHandler")
+    mocker.patch("Middleware.workflows.managers.workflow_manager.MCPToolCallHandler")
 
     # Mock the WorkflowProcessor, which is the primary component orchestrated by the manager
     mock_processor_class = mocker.patch("Middleware.workflows.managers.workflow_manager.WorkflowProcessor")
@@ -75,24 +81,43 @@ class TestWorkflowManagerInitialization:
 
     def test_init_registers_all_node_handlers(self, mock_dependencies):
         """
-        Verifies that all expected node types are registered in the node_handlers dictionary.
+        Verifies that the registry contains exactly the node types wired up in
+        WorkflowManager.__init__: no missing registrations and no strays.
         """
         manager = WorkflowManager(workflow_config_name="test_workflow")
-        expected_node_types = [
-            "Standard", "PythonModule", "SlowButQualityRAG", "ConversationMemory",
-            "FullChatSummary", "RecentMemory", "RecentMemorySummarizerTool",
-            "ChatSummaryMemoryGatheringTool", "GetCurrentSummaryFromFile",
-            "chatSummarySummarizer", "WriteCurrentSummaryToFileAndReturnIt",
-            "QualityMemory", "GetCurrentMemoryFromFile", "ConversationalKeywordSearchPerformerTool",
-            "MemoryKeywordSearchPerformerTool", "VectorMemorySearch", "OfflineWikiApiFullArticle",
-            "OfflineWikiApiBestFullArticle", "OfflineWikiApiTopNFullArticles",
-            "OfflineWikiApiPartialArticle", "CustomWorkflow", "ConditionalCustomWorkflow",
-            "WorkflowLock", "GetCustomFile", "SaveCustomFile", "ImageProcessor", "StaticResponse",
-            "ContextCompactor", "ArithmeticProcessor", "Conditional", "StringConcatenator",
-            "JsonExtractor", "TagTextExtractor"
-        ]
-        for node_type in expected_node_types:
-            assert node_type in manager.node_handlers
+        expected_node_types = {
+            "Standard", "PythonModule", "SlowButQualityRAG",
+            # Memory nodes
+            "ConversationMemory", "FullChatSummary", "RecentMemory",
+            "RecentMemorySummarizerTool", "ChatSummaryMemoryGatheringTool",
+            "GetCurrentSummaryFromFile", "chatSummarySummarizer",
+            "WriteCurrentSummaryToFileAndReturnIt", "QualityMemory",
+            "GetCurrentMemoryFromFile", "GetCurrentStateDocument", "VectorMemorySearch",
+            # Tool-based search nodes
+            "ConversationalKeywordSearchPerformerTool", "MemoryKeywordSearchPerformerTool",
+            "OfflineWikiApiFullArticle", "OfflineWikiApiBestFullArticle",
+            "OfflineWikiApiTopNFullArticles", "OfflineWikiApiPartialArticle",
+            "OfflineResearcherApiQuickSearch", "OfflineResearcherApiDeepResearch",
+            # Other node types
+            "CustomWorkflow", "ConditionalCustomWorkflow", "ConversationChunkProcessor", "WorkflowLock",
+            "GetCustomFile", "SaveCustomFile", "ImageProcessor", "StaticResponse",
+            "ArithmeticProcessor", "Conditional", "StringConcatenator",
+            "JsonExtractor", "TagTextExtractor", "DelimitedChunker",
+            "ContextCompactor", "WebFetch", "CurlCommand", "MCPToolCall",
+        }
+        assert set(manager.node_handlers.keys()) == expected_node_types
+
+    def test_registry_matches_valid_node_types_whitelist(self, mock_dependencies):
+        """The handler registry and the VALID_NODE_TYPES whitelist must stay in
+        lockstep. The processor validates a node's ``type`` against VALID_NODE_TYPES
+        and then looks the type up in this registry; a type present in one but not
+        the other is a silent bug: an unregistered whitelisted type would default
+        to 'Standard' (wrong handler), and a registered-but-non-whitelisted type is
+        unreachable. Docs (Workflows.md) require registering a new type in both
+        places (plus the handler's dispatch); this test enforces that invariant so a
+        drift is caught here rather than in production."""
+        manager = WorkflowManager(workflow_config_name="test_workflow")
+        assert set(manager.node_handlers.keys()) == set(VALID_NODE_TYPES)
 
 
 class TestRunWorkflow:
@@ -180,6 +205,33 @@ class TestRunWorkflow:
         assert mock_dependencies["WorkflowProcessor"].call_args.kwargs["discussion_id"] == "extracted-id"
         mock_dependencies["extract_discussion_id"].assert_called_once_with(messages)
 
+    def test_run_workflow_forwards_request_scoped_kwargs_to_processor(self, mock_dependencies):
+        """
+        Verifies that api_key, tools, and tool_choice are forwarded into the
+        WorkflowProcessor, and default to None when omitted.
+        """
+        mock_dependencies["json_load"].return_value = {"nodes": []}
+        manager = WorkflowManager(workflow_config_name="test_workflow")
+        tools = [{"type": "function", "function": {"name": "get_weather"}}]
+
+        manager.run_workflow(messages=[], request_id="req-123",
+                             api_key="sk-test", tools=tools, tool_choice="auto")
+
+        call_kwargs = mock_dependencies["WorkflowProcessor"].call_args.kwargs
+        assert call_kwargs["api_key"] == "sk-test"
+        assert call_kwargs["tools"] is tools
+        assert call_kwargs["tool_choice"] == "auto"
+
+        # Omitted kwargs must arrive as None, not be dropped.
+        mock_dependencies["WorkflowProcessor"].reset_mock()
+        mock_dependencies["mock_processor_instance"].execute.return_value = iter(["result"])
+        manager.run_workflow(messages=[], request_id="req-456")
+
+        call_kwargs = mock_dependencies["WorkflowProcessor"].call_args.kwargs
+        assert call_kwargs["api_key"] is None
+        assert call_kwargs["tools"] is None
+        assert call_kwargs["tool_choice"] is None
+
     def test_run_workflow_exception_handling(self, mock_dependencies):
         """
         Ensures that locks are cleared even if the workflow execution fails.
@@ -190,7 +242,11 @@ class TestRunWorkflow:
         with pytest.raises(json.JSONDecodeError):
             manager.run_workflow(messages=[], request_id="123")
 
-        manager.locking_service.delete_node_locks.assert_called_once()
+        # The lock cleanup must target this instance and this run's workflow id
+        # (uuid.uuid4 is patched to "mock-workflow-id" in the fixture).
+        manager.locking_service.delete_node_locks.assert_called_once_with(
+            instance_global_variables.INSTANCE_ID, "mock-workflow-id"
+        )
 
 
 @patch("Middleware.workflows.managers.workflow_manager.WorkflowManager")

@@ -87,13 +87,16 @@ a single node from any "parent" workflow, simplifying design and eliminating red
 
 ### Stateful Conversation Memory
 
-WilmerAI includes a robust, three-part memory system to provide long-term context for conversations. By including a
+WilmerAI includes a four-part memory system that provides long-term context for conversations. By including a
 `[DiscussionId]` in your request, you can enable:
 
 * **Long-Term Memory File**: Chronological, summarized chunks of the conversation.
 * **Rolling Chat Summary**: A continuously updated high-level summary of the entire discussion.
 * **Searchable Vector Memory**: A dedicated full-text search database for the discussion, allowing for efficient
-  keyword-based search to retrieve relevant information.
+  keyword-based search to retrieve relevant information, with optional embedding-based semantic or hybrid search
+  when an embeddings endpoint is configured.
+* **State Document**: A continuously updated markdown snapshot of what is currently true in the conversation (a user
+  profile, world state, etc.), maintained by the vector memory pipeline and readable by workflows at any time.
 
 ### Per-User Encryption and Data Isolation
 
@@ -108,6 +111,15 @@ is unchanged. See [Per-User Encryption and Data Isolation](Core_Features/Per_Use
 The workflow engine can be extended with custom tools. This includes nodes for running local Python scripts or
 connecting to external services. A built-in example is the **Offline Wikipedia Integration**, which allows a workflow
 to query a local Wikipedia database to provide factual context for a response.
+
+### Tool Calling and Structured Output
+
+Front-ends that use OpenAI-style tool calling work through WilmerAI end to end: tool definitions pass through to the
+backend, tool call responses relay back, and multi-round tool loops work reliably through authored-prompt workflows
+via native delivery of the live tool exchange. On backends with constrained decoding, demanded tool calls
+(`tool_choice` forced or `"required"`) are grammar-enforced, and any workflow node can pin its output to a JSON
+Schema so downstream nodes consume guaranteed-parseable JSON. See
+[Tool Calling and Structured Output](Core_Features/Tool_Calling_And_Structured_Output.md).
 
 -----
 
@@ -193,15 +205,15 @@ Contains all user-facing JSON configuration files.
 Scripts to automatically generate a venv, install the requirements.txt for the app, and run the application by calling
 server.py. Takes the following optional parameters:
 
-* `--ConfigDirectory` - String input that specifies where the Public/Configs folder is at.
-* `--User` - String input that specifies the name of the user you'd like to start the app as. Can be repeated for multi-user mode.
-* `--port` - Integer input that specifies the port to listen on. In single-user mode, falls back to the user's config. In multi-user mode, defaults to 5050.
-* `--listen` - Listen on the network. With no value, binds to 0.0.0.0 (all interfaces). Optionally accepts a specific address.
-* `--concurrency` - Integer input that sets the max concurrent requests (or LLM calls in endpoint mode). 0 = no limit. Default: 1.
-* `--concurrency-timeout` - Integer input that sets the seconds to wait for a concurrency slot before returning 503. Default: 900.
-* `--concurrency-level` - `wilmer` or `endpoint`. Selects where the gate is enforced. `wilmer` (default) gates at the request boundary; `endpoint` lifts the request gate and serializes only outbound LLM API calls, allowing reentrant requests (workflows that call back into the same Wilmer instance) to make progress. Default: `wilmer`.
-* `--file-logging` - Enable file logging. In single-user mode, falls back to the user's useFileLogging config setting. In multi-user mode, defaults to off.
-* `--LoggingDirectory` - Directory for log files. When unset, defaults to `{PublicDirectory}/logs/` if `--PublicDirectory` is provided, otherwise `{install_dir}/Public/logs/`. The default is install-pinned (derived from the location of `server.py` on disk) and does not depend on the current working directory.
+* `--ConfigDirectory`: String input that specifies where the Public/Configs folder is at.
+* `--User`: String input that specifies the name of the user you'd like to start the app as. Can be repeated for multi-user mode.
+* `--port`: Integer input that specifies the port to listen on. In single-user mode, falls back to the user's config. In multi-user mode, defaults to 5050.
+* `--listen`: Listen on the network. With no value, binds to 0.0.0.0 (all interfaces). Optionally accepts a specific address.
+* `--concurrency`: Integer input that sets the max concurrent requests (or LLM calls in endpoint mode). 0 = no limit. Default: 1.
+* `--concurrency-timeout`: Integer input that sets the seconds to wait for a concurrency slot before returning 503. Default: 900.
+* `--concurrency-level`: `wilmer` or `endpoint`. Selects where the gate is enforced. `wilmer` (default) gates at the request boundary; `endpoint` lifts the request gate and serializes only outbound LLM API calls, allowing reentrant requests (workflows that call back into the same Wilmer instance) to make progress. Default: `wilmer`.
+* `--file-logging`: Enable file logging. In single-user mode, falls back to the user's useFileLogging config setting. In multi-user mode, defaults to off.
+* `--LoggingDirectory`: Directory for log files. When unset, defaults to `{PublicDirectory}/logs/` if `--PublicDirectory` is provided, otherwise `{install_dir}/Public/logs/`. The default is install-pinned (derived from the location of `server.py` on disk) and does not depend on the current working directory.
 
 #### **`server.py`**
 
@@ -285,6 +297,10 @@ The API accepts these model field formats:
 
 ### workflowConfigsSubDirectoryOverride
 
-The `workflowConfigsSubDirectoryOverride` user config setting loads workflows from a subfolder within `_overrides/`
-instead of the username folder. For example, setting `"workflowConfigsSubDirectoryOverride": "coding-workflows"` loads
-workflows from `_overrides/coding-workflows/`.
+The `workflowConfigsSubDirectoryOverride` user config setting loads workflows from a named subfolder under
+`Public/Configs/Workflows/` instead of the username folder. For example, setting
+`"workflowConfigsSubDirectoryOverride": "coding-workflows"` loads workflows from `Public/Configs/Workflows/coding-workflows/`.
+
+Upgrade note: this setting previously resolved under `Public/Configs/Workflows/_overrides/<value>/`. It now
+resolves directly under `Public/Configs/Workflows/<value>/`; if you used the old location, move your override
+folder up out of `_overrides/`.

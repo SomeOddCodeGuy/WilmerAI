@@ -174,6 +174,33 @@ def test_run_list_tools_stdio_dispatch(mocker):
     assert record["args"][0].command == "echo"
 
 
+def test_run_list_tools_result_without_tools_attr_returns_empty(mocker):
+    """A list_tools result object with no .tools attribute normalizes to an empty list."""
+
+    class _NoToolsSession(_FakeListSession):
+        async def list_tools(self):
+            assert self.initialized, "list_tools called before initialize()"
+            return SimpleNamespace()  # no .tools attribute at all
+
+    @asynccontextmanager
+    async def fake_stdio(*args, **kwargs):
+        yield MagicMock(name="read"), MagicMock(name="write")
+
+    import mcp
+    import mcp.client.stdio as stdio_module
+
+    mocker.patch.object(stdio_module, "stdio_client", fake_stdio)
+    mocker.patch.object(mcp, "ClientSession", _NoToolsSession)
+
+    server_config = {"transport": "stdio", "command": "echo", "args": []}
+
+    tools = asyncio.run(
+        mcp_client_tool._run_list_tools(server_config, "srv", timeout=5.0)
+    )
+
+    assert tools == []
+
+
 def test_run_list_tools_sse_missing_url_raises(mocker):
     with pytest.raises(MCPToolCallError, match="requires a 'url' field"):
         asyncio.run(

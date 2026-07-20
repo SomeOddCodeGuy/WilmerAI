@@ -1,13 +1,13 @@
 # middleware/llmapis/handlers/impl/claude_api_handler.py
-import base64 as base64_module
+import base64
 import io
 import json
 import logging
 import re
-import traceback
 from typing import Dict, Optional, Any, List
 
 from Middleware.llmapis.handlers.base.base_chat_completions_handler import BaseChatCompletionsHandler
+from Middleware.llmapis.handlers.base.image_injection import inject_images_into_messages
 from Middleware.utilities.sensitive_logging_utils import sensitive_log
 
 logger = logging.getLogger(__name__)
@@ -147,7 +147,10 @@ class ClaudeApiHandler(BaseChatCompletionsHandler):
                 return None
 
             return None
-        except (json.JSONDecodeError, KeyError):
+        except (json.JSONDecodeError, AttributeError):
+            # AttributeError covers a data line whose JSON parses to a non-dict
+            # (e.g. "data: 123"); every dict access above uses .get, so KeyError
+            # cannot occur. Malformed chunks are skipped, not fatal.
             logger.warning(f"Could not parse Claude stream data string: {data_str}")
             return None
 
@@ -181,6 +184,146 @@ class ClaudeApiHandler(BaseChatCompletionsHandler):
         return claude_tools
 
     @staticmethod
+    def _parse_tool_arguments(arguments) -> Dict[str, Any]:
+        """
+        Parses tool-call arguments into the object Claude requires as tool_use input.
+
+        Args:
+            arguments: The arguments value from an OpenAI-format tool call; a JSON
+                string in OpenAI's wire format, but a dict is accepted as-is.
+
+        Returns:
+            Dict[str, Any]: The parsed arguments object; empty on missing or
+            unparseable input (logged), since Claude rejects non-object input.
+        """
+        if isinstance(arguments, dict):
+            return arguments
+        if isinstance(arguments, str) and arguments.strip():
+            try:
+                parsed = json.loads(arguments)
+                if isinstance(parsed, dict):
+                    return parsed
+                logger.warning("Tool-call arguments parsed to a non-object; sending empty input to Claude.")
+            except json.JSONDecodeError:
+                logger.warning("Tool-call arguments were not valid JSON; sending empty input to Claude.")
+        return {}
+
+    @staticmethod
+    def _convert_tool_messages_for_claude(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Converts OpenAI-format tool-calling turns into Claude's native structure.
+
+        The ingestion side of Wilmer keeps tool traffic in OpenAI's format: an
+        assistant message carries a ``tool_calls`` list and each result arrives as
+        a ``role: "tool"`` message. The Anthropic Messages API accepts neither;
+        it wants tool calls as ``tool_use`` content blocks on the assistant turn
+        and results as ``tool_result`` blocks at the start of the following user
+        turn. Without this conversion the second request of any tool loop (the
+        one that replays the call and its result) is rejected with a 400.
+
+        Conversions applied:
+        - assistant + ``tool_calls`` -> assistant whose content is a block list:
+          existing text first, then one ``tool_use`` block per call.
+        - ``role: "tool"`` -> user message holding a ``tool_result`` block;
+          consecutive results merge into one user turn.
+        - a plain user message immediately following tool results merges into
+          that same user turn (results must lead the turn), keeping roles
+          alternating.
+
+        All other messages pass through untouched.
+
+        Args:
+            messages (List[Dict[str, Any]]): Messages in the internal (OpenAI-style)
+                format.
+
+        Returns:
+            List[Dict[str, Any]]: Messages restructured for the Claude API.
+        """
+
+        def _previous_tool_result_turn():
+            previous = converted[-1] if converted else None
+            if (isinstance(previous, dict) and previous.get("role") == "user"
+                    and isinstance(previous.get("content"), list)
+                    and any(isinstance(block, dict) and block.get("type") == "tool_result"
+                            for block in previous["content"])):
+                return previous
+            return None
+
+        converted: List[Dict[str, Any]] = []
+        for message_index, msg in enumerate(messages):
+            if not isinstance(msg, dict):
+                converted.append(msg)
+                continue
+            role = msg.get("role")
+            tool_calls = msg.get("tool_calls")
+
+            if role == "assistant" and "tool_calls" in msg \
+                    and not (isinstance(tool_calls, list) and tool_calls):
+                # An empty/None tool_calls key is OpenAI-format residue some
+                # clients emit on every assistant turn. It carries no calls to
+                # convert, but Claude rejects unknown message fields, so the
+                # key must be stripped rather than passed through.
+                converted.append({k: v for k, v in msg.items() if k != "tool_calls"})
+                continue
+
+            if role == "assistant" and isinstance(tool_calls, list) and tool_calls:
+                blocks = []
+                content = msg.get("content")
+                if isinstance(content, str) and content.strip():
+                    blocks.append({"type": "text", "text": content})
+                elif isinstance(content, list):
+                    blocks.extend(content)
+                for call_index, tool_call in enumerate(tool_calls):
+                    if not isinstance(tool_call, dict):
+                        continue
+                    function = tool_call.get("function") or {}
+                    blocks.append({
+                        "type": "tool_use",
+                        "id": tool_call.get("id") or f"toolcall_{message_index}_{call_index}",
+                        "name": function.get("name", ""),
+                        "input": ClaudeApiHandler._parse_tool_arguments(function.get("arguments")),
+                    })
+                converted.append({"role": "assistant", "content": blocks})
+                continue
+
+            if role == "tool":
+                content = msg.get("content")
+                block = {
+                    "type": "tool_result",
+                    "tool_use_id": str(msg.get("tool_call_id") or "unknown"),
+                    "content": content if isinstance(content, str) else str(content or ""),
+                }
+                existing_turn = _previous_tool_result_turn()
+                if existing_turn is not None:
+                    # Anthropic requires tool_result blocks to lead the user
+                    # turn; a merged plain-user text block may already sit in
+                    # this turn (tool -> user -> tool interleave), so insert
+                    # before the first non-tool_result block rather than append.
+                    content_blocks = existing_turn["content"]
+                    insert_at = next(
+                        (i for i, existing_block in enumerate(content_blocks)
+                         if not (isinstance(existing_block, dict)
+                                 and existing_block.get("type") == "tool_result")),
+                        len(content_blocks))
+                    content_blocks.insert(insert_at, block)
+                else:
+                    converted.append({"role": "user", "content": [block]})
+                continue
+
+            if role == "user":
+                existing_turn = _previous_tool_result_turn()
+                if existing_turn is not None:
+                    content = msg.get("content")
+                    if isinstance(content, str) and content.strip():
+                        existing_turn["content"].append({"type": "text", "text": content})
+                    elif isinstance(content, list):
+                        existing_turn["content"].extend(content)
+                    continue
+
+            converted.append(msg)
+        return converted
+
+    @staticmethod
     def _convert_tool_choice_to_claude_format(openai_tool_choice):
         """
         Converts a tool_choice value from OpenAI format to Claude format.
@@ -212,7 +355,7 @@ class ClaudeApiHandler(BaseChatCompletionsHandler):
 
     def _prepare_payload(self, conversation: Optional[List[Dict[str, str]]], system_prompt: Optional[str],
                          prompt: Optional[str], *, tools: Optional[list] = None,
-                         tool_choice=None) -> Dict:
+                         tool_choice=None, structured_output_schema: Optional[Dict] = None) -> Dict:
         """
         Prepares the payload for Claude API with proper system message handling.
 
@@ -250,8 +393,13 @@ class ClaudeApiHandler(BaseChatCompletionsHandler):
             for param in unsupported:
                 payload.pop(param)
 
+        # Convert OpenAI-format tool turns (assistant tool_calls / role "tool")
+        # into Claude's tool_use / tool_result blocks. Must happen before the
+        # role-based system extraction below so the converted turns are what
+        # gets sent.
+        messages = self._convert_tool_messages_for_claude(payload.get('messages', []))
+
         # Extract system messages from the messages array
-        messages = payload.get('messages', [])
         system_messages = []
         non_system_messages = []
 
@@ -272,9 +420,12 @@ class ClaudeApiHandler(BaseChatCompletionsHandler):
         if non_system_messages and non_system_messages[0].get('role') != 'user':
             logger.warning("Claude API requires messages to start with a 'user' message")
 
-        # Claude supports prefilling - trailing assistant messages are allowed and intentional
+        # Claude supports prefilling: trailing assistant messages are allowed and intentional
         # They guide Claude's response format (e.g., forcing JSON with "{")
-        if non_system_messages and non_system_messages[-1].get('role') == 'assistant':
+        # Only string content is a prefill; a trailing assistant turn whose content
+        # is a block list (e.g. converted tool_use blocks) is not.
+        if non_system_messages and non_system_messages[-1].get('role') == 'assistant' \
+                and isinstance(non_system_messages[-1].get('content'), str):
             prefill_content = non_system_messages[-1].get('content', '')
             sensitive_log(logger, logging.DEBUG, "Claude prefill detected: '%s...'", prefill_content[:100])
             # Validate: prefill cannot end with trailing whitespace
@@ -284,7 +435,11 @@ class ClaudeApiHandler(BaseChatCompletionsHandler):
                              "Trimming whitespace from: '%s'", prefill_content)
                 non_system_messages[-1]['content'] = prefill_content.rstrip()
 
-        if tools:
+        # tool_choice "none" means the client forbids tool use. Claude has no "none"
+        # option, so the only way to honor it is to send neither tools nor tool_choice:
+        # sending the tools would let Claude default to "auto" and call a tool the
+        # client explicitly disallowed.
+        if tools and tool_choice != "none":
             payload['tools'] = self._convert_tools_to_claude_format(tools)
             claude_tool_choice = self._convert_tool_choice_to_claude_format(tool_choice)
             if claude_tool_choice is not None:
@@ -311,44 +466,17 @@ class ClaudeApiHandler(BaseChatCompletionsHandler):
             List[Dict[str, Any]]: Messages with images converted to Claude's format.
         """
         messages = super()._build_messages_from_conversation(conversation, system_prompt, prompt)
-
-        try:
-            if not any("images" in msg for msg in messages):
-                return messages
-
-            for msg in messages:
-                if msg.get("role") == "user" and "images" in msg:
-                    image_list = msg.pop("images")
-                    image_blocks = []
-                    for img_source in image_list:
-                        img_block = self._process_single_image_source(img_source)
-                        if img_block:
-                            image_blocks.append(img_block)
-
-                    if image_blocks:
-                        if isinstance(msg["content"], str):
-                            msg["content"] = [{"type": "text", "text": msg["content"]}]
-                        # Claude recommends images before text for best results
-                        msg["content"] = image_blocks + msg["content"]
-
-            for msg in messages:
-                msg.pop("images", None)
-
-            return messages
-
-        except Exception as e:
-            logger.error(f"Critical error during Claude image processing: {e}\n{traceback.format_exc()}")
-            for msg in messages:
-                msg.pop("images", None)
-                if msg["role"] == "user" and isinstance(msg.get("content"), list):
-                    text_content = next(
-                        (item.get("text", "") for item in msg["content"] if item.get("type") == "text"), "")
-                    msg["content"] = text_content
-            if messages and messages[-1].get("role") == "user":
-                messages[-1]["content"] += "\n\n[System note: There was an error processing the provided image(s). I will respond based on the text alone.]"
-            else:
-                messages.append({"role": "user", "content": "[System note: There was an error processing the provided image(s). Please respond based on prior text.]"})
-            return messages
+        return inject_images_into_messages(
+            messages,
+            to_image_block=self._process_single_image_source,
+            # Claude recommends images before text for best results
+            images_first=True,
+            api_label="Claude",
+            missing_user_fallback_text=(
+                "[System note: There was an error processing the provided image(s). "
+                "Please respond based on prior text.]"
+            ),
+        )
 
     @staticmethod
     def _process_single_image_source(content: str) -> Optional[Dict]:
@@ -400,25 +528,24 @@ class ClaudeApiHandler(BaseChatCompletionsHandler):
         # and optional trailing padding (=, ==). % 4 == 0 is required because
         # base64 encodes groups of 3 bytes into 4 characters; any valid base64
         # string (padded) has a length that is a multiple of 4.
-        if isinstance(content, str) and len(content) >= 100:
-            if bool(re.match(r'^[A-Za-z0-9+/]+={0,2}$', content)) and len(content) % 4 == 0:
-                media_type = "image/jpeg"
-                try:
-                    decoded_data = base64_module.b64decode(content)
-                    from PIL import Image
-                    with Image.open(io.BytesIO(decoded_data)) as image:
-                        if image.format:
-                            media_type = f"image/{image.format.lower()}"
-                except Exception:
-                    pass  # Fall back to image/jpeg default
-                return {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": media_type,
-                        "data": content,
-                    }
+        if len(content) >= 100 and len(content) % 4 == 0 and re.match(r'^[A-Za-z0-9+/]+={0,2}$', content):
+            media_type = "image/jpeg"
+            try:
+                decoded_data = base64.b64decode(content)
+                from PIL import Image
+                with Image.open(io.BytesIO(decoded_data)) as image:
+                    if image.format:
+                        media_type = f"image/{image.format.lower()}"
+            except Exception:
+                pass  # Fall back to image/jpeg default
+            return {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": content,
                 }
+            }
 
         logger.warning(f"Skipping unrecognized image source for Claude: {content[:100]}...")
         return None
@@ -469,6 +596,8 @@ class ClaudeApiHandler(BaseChatCompletionsHandler):
                     'finish_reason': finish
                 }
             return content
-        except (KeyError, TypeError):
+        except (KeyError, TypeError, AttributeError):
+            # AttributeError covers malformed content blocks that are not dicts
+            # (e.g. a list of strings), which .get access would otherwise escape.
             logger.error(f"Could not find content in Claude response: {response_json}")
             return ""

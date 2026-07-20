@@ -80,7 +80,7 @@ def workflow_processor_factory(mock_llm_handler_service, mock_workflow_variable_
     """A factory fixture to create WorkflowProcessor instances with specific configurations."""
 
     def _factory(configs, stream=False, discussion_id="disc-123", messages=None, non_responder_flag=None,
-                 overrides=None, scoped_inputs=None):
+                 overrides=None, scoped_inputs=None, tools=None, tool_choice=None, api_key=None):
         if messages is None:
             messages = [{"role": "user", "content": "hello"}]
         if overrides is None:
@@ -103,7 +103,10 @@ def workflow_processor_factory(mock_llm_handler_service, mock_workflow_variable_
             non_responder_flag=non_responder_flag,
             first_node_system_prompt_override=overrides.get("systemPrompt"),
             first_node_prompt_override=overrides.get("prompt"),
-            scoped_inputs=scoped_inputs
+            scoped_inputs=scoped_inputs,
+            tools=tools,
+            tool_choice=tool_choice,
+            api_key=api_key,
         )
 
     return _factory
@@ -149,6 +152,22 @@ class TestWorkflowProcessorExecution:
         config = [
             {"type": "Standard", "title": "N1"},
             {"type": "Standard", "title": "N2 (Responder)", "returnToUser": True},
+            {"type": "Standard", "title": "N3 (Post)"},
+        ]
+        mock_node_handlers["Standard"].handle.side_effect = ["Out1", "Out2 User", "Out3"]
+        processor = workflow_processor_factory(configs=config, stream=False)
+
+        result_list = list(processor.execute())
+
+        assert result_list == ["Out2 User"]
+        assert mock_node_handlers["Standard"].handle.call_count == 3
+
+    def test_execute_responder_logic_is_responder_key(self, workflow_processor_factory, mock_node_handlers):
+        """The documented 'is_responder' key marks the responder node, just like the
+        legacy 'returnToUser' alias it was renamed from."""
+        config = [
+            {"type": "Standard", "title": "N1"},
+            {"type": "Standard", "title": "N2 (Responder)", "is_responder": True},
             {"type": "Standard", "title": "N3 (Post)"},
         ]
         mock_node_handlers["Standard"].handle.side_effect = ["Out1", "Out2 User", "Out3"]
@@ -394,11 +413,11 @@ class TestWorkflowProcessorHelpers:
 
 
 class TestEndpointAndPresetVariableSubstitution:
-    """Tests for endpoint and preset variable substitution - covering the critical gap that caused the bug."""
+    """Tests for endpoint and preset variable substitution, covering the critical gap that caused the bug."""
 
     def test_both_hardcoded_no_variables(self, workflow_processor_factory, mock_node_handlers,
                                         mock_llm_handler_service, mock_workflow_variable_service):
-        """Verifies that BOTH hardcoded endpoints and presets WITHOUT variables work correctly - most common case."""
+        """Verifies that BOTH hardcoded endpoints and presets WITHOUT variables work correctly (most common case)."""
         config = [{"type": "Standard", "endpointName": "HardcodedEndpoint", "preset": "HardcodedPreset"}]
         mock_node_handlers["Standard"].handle.return_value = "Response"
         processor = workflow_processor_factory(configs=config, stream=False)
@@ -879,8 +898,12 @@ class TestNodeExecutionLogging:
 
     @patch('Middleware.workflows.processors.workflows_processor.VALID_NODE_TYPES', MOCK_VALID_TYPES)
     def test_node_execution_info_is_collected(self, workflow_processor_factory, mock_node_handlers,
-                                              mock_workflow_variable_service):
-        """Verifies that NodeExecutionInfo objects are created for each node."""
+                                              mock_workflow_variable_service, mocker):
+        """Verifies that a NodeExecutionInfo object is actually collected for EVERY
+        node (index/type/name), not merely that the handlers were called. Spies on
+        the summary logger so the collected list itself is asserted; deleting the
+        info-collection would still leave the handler calls intact, so the prior
+        call-count-only assertion could not catch that regression."""
         config = [
             {"type": "Standard", "title": "First Node", "endpointName": "Endpoint1"},
             {"type": "Standard", "agentName": "Second Agent", "endpointName": "Endpoint2"},
@@ -890,6 +913,7 @@ class TestNodeExecutionLogging:
         mock_node_handlers["Tool"].handle.return_value = "ToolResponse"
 
         processor = workflow_processor_factory(configs=config, stream=False)
+        summary_spy = mocker.spy(processor, '_log_node_execution_summary')
 
         # Execute the workflow
         list(processor.execute())
@@ -897,6 +921,13 @@ class TestNodeExecutionLogging:
         # All handlers should have been called
         assert mock_node_handlers["Standard"].handle.call_count == 2
         mock_node_handlers["Tool"].handle.assert_called_once()
+
+        # One NodeExecutionInfo per node, in order, with the right identity fields.
+        summary_spy.assert_called_once()
+        infos = summary_spy.call_args[0][0]
+        assert [i.node_index for i in infos] == [1, 2, 3]
+        assert [i.node_type for i in infos] == ["Standard", "Standard", "Tool"]
+        assert [i.node_name for i in infos] == ["First Node", "Second Agent", "N/A"]
 
     @patch('Middleware.workflows.processors.workflows_processor.VALID_NODE_TYPES', MOCK_VALID_TYPES)
     def test_get_node_name_prefers_title(self, workflow_processor_factory, mock_node_handlers):
@@ -1305,3 +1336,450 @@ class TestLowercaseToolCallFunctionNames:
 
         assert len(result_list) == 1
         assert result_list[0]['tool_calls'][0]['function']['name'] == 'get_weather'
+
+
+class TestAddGenerationPromptDerivation:
+    """Pins the addGenerationPrompt value derived in _process_section and passed
+    to load_model_from_config. The rules differ for responding vs non-responding
+    nodes and interact with non_responder_flag, forceGenerationPromptIfEndpointAllows,
+    addUserTurnTemplate, and blockGenerationPrompt."""
+
+    @pytest.mark.parametrize("node_flags, non_responder_flag, is_responder, expected", [
+        # --- Responding node (single node => implicit responder) ---
+        # Default: normal responder gets the generation prompt suppressed.
+        ({}, None, True, False),
+        # force flag lifts the suppression -> None (endpoint decides).
+        ({"forceGenerationPromptIfEndpointAllows": True}, None, True, None),
+        # addUserTurnTemplate also lifts the suppression.
+        ({"addUserTurnTemplate": True}, None, True, None),
+        # blockGenerationPrompt wins over the force flag.
+        ({"forceGenerationPromptIfEndpointAllows": True, "blockGenerationPrompt": True}, None, True, False),
+        # Workflow-level nonResponder flag: the responder branch no longer suppresses.
+        ({}, True, True, None),
+        # ...unless blockGenerationPrompt forces it off again.
+        ({"blockGenerationPrompt": True}, True, True, False),
+        # --- Non-responding node (first of two nodes) ---
+        # Default: suppressed.
+        ({}, None, False, False),
+        # force flag -> None.
+        ({"forceGenerationPromptIfEndpointAllows": True}, None, False, None),
+        # addUserTurnTemplate -> None.
+        ({"addUserTurnTemplate": True}, None, False, None),
+        # blockGenerationPrompt wins over addUserTurnTemplate.
+        ({"addUserTurnTemplate": True, "blockGenerationPrompt": True}, None, False, False),
+    ])
+    def test_add_generation_prompt_value(self, workflow_processor_factory, mock_node_handlers,
+                                         mock_llm_handler_service, node_flags, non_responder_flag,
+                                         is_responder, expected):
+        node_under_test = {"type": "Standard", "endpointName": "EP", **node_flags}
+        if is_responder:
+            # Single node: implicit responder.
+            configs = [node_under_test]
+        else:
+            # Node under test runs first as a non-responder; the trailing node has
+            # no endpoint, so load_model_from_config is only called for the first.
+            configs = [node_under_test, {"type": "Standard"}]
+        mock_node_handlers["Standard"].handle.return_value = "resp"
+        processor = workflow_processor_factory(configs=configs, stream=False,
+                                               non_responder_flag=non_responder_flag)
+
+        list(processor.execute())
+
+        mock_llm_handler_service.load_model_from_config.assert_called_once()
+        call = mock_llm_handler_service.load_model_from_config.call_args
+        assert call.kwargs["addGenerationPrompt"] is expected
+
+
+class TestPostProcessLlmOutput:
+    """Tests the post_process_llm_output call on non-streaming node results.
+    Note the mock_processor_utils fixture identity-mocks the function; tests
+    that need to observe its effect override the side_effect."""
+
+    def test_string_result_with_endpoint_is_post_processed(self, workflow_processor_factory, mock_node_handlers,
+                                                           mock_processor_utils, mocker):
+        """A non-streaming string result from a node with an endpoint is passed
+        through post_process_llm_output, and the processed value is what the
+        workflow yields."""
+        endpoint_config = {"endpoint": "http://localhost:5001"}
+        mocker.patch('Middleware.workflows.processors.workflows_processor.get_endpoint_config',
+                     return_value=endpoint_config)
+        mock_processor_utils["post_process"].side_effect = \
+            lambda content, ep_config, node_config: content + " [post-processed]"
+        config = [{"type": "Standard", "endpointName": "EP"}]
+        mock_node_handlers["Standard"].handle.return_value = "raw output"
+        processor = workflow_processor_factory(configs=config, stream=False)
+
+        result_list = list(processor.execute())
+
+        mock_processor_utils["post_process"].assert_called_once_with(
+            "raw output", endpoint_config, {"type": "Standard", "endpointName": "EP"})
+        assert result_list == ["raw output [post-processed]"]
+
+    def test_dict_result_with_empty_content_is_not_post_processed(self, workflow_processor_factory,
+                                                                  mock_node_handlers,
+                                                                  mock_processor_utils, mocker):
+        """A tool-call dict with no text content has nothing to clean and passes through untouched."""
+        mocker.patch('Middleware.workflows.processors.workflows_processor.get_endpoint_config',
+                     return_value={"endpoint": "http://localhost:5001"})
+        tool_call_result = {"content": "", "tool_calls": [{"id": "c1"}], "finish_reason": "tool_calls"}
+        config = [{"type": "Standard", "endpointName": "EP"}]
+        mock_node_handlers["Standard"].handle.return_value = tool_call_result
+        processor = workflow_processor_factory(configs=config, stream=False)
+
+        result_list = list(processor.execute())
+
+        mock_processor_utils["post_process"].assert_not_called()
+        assert result_list[0] is tool_call_result
+
+    def test_dict_result_content_is_post_processed_tool_calls_untouched(self, workflow_processor_factory,
+                                                                        mock_node_handlers,
+                                                                        mock_processor_utils, mocker):
+        """A tool-call dict's text content gets the same cleaning (think removal,
+        prefix stripping) as a plain string response; the tool_calls ride along
+        unmodified. Mirrors the streaming path, where text chunks run through the
+        remover while tool-call chunks bypass it."""
+        endpoint_config = {"endpoint": "http://localhost:5001"}
+        mocker.patch('Middleware.workflows.processors.workflows_processor.get_endpoint_config',
+                     return_value=endpoint_config)
+        mock_processor_utils["post_process"].side_effect = \
+            lambda content, ep_config, node_config: content.replace("<think>x</think>", "")
+        tool_calls = [{"id": "c1", "function": {"name": "calc", "arguments": "{}"}}]
+        tool_call_result = {"content": "<think>x</think>Checking now.",
+                            "tool_calls": tool_calls, "finish_reason": "tool_calls"}
+        config = [{"type": "Standard", "endpointName": "EP"}]
+        mock_node_handlers["Standard"].handle.return_value = tool_call_result
+        processor = workflow_processor_factory(configs=config, stream=False)
+
+        result_list = list(processor.execute())
+
+        mock_processor_utils["post_process"].assert_called_once_with(
+            "<think>x</think>Checking now.", endpoint_config, {"type": "Standard", "endpointName": "EP"})
+        assert result_list[0]["content"] == "Checking now."
+        assert result_list[0]["tool_calls"] is tool_calls
+        assert result_list[0]["finish_reason"] == "tool_calls"
+
+    def test_endpointless_node_is_not_post_processed(self, workflow_processor_factory, mock_node_handlers,
+                                                     mock_processor_utils):
+        """A string result from a node without an endpoint skips post-processing."""
+        config = [{"type": "Standard"}]
+        mock_node_handlers["Standard"].handle.return_value = "raw output"
+        processor = workflow_processor_factory(configs=config, stream=False)
+
+        result_list = list(processor.execute())
+
+        mock_processor_utils["post_process"].assert_not_called()
+        assert result_list == ["raw output"]
+
+
+class TestStreamingSubWorkflowSseReassembly:
+    """Tests that the SSE stream from a streaming CustomWorkflow responder is
+    reassembled into plain text for downstream agent#Output variables."""
+
+    def test_sub_workflow_sse_content_becomes_agent_output(self, workflow_processor_factory, mock_node_handlers):
+        sse_chunks = [
+            'data: {"choices": [{"delta": {"content": "Hello "}}]}\n\n',
+            'data: {"choices": [{"delta": {"content": "world"}}]}\n\n',
+            'data: {"choices": [{"delta": {}}]}\n\n',  # no content key -> ignored
+            'data: not-json\n\n',  # malformed payload -> ignored
+            'data: [DONE]\n\n',
+        ]
+        mock_node_handlers["CustomWorkflow"].handle.return_value = (c for c in sse_chunks)
+        mock_node_handlers["Standard"].handle.return_value = "post output"
+        configs = [
+            {"type": "CustomWorkflow", "returnToUser": True},
+            {"type": "Standard", "title": "post-node"},
+        ]
+        processor = workflow_processor_factory(configs=configs, stream=True)
+
+        yielded = list(processor.execute())
+
+        # The raw SSE chunks pass through to the client untouched...
+        assert yielded == sse_chunks
+        # ...while the later node's context sees the reassembled text.
+        context = mock_node_handlers["Standard"].handle.call_args[0][0]
+        assert context.agent_outputs["agent1Output"] == "Hello world"
+
+
+class TestTimestampedMessagesSentToHandler:
+    """Tests that addDiscussionIdTimestampsForLLM swaps the handler's messages
+    for the TimestampService-formatted ones (and only when appropriate)."""
+
+    @pytest.mark.parametrize("use_relative", [False, True])
+    def test_formatted_messages_are_passed_to_handler(self, workflow_processor_factory, mock_node_handlers,
+                                                      mock_internal_services, use_relative):
+        config = [{"type": "Standard", "addDiscussionIdTimestampsForLLM": True}]
+        if use_relative:
+            config[0]["useRelativeTimestamps"] = True
+        stamped_messages = [{"role": "user", "content": "[Sent 5 minutes ago] hello"}]
+        mock_timestamp_service = mock_internal_services["timestamp"]
+        mock_timestamp_service.format_messages_with_timestamps.return_value = stamped_messages
+        mock_node_handlers["Standard"].handle.return_value = "resp"
+        processor = workflow_processor_factory(configs=config, discussion_id="disc-123")
+
+        list(processor.execute())
+
+        mock_timestamp_service.format_messages_with_timestamps.assert_called_once_with(
+            messages=[{"role": "user", "content": "hello"}],
+            discussion_id="disc-123",
+            use_relative_time=use_relative,
+            encryption_key=None,
+            api_key_hash=None,
+        )
+        context = mock_node_handlers["Standard"].handle.call_args[0][0]
+        assert context.messages == stamped_messages
+
+    def test_formatting_is_skipped_for_non_responder_workflows(self, workflow_processor_factory,
+                                                               mock_node_handlers, mock_internal_services):
+        """With non_responder_flag set, the node keeps the raw messages."""
+        config = [{"type": "Standard", "addDiscussionIdTimestampsForLLM": True}]
+        original_messages = [{"role": "user", "content": "hello"}]
+        mock_timestamp_service = mock_internal_services["timestamp"]
+        mock_node_handlers["Standard"].handle.return_value = "resp"
+        processor = workflow_processor_factory(configs=config, discussion_id="disc-123",
+                                               messages=list(original_messages), non_responder_flag=True)
+
+        list(processor.execute())
+
+        mock_timestamp_service.format_messages_with_timestamps.assert_not_called()
+        context = mock_node_handlers["Standard"].handle.call_args[0][0]
+        assert context.messages == original_messages
+
+
+class TestSubWorkflowStreamReassemblyPerFormat:
+    """The full-response reconstruction must parse each client-facing format's
+    own chunk shape: Ollama front-ends yield NDJSON without a 'data:' prefix,
+    and the legacy completions format carries tokens under choices[0].text.
+    Before this was format-aware, those front-ends reassembled to '' and
+    post-return nodes saw an empty responder output."""
+
+    def _run(self, workflow_processor_factory, mock_node_handlers, mocker, api_type, chunks):
+        mocker.patch(
+            'Middleware.workflows.processors.workflows_processor.instance_global_variables.get_api_type',
+            return_value=api_type)
+        mock_node_handlers["CustomWorkflow"].handle.return_value = (c for c in chunks)
+        mock_node_handlers["Standard"].handle.return_value = "post output"
+        configs = [
+            {"type": "CustomWorkflow", "returnToUser": True},
+            {"type": "Standard", "title": "post-node"},
+        ]
+        processor = workflow_processor_factory(configs=configs, stream=True)
+        yielded = list(processor.execute())
+        assert yielded == chunks, "Chunks must still pass through to the client untouched"
+        context = mock_node_handlers["Standard"].handle.call_args[0][0]
+        return context.agent_outputs["agent1Output"]
+
+    def test_ollama_chat_ndjson_chunks_reassemble(self, workflow_processor_factory, mock_node_handlers, mocker):
+        chunks = [
+            '{"model": "m", "message": {"role": "assistant", "content": "Hello "}, "done": false}\n',
+            '{"model": "m", "message": {"role": "assistant", "content": "world"}, "done": false}\n',
+            '{"model": "m", "message": {"role": "assistant", "content": ""}, "done": true, "done_reason": "stop"}\n',
+        ]
+        result = self._run(workflow_processor_factory, mock_node_handlers, mocker, "ollamaapichat", chunks)
+        assert result == "Hello world"
+
+    def test_ollama_generate_ndjson_chunks_reassemble(self, workflow_processor_factory, mock_node_handlers, mocker):
+        chunks = [
+            '{"model": "m", "response": "Hello ", "done": false}\n',
+            '{"model": "m", "response": "world", "done": false}\n',
+            '{"model": "m", "response": "", "done": true, "done_reason": "stop"}\n',
+        ]
+        result = self._run(workflow_processor_factory, mock_node_handlers, mocker, "ollamagenerate", chunks)
+        assert result == "Hello world"
+
+    def test_openai_completions_chunks_reassemble(self, workflow_processor_factory, mock_node_handlers, mocker):
+        chunks = [
+            'data: {"choices": [{"text": "Hello ", "index": 0}]}\n\n',
+            'data: {"choices": [{"text": "world", "index": 0}]}\n\n',
+            'data: [DONE]\n\n',
+        ]
+        result = self._run(workflow_processor_factory, mock_node_handlers, mocker, "openaicompletion", chunks)
+        assert result == "Hello world"
+
+
+class TestExtractStreamChunkToken:
+    """Direct unit tests of the per-format chunk token extractor."""
+
+    def _extract(self, chunk, output_format):
+        from Middleware.workflows.processors.workflows_processor import WorkflowProcessor
+        return WorkflowProcessor._extract_stream_chunk_token(chunk, output_format)
+
+    def test_content_containing_data_prefix_is_not_mangled(self):
+        chunk = 'data: {"choices": [{"delta": {"content": "say data: hi"}}]}\n\n'
+        assert self._extract(chunk, "openaichatcompletion") == "say data: hi"
+
+    def test_done_sentinel_returns_empty(self):
+        assert self._extract("data: [DONE]\n\n", "openaichatcompletion") == ""
+
+    def test_heartbeat_comment_returns_empty(self):
+        assert self._extract(":\n\n", "openaichatcompletion") == ""
+
+    def test_ollama_heartbeat_returns_empty(self):
+        chunk = '{"model":"","created_at":"","message":{"role":"assistant","content":""},"done":false}\n'
+        assert self._extract(chunk, "ollamaapichat") == ""
+
+    def test_non_dict_json_returns_empty(self):
+        assert self._extract("data: 123\n\n", "openaichatcompletion") == ""
+
+    def test_malformed_json_returns_empty(self):
+        assert self._extract("data: {broken\n\n", "openaichatcompletion") == ""
+        assert self._extract("{broken\n", "ollamaapichat") == ""
+
+
+class TestExecutionContextPopulation:
+    """The central architectural pattern (Dev README §4): the processor assembles a
+    fully populated ExecutionContext per node. Pins that request-scoped fields reach
+    the handler, since handlers depend on reading them off the context."""
+
+    def test_context_carries_request_scoped_fields(self, workflow_processor_factory, mock_node_handlers):
+        """tools, tool_choice, workflow_config, node_handlers, workflow_manager, and the
+        id fields all land on the ExecutionContext handed to the node handler."""
+        tools = [{"type": "function", "function": {"name": "get_weather"}}]
+        config = [{"type": "Standard"}]
+        mock_node_handlers["Standard"].handle.return_value = "resp"
+        processor = workflow_processor_factory(configs=config, stream=False,
+                                               tools=tools, tool_choice="auto")
+
+        list(processor.execute())
+
+        context = mock_node_handlers["Standard"].handle.call_args[0][0]
+        assert context.tools is tools
+        assert context.tool_choice == "auto"
+        assert context.request_id == "req-123"
+        assert context.workflow_id == "wf-123"
+        assert context.discussion_id == "disc-123"
+        assert context.workflow_config["top_level_var"] == "value"
+        assert context.node_handlers is mock_node_handlers
+        # The sub-workflow reference is threaded from the CustomWorkflow handler.
+        assert context.workflow_manager is mock_node_handlers["CustomWorkflow"].workflow_manager
+
+    def test_context_encryption_fields_none_without_api_key(self, workflow_processor_factory, mock_node_handlers):
+        """With no api_key, the derived encryption_key and api_key_hash are None
+        (no PBKDF2 derivation, plaintext/flat-directory behavior)."""
+        config = [{"type": "Standard"}]
+        mock_node_handlers["Standard"].handle.return_value = "resp"
+        processor = workflow_processor_factory(configs=config, stream=False, api_key=None)
+
+        list(processor.execute())
+
+        context = mock_node_handlers["Standard"].handle.call_args[0][0]
+        assert context.api_key is None
+        assert context.encryption_key is None
+        assert context.api_key_hash is None
+
+
+class TestPostReturnNodeSeesResponderOutput:
+    """Non-streaming complement to TestStreamingSubWorkflowSseReassembly: a responder
+    that is not the last node returns to the user, and a later (post-return)
+    non-responder node still executes and sees the responder's output as agent#Output."""
+
+    def test_post_return_node_receives_responder_output(self, workflow_processor_factory, mock_node_handlers):
+        configs = [
+            {"type": "Standard", "title": "N1"},
+            {"type": "Standard", "title": "N2 (Responder)", "returnToUser": True},
+            {"type": "Tool", "title": "N3 (Post)"},
+        ]
+        mock_node_handlers["Standard"].handle.side_effect = ["Out1", "Responder Out"]
+        mock_node_handlers["Tool"].handle.return_value = "Post Out"
+        processor = workflow_processor_factory(configs=configs, stream=False)
+
+        result = list(processor.execute())
+
+        # Only the responder returns to the user...
+        assert result == ["Responder Out"]
+        # ...but the post-return node ran and saw both prior outputs.
+        post_context = mock_node_handlers["Tool"].handle.call_args[0][0]
+        assert post_context.agent_outputs["agent1Output"] == "Out1"
+        assert post_context.agent_outputs["agent2Output"] == "Responder Out"
+
+
+class TestGeneratorExitReleasesLocks:
+    """A streaming consumer that stops early raises GeneratorExit at the suspended
+    yield inside execute(). The except clause re-raises it cleanly and the finally
+    block must still release the node locks (Dev README §5: cleanup on teardown)."""
+
+    def test_generator_close_midstream_still_unlocks(self, workflow_processor_factory,
+                                                     mock_node_handlers, mock_internal_services):
+        # Pre-formatted SSE from a CustomWorkflow responder passes straight through
+        # execute()'s `for chunk in result_gen: yield chunk`, giving a clean
+        # suspension point to close on.
+        def chunks():
+            yield "data: a\n\n"
+            yield "data: b\n\n"
+            yield "data: [DONE]\n\n"
+        mock_node_handlers["CustomWorkflow"].handle.return_value = chunks()
+        configs = [{"type": "CustomWorkflow", "returnToUser": True}]
+        processor = workflow_processor_factory(configs=configs, stream=True)
+
+        gen = processor.execute()
+        first = next(gen)  # consume one chunk, suspending execute() at the yield
+        assert first == "data: a\n\n"
+        gen.close()  # raises GeneratorExit inside execute()
+
+        # The finally block ran despite the early teardown.
+        mock_internal_services["locking"].delete_node_locks.assert_called_once()
+
+
+class TestNumericConfigFieldResolution:
+    """Covers the numeric config coercion branches in _resolve_numeric_config_fields
+    beyond the maxResponseSizeInTokens int path already exercised elsewhere:
+    the float field, int-field float coercion, and the no-default error branch."""
+
+    def test_float_field_resolved_from_variable(self, workflow_processor_factory, mock_node_handlers,
+                                                mock_workflow_variable_service):
+        """A float config field ('percentile') holding a scoped variable is resolved
+        then coerced to float on the node config."""
+        config = [{"type": "Standard", "percentile": "{agent1Input}"}]
+        mock_node_handlers["Standard"].handle.return_value = "resp"
+        mock_workflow_variable_service.apply_early_variables.return_value = "0.75"
+        processor = workflow_processor_factory(configs=config, stream=False, scoped_inputs=["0.75"])
+
+        list(processor.execute())
+
+        context = mock_node_handlers["Standard"].handle.call_args[0][0]
+        assert context.config["percentile"] == 0.75
+        assert isinstance(context.config["percentile"], float)
+
+    def test_float_field_invalid_falls_back_to_default(self, workflow_processor_factory, mock_node_handlers,
+                                                       mock_workflow_variable_service, caplog):
+        """A non-float value for 'percentile' falls back to the 0.5 default with a warning."""
+        config = [{"type": "Standard", "percentile": "{agent1Input}"}]
+        mock_node_handlers["Standard"].handle.return_value = "resp"
+        mock_workflow_variable_service.apply_early_variables.return_value = "not_a_float"
+        processor = workflow_processor_factory(configs=config, stream=False, scoped_inputs=["not_a_float"])
+
+        list(processor.execute())
+
+        context = mock_node_handlers["Standard"].handle.call_args[0][0]
+        assert context.config["percentile"] == 0.5
+        assert "'percentile' resolved to non-float value" in caplog.text
+
+    def test_int_field_float_value_coerced_to_int(self, workflow_processor_factory, mock_node_handlers,
+                                                 mock_llm_handler_service):
+        """A float literal in an int config field is truncated to int and forwarded."""
+        config = [{"type": "Standard", "endpointName": "EP", "maxResponseSizeInTokens": 5000.0}]
+        mock_node_handlers["Standard"].handle.return_value = "resp"
+        processor = workflow_processor_factory(configs=config, stream=False)
+
+        list(processor.execute())
+
+        mock_llm_handler_service.load_model_from_config.assert_called_once_with(
+            "EP", None, False, 4096, 5000, addGenerationPrompt=ANY
+        )
+        context = mock_node_handlers["Standard"].handle.call_args[0][0]
+        assert context.config["maxResponseSizeInTokens"] == 5000
+        assert isinstance(context.config["maxResponseSizeInTokens"], int)
+
+    def test_int_field_no_default_non_int_logs_error_and_keeps_value(self, workflow_processor_factory,
+                                                                    mock_node_handlers, caplog):
+        """An int field whose default is None (e.g. maxTurnsToPull) given a non-numeric
+        value logs the 'no default is available' error and leaves the value unchanged."""
+        config = [{"type": "Standard", "maxTurnsToPull": "abc"}]
+        mock_node_handlers["Standard"].handle.return_value = "resp"
+        processor = workflow_processor_factory(configs=config, stream=False)
+
+        list(processor.execute())
+
+        assert "'maxTurnsToPull' resolved to non-integer value" in caplog.text
+        assert "no default is available" in caplog.text
+        context = mock_node_handlers["Standard"].handle.call_args[0][0]
+        assert context.config["maxTurnsToPull"] == "abc"

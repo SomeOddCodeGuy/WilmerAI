@@ -3,6 +3,16 @@ import json
 import pytest
 
 from Middleware.api import api_helpers
+from Middleware.api.app import app
+from Middleware.common import instance_global_variables
+
+
+@pytest.fixture(autouse=True)
+def reset_api_type():
+    """Clears the thread-local api_type after every test in this module so
+    values like "unsupported_api" cannot leak into later tests."""
+    yield
+    instance_global_variables.clear_api_type()
 
 
 @pytest.mark.parametrize("api_type, expected_method", [
@@ -43,42 +53,17 @@ def test_build_response_json_unsupported_type(monkeypatch):
         api_helpers.build_response_json("token")
 
 
-@pytest.mark.parametrize("chunk, expected_text", [
-    # OpenAI Chat SSE
-    ('data: {"choices": [{"delta": {"content": "Hello"}}]}', "Hello"),
-    # OpenAI Legacy Completion SSE
-    ('data: {"choices": [{"text": " World"}]}', " World"),
-    # Ollama Generate plain JSON string
-    ('{"response": "Ollama"}', "Ollama"),
-    # Ollama Chat plain JSON string
-    ('{"message": {"content": " Chat"}}', " Chat"),
-    # Direct dictionary
-    ({"choices": [{"delta": {"content": "Dict"}}]}, "Dict"),
-    # SSE Done signal
-    ('data: [DONE]', ""),
-    # Empty/None values
-    (None, ""),
-    ("", ""),
-    ("  ", ""),
-    # Malformed JSON
-    ('data: {"bad": json', ""),
-])
-def test_extract_text_from_chunk(chunk, expected_text):
-    assert api_helpers.extract_text_from_chunk(chunk) == expected_text
-
-
-@pytest.mark.parametrize("input_text, expected_output", [
-    ("Assistant: Hello", "Hello"),
-    ("  Assistant:  Hi there", "Hi there"),
-    ("No prefix here", "No prefix here"),
-    ("Assistant:", ""),
-])
-def test_remove_assistant_prefix(input_text, expected_output):
-    assert api_helpers.remove_assistant_prefix(input_text) == expected_output
-
-
 class TestWorkflowOverride:
     """Tests for workflow override functionality via model field."""
+
+    @pytest.fixture(autouse=True)
+    def reset_globals(self):
+        from Middleware.common import instance_global_variables
+        original_users = instance_global_variables.USERS
+        yield
+        instance_global_variables.USERS = original_users
+        instance_global_variables.clear_request_user()
+        instance_global_variables.clear_workflow_override()
 
     def test_get_model_name_without_override(self, mocker):
         """Tests that get_model_name returns just username when no override is set."""
@@ -108,6 +93,7 @@ class TestWorkflowOverride:
         from Middleware.common import instance_global_variables
         instance_global_variables.USERS = None
         user, workflow = api_helpers.parse_model_field('test_user:Coding_Workflow')
+        assert user is None
         assert workflow == 'Coding_Workflow'
 
     def test_parse_model_field_username_workflow_not_found(self, mocker):
@@ -132,6 +118,7 @@ class TestWorkflowOverride:
         from Middleware.common import instance_global_variables
         instance_global_variables.USERS = None
         user, workflow = api_helpers.parse_model_field('Coding_Workflow:latest')
+        assert user is None
         assert workflow == 'Coding_Workflow'
 
     def test_parse_model_field_username_workflow_latest(self, mocker):
@@ -141,6 +128,7 @@ class TestWorkflowOverride:
         instance_global_variables.USERS = None
         # After stripping :latest, becomes "test_user:Coding_Workflow"
         user, workflow = api_helpers.parse_model_field('test_user:Coding_Workflow:latest')
+        assert user is None
         assert workflow == 'Coding_Workflow'
 
     def test_set_workflow_override(self, mocker):
@@ -254,6 +242,19 @@ class TestMultiUserModelParsing:
         user, workflow = api_helpers.parse_model_field('coding')
         assert user is None
         assert workflow is None
+
+    def test_multi_user_unrecognized_user_with_colon_skips_shared_folder(self, mocker):
+        """In multi-user mode an unrecognized 'user:workflow' must NOT consult
+        the shared workflows folder: no request user is set yet, so that lookup
+        would crash (get_current_username raises in multi-user mode). The value
+        is simply rejected and require_identified_user() produces the 400."""
+        from Middleware.common import instance_global_variables
+        instance_global_variables.USERS = ['user-one', 'user-two']
+        mocker.patch(
+            'Middleware.api.api_helpers.workflow_exists_in_shared_folder',
+            side_effect=AssertionError("shared-folder lookup must not run in multi-user mode"))
+
+        assert api_helpers.parse_model_field('ghost:coding') == (None, None)
 
     def test_single_user_mode_legacy_behavior(self, mocker):
         """In single-user mode (USERS is None), existing behavior is preserved."""
@@ -448,3 +449,211 @@ class TestBuildResponseJsonToolCalls:
         api_helpers.build_response_json("token", "stop", tool_calls=tool_calls)
 
         mock_response_builder.build_ollama_generate_chunk.assert_called_once_with("token", "stop", None)
+
+
+class TestBuildResponseJsonFields:
+    """Tests for additional_fields merging and request_id pass-through in build_response_json."""
+
+    @pytest.fixture(autouse=True)
+    def reset_api_type(self):
+        from Middleware.common import instance_global_variables
+        yield
+        instance_global_variables.clear_api_type()
+
+    def test_additional_fields_merged_into_output(self, mocker):
+        """additional_fields entries are merged into the final JSON payload."""
+        mock_response_builder = mocker.patch('Middleware.api.api_helpers.response_builder')
+        from Middleware.common import instance_global_variables
+        instance_global_variables.set_api_type("openaichatcompletion")
+
+        mock_response_builder.build_openai_chat_completion_chunk.return_value = {"base": "value"}
+
+        result = api_helpers.build_response_json(
+            "tok", "stop", additional_fields={"extra": 123, "usage": {"total_tokens": 5}}
+        )
+
+        assert json.loads(result) == {"base": "value", "extra": 123, "usage": {"total_tokens": 5}}
+
+    def test_additional_fields_overwrite_builder_output(self, mocker):
+        """additional_fields entries overwrite keys already present in the builder output."""
+        mock_response_builder = mocker.patch('Middleware.api.api_helpers.response_builder')
+        from Middleware.common import instance_global_variables
+        instance_global_variables.set_api_type("openaicompletion")
+
+        mock_response_builder.build_openai_completion_chunk.return_value = {"model": "original"}
+
+        result = api_helpers.build_response_json("tok", "stop", additional_fields={"model": "override"})
+
+        assert json.loads(result) == {"model": "override"}
+
+    def test_request_id_reaches_ollama_generate_builder(self, mocker):
+        """An explicit request_id is passed positionally to build_ollama_generate_chunk."""
+        mock_response_builder = mocker.patch('Middleware.api.api_helpers.response_builder')
+        from Middleware.common import instance_global_variables
+        instance_global_variables.set_api_type("ollamagenerate")
+
+        mock_response_builder.build_ollama_generate_chunk.return_value = {"response": "ok"}
+
+        api_helpers.build_response_json("tok", "stop", request_id="req-42")
+
+        mock_response_builder.build_ollama_generate_chunk.assert_called_once_with("tok", "stop", "req-42")
+
+    def test_request_id_reaches_ollama_chat_builder(self, mocker):
+        """An explicit request_id is passed positionally to build_ollama_chat_chunk."""
+        mock_response_builder = mocker.patch('Middleware.api.api_helpers.response_builder')
+        from Middleware.common import instance_global_variables
+        instance_global_variables.set_api_type("ollamaapichat")
+
+        mock_response_builder.build_ollama_chat_chunk.return_value = {"message": {}}
+
+        api_helpers.build_response_json("tok", "stop", request_id="req-42")
+
+        mock_response_builder.build_ollama_chat_chunk.assert_called_once_with(
+            "tok", "stop", "req-42", tool_calls=None
+        )
+
+
+@pytest.mark.parametrize("output_format, expected", [
+    # Ollama formats stream newline-delimited JSON (bare data + single newline)
+    ("ollamagenerate", '{"x": 1}\n'),
+    ("ollamaapichat", '{"x": 1}\n'),
+    # Everything else uses the SSE "data: ...\n\n" contract
+    ("openaichatcompletion", 'data: {"x": 1}\n\n'),
+    ("openaicompletion", 'data: {"x": 1}\n\n'),
+    ("openai", 'data: {"x": 1}\n\n'),
+    ("anything_else", 'data: {"x": 1}\n\n'),
+])
+def test_sse_format(output_format, expected):
+    """sse_format wraps Ollama output as bare NDJSON and everything else as SSE."""
+    assert api_helpers.sse_format('{"x": 1}', output_format) == expected
+
+
+class TestExtractApiKey:
+    """Tests for extracting the API key from the Authorization header."""
+
+    def test_bearer_key_returned(self):
+        """A 'Bearer <key>' header yields the key."""
+        with app.test_request_context(headers={'Authorization': 'Bearer my-secret-key'}):
+            assert api_helpers.extract_api_key() == 'my-secret-key'
+
+    def test_bearer_key_is_stripped(self):
+        """Whitespace around the key is stripped."""
+        with app.test_request_context(headers={'Authorization': 'Bearer   spaced-key  '}):
+            assert api_helpers.extract_api_key() == 'spaced-key'
+
+    def test_bearer_with_empty_key_returns_none(self):
+        """A 'Bearer ' header with no key yields None."""
+        with app.test_request_context(headers={'Authorization': 'Bearer '}):
+            assert api_helpers.extract_api_key() is None
+
+    def test_no_authorization_header_returns_none(self):
+        """No Authorization header yields None."""
+        with app.test_request_context():
+            assert api_helpers.extract_api_key() is None
+
+    def test_non_bearer_scheme_returns_none(self):
+        """A non-Bearer scheme (e.g. Basic) yields None."""
+        with app.test_request_context(headers={'Authorization': 'Basic dXNlcjpwYXNz'}):
+            assert api_helpers.extract_api_key() is None
+
+
+class TestExtractIdempotencyKey:
+    """Tests for extracting the client idempotency key from the request headers."""
+
+    def test_present_key_returned(self):
+        """An X-Idempotency-Key header yields its value."""
+        key = "9f6c1c1e-8e42-4a6f-b1a2-3c4d5e6f7a8b"
+        with app.test_request_context(headers={'X-Idempotency-Key': key}):
+            assert api_helpers.extract_idempotency_key() == key
+
+    def test_key_is_stripped(self):
+        """Surrounding whitespace is stripped."""
+        with app.test_request_context(headers={'X-Idempotency-Key': '  abc123  '}):
+            assert api_helpers.extract_idempotency_key() == 'abc123'
+
+    def test_header_is_case_insensitive(self):
+        """HTTP header names are case-insensitive."""
+        with app.test_request_context(headers={'x-idempotency-key': 'abc123'}):
+            assert api_helpers.extract_idempotency_key() == 'abc123'
+
+    def test_absent_header_returns_none(self):
+        """No header means a legacy client -> None."""
+        with app.test_request_context():
+            assert api_helpers.extract_idempotency_key() is None
+
+    def test_empty_key_returns_none(self):
+        """An empty (or whitespace-only) value is treated as absent."""
+        with app.test_request_context(headers={'X-Idempotency-Key': '   '}):
+            assert api_helpers.extract_idempotency_key() is None
+
+    def test_over_length_key_returns_none(self):
+        """A value longer than the contract's 128-char limit is ignored."""
+        too_long = "x" * (api_helpers.MAX_IDEMPOTENCY_KEY_LENGTH + 1)
+        with app.test_request_context(headers={'X-Idempotency-Key': too_long}):
+            assert api_helpers.extract_idempotency_key() is None
+
+    def test_max_length_key_is_accepted(self):
+        """A value exactly at the limit is accepted."""
+        at_limit = "x" * api_helpers.MAX_IDEMPOTENCY_KEY_LENGTH
+        with app.test_request_context(headers={'X-Idempotency-Key': at_limit}):
+            assert api_helpers.extract_idempotency_key() == at_limit
+
+
+class TestWorkflowExistsForUser:
+    """Tests for _workflow_exists_for_user shared-folder resolution."""
+
+    def test_uses_shared_override_folder_from_user_config(self, mocker, tmp_path):
+        """The user's sharedWorkflowsSubDirectoryOverride determines the folder checked."""
+        (tmp_path / 'Workflows' / 'custom_shared' / 'my_workflow').mkdir(parents=True)
+        mocker.patch(
+            'Middleware.api.api_helpers.get_user_config_for',
+            return_value={'sharedWorkflowsSubDirectoryOverride': 'custom_shared'}
+        )
+        mocker.patch(
+            'Middleware.api.api_helpers.get_root_config_directory',
+            return_value=str(tmp_path)
+        )
+
+        assert api_helpers._workflow_exists_for_user('my_workflow', 'alice') is True
+        assert api_helpers._workflow_exists_for_user('missing_workflow', 'alice') is False
+
+    def test_falls_back_to_shared_folder_without_override(self, mocker, tmp_path):
+        """Without an override in the config, the '_shared' folder is checked."""
+        (tmp_path / 'Workflows' / '_shared' / 'my_workflow').mkdir(parents=True)
+        mocker.patch('Middleware.api.api_helpers.get_user_config_for', return_value={})
+        mocker.patch(
+            'Middleware.api.api_helpers.get_root_config_directory',
+            return_value=str(tmp_path)
+        )
+
+        assert api_helpers._workflow_exists_for_user('my_workflow', 'alice') is True
+        assert api_helpers._workflow_exists_for_user('missing_workflow', 'alice') is False
+
+    def test_config_error_falls_back_to_shared_folder(self, mocker, tmp_path):
+        """If the user config cannot be loaded, '_shared' is used as the folder."""
+        (tmp_path / 'Workflows' / '_shared' / 'my_workflow').mkdir(parents=True)
+        mocker.patch(
+            'Middleware.api.api_helpers.get_user_config_for',
+            side_effect=FileNotFoundError("no config")
+        )
+        mocker.patch(
+            'Middleware.api.api_helpers.get_root_config_directory',
+            return_value=str(tmp_path)
+        )
+
+        assert api_helpers._workflow_exists_for_user('my_workflow', 'alice') is True
+
+    @pytest.mark.parametrize("unsafe_name", ['../evil', '/abs/path', 'sub/dir', '..'])
+    def test_unsafe_workflow_name_rejected_before_any_lookup(self, mocker, unsafe_name):
+        """The workflow name comes from the request's model field; a traversal
+        or absolute value must be rejected outright, without loading any config
+        or touching the filesystem (which could resolve outside the user's
+        shared folder)."""
+        mocker.patch(
+            'Middleware.api.api_helpers.get_user_config_for',
+            side_effect=AssertionError("config must not be read for an unsafe name"))
+        mocker.patch(
+            'Middleware.api.api_helpers.get_root_config_directory',
+            side_effect=AssertionError("filesystem must not be probed for an unsafe name"))
+
+        assert api_helpers._workflow_exists_for_user(unsafe_name, 'alice') is False

@@ -82,7 +82,7 @@ def test_chunk_messages_with_hashes_last_message(mocker, sample_messages):
 
     result = chunk_messages_with_hashes(sample_messages, chunk_size=100, use_first_message_hash=False)
 
-    mock_chunker.assert_called_once_with(sample_messages, 100, 0)
+    mock_chunker.assert_called_once_with(sample_messages, 100)
     assert len(result) == 2
 
     assert result[0][0] == "You are a helpful assistant. Hello, who are you?"
@@ -104,15 +104,34 @@ def test_chunk_messages_with_hashes_first_message(mocker, sample_messages):
     chunk2 = [sample_messages[2], sample_messages[3]]
     mock_chunker.return_value = [chunk1, chunk2]
 
-    result = chunk_messages_with_hashes(sample_messages, chunk_size=100, use_first_message_hash=True,
-                                        max_messages_before_chunk=5)
+    result = chunk_messages_with_hashes(sample_messages, chunk_size=100, use_first_message_hash=True)
 
-    mock_chunker.assert_called_once_with(sample_messages, 100, 5)
+    mock_chunker.assert_called_once_with(sample_messages, 100)
     assert len(result) == 2
 
     assert result[0][1] == hash_single_message(chunk1[0])
 
     assert result[1][1] == hash_single_message(chunk2[0])
+
+
+def test_chunk_messages_with_hashes_filters_empty_chunks(mocker, sample_messages):
+    """
+    Empty chunks returned by the chunker are filtered out rather than producing
+    zero-content hash tuples (an unfiltered empty chunk would also crash on
+    chunk[-1] when hashing).
+    """
+    mock_chunker = mocker.patch('Middleware.utilities.hashing_utils.chunk_messages_by_token_size')
+    mocker.patch('Middleware.utilities.hashing_utils.messages_to_text_block',
+                 side_effect=lambda x: " ".join(msg['content'] for msg in x))
+
+    chunk1 = [sample_messages[0], sample_messages[1]]
+    mock_chunker.return_value = [[], chunk1]
+
+    result = chunk_messages_with_hashes(sample_messages, chunk_size=100)
+
+    assert len(result) == 1
+    assert result[0][0] == "You are a helpful assistant. Hello, who are you?"
+    assert result[0][1] == hash_single_message(chunk1[-1])
 
 
 @pytest.mark.parametrize(
@@ -175,17 +194,76 @@ def test_find_last_matching_hash_message(sample_messages, description, hashed_ch
 
 def test_find_last_matching_hash_message_images_key_hashed_by_content(sample_messages):
     """
-    Messages with the 'images' key are hashed by their text content, not image data.
-    A hash of the text content 'Look at this' should match the message at index 5.
+    Messages with the 'images' key are hashed by their text content only, not
+    by the image data. The image-bearing message ('Look at this', index 5) must
+    be inside the search window for this to be exercised, so the lookback is
+    narrowed to 1 (search_boundary = 7 - 1 = 6).
     """
     hashed_chunks_with_text_hash = [
         ("text", hash_single_message({"role": "user", "content": "Look at this"}))
     ]
 
-    # 7 messages, search_boundary = 7-4 = 3
-    # "Look at this" is at index 5, which is >= search_boundary (3), so it won't match
-    result = find_last_matching_hash_message(sample_messages, hashed_chunks_with_text_hash, skip_system=False)
-    assert result == 3  # search_boundary, no match found in valid range
+    # The content-only hash matches at index 5, returning 6 - 5 - 1 = 0 new
+    # messages. If the image data were part of the hash, no match would be
+    # found and the function would return the full boundary count of 6 instead,
+    # so this assertion requires an actual content-hash match.
+    result = find_last_matching_hash_message(
+        sample_messages, hashed_chunks_with_text_hash, skip_system=False,
+        turns_to_skip_looking_back=1
+    )
+    assert result == 0
+
+
+def test_find_last_matching_hash_message_match_at_boundary_returns_zero(sample_messages):
+    """
+    A stored hash matching the message exactly at index == search_boundary means
+    the memorized message slid into the skip zone (the conversation shrank by one,
+    e.g. a regeneration). The window therefore holds nothing new: the count clamps
+    to 0 rather than the historical -1.
+    """
+    # 7 messages, default turns_to_skip_looking_back=4 -> search_boundary = 3.
+    # "What is the weather like?" is the message at index 3.
+    hashed_chunks = [
+        ("text", hash_single_message({"role": "user", "content": "What is the weather like?"}))
+    ]
+
+    result = find_last_matching_hash_message(sample_messages, hashed_chunks, skip_system=False)
+
+    assert result == 0
+
+
+def test_find_last_matching_hash_message_zero_lookback_no_match(sample_messages):
+    """turns_to_skip_looking_back=0 makes the boundary equal the list length;
+    the search must not read past the end (historically an IndexError) and with
+    no match every message counts as new."""
+    hashed_chunks = [("text", "no-such-hash")]
+
+    result = find_last_matching_hash_message(
+        sample_messages, hashed_chunks, skip_system=False, turns_to_skip_looking_back=0
+    )
+
+    assert result == len(sample_messages)
+
+
+def test_find_last_matching_hash_message_zero_lookback_match_at_last(sample_messages):
+    """With zero lookback and the newest message already memorized, there is
+    nothing new to process."""
+    hashed_chunks = [("text", hash_single_message(sample_messages[-1]))]
+
+    result = find_last_matching_hash_message(
+        sample_messages, hashed_chunks, skip_system=False, turns_to_skip_looking_back=0
+    )
+
+    assert result == 0
+
+
+def test_find_last_matching_hash_message_empty_messages():
+    """An empty conversation must return 0, not crash on index 0."""
+    hashed_chunks = [("text", "some-hash")]
+
+    result = find_last_matching_hash_message([], hashed_chunks, skip_system=False)
+
+    assert result == 0
 
 
 # --- Tests for hash_message_with_images ---

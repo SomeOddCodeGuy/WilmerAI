@@ -32,14 +32,6 @@ _Last Updated: 2024-06-23_
 * Code: https://github.com/urllib3/urllib3/
 * License: https://github.com/urllib3/urllib3/blob/main/LICENSE.txt
 
-#### scikit-learn:
-
-_Last Updated: 2026-03-29_
-
-* License Type: `BSD 3-Clause "New" or "Revised" License`
-* Code: https://github.com/scikit-learn/scikit-learn/
-* License: https://github.com/scikit-learn/scikit-learn/blob/main/COPYING
-
 #### jinja:
 
 _Last Updated: 2024-08-17_

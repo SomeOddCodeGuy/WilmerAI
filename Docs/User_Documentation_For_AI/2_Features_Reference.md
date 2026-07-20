@@ -12,17 +12,28 @@ WilmerAI emulates OpenAI and Ollama APIs. Frontends connect to WilmerAI as if it
 ### Endpoints
 
 **OpenAI-compatible:**
-- `POST /v1/chat/completions` -- Chat completions (structured messages array). Primary endpoint.
-- `POST /v1/completions` -- Legacy text completions (single prompt string).
-- `GET /v1/models` -- List available workflows as "models."
+- `POST /v1/chat/completions`: Chat completions (structured messages array). Primary endpoint.
+- `POST /v1/completions`: Legacy text completions (single prompt string).
+- `GET /v1/models`: List available workflows as "models."
 
 **Ollama-compatible:**
-- `POST /api/chat` -- Chat completions.
-- `POST /api/generate` -- Text completions.
-- `GET /api/tags` -- List available models.
-- `DELETE /api/chat`, `DELETE /api/generate` -- Cancel in-progress request with `{"request_id": "..."}`.
+- `POST /api/chat`: Chat completions.
+- `POST /api/generate`: Text completions.
+- `GET /api/tags`: List available models.
+- `DELETE /api/chat`, `DELETE /api/generate`: Cancel in-progress request with `{"request_id": "..."}`.
 
-All POST endpoints support cancellation via client disconnection (close the HTTP connection).
+All POST endpoints support cancellation via client disconnection (close the HTTP connection). Disconnection
+cancels the backend generation and frees the request's slot, covering both mid-stream and pre-response
+(before the first token) disconnects.
+
+### Idempotent Retries
+
+The OpenAI completion endpoints (`/v1/chat/completions`, `/v1/completions`) honor an optional
+`X-Idempotency-Key` header (opaque string, <= 128 chars, case-insensitive). Send the same value across all
+retries of one logical request; use a fresh value per new request. When a key arrives that is still in flight,
+WilmerAI cancels the abandoned original and serves the new request fresh, so a retry never double-generates on
+the backend. Retry only on failures that happen before the response starts. Header absent = legacy behavior.
+Keys are process-local (not persisted across restarts).
 
 ### Streaming
 
@@ -39,9 +50,9 @@ conversation. WilmerAI strips the tag before processing.
 
 WilmerAI connects to LLM backends through three config layers:
 
-1. **Endpoint** (`Endpoints/`) -- Where: URL, model name, API key, prompt injection, response cleaning.
-2. **ApiType** (`ApiTypes/`) -- How: Maps property names to the backend's API schema (OpenAI, Ollama, Claude, etc.).
-3. **Preset** (`Presets/`) -- What: Generation parameters (temperature, top_p, stop sequences, etc.).
+1. **Endpoint** (`Endpoints/`): the "where". URL, model name, API key, prompt injection, response cleaning.
+2. **ApiType** (`ApiTypes/`): the "how". Maps property names to the backend's API schema (OpenAI, Ollama, Claude, etc.).
+3. **Preset** (`Presets/`): the "what". Generation parameters (temperature, top_p, stop sequences, etc.).
 
 Each workflow node specifies an `endpointName` and optionally a `preset`. Different nodes in the same workflow
 can use different endpoints, allowing you to mix local and cloud models in one request.
@@ -55,8 +66,8 @@ KoboldCpp, Llama.cpp, Text Generation WebUI, Apple MLX.
 
 Routes incoming requests to different workflows based on user intent. Uses a two-part system:
 
-1. **Routing config** (`Routing/`) -- Maps category names to workflows with descriptions.
-2. **Categorization workflow** -- A standard workflow that analyzes the prompt and outputs a category name.
+1. **Routing config** (`Routing/`): Maps category names to workflows with descriptions.
+2. **Categorization workflow**: A standard workflow that analyzes the prompt and outputs a category name.
 
 **How it works:** Request arrives -> categorization workflow runs -> outputs a category name (e.g., "CODING") ->
 matched to routing config -> corresponding workflow executes. If no match after `maxCategorizationAttempts`,
@@ -82,7 +93,7 @@ matching sub-workflow. See the Node Reference for properties.
 
 ## Nested Workflows (Parent/Child)
 
-The `CustomWorkflow` node executes another workflow file as a child. Child workflows run in isolated context --
+The `CustomWorkflow` node executes another workflow file as a child. Child workflows run in isolated context;
 they cannot access parent `{agent#Output}` variables. Data must be passed explicitly via `scoped_variables`,
 which the child receives as `{agent1Input}`, `{agent2Input}`, etc.
 
@@ -129,16 +140,17 @@ The `{time_context_summary}` variable provides a natural language summary:
 
 ## Memory System
 
-Three-part persistent memory tied to a `discussionId`:
+Four-part persistent memory tied to a `discussionId`:
 
-1. **Long-Term Memory File** (`<id>_memories.json`) -- Chronological summarized chunks.
-2. **Rolling Chat Summary** (`<id>_chat_summary.json`) -- Continuously updated high-level summary.
-3. **Vector Memory Database** (`<id>_vector_memory.db`) -- Structured memory objects indexed for full-text keyword search (SQLite FTS5/BM25).
+1. **Long-Term Memory File** (`<id>_memories.json`): Chronological summarized chunks.
+2. **Rolling Chat Summary** (`<id>_chat_summary.json`): Continuously updated high-level summary.
+3. **Vector Memory Database** (`vector_memory.db` in the discussion folder; a legacy `<id>_vector_memory.db` at the old `Public/` location keeps being used if present): Structured memory objects indexed for full-text keyword search (SQLite FTS5/BM25). Optionally also stores per-model embeddings (`embeddingEndpointName` in memory settings) enabling semantic/hybrid search on `VectorMemorySearch` (`searchMode`, merged via RRF); degrades to keyword search when embeddings are unavailable.
+4. **State Document** (`state_document.md`): Optional always-injected markdown snapshot of what is currently true (profile / world state); maintained by a merge sub-workflow (`useStateDocument`), read via `GetCurrentStateDocument`.
 
 **Writer nodes** (slow, run after response): `QualityMemory`, `chatSummarySummarizer`, `FullChatSummary` (default mode).
 
 **Reader nodes** (fast, use inline): `VectorMemorySearch`, `GetCurrentSummaryFromFile`, `RecentMemorySummarizerTool`,
-`GetCurrentMemoryFromFile`, `FullChatSummary` (with `isManualConfig: true`).
+`GetCurrentMemoryFromFile`, `GetCurrentStateDocument`, `FullChatSummary` (with `isManualConfig: true`).
 
 **Typical pattern:** Read memory -> LLM responds -> WorkflowLock -> QualityMemory runs in background.
 
@@ -155,8 +167,8 @@ See 5_Workflow_Memory.md for full memory node details and 4_Workflow_Variables.m
 ## Per-User Encryption and Data Isolation
 
 When a client sends `Authorization: Bearer <key>`:
-- **Directory isolation** activates automatically -- discussion files stored under a hash-based subdirectory.
-- **Encryption** activates if `encryptUsingApiKey: true` in user config -- files encrypted at rest with Fernet
+- **Directory isolation** activates automatically: discussion files stored under a hash-based subdirectory.
+- **Encryption** activates if `encryptUsingApiKey: true` in user config: files encrypted at rest with Fernet
   (AES-128-CBC + HMAC-SHA256) derived from the API key.
 
 When no API key is sent, behavior is unchanged (original directory, plaintext files).
@@ -186,8 +198,8 @@ Applies to POST endpoints only. GET (models list) and DELETE (cancellation) are 
 
 In multi-user mode, the concurrency gate is shared across all users, protecting shared LLM hardware. In `endpoint`
 mode the protection is preserved (only one LLM call at a time at `--concurrency 1`) while requests themselves can
-overlap freely -- useful for setups where workflows make outbound calls to services that may call back into the
-same Wilmer instance.
+overlap freely, which is useful for setups where workflows make outbound calls to services that may call back into
+the same Wilmer instance.
 
 ---
 
@@ -231,9 +243,9 @@ For controlled error reporting, raise `DynamicModuleError` from
 Agentic frontends can produce multiple assistant messages in a row, which most LLM APIs reject.
 WilmerAI offers two strategies on `Standard` nodes (only when `prompt` is empty):
 
-1. **Merge:** `mergeConsecutiveAssistantMessages: true` -- Collapse runs into one message. Optional delimiter
+1. **Merge:** Set `mergeConsecutiveAssistantMessages: true` to collapse runs into one message. Optional delimiter
    via `mergeConsecutiveAssistantMessagesDelimiter`.
-2. **Insert:** `insertUserTurnBetweenAssistantMessages: true` -- Add synthetic user messages between them.
+2. **Insert:** Set `insertUserTurnBetweenAssistantMessages: true` to add synthetic user messages between them.
    Customize text with `insertedUserTurnText` (default: `"Continue."`).
 
 If both are enabled, merging takes precedence. Tool-call sequences (`assistant -> tool -> assistant`) are
@@ -250,9 +262,32 @@ OpenAI, Claude, and Ollama backends.
 Only useful on the responding node. Set `includeToolCallsInConversation: true` to make tool call summaries
 visible in conversation variables for downstream nodes.
 
+For multi-round tool loops through an authored-prompt responder (a node with a `prompt` field), also set
+`appendNativeToolExchange: true`: the trailing assistant `tool_calls` turn and its `role:"tool"` results are
+then sent as native messages after the authored prompt (and excluded from the text transcript), so the model
+generates from the standard post-tool-result position instead of imitating tool syntax as text. Collection-mode
+responders (no `prompt`) already send native tool history. Completions-paradigm backends ignore tools entirely.
+
 Set `lowercaseToolCallFunctionNames: true` to lowercase function names in tool call responses before relaying
 them to the frontend. This fixes local models (Gemma, Qwen, etc.) that produce capitalized names like `Glob`
 instead of `glob`. Off by default; do not enable for frontends like Claude Code that expect original casing.
+
+## Structured Output (Grammar-Constrained Responses)
+
+Backends declare a per-request constraint mechanism in their ApiType config: `structuredOutput` block with `field`
+(the payload key, dotted for nesting) and `style` (`openaiJsonSchema` for llama.cpp/LM Studio/vLLM/OpenAI's
+`response_format`, `raw` for Ollama's `format`); absent = unsupported. Two uses:
+
+1. **Automatic tool enforcement**: when a request's `tool_choice` is a forced function or `"required"`, the round
+   is grammar-constrained to a tool-call JSON shape and converted back to a `tool_calls` response. Native tools are
+   dropped from that payload (schema+tools conflict on llama.cpp/Ollama) and injected as text. Output is
+   parse-checked with one redraw (some backends fail open). `tool_choice: "auto"` is never touched.
+2. **`structuredOutputFile` node property**: pins a node's output to a JSON Schema file from
+   `Public/Configs/StructuredOutputs/<sub>/` (sub = `structuredOutputConfigsSubDirectory` user key, default
+   username, root fallback). The output IS the constrained JSON text.
+
+Caveats: the model never sees the schema (describe the shape in the prompt too); disable thinking on constrained
+nodes; a 200 does not prove enforcement on fail-open backends.
 
 ---
 

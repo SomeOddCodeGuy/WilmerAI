@@ -68,6 +68,54 @@ def test_block_private_unresolvable_host_is_rejected(mocker):
     assert reason is not None and "could not be resolved" in reason
 
 
+@pytest.mark.parametrize("resolution_error", [
+    UnicodeError("IDNA encoding failed"),
+    ValueError("malformed host"),
+])
+def test_block_private_non_gaierror_resolution_failures_fail_closed(mocker, resolution_error):
+    # A malformed host can raise UnicodeError/ValueError (not just gaierror) from
+    # resolution. All of these must fail CLOSED (return a violation reason), never
+    # propagate out of a WebFetch configured with onError:"return".
+    mocker.patch.object(nsu.socket, "getaddrinfo", side_effect=resolution_error)
+    reason = nsu.check_url_allowed("http://bad.example/", block_private_addresses=True)
+    assert reason is not None and "could not be resolved" in reason
+
+
+def test_block_private_rejects_dual_stack_public_then_private(mocker):
+    # The resolver answers a public address first and a private one second.
+    # Every resolved address must be screened; a regression that checks only
+    # addresses[0] would reopen SSRF via multi-record DNS answers.
+    mocker.patch.object(
+        nsu.socket, "getaddrinfo",
+        return_value=_addrinfo("93.184.216.34") + _addrinfo("10.0.0.9"),
+    )
+    reason = nsu.check_url_allowed("http://dual.example/", block_private_addresses=True)
+    assert reason is not None and "10.0.0.9" in reason
+
+
+def test_block_private_rejects_zoned_link_local_answer(mocker):
+    # Some resolvers return zone-scoped IPv6 answers ("fe80::1%eth0"). The zone
+    # id must be stripped before classification so the link-local block still
+    # applies instead of the address failing to parse.
+    mocker.patch.object(
+        nsu.socket, "getaddrinfo",
+        return_value=[(socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("fe80::1%eth0", 0, 0, 0))],
+    )
+    reason = nsu.check_url_allowed("http://router.example/", block_private_addresses=True)
+    assert reason is not None and "link-local" in reason
+
+
+def test_metadata_endpoint_rejected_as_link_local(mocker):
+    # 169.254.169.254 (cloud metadata) must be reported under the most specific
+    # label, link-local, not the generic private/non-global fallback.
+    gai = mocker.patch.object(nsu.socket, "getaddrinfo")
+    reason = nsu.check_url_allowed(
+        "http://169.254.169.254/latest/meta-data/", block_private_addresses=True
+    )
+    assert reason is not None and "link-local" in reason
+    gai.assert_not_called()
+
+
 # --- allowedHosts ---
 
 def test_allowed_hosts_permits_listed_host_case_insensitively():
@@ -82,6 +130,26 @@ def test_allowed_hosts_rejects_unlisted_host():
 def test_allowed_hosts_does_not_resolve_dns(mocker):
     gai = mocker.patch.object(nsu.socket, "getaddrinfo")
     nsu.check_url_allowed("http://example.com/", allowed_hosts=["example.com"])
+    gai.assert_not_called()
+
+
+# Allowlist hygiene: these two tests pin CURRENT INTENDED behavior. An
+# allowlist with no usable entries (empty list, or only empty/whitespace
+# strings) deactivates the allowlist control entirely (the URL passes and no
+# DNS is done) rather than blocking every host. This is fail-open by design
+# so a blank config field does not brick all outbound fetches; operators must
+# supply real hostnames to activate filtering. If this ever changes to
+# fail-closed, these tests should be updated deliberately, not silently.
+
+def test_empty_allowed_hosts_list_is_noop(mocker):
+    gai = mocker.patch.object(nsu.socket, "getaddrinfo")
+    assert nsu.check_url_allowed("http://evil.net/", allowed_hosts=[]) is None
+    gai.assert_not_called()
+
+
+def test_whitespace_only_allowed_hosts_is_noop(mocker):
+    gai = mocker.patch.object(nsu.socket, "getaddrinfo")
+    assert nsu.check_url_allowed("http://evil.net/", allowed_hosts=["", "  "]) is None
     gai.assert_not_called()
 
 

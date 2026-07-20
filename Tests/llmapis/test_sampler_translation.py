@@ -119,6 +119,32 @@ class TestResolveThinking:
     def test_missing_descriptor_drops(self):
         assert resolve_thinking("on", {}, "kobold") == {}
 
+    @pytest.mark.parametrize("off_value", [
+        # Documented off-synonyms
+        "off", "false", "no", "0", "none", "disabled",
+        # Case and whitespace variants (values are normalized via str().strip().lower())
+        "OFF", " off ", "  FALSE  ",
+        # Non-strings: str(False) -> "false", str(0) -> "0", both in the off-set
+        False, 0,
+    ])
+    def test_bool_mode_off_synonyms(self, off_value):
+        assert resolve_thinking(off_value, OLLAMA_THINKING, "ollama") == {"think": False}
+
+    @pytest.mark.parametrize("off_value", ["off", "FALSE", " none ", False, 0])
+    def test_effort_mode_off_synonyms_emit_nothing(self, off_value):
+        assert resolve_thinking(off_value, OPENAI_THINKING, "openai") == {}
+
+    def test_valid_mode_missing_field_drops(self):
+        descriptor = {"thinking": {"location": "top", "mode": "bool"}}
+        assert resolve_thinking("off", descriptor, "ollama") == {}
+
+    def test_unknown_mode_string_drops(self):
+        descriptor = {"thinking": {"location": "top", "field": "think", "mode": "fancy"}}
+        assert resolve_thinking("on", descriptor, "ollama") == {}
+
+    def test_effort_invalid_level_defaults_to_medium(self):
+        assert resolve_thinking("maximum", OPENAI_THINKING, "openai") == {"reasoning_effort": "medium"}
+
 
 # --- translate ------------------------------------------------------------
 
@@ -195,3 +221,16 @@ class TestTranslate:
         block = {"temperature": 0.5, "chat_template_kwargs": {"a": 1}}
         translate(block, LLAMACPP_CFG)
         assert block == {"temperature": 0.5, "chat_template_kwargs": {"a": 1}}
+
+    def test_missing_sampler_field_map_drops_all_canonical_fields(self):
+        # A legacy ApiType file with no samplerFieldMap at all supports nothing:
+        # every canonical field is dropped (warn), yielding an empty native block
+        # instead of raising or passing fields through untranslated.
+        legacy_cfg = {"presetType": "Legacy"}
+        assert translate({"temperature": 0.5, "top_p": 0.9, "stop": ["x"]}, legacy_cfg) == {}
+
+    def test_thinking_mode_dropped_for_unsupported_apitype(self):
+        # An unsupported ApiType resolves thinkingMode to an empty fragment; the
+        # merge emits nothing and the canonical key itself never survives.
+        assert translate({"temperature": 0.5, "thinkingMode": "off"}, CLAUDE_CFG) == {"temperature": 0.5}
+        assert translate({"thinkingMode": "off"}, KOBOLD_CFG) == {}

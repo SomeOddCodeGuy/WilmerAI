@@ -4,6 +4,7 @@ import logging
 from typing import Dict, List, Optional, Any
 
 from Middleware.llmapis.handlers.base.base_completions_handler import BaseCompletionsHandler
+from Middleware.utilities.text_utils import strip_data_uri_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -21,26 +22,9 @@ class KoboldCppApiHandler(BaseCompletionsHandler):
     request. It extracts image content and includes it in the generation parameters.
     """
 
-    @staticmethod
-    def _strip_data_uri_prefix(image_str: str) -> str:
-        """
-        Strips the ``data:...;base64,`` prefix from a data URI, returning raw base64.
-
-        If the string does not start with a data URI prefix it is returned unchanged.
-
-        Args:
-            image_str (str): A base64 string or data URI.
-
-        Returns:
-            str: Raw base64 data suitable for the KoboldCpp API.
-        """
-        if image_str.startswith("data:") and ";base64," in image_str:
-            return image_str.split(";base64,", 1)[1]
-        return image_str
-
     def _prepare_payload(self, conversation: Optional[List[Dict[str, str]]], system_prompt: Optional[str],
                          prompt: Optional[str], *, tools: Optional[list] = None,
-                         tool_choice=None) -> Dict:
+                         tool_choice=None, structured_output_schema: Optional[Dict] = None) -> Dict:
         """
         Prepares the payload by adding image data before calling the parent implementation.
 
@@ -67,13 +51,16 @@ class KoboldCppApiHandler(BaseCompletionsHandler):
             Dict: The final JSON payload, including image data if present, ready to be
             sent to the API.
         """
+        # Clear any images left in gen_input by a prior request on this handler;
+        # without this, an image-free request reuses the previous request's images.
+        self.gen_input.pop("images", None)
         if conversation:
             image_contents = []
             for msg in conversation:
                 if msg.get("role") == "user":
                     image_contents.extend(msg.get("images", []))
             if image_contents:
-                self.gen_input["images"] = [self._strip_data_uri_prefix(img) for img in image_contents]
+                self.gen_input["images"] = [strip_data_uri_prefix(img) for img in image_contents]
 
         return super()._prepare_payload(conversation, system_prompt, prompt)
 
@@ -138,7 +125,9 @@ class KoboldCppApiHandler(BaseCompletionsHandler):
             chunk_data = json.loads(data_str)
             token = chunk_data.get("token", "")
             return {'token': token, 'finish_reason': None}
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, AttributeError):
+            # AttributeError covers a data line whose JSON parses to a non-dict;
+            # malformed chunks are skipped, not fatal to the stream.
             logger.warning(f"Could not parse KoboldCpp stream data string: {data_str}")
             return None
 

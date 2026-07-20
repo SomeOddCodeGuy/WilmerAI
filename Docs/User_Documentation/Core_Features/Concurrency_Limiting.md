@@ -18,7 +18,7 @@ LLM calls, set `--concurrency-level endpoint`.
 
 Sets the maximum number of requests that can be processed at the same time.
 
-- **Default**: `1` (requests are serialized -- only one request is processed at a time)
+- **Default**: `1` (requests are serialized; only one request is processed at a time)
 - **Type**: Integer, zero or positive
 - When set to `1`, requests are serialized: each request must complete before the next one begins processing.
 - When set to a value greater than `1`, up to N requests are processed concurrently. Additional requests wait in a
@@ -50,7 +50,7 @@ Selects where the concurrency gate is enforced.
 - `endpoint`: the request-level gate is lifted entirely. Many requests can be in flight at once, doing whatever
   non-LLM work their workflows require (file IO, HTTP calls to other services, memory lookups, etc.). The semaphore
   is instead acquired only around the *outbound LLM API call* inside `LlmApiService.get_response_from_llm`. The
-  same `--concurrency` value still controls how many LLM calls can run simultaneously -- with `--concurrency 1`
+  same `--concurrency` value still controls how many LLM calls can run simultaneously: with `--concurrency 1`
   (the default), one LLM call at a time, but as many concurrent workflows as you like otherwise.
 
 ### When to use `endpoint` mode
@@ -113,7 +113,7 @@ and the timeout has elapsed, WilmerAI returns:
 }
 ```
 
-When `--concurrency-level endpoint` is in effect, requests are never rejected at the gate -- they simply wait inside
+When `--concurrency-level endpoint` is in effect, requests are never rejected at the gate; they simply wait inside
 the workflow for an LLM-call slot. If an LLM call times out waiting for its slot, the workflow node raises a
 `TimeoutError`. Without specific handling, this surfaces to the client as a generic 500.
 
@@ -121,13 +121,13 @@ the workflow for an LLM-call slot. If an LLM call times out waiting for its slot
 
 ## Scope
 
-The concurrency limit applies to **POST** endpoints only -- the ones that dispatch requests to LLM backends. Lightweight
+The concurrency limit applies to **POST** endpoints only, the ones that dispatch requests to LLM backends. Lightweight
 endpoints that return metadata or perform administrative actions are exempt and will never be blocked by the semaphore:
 
-- **GET** endpoints (`/v1/models`, `/models`, `/api/tags`, `/api/version`) -- these return model lists and version info
+- **GET** endpoints (`/v1/models`, `/models`, `/api/tags`, `/api/version`): these return model lists and version info
   and are used by front-ends to populate UI elements. They are always available regardless of how many LLM requests are
   in flight.
-- **DELETE** endpoints (`/api/generate`, `/api/chat`) -- these handle request cancellation and are always available.
+- **DELETE** endpoints (`/api/generate`, `/api/chat`): these handle request cancellation and are always available.
 
 This means a front-end can always query available models or cancel a running request, even while a long-running LLM
 call is occupying all concurrency slots.

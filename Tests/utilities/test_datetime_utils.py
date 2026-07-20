@@ -86,11 +86,28 @@ def test_calculate_relative_time_internal(mock_datetime_now):
     (timedelta(minutes=45), "45 minutes"),
     (timedelta(hours=1, minutes=1), "1 hour, 1 minute"),
     (timedelta(days=3, hours=8, minutes=30), "3 days, 8 hours, 30 minutes"),
+    # Zero-valued units are omitted entirely, not rendered as "0 hours".
+    (timedelta(days=2), "2 days"),
+    (timedelta(hours=3), "3 hours"),
+    (timedelta(days=1, minutes=5), "1 day, 5 minutes"),
 ])
 def test_format_relative_time_string(mock_datetime_now, time_delta, expected_string):
     base_time = MOCK_NOW - time_delta
     result = format_relative_time_string(base_time)
     assert result == expected_string
+
+
+def test_format_relative_time_string_future_base_time_clamps_to_now(mock_datetime_now):
+    """
+    A base_time in the future (client clock skew) must read as "less than a
+    minute", not the incoherent "23 hours, 55 minutes" that Python's negative
+    timedelta normalization (days=-1, seconds=86100) used to produce.
+    """
+    base_time = MOCK_NOW + timedelta(minutes=5)
+
+    result = format_relative_time_string(base_time)
+
+    assert result == "less than a minute"
 
 
 def test_current_timestamp(mock_datetime_now):
@@ -118,6 +135,14 @@ def test_add_seconds_to_timestamp_invalid():
     initial_ts = "Invalid"
     result = add_seconds_to_timestamp(initial_ts, 10)
     assert result == initial_ts
+
+
+def test_add_seconds_to_timestamp_crossing_midnight_recomputes_weekday():
+    """The weekday name in the output must be derived from the NEW date, not
+    carried over from the input string."""
+    initial_ts = "(Saturday, 2025-09-20 23:59:30)"
+    result = add_seconds_to_timestamp(initial_ts, 60)
+    assert result == "(Sunday, 2025-09-21 00:00:30)"
 
 
 def test_subtract_minutes_from_timestamp(mock_datetime_now):

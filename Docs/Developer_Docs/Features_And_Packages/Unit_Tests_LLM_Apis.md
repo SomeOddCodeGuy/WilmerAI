@@ -1,7 +1,7 @@
 ## Developer Guide: Unit Testing `Middleware/llmapis/` Handlers
 
 This document outlines the standardized approach for writing unit tests for any `LlmApiHandler` within the WilmerAI
-project. Following these guidelines ensures that all handlers are robust, predictable, and easy to maintain.
+project. Following these guidelines keeps all handlers predictable and maintainable.
 
 -----
 
@@ -12,7 +12,7 @@ Our testing strategy for API handlers is guided by two main principles:
 1. **Isolation**: A handler's unit test should *only* test the logic within that handler. It must not make real HTTP
    requests or access the file system. All external dependencies, including parent class methods that are not being
    overridden, should be mocked.
-2. **Contract Verification**: Each handler has a "contract" -- it must correctly prepare a request payload for a specific
+2. **Contract Verification**: Each handler has a "contract": it must correctly prepare a request payload for a specific
    API and correctly parse that API's response. Our tests are designed to verify every part of this contract.
 
 ### Setup: The Handler Fixture

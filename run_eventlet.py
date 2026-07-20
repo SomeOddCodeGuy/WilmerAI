@@ -14,7 +14,6 @@ except ImportError:
     sys.exit(1)
 
 import sys
-import argparse
 import logging
 # Import socket AFTER monkey_patch
 import socket
@@ -22,113 +21,13 @@ import traceback
 
 # Define a function to parse arguments and set globals
 def initialize_globals():
-    # Now we can safely import instance_global_variables as stdlib is patched
-    # We must import this inside the function scope.
+    # Safe only after monkey_patch: these pull in stdlib and
+    # Middleware.common/utilities, but not server.py (which initializes the
+    # whole app at import time).
     from Middleware.common import instance_global_variables
+    from Middleware.common.launch_arguments import parse_and_apply_launch_arguments
 
-    parser = argparse.ArgumentParser(description="Launch WilmerAI with Eventlet")
-    parser.add_argument("--ConfigDirectory", type=str, help="Custom path to the configuration directory (typically the Public/Configs subfolder). Kept for backwards compatibility; new installations should prefer --PublicDirectory.")
-    parser.add_argument("--PublicDirectory", type=str, help="Custom path to the Public/ root (the parent of Configs, DiscussionIds, SqlLiteDBs, and logs). When set, all runtime data defaults to subfolders under this path unless overridden individually.")
-    parser.add_argument("--User", action='append', help="User to run Wilmer as (can be repeated for multi-user)")
-    parser.add_argument("--LoggingDirectory", type=str, default=None,
-                        help="Directory for log files. Defaults to {PublicDirectory}/logs when "
-                             "--PublicDirectory is set, otherwise {install_dir}/Public/logs (install-pinned; "
-                             "does not depend on the current working directory).")
-    parser.add_argument("--UserLevelSqlLiteDirectory", type=str, default=None,
-                        help="Override directory for per-user SQLite databases (workflow locks). "
-                             "Takes precedence over the sqlLiteDirectory user config setting.")
-    parser.add_argument("--DiscussionDirectory", type=str, default=None,
-                        help="Override directory for per-discussion data files (memories, "
-                             "summaries, vector DBs). Takes precedence over the discussionDirectory "
-                             "user config setting.")
-    parser.add_argument("--file-logging", action='store_true', default=None,
-                        help="Enable file logging. In single-user mode, falls back to the "
-                             "user's useFileLogging config setting. In multi-user mode, "
-                             "defaults to off.")
-    parser.add_argument("--port", type=int, default=None,
-                        help="Port to listen on. In single-user mode, falls back to the user's "
-                             "config. In multi-user mode, defaults to 5050.")
-    parser.add_argument("--listen", nargs='?', const='0.0.0.0', default=None,
-                        help="Listen on the network. With no value, binds to 0.0.0.0 "
-                             "(all interfaces). Optionally accepts a specific address.")
-    parser.add_argument("--concurrency", type=int, default=1,
-                        help="Max concurrent requests. 0 = no limit (default: %(default)s)")
-    parser.add_argument("--concurrency-timeout", type=int, default=900,
-                        help="Seconds to wait for a concurrency slot before returning 503 "
-                             "(default: %(default)s)")
-    parser.add_argument("--concurrency-level", type=str, choices=["wilmer", "endpoint"], default="wilmer",
-                        help="Where the concurrency gate is enforced. 'wilmer' (default) gates "
-                             "at the WSGI front door: only --concurrency requests run at a time. "
-                             "'endpoint' lifts the request-level gate and instead serializes only "
-                             "outbound LLM API calls, allowing reentrant requests (e.g. a Wilmer "
-                             "workflow that calls another service which calls back into Wilmer) "
-                             "to make progress without deadlocking.")
-    parser.add_argument("positional", nargs="*", help="Positional arguments for ConfigDirectory and User")
-    args = parser.parse_args()
-
-    if args.concurrency < 0:
-        parser.error("--concurrency must be >= 0")
-    if args.concurrency_timeout <= 0:
-        parser.error("--concurrency-timeout must be > 0")
-
-    if len(args.positional) > 0 and args.positional[0].strip():
-        instance_global_variables.CONFIG_DIRECTORY = args.positional[0].strip().rstrip('/\\')
-    if len(args.positional) > 1 and args.positional[1].strip():
-        instance_global_variables.USERS = [args.positional[1].strip()]
-
-    if args.ConfigDirectory and args.ConfigDirectory.strip():
-        instance_global_variables.CONFIG_DIRECTORY = args.ConfigDirectory.strip().rstrip('/\\')
-    if args.PublicDirectory and args.PublicDirectory.strip():
-        instance_global_variables.PUBLIC_DIRECTORY = args.PublicDirectory.strip().rstrip('/\\')
-    if args.User:
-        users = [u.strip() for u in args.User if u.strip()]
-        if users:
-            instance_global_variables.USERS = users
-
-    import os
-    from Middleware.utilities import config_utils
-    if args.LoggingDirectory and args.LoggingDirectory.strip():
-        instance_global_variables.LOGGING_DIRECTORY = args.LoggingDirectory.strip()
-    else:
-        # No explicit --LoggingDirectory: resolve via get_root_public_directory()
-        # so the default is install-pinned (not cwd-relative). Picks up
-        # --PublicDirectory when set, otherwise {install_dir}/Public/.
-        instance_global_variables.LOGGING_DIRECTORY = os.path.join(
-            config_utils.get_root_public_directory(), 'logs'
-        )
-
-    if args.UserLevelSqlLiteDirectory and args.UserLevelSqlLiteDirectory.strip():
-        instance_global_variables.USER_LEVEL_SQLITE_DIRECTORY = args.UserLevelSqlLiteDirectory.strip().rstrip('/\\')
-    if args.DiscussionDirectory and args.DiscussionDirectory.strip():
-        instance_global_variables.DISCUSSION_DIRECTORY = args.DiscussionDirectory.strip().rstrip('/\\')
-
-    # Resolve <user> token -- delegate to server._resolve_logging_directory at import time.
-    # For now, handle it inline to avoid importing server.py too early.
-    log_dir = instance_global_variables.LOGGING_DIRECTORY
-    if "<user>" in log_dir:
-        u = instance_global_variables.USERS
-        if u and len(u) == 1:
-            instance_global_variables.LOGGING_DIRECTORY = log_dir.replace("<user>", u[0])
-        elif u and len(u) > 1:
-            print(
-                f"WARNING: <user> token in --LoggingDirectory is not supported in multi-user mode. "
-                f"Stripping token. Per-user log files are created automatically.",
-                file=sys.stderr,
-            )
-            instance_global_variables.LOGGING_DIRECTORY = log_dir.replace("<user>", "").rstrip(os.sep)
-
-    if args.file_logging is not None:
-        instance_global_variables.FILE_LOGGING = args.file_logging
-
-    if args.port is not None:
-        instance_global_variables.PORT = args.port
-    if args.listen is not None:
-        instance_global_variables.LISTEN_ADDRESS = args.listen.strip()
-
-    instance_global_variables.CONCURRENCY_LIMIT = args.concurrency
-    instance_global_variables.CONCURRENCY_TIMEOUT = args.concurrency_timeout
-    instance_global_variables.CONCURRENCY_LEVEL = args.concurrency_level
-
+    parse_and_apply_launch_arguments("Launch WilmerAI with Eventlet")
     return instance_global_variables
 
 # Initialize globals
@@ -204,13 +103,13 @@ class TCPNoDelayListener:
 host = globals_vars.LISTEN_ADDRESS
 
 print(f"\n{'=' * 60}")
-print(f"Starting WilmerAI with Eventlet WSGI Server")
+print("Starting WilmerAI with Eventlet WSGI Server")
 print(f"Listening on {host}:{port}")
-print(f"TCP_NODELAY wrapper installed (applied per connection)")
+print("TCP_NODELAY wrapper installed (applied per connection)")
 if host == "127.0.0.1":
-    print(f"\n\033[32mUPDATE: WilmerAI now defaults to 127.0.0.1 (localhost")
-    print(f"only). It previously defaulted to 0.0.0.0. To listen on")
-    print(f"all interfaces, use: --listen\033[0m")
+    print("\n\033[32mUPDATE: WilmerAI now defaults to 127.0.0.1 (localhost")
+    print("only). It previously defaulted to 0.0.0.0. To listen on")
+    print("all interfaces, use: --listen\033[0m")
 print(f"{'=' * 60}\n")
 
 try:

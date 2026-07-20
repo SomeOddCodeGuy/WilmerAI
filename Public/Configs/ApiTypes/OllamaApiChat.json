@@ -6,6 +6,10 @@
   "maxNewTokensPropertyName": "num_predict",
   "streamPropertyName": "stream",
   "supportsChatTemplateKwargs": false,
+  "structuredOutput": {
+    "field": "format",
+    "style": "raw"
+  },
   "thinking": {
     "location": "top",
     "field": "think",

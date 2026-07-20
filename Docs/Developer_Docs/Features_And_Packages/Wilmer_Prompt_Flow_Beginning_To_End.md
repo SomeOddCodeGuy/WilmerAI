@@ -124,6 +124,30 @@ The raw dictionary generator travels back up to the `$WorkflowProcessor$`, which
 5. **Final Yield:** The handler `yield`s the final, clean, SSE-formatted string. This travels all the way back to the
    Flask `Response` object and is sent to the client.
 
+6. **Mid-Task Liveness Guard (optional):** Agentic frontends end their autonomous loop the moment a response arrives
+   with no tool call in it. If a workflow-driven task still has pending work, that strands the task until a human
+   types something. To prevent this, `process_stream()` tracks whether any tool-call delta passed through the stream.
+   At finalization, if none did **and** the responding node's config sets `"injectLivenessToolCall": true` **and**
+   the user config defines `livenessToolCall`, the handler injects that configured no-op tool call
+   (via `_build_liveness_tool_calls()`) and closes the stream with `finish_reason: "tool_calls"` instead of `"stop"`,
+   so the frontend executes the no-op and calls back. The node property is the trigger because whether a turn is
+   mid-task is a property of the node's role in its workflow: a report or status responder whose whole output is
+   plain text while the task continues opts in; ordinary doer responders do not, so the final answer of a task
+   still ends the frontend's loop normally. Injection is limited to the
+   `openaichatcompletion` and `ollamaapichat` output formats, the two that carry tool calls.
+
+   Injected turns are **one-shot**: on the request immediately following an injection, the exchange sits at the
+   tail of the conversation and is kept visible; that single appearance is the model's corrective feedback that
+   its previous reply lacked a tool call. On every later request the exchange sits buried in history, and
+   `strip_machinery_turns()` in `workflow_gateway.py` removes it (and any model-emitted imitations of it, keyed on
+   the `[Wilmer]` marker in the call's arguments) at ingestion, before routing. The ingestion-side passes
+   (`strip_machinery_turns()` and `collapse_duplicate_tool_calls()`) run **only for users whose config defines
+   `livenessToolCall`**; conversations of users without that setting are never rewritten. Both halves matter: with
+   no visibility at all the model gets no signal anything happened and repeats the tool-less reply; with persistent
+   visibility a small model adopts the injection as a template and starts emitting it as its own action. For this
+   reason the configured `livenessToolCall` arguments should always contain the `[Wilmer]` marker. See `Api.md`
+   (`workflow_gateway.py` section) for the strip's exact matching rules.
+
 -----
 
 ## 2\. Key Component Responsibilities

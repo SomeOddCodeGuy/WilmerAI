@@ -11,6 +11,7 @@ from typing import Any, Dict, Generator, List, Optional, Set, Union
 from urllib.parse import urlsplit
 
 from Middleware.common import instance_global_variables
+from Middleware.common.constants import EMBEDDING_API_TYPES
 from Middleware.llmapis.handlers.base.base_llm_api_handler import LlmApiHandler
 from Middleware.llmapis.handlers.impl.claude_api_handler import ClaudeApiHandler
 from Middleware.llmapis.handlers.impl.koboldcpp_api_handler import KoboldCppApiHandler
@@ -124,7 +125,7 @@ def _classify_backup_host(url: str) -> str:
     except ValueError:
         pass
     # Not an IP literal: resolve so a public hostname (e.g. a cloud API) is gated by
-    # allowRemoteBackup too, not waved through. Conservative on a mixed result -- any
+    # allowRemoteBackup too, not waved through. Conservative on a mixed result: any
     # public address makes it 'remote', since failover would ship the prompt there.
     try:
         resolved = {
@@ -174,17 +175,21 @@ class LlmApiService:
         self.endpoint_file = get_endpoint_config(endpoint)
         self.api_type_config = get_api_type_config(self.endpoint_file.get("apiTypeConfigFileName", ""))
         llm_type = self.api_type_config["type"]
+        # Fail fast, before preset resolution, so a misconfigured node produces a
+        # clear message instead of a confusing preset-file error.
+        if llm_type in EMBEDDING_API_TYPES:
+            raise ValueError(
+                f"Endpoint '{endpoint}' uses embeddings API type '{llm_type}' and cannot be used for text "
+                f"generation. Reference it from an embeddings setting (such as 'embeddingEndpointName') instead.")
         preset_type = self.api_type_config.get("presetType", "")
         logger.debug(f"API type: {llm_type}, Preset type: {preset_type}, Preset name: {presetname}")
-        preset = self._resolve_gen_input(presetname, preset_type)
+        self._gen_input = self._resolve_gen_input(presetname, preset_type)
 
         self.api_key = self.endpoint_file.get("apiKey", "")
         self.endpoint_url = self.endpoint_file["endpoint"]
         self.model_name = self.endpoint_file.get("modelNameToSendToAPI", "")
         self.dont_include_model = self.endpoint_file.get("dontIncludeModel", False)
         self.is_busy_flag: bool = False
-
-        self._gen_input = preset
 
         self.stream = stream
         self.headers = {
@@ -235,7 +240,7 @@ class LlmApiService:
             logger.debug(f"Fallback preset path: {preset_file}")
             if not os.path.exists(preset_file):
                 raise FileNotFoundError(f"The preset file {preset_file} does not exist.")
-        with open(preset_file) as file:
+        with open(preset_file, encoding="utf-8") as file:
             return json.load(file)
 
     def _resolve_gen_input(self, presetname: str, preset_type: str) -> Dict[str, Any]:
@@ -389,6 +394,7 @@ class LlmApiService:
             request_id: Optional[str] = None,
             tools: Optional[List[Dict[str, Any]]] = None,
             tool_choice: Optional[Any] = None,
+            structured_output_schema: Optional[Dict[str, Any]] = None,
     ) -> Union[Generator[Dict[str, Any], None, None], str, Dict[str, Any]]:
         """
         Sends a prompt or conversation to the LLM and returns the raw response.
@@ -407,6 +413,9 @@ class LlmApiService:
             request_id (Optional[str]): The request ID for cancellation tracking.
             tools (Optional[List[Dict[str, Any]]]): Tool definitions in OpenAI format.
             tool_choice (Optional[Any]): Tool selection policy.
+            structured_output_schema (Optional[Dict[str, Any]]): JSON schema to
+                constrain the response with, attached per the endpoint's ApiType
+                structuredOutput mechanism (ignored by handlers without one).
 
         Returns:
             Union[Generator[Dict[str, Any], None, None], str, Dict[str, Any]]: A generator
@@ -416,7 +425,20 @@ class LlmApiService:
         """
         self.is_busy_flag = True
         try:
-            conversation_copy = deepcopy(conversation) if conversation else None
+            # The no-images strip below already produces fresh message dicts, so only
+            # the images path needs a deep copy to keep the caller's conversation
+            # (reused verbatim by delegate_kwargs on failover) isolated from the
+            # handler. Skipping deepcopy on the common path avoids copying the whole
+            # history on every LLM call.
+            if not llm_takes_images:
+                logger.debug("llm_api does not take images. Stripping images key from messages.")
+                conversation_copy = (
+                    [{k: v for k, v in msg.items() if k != "images"} for msg in conversation]
+                    if conversation else None
+                )
+            else:
+                logger.debug("llm_api takes images. Leaving images in place.")
+                conversation_copy = deepcopy(conversation) if conversation else None
             system_prompt_to_pass = system_prompt
             prompt_to_pass = prompt
 
@@ -434,13 +456,6 @@ class LlmApiService:
             sensitive_log(logger, logging.DEBUG, "llm_api - System prompt: %s", system_prompt_to_pass)
             sensitive_log(logger, logging.DEBUG, "llm_api - Prompt: %s", prompt_to_pass)
 
-            if not llm_takes_images:
-                logger.debug("llm_api does not take images. Stripping images key from messages.")
-                if conversation_copy:
-                    conversation_copy = [{k: v for k, v in msg.items() if k != "images"} for msg in conversation_copy]
-            else:
-                logger.debug("llm_api takes images. Leaving images in place.")
-
             call_kwargs = dict(
                 conversation=conversation_copy,
                 system_prompt=system_prompt_to_pass,
@@ -448,6 +463,7 @@ class LlmApiService:
                 request_id=request_id,
                 tools=tools,
                 tool_choice=tool_choice,
+                structured_output_schema=structured_output_schema,
             )
             delegate_kwargs = dict(
                 conversation=conversation,
@@ -457,6 +473,7 @@ class LlmApiService:
                 request_id=request_id,
                 tools=tools,
                 tool_choice=tool_choice,
+                structured_output_schema=structured_output_schema,
             )
 
             if self.stream:

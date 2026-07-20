@@ -31,7 +31,7 @@ class OllamaGenerateApiHandler(BaseCompletionsHandler):
 
     def _prepare_payload(self, conversation: Optional[List[Dict[str, str]]], system_prompt: Optional[str],
                          prompt: Optional[str], *, tools: Optional[list] = None,
-                         tool_choice=None) -> Dict:
+                         tool_choice=None, structured_output_schema: Optional[Dict] = None) -> Dict:
         """
         Prepares the Ollama-specific payload for the /api/generate request.
 
@@ -59,8 +59,12 @@ class OllamaGenerateApiHandler(BaseCompletionsHandler):
         # Ollama reads the reasoning toggle as a top-level "think" field; every other
         # generation parameter belongs under "options". A preset can therefore set
         # "think": false (or true) and the handler lifts it out of options to the top level.
+        # The stream flag injected by set_gen_input is likewise a top-level transport
+        # field, not a valid Ollama option, so it must not ride along inside "options".
         options = dict(self.gen_input or {})
         think = options.pop("think", None)
+        if self.stream_property_name:
+            options.pop(self.stream_property_name, None)
 
         payload = {
             "model": self.model_name,
@@ -113,7 +117,9 @@ class OllamaGenerateApiHandler(BaseCompletionsHandler):
             token = chunk_data.get("response", "")
             finish_reason = "stop" if chunk_data.get("done") else None
             return {'token': token, 'finish_reason': finish_reason}
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, AttributeError):
+            # AttributeError covers a line whose JSON parses to a non-dict;
+            # malformed chunks are skipped, not fatal to the stream.
             logger.warning(f"Could not parse Ollama stream data string: {data_str}")
             return None
 

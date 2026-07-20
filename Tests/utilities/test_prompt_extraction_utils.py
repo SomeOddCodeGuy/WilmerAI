@@ -12,9 +12,6 @@ from Middleware.utilities.prompt_extraction_utils import (
     remove_discussion_id_tag_from_string,
     separate_messages,
     parse_conversation,
-    extract_initial_system_prompt,
-    process_remaining_string,
-    template,
     _format_messages_to_string,
     _summarize_tool_arguments,
     format_tool_calls_as_text,
@@ -80,9 +77,10 @@ class TestExtractLastNTurnsAsString:
 
     def test_extract_as_string_success(self, mocker):
         """
-        Verifies that the function calls the extractor and joins the content correctly.
+        Verifies that the function forwards n, include_sysmes, and
+        remove_all_systems_override to the extractor and joins the content correctly.
         """
-        mocker.patch(
+        mock_extract = mocker.patch(
             'Middleware.utilities.prompt_extraction_utils.extract_last_n_turns',
             return_value=[
                 {'role': 'user', 'content': 'Line 1'},
@@ -90,9 +88,12 @@ class TestExtractLastNTurnsAsString:
             ]
         )
 
-        result = extract_last_n_turns_as_string(MESSAGES_FIXTURE, 2)
+        result = extract_last_n_turns_as_string(
+            MESSAGES_FIXTURE, 2, include_sysmes=False, remove_all_systems_override=True
+        )
 
         assert result == "Line 1\nLine 2"
+        mock_extract.assert_called_once_with(MESSAGES_FIXTURE, 2, False, True)
 
     def test_extract_as_string_empty_list(self):
         """Tests that an empty message list returns an empty string."""
@@ -161,6 +162,24 @@ class TestExtractLastTurnsByEstimatedTokenLimit:
         result = extract_last_turns_by_estimated_token_limit(messages, 5000)
         assert len(result) == 1
         assert result[0]['content'] == 'huge'
+
+    def test_stops_at_first_overflow_does_not_skip_huge_message(self, mocker):
+        """The selection loop BREAKS at the first message that overflows the budget:
+        an older message that would individually fit is still excluded (the
+        documented stop-at-first-overflow contract), keeping the window contiguous."""
+        mocker.patch(
+            'Middleware.utilities.prompt_extraction_utils.rough_estimate_token_length',
+            side_effect=lambda text: {'small': 10, 'HUGE': 1000, 'recent': 10}.get(text, 0)
+        )
+        messages = [
+            {'role': 'user', 'content': 'small'},
+            {'role': 'assistant', 'content': 'HUGE'},
+            {'role': 'user', 'content': 'recent'},
+        ]
+        # Budget 100: recent (10) fits; HUGE (1010 total) overflows and stops the loop.
+        # small (20 total) would fit if the loop skipped HUGE, but must not be selected.
+        result = extract_last_turns_by_estimated_token_limit(messages, 100)
+        assert [m['content'] for m in result] == ['recent']
 
     def test_empty_messages_returns_empty(self):
         """Tests that an empty message list returns an empty list."""
@@ -274,6 +293,52 @@ class TestDiscussionIdFunctions:
         messages = [{'role': 'user', 'content': 'Hello there'}]
         assert extract_discussion_id(messages) is None
 
+    def test_extract_discussion_id_first_match_wins(self):
+        """When multiple messages contain IDs, the first one found is returned."""
+        messages = [
+            {'role': 'user', 'content': 'no id here'},
+            {'role': 'assistant', 'content': '[DiscussionId]first-id[/DiscussionId]'},
+            {'role': 'user', 'content': '[DiscussionId]second-id[/DiscussionId]'},
+        ]
+        assert extract_discussion_id(messages) == "first-id"
+
+    def test_extract_discussion_id_empty_tag_returns_empty_string(self):
+        """An empty [DiscussionId][/DiscussionId] pair returns "" (found), not None."""
+        messages = [{'role': 'user', 'content': 'Hello [DiscussionId][/DiscussionId]'}]
+        result = extract_discussion_id(messages)
+        assert result == ""
+        assert result is not None
+
+    @pytest.mark.parametrize("unsafe_id", [
+        "../evil",
+        "a/b",
+        "a\\b",
+        "C:evil",
+        ".",
+        "..",
+    ], ids=["dotdot_slash", "fwd_slash", "back_slash", "drive_colon", "dot", "dotdot"])
+    def test_extract_discussion_id_path_unsafe_returns_none(self, unsafe_id):
+        """The discussion id is joined into filesystem paths downstream; an id
+        containing a path separator, drive colon, or traversal component is
+        rejected at extraction and the request is treated as stateless (None)."""
+        messages = [{'role': 'user', 'content': f'[DiscussionId]{unsafe_id}[/DiscussionId]'}]
+        assert extract_discussion_id(messages) is None
+
+    def test_extract_discussion_id_unsafe_first_match_stops_search(self):
+        """An unsafe id in the first matching message returns None outright; a
+        safe id in a LATER message is not consulted (the request goes stateless
+        rather than trusting a mixed-signal conversation)."""
+        messages = [
+            {'role': 'user', 'content': '[DiscussionId]../evil[/DiscussionId]'},
+            {'role': 'user', 'content': '[DiscussionId]safe-id[/DiscussionId]'},
+        ]
+        assert extract_discussion_id(messages) is None
+
+    def test_extract_discussion_id_safe_characters_accepted(self):
+        """Hyphens, underscores, and dots inside a name are safe and accepted."""
+        messages = [{'role': 'user', 'content': '[DiscussionId]conv-42_test.v2[/DiscussionId]'}]
+        assert extract_discussion_id(messages) == "conv-42_test.v2"
+
     def test_remove_discussion_id_tag_from_string(self):
         """Tests removing the tag from a single string."""
         content = "Some text [DiscussionId]abc-def[/DiscussionId] more text."
@@ -328,6 +393,18 @@ class TestSeparateMessages:
         with pytest.raises(ValueError, match="Message is missing the 'role' or 'content' key."):
             separate_messages(messages)
 
+    def test_role_matching_is_case_insensitive(self):
+        """A 'System'/'SYSTEM' role is recognized as system (roles are lowercased
+        before comparison)."""
+        messages = [
+            {'role': 'System', 'content': 'Cap sys.'},
+            {'role': 'user', 'content': 'User1.'},
+            {'role': 'SYSTEM', 'content': 'Upper sys.'},
+        ]
+        system_prompt, conversation = separate_messages(messages, separate_sysmes=False)
+        assert system_prompt == "Cap sys. Upper sys."
+        assert conversation == [{'role': 'user', 'content': 'User1.'}]
+
 
 class TestParseConversation:
     """Tests for the parse_conversation function."""
@@ -357,41 +434,40 @@ class TestParseConversation:
                 "",
                 []
         ),
-    ], ids=["standard", "multiple_system", "no_tags", "empty_string"])
+        (
+                "[Beg_SysMes]Mid-conversation system note.",
+                [{"role": "systemMes", "content": "Mid-conversation system note."}]
+        ),
+        (
+                "[Beg_User]Hello![Beg_Foo]Should be dropped.[Beg_Assistant]Hi!",
+                [
+                    {"role": "user", "content": "Hello!"},
+                    {"role": "assistant", "content": "Hi!"}
+                ]
+        ),
+        (
+                # Legacy clients end the prompt with a bare [Beg_Assistant] to
+                # request a completion: the empty segment still yields a message.
+                "[Beg_User]Hello![Beg_Assistant]",
+                [
+                    {"role": "user", "content": "Hello!"},
+                    {"role": "assistant", "content": ""}
+                ]
+        ),
+        (
+                # Whitespace around segment content is stripped.
+                "[Beg_User]  padded  [Beg_Assistant]\n\nnewlines\n",
+                [
+                    {"role": "user", "content": "padded"},
+                    {"role": "assistant", "content": "newlines"}
+                ]
+        ),
+    ], ids=["standard", "multiple_system", "no_tags", "empty_string",
+            "sysmes_tag_maps_to_systemMes", "unrecognized_tag_skipped",
+            "trailing_empty_assistant_segment", "whitespace_stripped"])
     def test_parse_conversation(self, input_str, expected):
         """Tests parsing of various tagged string formats."""
         assert parse_conversation(input_str) == expected
-
-
-class TestLegacyParsingHelpers:
-    """Tests for extract_initial_system_prompt and process_remaining_string."""
-
-    def test_extract_initial_system_prompt_found(self):
-        """Tests extraction when the system prompt tag is present."""
-        input_str = "[Beg_Sys]System content.[Beg_User]User content."
-        sys_prompt, remaining = extract_initial_system_prompt(input_str, template["Begin_Sys"])
-        assert sys_prompt == "System content."
-        assert remaining == "[Beg_User]User content."
-
-    def test_extract_initial_system_prompt_not_found(self):
-        """Tests extraction when the system prompt tag is not present."""
-        input_str = "[Beg_User]User content."
-        sys_prompt, remaining = extract_initial_system_prompt(input_str, template["Begin_Sys"])
-        assert sys_prompt == ""
-        assert remaining == "[Beg_User]User content."
-
-    def test_extract_initial_system_prompt_only_system(self):
-        """Tests when the entire string is just the system prompt."""
-        input_str = "[Beg_Sys]System content only."
-        sys_prompt, remaining = extract_initial_system_prompt(input_str, template["Begin_Sys"])
-        assert sys_prompt == "System content only."
-        assert remaining == ""
-
-    def test_process_remaining_string(self):
-        """Tests the removal of the Begin_Sys tag."""
-        input_str = "[Beg_Sys]System stuff to remove. [Beg_User]Keep this."
-        expected = "System stuff to remove. [Beg_User]Keep this."
-        assert process_remaining_string(input_str, template) == expected
 
 
 class TestExtractLastTurnsWithMinMessagesAndTokenLimit:
@@ -449,6 +525,25 @@ class TestExtractLastTurnsWithMinMessagesAndTokenLimit:
         assert result[0]['content'] == 'msg2'
         assert result[1]['content'] == 'msg3'
         assert result[2]['content'] == 'msg4'
+
+    def test_stops_at_first_overflow_does_not_skip_huge_message(self, mocker):
+        """Phase 2 BREAKS at the first message that overflows the budget: an older
+        message that would individually fit is still excluded (the documented
+        stop-at-first-overflow contract), keeping the window contiguous."""
+        mocker.patch(
+            'Middleware.utilities.prompt_extraction_utils.rough_estimate_token_length',
+            side_effect=lambda text: {'small': 10, 'HUGE': 1000, 'recent': 10}.get(text, 0)
+        )
+        messages = [
+            {'role': 'user', 'content': 'small'},
+            {'role': 'assistant', 'content': 'HUGE'},
+            {'role': 'user', 'content': 'recent'},
+        ]
+        # min=1: recent (10) satisfies the floor. Budget 100: HUGE (1010 total)
+        # overflows and stops the loop. small (20 total) would fit if the loop
+        # skipped HUGE, but must not be selected.
+        result = extract_last_turns_with_min_messages_and_token_limit(messages, 1, 100)
+        assert [m['content'] for m in result] == ['recent']
 
     def test_empty_messages_returns_empty(self):
         """Tests that empty messages returns empty list."""
@@ -867,7 +962,7 @@ class TestComboExtractionEdgeCases:
             {'role': 'user', 'content': 'msg3'},
         ]
         # min=3, token_limit=150: a hard floor keeps all 3 (300 tok); yielding keeps
-        # only msg3 (100) -- msg2 would make 200 > 150, so it stops.
+        # only msg3 (100); msg2 would make 200 > 150, so it stops.
         result = extract_last_turns_with_min_messages_and_token_limit(
             messages, 3, 150, budget_overrides_min=True)
         assert [m['content'] for m in result] == ['msg3']
@@ -908,7 +1003,7 @@ class TestComboExtractionEdgeCases:
         assert [m['content'] for m in result] == ['huge']
 
     def test_budget_overrides_min_noop_when_floor_fits(self, mocker):
-        """When the floor already fits, the flag changes nothing -- the full floor
+        """When the floor already fits, the flag changes nothing: the full floor
         plus any phase-2 expansion is returned, exactly as the hard floor would."""
         mocker.patch(
             'Middleware.utilities.prompt_extraction_utils.rough_estimate_token_length',
@@ -925,8 +1020,8 @@ class TestComboExtractionEdgeCases:
         assert len(result) == 3
 
     def test_budget_overrides_min_false_keeps_hard_floor(self, mocker):
-        """Regression guard: the default (False) preserves the historical hard floor
-        -- min_messages are returned even when they exceed the token limit."""
+        """Regression guard: the default (False) preserves the historical hard floor,
+        so min_messages are returned even when they exceed the token limit."""
         mocker.patch(
             'Middleware.utilities.prompt_extraction_utils.rough_estimate_token_length',
             side_effect=lambda text: {'msg1': 100, 'msg2': 100, 'msg3': 100}.get(text, 0)
@@ -1167,6 +1262,24 @@ class TestSummarizeToolArguments:
         result = _summarize_tool_arguments(long_raw)
         assert len(result) == 200
 
+    def test_dict_arguments_return_first_string_field(self):
+        """Ollama-native dict arguments (not a JSON string) are supported: the
+        first string-valued field is returned."""
+        result = _summarize_tool_arguments({"count": 3, "command": "git log"})
+        assert result == "git log"
+
+    def test_dict_arguments_without_string_field_fall_back_to_str(self):
+        """A dict with no string values falls back to str(arguments), truncated."""
+        result = _summarize_tool_arguments({"count": 3, "flag": True})
+        assert result == str({"count": 3, "flag": True})
+
+    def test_non_str_non_dict_arguments_fall_back_to_str(self):
+        """Arguments that are neither a string nor a dict (e.g. a list) fall back
+        to their str() rendering, truncated to 200 characters."""
+        assert _summarize_tool_arguments([1, 2, 3]) == "[1, 2, 3]"
+        long_list = list(range(200))
+        assert _summarize_tool_arguments(long_list) == str(long_list)[:200]
+
 
 class TestFormatToolCallsAsText:
     """Tests for format_tool_calls_as_text."""
@@ -1201,6 +1314,23 @@ class TestFormatToolCallsAsText:
         calls = [{"function": {"name": "calc", "arguments": '{"value": 42}'}}]
         result = format_tool_calls_as_text(calls)
         assert result == '[Tool Call: calc] {"value": 42}'
+
+    def test_non_dict_entries_skipped(self):
+        """Malformed non-dict entries in the tool_calls list are skipped without
+        crashing; the valid calls still render."""
+        calls = [
+            "garbage-string",
+            None,
+            {"function": {"name": "bash", "arguments": '{"command": "ls"}'}},
+        ]
+        result = format_tool_calls_as_text(calls)
+        assert result == "[Tool Call: bash] ls"
+
+    def test_non_dict_function_value_falls_back_to_unknown(self):
+        """A call whose 'function' value is not a dict renders as unknown rather
+        than crashing."""
+        calls = [{"function": "not-a-dict"}]
+        assert format_tool_calls_as_text(calls) == "[Tool Call: unknown] "
 
 
 class TestEnrichMessagesWithToolCalls:
@@ -1272,7 +1402,8 @@ class TestEnrichMessagesWithToolCalls:
         assert enrich_messages_with_tool_calls([]) == []
 
     def test_multiple_tool_calls_in_one_message(self):
-        """Multiple tool calls in a single message are all rendered."""
+        """Multiple tool calls in a single message are all rendered, one line each,
+        in order, joined by newlines with nothing else added."""
         messages = [
             {"role": "assistant", "content": None, "tool_calls": [
                 {"function": {"name": "bash", "arguments": '{"command": "ls"}'}},
@@ -1280,8 +1411,7 @@ class TestEnrichMessagesWithToolCalls:
             ]}
         ]
         result = enrich_messages_with_tool_calls(messages)
-        assert "[Tool Call: bash] ls" in result[0]["content"]
-        assert "[Tool Call: read] /tmp/a.txt" in result[0]["content"]
+        assert result[0]["content"] == "[Tool Call: bash] ls\n[Tool Call: read] /tmp/a.txt"
 
     def test_assistant_without_tool_calls_key(self):
         """Assistant messages without tool_calls key are not modified."""
@@ -1377,9 +1507,9 @@ class TestEnrichMessagesWithToolCalls:
         ]
         result = enrich_messages_with_tool_calls(messages)
         content = result[0]["content"]
-        # bash summary is "ls" — no braces
+        # bash summary is "ls", no braces
         assert "bash" in content
-        # config falls back to raw JSON — braces should be escaped
+        # config falls back to raw JSON, so braces should be escaped
         assert "config" in content
         assert "{" not in content
         assert "}" not in content
@@ -1457,3 +1587,83 @@ class TestEnrichMessagesWithToolCalls:
         assert "[Tool Result: glob]" in result[3]["content"]
         assert "app.js" in result[3]["content"]
         assert result[4] is messages[4]
+
+    def test_tool_result_attributed_via_tool_call_id(self):
+        """A result carrying only a tool_call_id (no name) is labeled from the
+        originating call's name AND argument summary, so the reader can tell
+        which file the result is for."""
+        messages = [
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "call_abc", "function": {
+                    "name": "read", "arguments": '{"filePath": "/workspace/src/store.js"}'}}
+            ]},
+            {"role": "tool", "content": "'use strict';", "tool_call_id": "call_abc"},
+        ]
+        result = enrich_messages_with_tool_calls(messages)
+        assert result[1]["content"] == "[Tool Result: read /workspace/src/store.js] 'use strict';"
+
+    def test_tool_result_call_id_lookup_preferred_over_name(self):
+        """When a result has both a matching tool_call_id and a bare name, the
+        richer call-id label (name + target) wins."""
+        messages = [
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "call_1", "function": {
+                    "name": "write", "arguments": '{"filePath": "/workspace/cli.js"}'}}
+            ]},
+            {"role": "tool", "content": "Wrote 17622 bytes", "name": "write", "tool_call_id": "call_1"},
+        ]
+        result = enrich_messages_with_tool_calls(messages)
+        assert result[1]["content"] == "[Tool Result: write /workspace/cli.js] Wrote 17622 bytes"
+
+    def test_tool_result_unmatched_call_id_falls_back_to_name(self):
+        """A tool_call_id that matches no assistant call falls back to the
+        result's own name rather than mislabeling."""
+        messages = [
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "call_1", "function": {"name": "read", "arguments": '{"filePath": "/a.txt"}'}}
+            ]},
+            {"role": "tool", "content": "data", "name": "bash", "tool_call_id": "call_999"},
+        ]
+        result = enrich_messages_with_tool_calls(messages)
+        assert result[1]["content"] == "[Tool Result: bash] data"
+
+    def test_label_is_name_only_when_arguments_empty(self):
+        """A call with empty arguments produces a name-only label, with no trailing
+        space from an empty summary."""
+        messages = [
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "call_1", "function": {"name": "status", "arguments": ""}}
+            ]},
+            {"role": "tool", "content": "ok", "tool_call_id": "call_1"},
+        ]
+        result = enrich_messages_with_tool_calls(messages)
+        assert result[1]["content"] == "[Tool Result: status] ok"
+
+    def test_label_map_skips_malformed_calls_without_crashing(self):
+        """Non-dict entries, calls with no/blank/non-string ids, and calls with a
+        non-dict function value are all skipped by the label map; a result whose
+        id therefore has no label falls back to its own name."""
+        messages = [
+            {"role": "assistant", "content": None, "tool_calls": [
+                "junk-entry",
+                {"function": {"name": "no_id", "arguments": '{"x": "y"}'}},
+                {"id": "", "function": {"name": "blank_id", "arguments": "{}"}},
+                {"id": 42, "function": {"name": "int_id", "arguments": "{}"}},
+                {"id": "call_fn_bad", "function": "not-a-dict"},
+            ]},
+            {"role": "tool", "content": "out", "name": "fallback_tool", "tool_call_id": "call_x"},
+        ]
+        result = enrich_messages_with_tool_calls(messages)
+        assert result[1]["content"] == "[Tool Result: fallback_tool] out"
+
+    def test_result_with_call_id_to_function_less_call_labeled_unknown(self):
+        """A result whose id maps to a call with a non-dict function gets the
+        'unknown' name from the map (the id DID match), not unknown_tool."""
+        messages = [
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "call_1", "function": "not-a-dict"},
+            ]},
+            {"role": "tool", "content": "out", "tool_call_id": "call_1"},
+        ]
+        result = enrich_messages_with_tool_calls(messages)
+        assert result[1]["content"] == "[Tool Result: unknown] out"

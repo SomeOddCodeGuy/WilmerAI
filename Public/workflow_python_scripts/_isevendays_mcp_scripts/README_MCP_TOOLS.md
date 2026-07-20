@@ -32,7 +32,7 @@ The following configurations have been set up:
 1. The system automatically detects MCP services mentioned in the system prompt.
 2. It discovers the available tools for each service:
    - **Native MCP (preferred):** if `Public/Configs/MCPServers/<service>.json` exists, the tools are listed
-     directly from that server using the official `mcp` SDK — no proxy needed. This is the same server registry
+     directly from that server using the official `mcp` SDK, with no proxy needed. This is the same server registry
      used by the deterministic `MCPToolCall` workflow node (see the
      [MCP Support guide](../../../Docs/User_Documentation/Core_Features/MCP_Support.md) for the config format;
      examples ship in `MCPServers/_examples/`).

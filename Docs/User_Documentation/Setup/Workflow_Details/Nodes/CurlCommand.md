@@ -2,7 +2,7 @@
 
 The `CurlCommand` node invokes the system `curl` binary inside a workflow. Arguments are supplied as a JSON list and
 passed to curl directly with `shell=False`. There is no shell parsing, no glob expansion, and no
-environment-variable expansion done by the node itself — each argument is treated as a literal string after Wilmer's
+environment-variable expansion done by the node itself; each argument is treated as a literal string after Wilmer's
 own variable substitution runs. The node spawns curl via `subprocess.Popen` and streams its output, so the response
 body can be bounded in-process (see `maxResponseBytes`).
 
@@ -44,15 +44,16 @@ dependency, runs on every platform Wilmer supports, and integrates cleanly with 
 
     * A human-readable name for the node, used in logging.
 
-* `"agentName"`: **(String, Required)**
+* `"agentName"`: **(String, Optional)**
 
-    * The output variable name. The node's return value becomes `{agentName}` for downstream nodes.
+    * A fallback display name used in logs when `title` is not set. It does not create a named output variable;
+      the node's return value is available to later nodes only positionally, as `{agent#Output}`.
 
 * `"args"`: **(List of Strings, Required)**
 
     * The arguments passed to `curl`. The node prepends `curl` itself, so this list contains everything else: flags,
       URLs, headers, payload, etc. Each element is variable-substituted in place. **Each argument is sent as a separate
-      `argv` entry** — there is no shell tokenization, so `"-H 'X: Y'"` would be one argument including the quotes, not
+      `argv` entry**; there is no shell tokenization, so `"-H 'X: Y'"` would be one argument including the quotes, not
       two arguments.
 
 * `"timeout"`: **(Integer, Optional, default `30`)**
@@ -76,29 +77,29 @@ dependency, runs on every platform Wilmer supports, and integrates cleanly with 
           `subprocess.TimeoutExpired`.
         * `"return"` causes the node to emit an error payload as its output, allowing a later `Conditional` node to
           branch on the failure. The shape of the payload matches `outputFormat`:
-            * `"stdout"` or `"stdout+stderr"` — returns whatever curl produced before the failure, or a short
+            * `"stdout"` or `"stdout+stderr"`: returns whatever curl produced before the failure, or a short
               `"curl timed out after N seconds"` message for timeouts.
-            * `"full"` — returns the JSON envelope; for timeouts, `returncode` is `null` and an additional `error`
+            * `"full"`: returns the JSON envelope; for timeouts, `returncode` is `null` and an additional `error`
               field describes the timeout.
 
 * `"proxy"`: **(String, Optional)**
 
     * A proxy URL. When set, the node prepends `-x <url>` to the `args` list before invoking curl. Any scheme curl
       supports works:
-        * `socks5://host:port` — SOCKS5 with local DNS resolution.
-        * `socks5h://host:port` — SOCKS5 with remote DNS (resolves at the proxy; useful for Tor/onion endpoints).
-        * `socks4://host:port` — SOCKS4.
-        * `http://host:port` or `https://host:port` — standard HTTP proxy.
+        * `socks5://host:port`: SOCKS5 with local DNS resolution.
+        * `socks5h://host:port`: SOCKS5 with remote DNS (resolves at the proxy; useful for Tor/onion endpoints).
+        * `socks4://host:port`: SOCKS4.
+        * `http://host:port` or `https://host:port`: standard HTTP proxy.
     * Auth: include credentials inline, e.g., `socks5://user:pass@host:1080`.
     * Supports variable substitution. An empty string is treated as "no proxy".
     * **Note:** curl handles the proxy entirely on its own; no Python SOCKS library is involved.
 
-* `"maxResponseBytes"`: **(Integer, Optional, default `10485760` — 10 MiB)**
+* `"maxResponseBytes"`: **(Integer, Optional, default `10485760`, 10 MiB)**
 
     * Caps how many bytes curl may pull onto the machine, using two layers:
         1. **Early abort (`--max-filesize`).** When set above `0`, the node injects curl's native
            `--max-filesize <bytes>`. curl aborts before downloading when the server advertises a `Content-Length`
-           larger than the cap. This is cheap but **only fires for advertised-length responses** — a chunked or
+           larger than the cap. This is cheap but **only fires for advertised-length responses**; a chunked or
            unknown-length response (no `Content-Length`) slips past it. If you supply your own `--max-filesize` in
            `args`, the node does not add a second one.
         2. **In-process cap (the true bound).** The node reads curl's stdout incrementally with a running byte total
@@ -126,7 +127,7 @@ dependency, runs on every platform Wilmer supports, and integrates cleanly with 
       rejects an `args` element whose resolved value introduces a non-`http`/`https` URL scheme (`file://`, `ftp://`,
       `scp://`, `dict://`, `gopher://`, ...) **via variable substitution**. Such a scheme would let curl read a local
       file or reach an internal service from a conversation-derived value. A scheme the author writes **literally** in
-      the template (e.g. `args: ["file://{path}"]`) is treated as intentional and is allowed — only a scheme that the
+      the template (e.g. `args: ["file://{path}"]`) is treated as intentional and is allowed; only a scheme that the
       *substituted value* introduces is blocked. Set this to `true` to fully open the node back up and permit
       substituted schemes of any kind. Note: the guard inspects only the leading scheme of a value; it is not a host or
       SSRF allowlist (see "Security and Safety Notes").
@@ -134,13 +135,13 @@ dependency, runs on every platform Wilmer supports, and integrates cleanly with 
 * `"blockPrivateAddresses"`: **(Boolean, Optional, default `false`)**
 
     * Opt-in SSRF guard. When `true`, any `http(s)` URL among the resolved `args` (a bare `http://...`/`https://...`
-      value, or a `--url=<url>`) is rejected if its host is, or resolves to, an address that is not globally routable —
+      value, or a `--url=<url>`) is rejected if its host is, or resolves to, an address that is not globally routable:
       loopback/link-local/private/reserved (e.g. `127.0.0.1`, the cloud metadata endpoint `169.254.169.254`, and the
-      `10.x` / `172.16–31.x` / `192.168.x` ranges), plus shared CGNAT space (`100.64.0.0/10`) and the TEST-NET ranges.
+      `10.x` / `172.16-31.x` / `192.168.x` ranges), plus shared CGNAT space (`100.64.0.0/10`) and the TEST-NET ranges.
       While the guard is active the node also pins curl to `--max-redirs 0` (unless you set your own) so a `3xx` cannot
-      bounce the request to an unvalidated host — curl resolves and follows redirects itself, so they cannot be
+      bounce the request to an unvalidated host; curl resolves and follows redirects itself, so they cannot be
       re-checked in-process the way `WebFetch` does. Default `false` preserves the historical behavior. **This guard is
-      best-effort on `CurlCommand`** — see the SSRF note below for why, and prefer `WebFetch` for conversation-derived URLs.
+      best-effort on `CurlCommand`**; see the SSRF note below for why, and prefer `WebFetch` for conversation-derived URLs.
 
 * `"allowedHosts"`: **(List of strings, Optional, default none)**
 
@@ -148,21 +149,23 @@ dependency, runs on every platform Wilmer supports, and integrates cleanly with 
       (case-insensitively) one of the listed hosts; any other host is rejected. Entries support variable substitution.
       As with `blockPrivateAddresses`, curl is pinned to `--max-redirs 0` while active. Combine the two to require both
       an allowlisted host *and* a non-private address.
+    * Entries must be hostnames only (no port). Matching runs against the URL's hostname with any port stripped, so an
+      entry written as `"example.com:8080"` can never match and every request to it will be rejected. Write
+      `"example.com"` instead; the port in the URL itself is unaffected.
 
 -----
 
 ### **Variable Substitution**
 
-Each element of the `args` list — and the `proxy` field — is passed through Wilmer's standard variable resolver
+Each element of the `args` list (and the `proxy` field) is passed through Wilmer's standard variable resolver
 before curl is invoked. This means you can reference any of:
 
 * Other agent outputs: `{agent1Output}`, `{agent2Output}`, ...
-* Named agents: `{MyAgent}` (matching an earlier node's `agentName`)
 * Built-in variables: `{Discussion_Id}`, `{YYYY_MM_DD}`, `{userInput}`, etc.
 * Custom workflow variables defined at the top of the workflow JSON.
 
 Substitution is per-element; an argument's content can be any string after substitution, but the argument boundaries
-are fixed by the list structure. If your variable contains spaces, those spaces stay inside the same argument — curl
+are fixed by the list structure. If your variable contains spaces, those spaces stay inside the same argument; curl
 will see one argument, not multiple.
 
 -----
@@ -177,7 +180,7 @@ will see one argument, not multiple.
 * **`shell=False` stops shell injection, not curl's own options.** Each `args` element is a real curl argument, and
   curl has features that touch the local filesystem:
     * `file://` URLs and `-d @file` / `--data-binary @file` make curl **read a local file** (and, with a data flag,
-      send its contents to the remote server — an exfiltration path).
+      send its contents to the remote server, an exfiltration path).
     * `-o` / `--output` and `-O` make curl **write/overwrite a local file**.
     * `-K` / `--config` makes curl read further options from a file.
     * Any argument that starts with `-` is parsed as an **option**, including one produced by variable substitution.
@@ -192,7 +195,7 @@ will see one argument, not multiple.
   (e.g. `file:///etc/passwd`, `dict://`, `gopher://`) is rejected before curl runs, because such a value would make
   curl read a local file or reach an internal service. This guard is on by default; a scheme the author writes
   *literally* in the template is still allowed (it is your intent, not injection). Set `"allowSchemeInjection": true`
-  to disable the guard and fully open the node back up. Note the guard checks the **scheme only** — it is not a host
+  to disable the guard and fully open the node back up. Note the guard checks the **scheme only**; it is not a host
   or IP allowlist, so it does not by itself stop a substituted `http://169.254.169.254/...` SSRF; keep building the
   host portion of any URL from values you control, or enable the opt-in address guard described below.
 * **`blockOptionInjection` guards leading-`-` and `@file` injection (separate, opt-in).** The scheme guard handles
@@ -206,7 +209,7 @@ will see one argument, not multiple.
   reach a URL, set `"blockPrivateAddresses": true` to reject `http(s)` URL args that target any non-globally-routable
   address (loopback/link-local/private/reserved, plus CGNAT `100.64.0.0/10` and the TEST-NET ranges), and/or
   `"allowedHosts"` to restrict them to a fixed host list. While either is active the node pins curl to `--max-redirs 0`
-  (unless you supply your own `--max-redirs`) so a redirect cannot reach an unvalidated host — curl follows redirects
+  (unless you supply your own `--max-redirs`) so a redirect cannot reach an unvalidated host; curl follows redirects
   itself and they cannot be re-validated in-process.
 
   **Why "best-effort": the component Wilmer validates is not the component that connects.** Wilmer parses the URL and

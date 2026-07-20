@@ -6,7 +6,7 @@ directly passes the key-value pairs from a selected preset file into the final J
 This design allows WilmerAI to support any parameter offered by a target backend (e.g., KoboldCpp, Ollama,
 OpenAI-compatible) without requiring changes to the core application code.
 
-> **Newer alternative — embedded samplers on the endpoint.** Folder presets (described on this page)
+> **Newer alternative: embedded samplers on the endpoint.** Folder presets (described on this page)
 > still work exactly as before and remain the fallback. But you can now avoid maintaining one preset
 > file per API type by writing your samplers **once, in a canonical vocabulary, directly on the
 > endpoint** via a `presetSamplers` block; Wilmer translates them to whatever the endpoint's API type

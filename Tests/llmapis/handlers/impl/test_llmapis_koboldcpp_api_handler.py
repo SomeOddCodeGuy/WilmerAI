@@ -103,8 +103,10 @@ def test_prepare_payload_with_completion_text(base_handler_args):
         ('{"other_key": "value"}', {'token': '', 'finish_reason': None}),
         ("not a json string", None),
         ("", None),
+        ("123", None),
     ],
-    ids=["valid_token", "empty_token", "empty_json", "missing_token_key", "invalid_json", "empty_string"]
+    ids=["valid_token", "empty_token", "empty_json", "missing_token_key", "invalid_json", "empty_string",
+         "non_dict_json"]
 )
 def test_process_stream_data(base_handler_args, data_str, expected_output):
     """
@@ -218,8 +220,8 @@ def test_handle_streaming_success(mocker, base_handler_args):
 
 def test_prepare_payload_images_only_from_user_messages(base_handler_args):
     """
-    Verifies that only images from user messages are collected into
-    gen_input, not images from assistant or system messages.
+    Verifies that only images from user messages are collected into the
+    payload, not images from assistant or system messages.
     """
     handler = KoboldCppApiHandler(**base_handler_args, stream=False)
     conversation = [
@@ -228,14 +230,51 @@ def test_prepare_payload_images_only_from_user_messages(base_handler_args):
         {"role": "assistant", "content": "I see", "images": ["assistant_img"]},
         {"role": "user", "content": "Another", "images": ["user_img3"]},
     ]
-    handler._prepare_payload(conversation=conversation, system_prompt=None, prompt=None)
+    payload = handler._prepare_payload(conversation=conversation, system_prompt=None, prompt=None)
 
-    assert handler.gen_input["images"] == ["user_img1", "user_img2", "user_img3"]
+    assert payload["images"] == ["user_img1", "user_img2", "user_img3"]
+
+
+def test_prepare_payload_strips_data_uri_prefix_from_images(base_handler_args, mocker):
+    """
+    Verifies that a data URI image on a user message has its prefix stripped,
+    leaving only the raw base64 data in the payload.
+    """
+    mocker.patch('Middleware.llmapis.handlers.base.base_api_transport.get_connect_timeout',
+                 return_value=30)
+    handler = KoboldCppApiHandler(**base_handler_args, stream=False)
+    conversation = [
+        {"role": "user", "content": "Describe this", "images": ["data:image/png;base64,XXX"]},
+    ]
+    payload = handler._prepare_payload(conversation=conversation, system_prompt=None, prompt=None)
+
+    assert payload["images"] == ["XXX"]
+
+
+def test_images_do_not_leak_into_subsequent_imageless_request(base_handler_args):
+    """
+    A request with images must not pollute the next request on the same handler:
+    _prepare_payload stores images in gen_input, and without clearing them a
+    later image-free conversation would silently resend the previous request's
+    images (regression pin for the stale-images bug).
+    """
+    handler = KoboldCppApiHandler(**base_handler_args, stream=False)
+
+    first_payload = handler._prepare_payload(
+        conversation=[{"role": "user", "content": "Describe", "images": ["IMG1"]}],
+        system_prompt=None, prompt=None)
+    second_payload = handler._prepare_payload(
+        conversation=[{"role": "user", "content": "Text only follow-up"}],
+        system_prompt=None, prompt=None)
+
+    assert first_payload["images"] == ["IMG1"]
+    assert "images" not in second_payload
 
 
 def test_handle_non_streaming_http_error(mocker, base_handler_args):
     """
-    Ensures that an HTTP request failure is correctly propagated as an exception.
+    Ensures that an HTTP request failure is retried 3 times and then correctly
+    propagated as an exception.
     """
     handler = KoboldCppApiHandler(**base_handler_args, stream=False)
     mock_session = mocker.patch.object(handler, 'session', spec=requests.Session)
@@ -243,3 +282,5 @@ def test_handle_non_streaming_http_error(mocker, base_handler_args):
 
     with pytest.raises(requests.exceptions.RequestException, match="Connection failed"):
         handler.handle_non_streaming(prompt="Test prompt")
+
+    assert mock_session.post.call_count == 3

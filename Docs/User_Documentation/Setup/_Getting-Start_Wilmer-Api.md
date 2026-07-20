@@ -56,28 +56,6 @@ You have two options for installation:
 
 -----
 
-### Step 2b: (Optional) Use the Setup Wizard
-
-WilmerAI includes an interactive setup wizard that can configure your LLM endpoints for you. If you'd rather not
-manually edit JSON files, the wizard provides a guided experience.
-
-**To run the setup wizard:**
-
-```bash
-python setup_wizard_web.py
-```
-
-The wizard will:
-
-1. Ask if you're using one model for everything or multiple models
-2. Guide you through selecting your API type (Ollama, OpenAI, KoboldCpp, etc.)
-3. Collect your LLM server URL and model name
-4. Automatically update all endpoint configuration files
-
-If you use the setup wizard, you can skip Step 5 (Configure Your LLM Endpoints) since the wizard handles that for you.
-
------
-
 ### Step 3: Manage Your Configuration Files
 
 To avoid issues with future updates (like git conflicts), it's highly recommended to **move your configuration files out
@@ -113,7 +91,7 @@ Critically, runtime data lives *alongside* `Configs/`, never inside it:
 | Workflow lock SQLite DBs | `{PublicDirectory}/SqlLiteDBs/` (override with `--UserLevelSqlLiteDirectory` or the `sqlLiteDirectory` user config setting) |
 | Per-discussion files (memories, summaries, vector DBs) | `{PublicDirectory}/DiscussionIds/` (override with `--DiscussionDirectory` or the `discussionDirectory` user config setting) |
 
-When **no** flag is set, every default above resolves to a subfolder under `{install_dir}/Public/` — where
+When **no** flag is set, every default above resolves to a subfolder under `{install_dir}/Public/`, where
 `{install_dir}` is the directory containing `server.py`. The defaults are pinned to the install location (derived from
 the Python source files), so they never depend on the current working directory. If you run WilmerAI from an unusual
 cwd (e.g. as a systemd service, or by launching the script from your home directory), logs and runtime data still
@@ -124,7 +102,7 @@ land inside the install tree rather than quietly appearing in `~/logs/` or `/log
 behavior, prefer `--PublicDirectory`.
 
 If data already exists at pre-refactor locations (e.g. `Public/DiscussionIds/` or a lock database in the project root),
-WilmerAI keeps reading and writing to that existing location -- no automatic migration is performed. Move the files
+WilmerAI keeps reading and writing to that existing location; no automatic migration is performed. Move the files
 manually if you want them under the new location.
 
 > NOTE: Since you have not chosen a user yet, if you run the project on this step it will automatically load the
@@ -199,11 +177,11 @@ out the workflow that is called.
 For example, you could change that node's `workflowName` from `General` to `Task` (or any other entry in `_common`) by
 editing the `_DefaultWorkflow.json` for that shared workflow. Common workflows in `_common` include:
 
-* `General` - General conversation
-* `General_CoT` - General conversation with an enforced manual chain-of-thought step
-* `General_With_Vision_DiscussionId` - General conversation that uses a discussionId vision node to describe and persist images
-* `Task` - Task-oriented workflow
-* `Direct_Model` - Sends the conversation straight to a single model with no extra steps
+* `General`: General conversation
+* `General_CoT`: General conversation with an enforced manual chain-of-thought step
+* `General_With_Vision_DiscussionId`: General conversation that uses a discussionId vision node to describe and persist images
+* `Task`: Task-oriented workflow
+* `Direct_Model`: Sends the conversation straight to a single model with no extra steps
 
 That is not necessary for setting up the example users, and is optional. For the sake of a quick start, the user should
 not need to modify the workflow folder at all.
@@ -216,9 +194,6 @@ This is the most important step. Each example user points at its own endpoint co
 `Public/Configs/Endpoints/`, selected by the user's `endpointConfigsSubDirectory` setting. The four `chat-ui` users use
 the `_shared*` collections; the other users have their own.
 
-> **Tip:** If you prefer a guided experience, run `python setup_wizard_web.py` instead of manually editing these files.
-> The setup wizard will configure all your endpoints interactively.
-
 1. Navigate to the endpoint collection for the user you picked, e.g. **`Public/Configs/Endpoints/_shared/`** for the
    `chat-ui` user (or the equivalent location you chose in the Pro-Tip step). The collection name matches the user's
    `endpointConfigsSubDirectory` setting.
@@ -229,7 +204,8 @@ Here are the key fields to update in each endpoint file:
 
 * `"endpoint"`: The URL and port of your LLM API (e.g., `"http://localhost:11434"` for Ollama).
 * `"apiTypeConfigFileName"`: The name of the API "driver" file from the `Public/Configs/ApiTypes/` folder. Common
-  choices are `"Ollama"`, `"KoboldCpp"`, or `"OpenAI"`.
+  choices are `"OllamaApiChat"`, `"LlamaCppServer"`, `"KoboldCpp"`, or `"Open-AI-API"`. The value must match a file
+  name in that folder exactly (without the `.json` extension).
 * `"maxContextTokenSize"`: The context window size of your model (e.g., `8192`).
 * `"modelNameToSendToAPI"`: The specific model name your API requires (e.g., `"llama3:8b-instruct-q5_K_M"` for Ollama).
   For single-model servers, this can sometimes be left blank.
@@ -267,6 +243,8 @@ only ships the endpoints its workflows actually reference.
   a memory, it needs to really 'get' what it's reading and what was happening/being said.
 * `Responder-Endpoint`: Your best talker. Some example users use this to give the final response to the user, after
   other models have thought about it.
+* `Embedding-Endpoint`: An embeddings server (llama.cpp `--embedding`, Ollama embedding models, or any `/v1/embeddings`
+  service). Only used when semantic memory search is enabled; not a generation endpoint.
 * `Thinker-Endpoint`: The model that is tasked, by some example users, to think through a situation and respond with a
   breakdown of things. This could be a reasoning model, but it doesn't have to be. Socg doesn't use reasoning models, or
   if he does he disables the reasoning. That's what workflows are for.
@@ -325,11 +303,11 @@ between different workflows without changing configuration files.
 
 The `_shared` folder includes several ready-to-use workflows for Open WebUI:
 
-* `general` - General conversation workflow
-* `fast` - Faster general conversation (fewer/lighter processing steps)
-* `general-reasoning` - General conversation with a reasoning pass
-* `fast-reasoning` - Faster conversation with a lighter reasoning pass
-* `task` - Task-oriented workflow
+* `general`: General conversation workflow
+* `fast`: Faster general conversation (fewer/lighter processing steps)
+* `general-reasoning`: General conversation with a reasoning pass
+* `fast-reasoning`: Faster conversation with a lighter reasoning pass
+* `task`: Task-oriented workflow
 
 #### Enabling Shared Workflows for Other Users
 

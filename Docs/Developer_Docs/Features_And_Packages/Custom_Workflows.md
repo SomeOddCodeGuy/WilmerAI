@@ -43,7 +43,7 @@ A child workflow is isolated and cannot access the parent's `agent_outputs` (e.g
 
 #### **Mechanism 1: `scoped_variables` (Modern & Recommended)**
 
-This is the most robust method for passing data, making it globally available within the child workflow as `agent_inputs`.
+This is the preferred method for passing data, making it globally available within the child workflow as `agent_inputs`.
 
 1.  **Resolution (in `$SubWorkflowHandler$`):**
       * The `_prepare_scoped_inputs` method retrieves the `scoped_variables` array from the node's configuration.
@@ -70,7 +70,7 @@ The `handle_conditional_custom_workflow` method contains the branching logic.
 1.  **Key Resolution:** The `conditionalKey` (e.g., `"{agent1Output}"`) is resolved to its string value.
 2.  **Key Normalization:** The resolved value is normalized for matching: `raw_key_value.strip().lower()`. This ensures that `"Python"`, `" python "`, and `"python"` are all treated as `"python"`.
 3.  **Workflow Selection:** The keys in the `conditionalWorkflows` dictionary are also iterated and converted to lowercase to perform a case-insensitive lookup.
-4.  **Route Override Selection (Known Issue):** The logic for selecting a `systemPromptOverride` or `promptOverride` from the `routeOverrides` map is **different**. The normalized, lowercase `key_value` is explicitly capitalized (`"python"` becomes `"Python"`) before being used as the lookup key. This is why the keys in the `routeOverrides` object **must be capitalized** to be found. This is an implementation inconsistency between the workflow selection logic and the override selection logic.
+4.  **Route Override Selection:** The `routeOverrides` lookup uses the same case-insensitive matching as workflow selection: the map's keys are lowercased and looked up with the normalized `key_value`, so `"Python"`, `"python"`, and `"PYTHON"` route override keys all match.
 
 -----
 
@@ -119,7 +119,9 @@ def handle_conditional_custom_workflow(self, context: ExecutionContext):
     # ... (logic to resolve conditionalKey and select workflow_name) ...
 
     # Find the specific override configuration for the chosen route
-    route_overrides = context.config.get("routeOverrides", {}).get(key_value.capitalize(), {})
+    # (case-insensitive: map keys are lowercased before lookup)
+    route_overrides_map = {k.lower(): v for k, v in context.config.get("routeOverrides", {}).items()}
+    route_overrides = route_overrides_map.get(key_value, {})
 
     # Use the centralized helper, passing the specific overrides for this route
     system_prompt, prompt, non_responder, allow_streaming = self._prepare_workflow_overrides(

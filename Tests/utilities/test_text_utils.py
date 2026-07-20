@@ -22,6 +22,7 @@ from Middleware.utilities.text_utils import (
     tokenize,
     replace_delimiter_in_file,
     redact_sensitive_data,
+    strip_data_uri_prefix,
 )
 
 # Test data to be used across multiple tests
@@ -41,6 +42,9 @@ MESSAGES_FIXTURE = [
         ("antidisestablishmentarianism", 8),
         ("", 0),
         ("  ", 0),
+        # Unbroken CJK text has no spaces: word ratio sees 1 word (1.35), the
+        # char ratio dominates. 7 chars / 3.5 = 2.0, * 1.10 margin = 2.2 -> 2.
+        ("こんにちは世界", 2),
     ]
 )
 def test_rough_estimate_token_length(text, expected_tokens):
@@ -73,22 +77,27 @@ def test_rough_estimate_token_length_custom_safety_margin():
 
 def test_rough_estimate_default_margin_distinguishable_from_no_margin():
     """
-    Tests that the default 1.10 safety margin produces a detectably different
-    result from no margin (1.0) for a carefully chosen input.
+    Tests that the default safety margin is exactly 1.10: for this input the
+    raw estimate is 6.75, so int(6.75 * 1.10) = 7 while a default of 1.0 would
+    give 6 and 1.20 would give 8. Pins the documented default, not just "some
+    margin exists".
     """
     # "one two three four five" has word_est=6.75, char_est=6.571
     text = "one two three four five"
     result_with_margin = rough_estimate_token_length(text)       # 1.10 default
     result_no_margin = rough_estimate_token_length(text, safety_margin=1.0)
     assert result_with_margin > result_no_margin
+    assert result_with_margin == 7  # int(6.75 * 1.10); default must be 1.10
+    assert result_no_margin == 6    # int(6.75 * 1.00)
 
 
 @pytest.mark.parametrize(
     "text, token_limit, expected_text",
     [
-        ("one two three four five", 5, ""),
+        # Text fully within the limit is returned unchanged.
+        ("one two three four five", 5, "one two three four five"),
         ("one two three four five", 4, "two three four five"),
-        ("one two three four five", 100, ""),
+        ("one two three four five", 100, "one two three four five"),
         ("one two three four five", 0, ""),
         ("", 10, ""),
     ]
@@ -107,6 +116,12 @@ def test_reduce_text_to_token_limit(text, token_limit, expected_text):
         ("one two three", 10, ["one two three"]),
         ("a b c d e f", 1, ["a", "b", "c", "d", "e", "f"]),
         ("", 10, []),
+        # Exact-fit boundary: each single-letter word estimates to 1 token, and
+        # the split condition is strictly greater-than, so a chunk that lands
+        # exactly on chunk_size is NOT split...
+        ("a b", 2, ["a b"]),
+        # ...but one more word past the exact boundary starts a new chunk.
+        ("a b c", 2, ["a b", "c"]),
     ]
 )
 def test_split_into_tokenized_chunks(text, chunk_size, expected_chunks):
@@ -121,7 +136,7 @@ def test_chunk_messages_by_token_size():
     Tests that messages are chunked correctly based on token size, preserving order.
     """
     messages = deepcopy(MESSAGES_FIXTURE)
-    chunks = chunk_messages_by_token_size(messages, 20, 0)
+    chunks = chunk_messages_by_token_size(messages, 20)
     assert len(chunks) == 4
     assert chunks[0] == [messages[0]]
     assert chunks[1] == [messages[1]]
@@ -129,17 +144,17 @@ def test_chunk_messages_by_token_size():
     assert chunks[3] == [messages[3]]
 
 
-def test_chunk_messages_by_token_size_with_max_messages_filter():
+def test_chunk_messages_single_oversized_message_still_admitted():
     """
-    Tests the max_messages_before_chunk logic, which filters out small final chunks.
+    A message whose estimated size exceeds chunk_size is still admitted when the
+    current chunk is empty: messages are never split or dropped, so an oversized
+    message forms its own chunk.
     """
     messages = [
-        {"role": "user", "content": "a b c d e f g h i j"},
-        {"role": "user", "content": "k"},
+        {"role": "user", "content": "this message is far larger than the tiny chunk size"},
     ]
-    chunks = chunk_messages_by_token_size(messages, 20, max_messages_before_chunk=2)
-    assert len(chunks) == 1
-    assert chunks[0] == messages
+    chunks = chunk_messages_by_token_size(messages, 1)
+    assert chunks == [messages]
 
 
 def test_chunk_messages_fits_in_one_chunk():
@@ -147,24 +162,45 @@ def test_chunk_messages_fits_in_one_chunk():
     Tests that no chunking occurs if all messages fit within the chunk size.
     """
     messages = deepcopy(MESSAGES_FIXTURE)
-    chunks = chunk_messages_by_token_size(messages, 100, 0)
+    chunks = chunk_messages_by_token_size(messages, 100)
     assert len(chunks) == 1
     assert chunks[0] == messages
 
 
-def test_messages_into_chunked_text_of_token_size(mocker):
+# Three messages that each estimate to exactly 4 tokens: one 14-char "word",
+# so char ratio dominates -> int(max(1.35, 14/3.5) * 1.10) = int(4.4) = 4.
+# With chunk_size=10 the 80% headroom threshold is 8: the newest two messages
+# together hit the threshold exactly (4+4=8 <= 8, admitted), while the third
+# would overflow it (8+4=12 > 8) and starts an older chunk.
+FOUR_TOKEN_MESSAGES = [
+    {"role": "user", "content": "aaaaaaaaaaaaaa"},
+    {"role": "assistant", "content": "bbbbbbbbbbbbbb"},
+    {"role": "user", "content": "cccccccccccccc"},
+]
+
+
+def test_chunk_messages_exact_80_percent_boundary_is_inclusive():
     """
-    Tests the conversion of messages into formatted text blocks.
+    A message landing exactly on the 80% headroom threshold is admitted to the
+    current chunk (the comparison is <=, not <). Breaking either the 0.8 factor
+    or the inclusive comparison changes the grouping and fails this test.
     """
-    mocker.patch(
-        "Middleware.utilities.text_utils.chunk_messages_by_token_size",
-        return_value=[
-            [{"role": "user", "content": "Hello"}],
-            [{"role": "assistant", "content": "Hi there!"}],
-        ],
-    )
-    text_blocks = messages_into_chunked_text_of_token_size([], 100, 0)
-    assert text_blocks == ["Hello", "Hi there!"]
+    messages = deepcopy(FOUR_TOKEN_MESSAGES)
+    chunks = chunk_messages_by_token_size(messages, 10)
+    assert chunks == [[messages[0]], [messages[1], messages[2]]]
+
+
+def test_messages_into_chunked_text_of_token_size():
+    """
+    End-to-end: messages are chunked by the real chunker and rendered into
+    newline-joined text blocks, oldest chunk first, roles omitted.
+    """
+    messages = deepcopy(FOUR_TOKEN_MESSAGES)
+    text_blocks = messages_into_chunked_text_of_token_size(messages, 10)
+    assert text_blocks == [
+        "aaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbb\ncccccccccccccc",
+    ]
 
 
 def test_messages_to_text_block():
@@ -189,6 +225,16 @@ def test_get_message_chunks(mocker, lookback, expected_slice):
     mock_chunker.assert_called_once()
     called_with_messages = mock_chunker.call_args[0][0]
     assert called_with_messages == messages[expected_slice]
+
+
+def test_get_message_chunks_single_message_lookback_zero_returns_empty():
+    """
+    With lookbackStartTurn=0 and only one message there is nothing to chunk
+    (the last message is always excluded in the lookback=0 path): the result
+    is an empty list, not a chunk containing the sole message.
+    """
+    messages = [{"role": "user", "content": "only message"}]
+    assert get_message_chunks(messages, lookbackStartTurn=0, chunk_size=100) == []
 
 
 @pytest.mark.parametrize(
@@ -540,3 +586,49 @@ class TestRedactSensitiveData:
         result = redact_sensitive_data(data)
         for key in data.keys():
             assert result[key] == '***REDACTED***', f"Key '{key}' was not redacted"
+
+    def test_redact_does_not_mutate_input(self):
+        """
+        Tests that the input structure is not modified; a redacted copy is returned.
+        """
+        data = {
+            'apiKey': 'secret123',
+            'servers': [{'credentials': {'password': 'pass456'}, 'name': 'server1'}],
+            'endpoint': 'https://api.example.local'
+        }
+        original = deepcopy(data)
+        redact_sensitive_data(data)
+        assert data == original
+
+
+class TestStripDataUriPrefix:
+    """
+    Tests for strip_data_uri_prefix, used by the KoboldCpp/Ollama handlers to
+    convert data URIs into the raw base64 those backends require.
+    """
+
+    def test_strips_png_data_uri_prefix(self):
+        assert strip_data_uri_prefix("data:image/png;base64,iVBORw0KGgo=") == "iVBORw0KGgo="
+
+    def test_strips_jpeg_data_uri_prefix(self):
+        assert strip_data_uri_prefix("data:image/jpeg;base64,/9j/4AAQ") == "/9j/4AAQ"
+
+    def test_plain_base64_unchanged(self):
+        """Raw base64 without a data URI prefix passes through untouched."""
+        assert strip_data_uri_prefix("iVBORw0KGgo=") == "iVBORw0KGgo="
+
+    def test_data_prefix_without_base64_marker_unchanged(self):
+        """A data: URI that is not base64-encoded (no ';base64,') is left alone."""
+        assert strip_data_uri_prefix("data:text/plain,hello") == "data:text/plain,hello"
+
+    def test_base64_marker_without_data_prefix_unchanged(self):
+        """';base64,' inside a non-data string must not trigger stripping."""
+        assert strip_data_uri_prefix("junk;base64,AAAA") == "junk;base64,AAAA"
+
+    def test_only_first_marker_is_split(self):
+        """Splitting uses maxsplit=1: a ';base64,' sequence inside the payload
+        survives intact."""
+        assert strip_data_uri_prefix("data:image/png;base64,AAA;base64,BBB") == "AAA;base64,BBB"
+
+    def test_empty_string_unchanged(self):
+        assert strip_data_uri_prefix("") == ""

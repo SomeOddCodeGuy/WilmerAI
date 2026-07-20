@@ -2,9 +2,19 @@
 
 import logging
 import threading
+import time
 from typing import Set, Dict, Callable, List
 
 logger = logging.getLogger(__name__)
+
+# Entries older than this are pruned lazily on the next cancellation request.
+# A registered cancellation is normally acknowledged when its request tears
+# down; the TTL is a backstop so ids that are never acknowledged (a request_id
+# that no longer or never existed, e.g. sent to the unauthenticated DELETE
+# endpoints) cannot grow the registry without bound over long uptimes. No real
+# request outlives this window unobserved: the streaming path checks the flag
+# at least once per token and per heartbeat interval.
+CANCELLATION_TTL_SECONDS = 3600
 
 
 class CancellationService:
@@ -41,11 +51,28 @@ class CancellationService:
         if self._initialized:
             return
 
-        self._cancelled_requests: Set[str] = set()
+        # request_id -> monotonic registration time, used for TTL pruning.
+        self._cancelled_requests: Dict[str, float] = {}
         self._abort_callbacks: Dict[str, List[Callable[[], None]]] = {}
         self._set_lock = threading.Lock()
         self._initialized = True
         logger.info("CancellationService initialized")
+
+    def _prune_stale_locked(self) -> None:
+        """
+        Removes cancellation entries older than CANCELLATION_TTL_SECONDS.
+
+        Must be called while holding self._set_lock.
+        """
+        cutoff = time.monotonic() - CANCELLATION_TTL_SECONDS
+        stale = [request_id for request_id, registered_at in self._cancelled_requests.items()
+                 if registered_at < cutoff]
+        for request_id in stale:
+            del self._cancelled_requests[request_id]
+            self._abort_callbacks.pop(request_id, None)
+        if stale:
+            logger.info(f"Pruned {len(stale)} stale cancellation entries older than "
+                        f"{CANCELLATION_TTL_SECONDS}s")
 
     def request_cancellation(self, request_id: str) -> None:
         """
@@ -60,12 +87,14 @@ class CancellationService:
 
         callbacks_to_call = []
         with self._set_lock:
+            self._prune_stale_locked()
+
             # Ensure we only process the cancellation registration once.
             if request_id in self._cancelled_requests:
                 logger.debug(f"Request {request_id} already marked for cancellation. Skipping registration.")
                 return
 
-            self._cancelled_requests.add(request_id)
+            self._cancelled_requests[request_id] = time.monotonic()
             logger.info(f"Cancellation registered for request_id: {request_id}")
 
             # Get callbacks to invoke (copy the list to avoid holding the lock during callback execution)
@@ -113,7 +142,7 @@ class CancellationService:
 
         with self._set_lock:
             if request_id in self._cancelled_requests:
-                self._cancelled_requests.remove(request_id)
+                del self._cancelled_requests[request_id]
                 logger.info(f"Cancellation acknowledged and cleared for request_id: {request_id}")
             else:
                 logger.debug(f"Attempted to acknowledge non-existent cancellation for request_id: {request_id}")
@@ -186,7 +215,7 @@ class CancellationService:
             Set[str]: A set containing all request IDs marked for cancellation.
         """
         with self._set_lock:
-            return self._cancelled_requests.copy()
+            return set(self._cancelled_requests)
 
 
 # Global singleton instance

@@ -2,13 +2,13 @@
 
 ## Memory System
 
-WilmerAI has a three-part memory system tied to a `discussionId` (conversation identifier). Without a `discussionId`,
+WilmerAI has a four-part memory system tied to a `discussionId` (conversation identifier). Without a `discussionId`,
 memory nodes either fall back to stateless mode or return empty results.
 
 **Providing a discussionId:** Include `[DiscussionId]my-unique-id[/DiscussionId]` anywhere in a user or system
 message. WilmerAI strips the tag before processing. The ID links all memory files for that conversation.
 
-### The Three Memory Stores
+### The Four Memory Stores
 
 1. **Long-Term Memory File** (`<id>_memories.json`): Chronological summarized chunks of conversation. Each chunk covers
    a range of messages. Created by `QualityMemory` when enough new messages accumulate.
@@ -16,9 +16,15 @@ message. WilmerAI strips the tag before processing. The ID links all memory file
 2. **Rolling Chat Summary** (`<id>_chat_summary.json`): A single continuously-updated high-level summary of the entire
    conversation. Updated by `FullChatSummary` or `chatSummarySummarizer`.
 
-3. **Vector Memory Database** (`<id>_vector_memory.db`): Structured memory objects (title, summary, entities) stored in
-   a searchable database. Queried via full-text keyword search (SQLite FTS5 with BM25 ranking). Created by `QualityMemory`
-   when `useVectorForQualityMemory` is enabled in the discussion's memory settings.
+3. **Vector Memory Database** (`vector_memory.db` in the discussion folder; a legacy `<id>_vector_memory.db` at the old
+   `Public/` location keeps being used if present): Structured memory objects (title, summary, entities) stored in a
+   searchable database. Queried via full-text keyword search (SQLite FTS5 with BM25 ranking), with optional
+   embedding-based semantic/hybrid search via `searchMode`. Created by `QualityMemory` when `useVectorForQualityMemory`
+   is enabled in the discussion's memory settings.
+
+4. **State Document** (`state_document.md` in the discussion folder): A single continuously-updated markdown snapshot
+   of what is currently true (user profile, roleplay world state, etc.), maintained by the vector memory pipeline when
+   `useStateDocument` is enabled in the discussion's memory settings. Read via `GetCurrentStateDocument`.
 
 ### Writer vs. Reader Nodes
 
@@ -116,7 +122,7 @@ no output.
 { "type": "QualityMemory" }
 ```
 
-Behavior depends on `useVectorForQualityMemory` in discussion settings -- writes to vector DB or memory file.
+Behavior depends on `useVectorForQualityMemory` in discussion settings: it writes to the vector DB or the memory file.
 
 ### VectorMemorySearch (Reader)
 
@@ -126,6 +132,24 @@ Searches the vector memory database by keywords. Returns matched memories joined
 |---|---|---|
 | `input` | String | Keywords separated by semicolons (`;`). **[var]** |
 | `limit` | Int | Max results. Default: 5. |
+| `bm25Weights` | List | Optional five per-column BM25 weights (title, summary, entities, key_phrases, memory text). Suggested: `[3.0, 2.0, 2.0, 2.0, 0.5]`. |
+| `useRecencyScoring` | Bool | Default false. Boosts newer memories via time decay. |
+| `includeDates` | Bool | Default false. Prefixes results with creation date, e.g. `[2024-03-15]`. |
+| `useEntityExpansion` | Bool | Default false. Entities from the metadata of the top results seed a second keyword pass, with roughly a third of the result slots reserved for memories only that pass found. Bridges facts connected by an entity the query could not name. Pure keyword/BM25; works in every `searchMode`, never requires embeddings. Expansion-only hits are appended after the base results. |
+| `searchMode` | String | Default `"keyword"`. `"semantic"` = embedding similarity; `"hybrid"` = both merged via RRF. Both need `embeddingEndpointName`; both degrade to keyword if embeddings unavailable. |
+| `semanticQuery` | String | Raw text to embed as the semantic query. **[var]** Defaults to keywords with `;` replaced by spaces. |
+| `embeddingEndpointName` | String | Endpoints config with an embeddings ApiType (`openAIEmbeddings`/`ollamaEmbeddings`). |
+
+### GetCurrentStateDocument (Reader)
+
+Reads the discussion's state document (`state_document.md`), a continuously updated markdown snapshot of what is
+currently true (user profile, roleplay world state, etc.), maintained by the vector memory pipeline when
+`useStateDocument` is enabled in discussion settings. Inject into system prompts so core facts are always present
+without a search. Returns `"No state document has been created yet"` when absent.
+
+```json
+{ "type": "GetCurrentStateDocument" }
+```
 
 ### RecentMemorySummarizerTool (Reader)
 
@@ -184,8 +208,8 @@ to persist the generated summary.
 
 Low-level node that generates an updated rolling summary from existing summary + new memory chunks. Uses two special
 placeholders in its `systemPrompt` and `prompt` fields (both placeholders can appear in either field):
-- `[CHAT_SUMMARY]` -- replaced with the current rolling summary
-- `[LATEST_MEMORIES]` -- replaced with new memory chunks to integrate
+- `[CHAT_SUMMARY]`: replaced with the current rolling summary
+- `[LATEST_MEMORIES]`: replaced with new memory chunks to integrate
 
 | Property | Type | Description |
 |---|---|---|
