@@ -5,6 +5,6 @@ Jinja2==3.1.6
 Pillow==12.3.0
 eventlet==0.41.1
 waitress==3.0.2
-cryptography==49.0.0
+cryptography==50.0.0
 mcp==1.28.1
 PySocks==1.7.1
