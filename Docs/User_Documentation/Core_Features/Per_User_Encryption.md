@@ -1,5 +1,8 @@
 ### **Feature Guide: Per-User Encryption and Data Isolation**
 
+> **EXPERIMENTAL. MAKE AN INDEPENDENT BACKUP BEFORE ENABLING ENCRYPTION.** Encryption is disabled by default. Keep your original API key
+>  and exact workflow-selection name; existing encrypted files require both. Disabling encryption does not decrypt existing files.
+
 > **Warning: losing the API key means losing access to encrypted data permanently.** WilmerAI does not store the key
 > and has no key reset, recovery key, backdoor, or other mechanism to recover that data. Encrypted backups also need
 > the original key. Before enabling encryption, save the exact API key securely, retain the original workflow-selection

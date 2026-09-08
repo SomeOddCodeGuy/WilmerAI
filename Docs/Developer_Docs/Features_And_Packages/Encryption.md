@@ -1,5 +1,8 @@
 ### **Developer Guide: Per-User Encryption and API Key Directory Isolation**
 
+> **EXPERIMENTAL. MAKE AN INDEPENDENT BACKUP BEFORE ENABLING ENCRYPTION.** Encryption is disabled by default. Keep your original API key
+> and exact workflow-selection name; existing encrypted files require both. Disabling encryption does not decrypt existing files.
+
 This guide provides a deep dive into the architecture and implementation of WilmerAI's per-user encryption and
 directory isolation feature. When a client sends an `Authorization: Bearer <key>` header, built-in discussion state is
 stored in the key's directory scope. Workflow-authored state uses the same scope when its path starts with
