@@ -6,9 +6,10 @@ environment-variable expansion done by the node itself; each argument is treated
 own variable substitution runs. The node spawns curl via `subprocess.Popen` and streams its output, so the response
 body can be bounded in-process (see `maxResponseBytes`).
 
-For most HTTP and HTTPS calls, the [WebFetch Node](WebFetch.md) is the better choice: it has no external binary
-dependency, runs on every platform Wilmer supports, and integrates cleanly with the workflow variable system. Use
-`CurlCommand` only when you specifically need the `curl` binary itself.
+For public webpage retrieval, use [WebPageFetch](WebPageFetch.md) when its default-on robots, pacing, and destination
+protections fit. For general HTTP and HTTPS calls, [WebFetch](WebFetch.md) is the better choice: it has no external
+binary dependency, runs on every platform Wilmer supports, and integrates cleanly with the workflow variable system.
+Use `CurlCommand` only when you specifically need the `curl` binary itself.
 
 -----
 
@@ -58,8 +59,9 @@ dependency, runs on every platform Wilmer supports, and integrates cleanly with 
 
 * `"timeout"`: **(Integer, Optional, default `30`)**
 
-    * Maximum time in seconds curl is allowed to run. If exceeded, the node either raises `subprocess.TimeoutExpired`
-      (when `onError` is `"raise"`) or emits a timeout payload (when `onError` is `"return"`).
+    * Maximum time in seconds curl is allowed to run. If exceeded, Wilmer stops curl and either raises
+      `subprocess.TimeoutExpired` (when `onError` is `"raise"`) or emits a timeout payload (when `onError` is `"return"`).
+      An interruption of the node also stops curl.
 
 * `"outputFormat"`: **(String, Optional, default `"stdout"`)**
 
@@ -225,20 +227,23 @@ will see one argument, not multiple.
 
   **Recommendation:** treat `CurlCommand`'s address guard as a hardening layer for *author-trusted* invocations, not as
   a boundary you can point untrusted input at. **When a URL can be filled from conversation-derived data, use
-  `WebFetch`**, which parses and resolves with the same Python stack it connects with (so the screened target is the
-  dialed target, rebinding aside). To constrain untrusted egress through `curl` specifically, route it via a vetted
-  allow-listing forward proxy (`proxy`) that enforces the policy at the component that actually opens the connection.
+  `WebFetch` with `transport: "requests"`**, which parses, resolves, and connects through the Python networking stack.
+  `WebFetch` with `transport: "curl"` has the same parser and DNS boundary described above. To constrain untrusted
+  egress through curl specifically, route it via a vetted allow-listing forward proxy (`proxy`) that enforces the
+  policy at the component that actually opens the connection.
 
 -----
 
-### **Choosing Between `CurlCommand` and `WebFetch`**
+### **Choosing Between `WebPageFetch`, `WebFetch`, and `CurlCommand`**
 
 | Reason                                                            | Prefer        |
 |:------------------------------------------------------------------|:--------------|
-| You want a cross-platform, no-binary-required HTTP/HTTPS request  | `WebFetch`    |
+| You want a public page with robots and pacing enabled by default  | `WebPageFetch` |
+| You want a cross-platform, no-binary-required HTTP/HTTPS request  | `WebFetch` with `transport: "requests"` |
 | A URL can be filled from conversation-derived/untrusted data      | `WebFetch`    |
 | You want clean integration with the workflow variable system      | `WebFetch`    |
 | You want output as parsed JSON or a full headers envelope         | `WebFetch`    |
+| You want curl networking with standard WebFetch fields and outputs | `WebFetch` with `transport: "curl"` |
 | You need a curl-only flag (such as `--data-binary @file`)         | `CurlCommand` |
 | You need to mirror an exact `curl` invocation a user gave you     | `CurlCommand` |
 | You need a protocol or feature the `requests` library doesn't provide | `CurlCommand` |

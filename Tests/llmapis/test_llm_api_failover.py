@@ -559,6 +559,44 @@ class TestNonStreamingFailover:
         assert delegated_conversation is original_conversation
         assert "images" in delegated_conversation[0]
 
+    def test_backup_applies_its_own_image_capability(self, mocker, base_mocks):
+        """A text-only backup strips images from the original delegated request."""
+        primary = {**PRIMARY_CONFIG}
+        backup = {**BACKUP_CONFIG, "backendSupportsImages": False}
+        mocker.patch(
+            "Middleware.llmapis.llm_api.get_endpoint_config",
+            side_effect=_make_config_resolver({"PRIMARY": primary, "BACKUP": backup}),
+        )
+
+        primary_handler = MagicMock()
+        primary_handler.handle_non_streaming.side_effect = ValueError("boom")
+        backup_handler = MagicMock()
+        backup_handler.handle_non_streaming.return_value = "ok"
+        mocker.patch(
+            "Middleware.llmapis.llm_api.LlmApiService.create_api_handler",
+            side_effect=[primary_handler, backup_handler],
+        )
+
+        service = LlmApiService(endpoint="PRIMARY", presetname="p", max_tokens=128)
+        original_conversation = [
+            {"role": "user", "content": "hi", "images": ["b64"]},
+        ]
+
+        assert service.get_response_from_llm(
+            conversation=original_conversation,
+            llm_takes_images=True,
+        ) == "ok"
+
+        primary_conversation = (
+            primary_handler.handle_non_streaming.call_args.kwargs["conversation"]
+        )
+        backup_conversation = (
+            backup_handler.handle_non_streaming.call_args.kwargs["conversation"]
+        )
+        assert primary_conversation[0]["images"] == ["b64"]
+        assert "images" not in backup_conversation[0]
+        assert original_conversation[0]["images"] == ["b64"]
+
     def test_delegate_kwargs_forwarded(self, single_chain):
         service = LlmApiService(endpoint="PRIMARY", presetname="p", max_tokens=128, stream=False)
         primary_handler = MagicMock()
@@ -1021,14 +1059,14 @@ class TestBaseHandlerSuppressRetries:
         adapter = h.session.get_adapter("http://x")
         assert adapter.max_retries.total == 0
 
-    def test_default_adapter_retry_total_is_five(self):
+    def test_default_adapter_retries_are_disabled(self):
         h = _ConcreteHandler(
             base_url="http://x", api_key="k", gen_input={}, model_name="m",
             headers={}, stream=False, api_type_config={}, endpoint_config={},
             max_tokens=100, suppress_retries=False,
         )
         adapter = h.session.get_adapter("http://x")
-        assert adapter.max_retries.total == 5
+        assert adapter.max_retries.total == 0
 
     @patch("requests.Session.post")
     def test_non_streaming_single_attempt_when_suppress_retries_true(self, mock_post):
@@ -1051,7 +1089,7 @@ class TestBaseHandlerSuppressRetries:
             headers={}, stream=False, api_type_config={}, endpoint_config={},
             max_tokens=100, suppress_retries=False,
         )
-        mock_post.side_effect = requests.exceptions.ConnectionError("down")
+        mock_post.side_effect = requests.exceptions.ConnectTimeout("down")
 
         with pytest.raises(requests.exceptions.ConnectionError):
             h.handle_non_streaming(prompt="hi")

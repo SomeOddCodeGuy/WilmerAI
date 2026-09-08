@@ -26,29 +26,34 @@ position while still sending exactly one user turn. Multi-round flows (search lo
 execution, image-generation retries) then work reliably through authored-prompt workflows. Backends whose chat
 templates cannot render tool turns can opt out endpoint-wide with `"backendSupportsToolTurns": false`.
 
+The property controls history delivery independently of `allowTools`. An authored-prompt internal planner can use
+`appendNativeToolExchange: true` with `allowTools` left disabled to inspect the live call and result in their native
+roles without receiving tool definitions or giving the planner's output a frontend execution path. Only the responding
+node should enable `allowTools` when the frontend must execute the model's calls.
+
 ## Enforced Tool Calls (forced and `required` `tool_choice`)
 
 When a client demands a call (`tool_choice` pinned to a function, or `"required"`) and the endpoint's API
-type declares a structured-output mechanism, WilmerAI enforces the demand with the backend's constrained
-decoding instead of hoping the model cooperates: the round is grammar-constrained to a tool-call JSON shape and
-converted back into a standard `tool_calls` response. On steering-only backends this turns an occasional
-sampling miss into a structural guarantee. Rounds with `tool_choice: "auto"` (the normal agentic case where
-the model decides) are never touched.
+type declares a structured-output mechanism, WilmerAI requests a tool-call JSON shape through the backend's
+constrained decoding and converts successfully parsed output into a standard `tool_calls` response. Backend
+enforcement can vary, so WilmerAI parse-checks the output and retries generation once after a failed parse. If
+the retry also fails, it returns the raw text and logs an error. Rounds with `tool_choice: "auto"` retain native
+tool handling, allowing the model to decide whether to call a tool.
 
 ## Structured Node Outputs: `structuredOutputFile`
 
 Any `Standard` node can pin its own output to a JSON Schema. Write the schema as a file under
 `Public/Configs/StructuredOutputs/` and reference it from the node:
 
-```json
+Configuration property fragment; insert these fields into the containing JSON object.
+
+```jsonc
 "structuredOutputFile": "RequestVerdict"
 ```
 
-The node's output is then grammar-guaranteed to parse as JSON matching the schema: a routing decision, an
-extraction result, a classification with a fixed enum, a state-document update. Downstream nodes (or a
-`ConditionalCustomWorkflow` routing on the value) consume it deterministically. This converts prompt-contract
-patterns ("respond ONLY with JSON shaped like...") from carefully-prompted hopes into guarantees, which is
-especially valuable when running small local models.
+WilmerAI requests schema-constrained output for routing decisions, extraction results, classifications, or
+state-document updates. Enforcement depends on the backend and its support for the schema. Downstream nodes
+should validate the returned JSON and required fields before using the result.
 
 Two rules of thumb: describe the desired structure in the prompt as well (grammar backends do not show the
 model the schema), and use endpoints with thinking disabled on constrained nodes.

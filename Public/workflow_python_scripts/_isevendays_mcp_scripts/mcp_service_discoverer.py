@@ -7,7 +7,9 @@ from typing import Dict, List, Optional, Tuple
 # Import the config utility to access user configuration
 from Middleware.utilities.config_utils import get_config_path, get_user_config
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 # Default MCPO server base URL (used if not provided in constructor)
 # First try to get from user config file, then environment variable, finally fallback to hardcoded value
@@ -520,4 +522,4 @@ class MCPServiceDiscoverer:
              return {}
 
         logger.info(f"{len(validated_tools_map)} tools remain after LLM schema validation ({invalid_count} failed).")
-        return validated_tools_map 
+        return validated_tools_map

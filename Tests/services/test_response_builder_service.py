@@ -55,7 +55,7 @@ def test_build_openai_models_response(service):
 
 
 def test_build_openai_models_response_no_workflows(service_no_workflows):
-    """Tests that models endpoint returns username when no workflows available."""
+    """Tests that models endpoint returns username when shared mode is disabled."""
     response = service_no_workflows.build_openai_models_response()
     assert response["object"] == "list"
     assert len(response["data"]) == 1
@@ -108,10 +108,28 @@ def test_build_ollama_tags_response(service):
 
 
 def test_build_ollama_tags_response_no_workflows(service_no_workflows):
-    """Tests that tags endpoint returns username when no workflows available."""
+    """Tests that tags endpoint returns username when shared mode is disabled."""
     response = service_no_workflows.build_ollama_tags_response()
     assert len(response["models"]) == 1
     assert response["models"][0]["name"] == "test-model"
+
+
+def test_shared_mode_with_empty_folder_advertises_no_models(mocker):
+    """A bare username is not advertised when shared mode requires a workflow."""
+    mocker.patch('Middleware.utilities.config_utils.get_current_username', return_value="test-model")
+    mocker.patch(
+        'Middleware.utilities.config_utils.get_user_config_for',
+        return_value={'allowSharedWorkflows': True},
+    )
+    mocker.patch(
+        'Middleware.utilities.config_utils.get_config_property_if_exists',
+        side_effect=[True, None, True, None],
+    )
+    mocker.patch('Middleware.utilities.config_utils.get_available_shared_workflows', return_value=[])
+    service = ResponseBuilderService()
+
+    assert service.build_openai_models_response()["data"] == []
+    assert service.build_ollama_tags_response()["models"] == []
 
 
 def test_build_openai_models_response_ignores_active_workflow_override(mocker):

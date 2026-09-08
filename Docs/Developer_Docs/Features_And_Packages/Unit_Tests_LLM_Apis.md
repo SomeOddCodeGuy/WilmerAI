@@ -124,19 +124,19 @@ def test_parse_non_stream_response_success(handler, response_json, expected):
 
 ### 5\. Non-Streaming Response Parsing (Failure)
 
-* **Purpose**: To ensure the handler is resilient and does not crash when receiving unexpected or malformed JSON from
-  the API.
-* **Strategy**: Use `@pytest.mark.parametrize` to provide various invalid inputs (e.g., `{}`, `{"choices": []}`,
-  `{"error": "..."}`). Assert that the method returns an empty string (`""`) and logs an error.
-
-<!-- end list -->
+* **Purpose**: Verify the provider's error contract and distinguish malformed envelopes from valid empty answers.
+* **Strategy**: For OpenAI chat, pass missing or wrong-type required fields and assert `InvalidLlmResponseError`.
+  Preserve separate success tests for absent/null/empty content in a valid message and tool-only responses.
+  Other providers retain their own parsing contracts; do not impose OpenAI's envelope on them.
 
 ```python
-@pytest.mark.parametrize("malformed_json", [...])
-def test_parse_non_stream_response_malformed(handler, malformed_json, mocker):
-    mock_logger = mocker.patch('path.to.handler.logger.error')
-    assert handler._parse_non_stream_response(malformed_json) == ""
-    mock_logger.assert_called_once()
+from Middleware.exceptions.invalid_llm_response_error import InvalidLlmResponseError
+
+
+@pytest.mark.parametrize("malformed_json", [{}, {"choices": []}, {"choices": [{}]}])
+def test_openai_chat_malformed_response(openai_handler, malformed_json):
+    with pytest.raises(InvalidLlmResponseError):
+        openai_handler._parse_non_stream_response(malformed_json)
 ```
 
 ### 6\. Streaming Chunk Parsing (Success)
@@ -171,3 +171,19 @@ def test_process_stream_data_invalid(streaming_handler, invalid_chunk_str, mocke
     if invalid_chunk_str:  # Only expect a log if there was something to parse
         mock_logger.assert_called_once()
 ```
+
+## Shared Retry and Failover Regression Coverage
+
+`Tests/llmapis/test_response_retry_policy.py` exercises the real service, Requests adapter, and urllib3 retry
+machinery with synthetic responses at `HTTPConnectionPool._make_request`. Socket connections and DNS are forbidden;
+endpoint and ApiType lookup use isolated objects. This is offline integration coverage, separate from isolated
+handler parser tests.
+
+The tests count actual attempts for streaming and non-streaming connection establishment failures and temporary HTTP
+errors, verify one attempt under suppression, and ensure permanent/ambiguous failures and invalid JSON are not
+replayed. They cover response closure, cancellation during real backoff, malformed-envelope failover, valid empty
+and tool-only messages, and interrupted streams before and after output. Backoff timing is checked with a fake clock,
+so tests do not need real waiting to verify the 0.25/0.5-second policy.
+
+HTTP failure responses are closed by the shared policy before streaming iteration. Tests should verify error
+propagation and cleanup; handlers do not consume or log those response bodies.

@@ -36,7 +36,9 @@ Activating the Jinja2 engine for a specific node is as simple as adding a single
 In any node that has a string field you wish to template (like `prompt` in a `Standard` node or `content` in a
 `StaticResponse` node), add the following property:
 
-```json
+Configuration property fragment; insert these fields into the containing JSON object.
+
+```jsonc
 "jinja2": true
 ```
 
@@ -56,6 +58,8 @@ Once enabled, you can use Jinja2 syntax in the relevant string fields. Remember 
 
 This is a common pattern for creating chains that react to the output of a previous "thinking" or "classification"
 step. Here, the system prompt for a `Standard` node changes based on the result of the first node.
+
+Partial workflow example: supply any omitted `endpointName` and `preset` fields for LLM nodes before running it.
 
 ```json
 {
@@ -82,8 +86,10 @@ step. Here, the system prompt for a `Standard` node changes based on the result 
 
 #### **Example 2: Formatting Conversation History with a Loop**
 
-The `{messages}` variable provides the entire conversation history as a list of dictionaries. This is perfect for a
-`for` loop to format the history exactly as needed for a summarization or analysis task.
+The `{messages}` variable provides the entire conversation history as a list of dictionaries. A `for` loop can
+format that history for a summarization or analysis task.
+
+Partial workflow example: supply any omitted `endpointName` and `preset` fields for LLM nodes before running it.
 
 ```json
 {

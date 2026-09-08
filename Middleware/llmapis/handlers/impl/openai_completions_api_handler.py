@@ -1,11 +1,12 @@
 # In middleware/llmapis/handlers/impl/openai_completions_api_handler.py
 import json
-import logging
 from typing import Dict, Optional, Any, List
 
 from Middleware.llmapis.handlers.base.base_completions_handler import BaseCompletionsHandler
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 
 class OpenAiCompletionsApiHandler(BaseCompletionsHandler):

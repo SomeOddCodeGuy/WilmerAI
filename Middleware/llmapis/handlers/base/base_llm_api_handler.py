@@ -20,7 +20,9 @@ from Middleware.utilities.config_utils import get_config_property_if_exists
 from Middleware.utilities.sensitive_logging_utils import sensitive_log, log_prompt_content
 from Middleware.utilities.structured_output_utils import get_structured_output_config
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 
 class LlmApiHandler(BaseApiTransport, ABC):
@@ -51,8 +53,8 @@ class LlmApiHandler(BaseApiTransport, ABC):
             endpoint_config: Configuration object for the specific endpoint.
             max_tokens: The maximum number of tokens to generate.
             dont_include_model (bool): If True, omits the model name from the payload.
-            suppress_retries (bool): If True, disables urllib3 5xx retries and shrinks the
-                manual non-streaming retry loop to a single attempt. Set by LlmApiService
+            suppress_retries (bool): If True, limits the shared POST policy to a
+                single attempt. Set by LlmApiService
                 when a backup endpoint is configured so failover happens on first failure.
         """
         super().__init__(base_url=base_url, api_key=api_key, headers=headers,
@@ -222,6 +224,8 @@ class LlmApiHandler(BaseApiTransport, ABC):
             request_id (Optional[str]): The request ID for cancellation tracking.
             tools (Optional[List[Dict]]): Tool definitions in OpenAI format.
             tool_choice (Optional[Any]): Tool selection policy.
+            structured_output_schema (Optional[Dict]): Optional JSON schema passed
+                to payload preparation for endpoints supporting structured output.
 
         Yields:
             Dict[str, Any]: Standardized token dictionaries with 'token' and
@@ -259,22 +263,14 @@ class LlmApiHandler(BaseApiTransport, ABC):
             logger.info(f"Registering abort callback for request_id: {request_id}")
             cancellation_service.register_abort_callback(request_id, abort_handle.abort)
 
-        # --- Streaming Logic ---
         # When Eventlet is active, session.post() is monkey-patched to be cooperative
         # The heartbeat mechanism in ollama_api_handler detects disconnects during prefill
         try:
             logger.info(f"Starting POST request for streaming request_id: {request_id}")
-            # This call is cooperative when Eventlet is active (monkey-patched)
-            with self.session.post(url, headers=self.headers, json=payload, stream=True, timeout=(self.connect_timeout, 14400)) as response:
-                abort_handle.response = response
-
-                # Check for errors and capture the response body before raising
-                if response.status_code >= 400:
-                    error_body = response.text
-                    logger.error(f"HTTP {response.status_code} error from {self.__class__.__name__}")
-                    logger.error(f"Response body: {error_body}")
-                    response.raise_for_status()
-
+            response = self._post_with_retries(url, payload, abort_handle, request_id, stream=True)
+            if response is None:
+                return
+            with response as response:
                 logger.debug(f"Streaming response status code: {response.status_code} from {self.__class__.__name__}")
                 response.encoding = "utf-8"
 
@@ -292,7 +288,6 @@ class LlmApiHandler(BaseApiTransport, ABC):
                         if line_count <= 3 or line_count % 20 == 0:
                             logger.debug(f"LLM handler received line #{line_count} ({len(line)} chars) for {request_id}")
 
-                    # --- Line Processing Logic ---
                     if not line:
                         continue
 

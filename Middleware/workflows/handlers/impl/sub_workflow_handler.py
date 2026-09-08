@@ -1,6 +1,5 @@
 # /Middleware/workflows/handlers/impl/sub_workflow_handler.py
 
-import logging
 import os
 import re
 from typing import Any, List, Dict, Optional
@@ -16,7 +15,9 @@ from Middleware.workflows.models.execution_context import ExecutionContext
 # are safe in a path segment (no separators, no '..') to prevent traversal.
 _CHUNK_PROCESSOR_ID_PATTERN = re.compile(r'^[A-Za-z0-9_.-]+$')
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 
 class SubWorkflowHandler(BaseHandler):

@@ -1,6 +1,6 @@
 ## The `RecentMemorySummarizerTool` Node
 
-This guide provides a comprehensive, code-validated overview of the `RecentMemorySummarizerTool` node. It details the
+This guide provides an overview of the `RecentMemorySummarizerTool` node. It details the
 node's dual-mode logic, properties, and best practices for retrieving recent conversational context.
 
 ### Core Purpose
@@ -56,7 +56,9 @@ The node operates in one of two modes depending on the presence of a `discussion
 Use this node to give an AI a quick refresher on recent events before it generates a response, especially in contexts
 that rely on file-based memory.
 
-```json
+Annotated JSON example. Remove comments before saving it as a configuration file.
+
+```jsonc
 [
   {
     "title": "Step 1: Get a summary of the last 3 major events",
@@ -77,4 +79,3 @@ that rely on file-based memory.
   }
 ]
 ```
-

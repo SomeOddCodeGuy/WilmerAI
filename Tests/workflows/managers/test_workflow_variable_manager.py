@@ -62,6 +62,19 @@ def _hermetic_user_config(mocker):
 
 
 @pytest.fixture(autouse=True)
+def _hermetic_discussion_roots(mocker, tmp_path):
+    """Keep real discussion-path resolution within each test's temporary directory."""
+    mocker.patch(
+        'Middleware.utilities.config_utils._resolve_discussions_root',
+        return_value=str(tmp_path / "discussions"),
+    )
+    mocker.patch(
+        'Middleware.utilities.config_utils._legacy_discussions_root',
+        return_value=str(tmp_path / "legacy"),
+    )
+
+
+@pytest.fixture(autouse=True)
 def _hermetic_timestamp_service(mocker):
     """Keep the real TimestampService off the filesystem: with a discussion_id set and
     no prompt, generate_variables calls get_time_context_summary, which resolves the
@@ -78,14 +91,14 @@ def _hermetic_timestamp_service(mocker):
 
 def test_workflow_variables_from_user_config_resolve(mocker, mock_context):
     """A 'userWideWorkflowVariables' dict in the user config is exposed as {placeholders}
-    available to every workflow (the single knob for shared state-file paths)."""
+    available to every workflow for operator-managed shared assets."""
     mocker.patch(
         'Middleware.workflows.managers.workflow_variable_manager.get_user_config',
-        return_value={"userWideWorkflowVariables": {"opencodePlansDir": "/data/plans"}},
+        return_value={"userWideWorkflowVariables": {"operatorAssetsDir": "/data/assets"}},
     )
     mock_context.messages = []  # skip conversation-variable generation (no template files in tests)
     manager = WorkflowVariableManager()
-    assert manager.apply_variables("dir is {opencodePlansDir}", mock_context) == "dir is /data/plans"
+    assert manager.apply_variables("dir is {operatorAssetsDir}", mock_context) == "dir is /data/assets"
 
 
 def test_workflow_variables_are_lowest_precedence(mocker, mock_context):
@@ -94,12 +107,23 @@ def test_workflow_variables_are_lowest_precedence(mocker, mock_context):
     both must win over the user-config values of the same name."""
     mocker.patch(
         'Middleware.workflows.managers.workflow_variable_manager.get_user_config',
-        return_value={"userWideWorkflowVariables": {"custom_var": "FROM_USER", "Discussion_Id": "HACKED"}},
+        return_value={"userWideWorkflowVariables": {
+            "custom_var": "FROM_USER",
+            "Discussion_Id": "HACKED",
+            "Discussion_Directory": "/shared/unsafe",
+        }},
+    )
+    discussion_path = mocker.patch(
+        'Middleware.workflows.managers.workflow_variable_manager.get_discussion_folder_path',
+        return_value="/isolated/api-hash/test_discussion_123",
     )
     mock_context.messages = []
     manager = WorkflowVariableManager()
-    result = manager.apply_variables("{custom_var}|{Discussion_Id}", mock_context)
-    assert result == "custom_value|test_discussion_123"
+    result = manager.apply_variables(
+        "{custom_var}|{Discussion_Id}|{Discussion_Directory}", mock_context)
+    assert result == (
+        "custom_value|test_discussion_123|/isolated/api-hash/test_discussion_123")
+    discussion_path.assert_called_once_with("test_discussion_123", api_key_hash=None)
 
 
 def test_workflow_variables_absent_or_malformed_is_noop(mocker, mock_context):
@@ -114,20 +138,19 @@ def test_workflow_variables_absent_or_malformed_is_noop(mocker, mock_context):
 
 
 def test_workflow_variables_nested_path_resolves(mocker, mock_context):
-    """The real OpenCode wiring: a workflow-level path key whose value references
-    {opencodePlansDir} resolves via the second substitution pass."""
+    """A workflow-level path referencing an operator asset root resolves on pass two."""
     mocker.patch(
         'Middleware.workflows.managers.workflow_variable_manager.get_user_config',
-        return_value={"userWideWorkflowVariables": {"opencodePlansDir": "/data/plans"}},
+        return_value={"userWideWorkflowVariables": {"operatorAssetsDir": "/data/assets"}},
     )
     mock_context.messages = []
     mock_context.workflow_config = {
-        "scratchpad_file": "{opencodePlansDir}/current_scratchpad.txt",
+        "persona_file": "{operatorAssetsDir}/assistant-persona.txt",
         "nodes": [],
     }
     manager = WorkflowVariableManager()
-    result = manager.apply_variables("{scratchpad_file}", mock_context)
-    assert result == "/data/plans/current_scratchpad.txt"
+    result = manager.apply_variables("{persona_file}", mock_context)
+    assert result == "/data/assets/assistant-persona.txt"
 
 @patch('Middleware.workflows.managers.workflow_variable_manager.TimestampService')
 @patch('Middleware.workflows.managers.workflow_variable_manager.MemoryService')
@@ -373,6 +396,141 @@ def test_time_context_summary_skipped_when_prompt_does_not_reference_it(mock_con
     assert variables['time_context_summary'] == "time summary"
     manager.timestamp_service.get_time_context_summary.assert_called_once_with(
         "test_discussion_123", encryption_key=None, api_key_hash=None)
+
+
+def test_discussion_directory_uses_canonical_api_key_scoped_path(mocker, mock_context):
+    """The workflow variable delegates to the same resolver as built-in memories."""
+    manager = WorkflowVariableManager()
+    mock_context.messages = []
+    mock_context.api_key_hash = "0123456789abcdef"
+    resolver = mocker.patch(
+        'Middleware.workflows.managers.workflow_variable_manager.get_discussion_folder_path',
+        return_value="/discussion-root/0123456789abcdef/test_discussion_123",
+    )
+
+    result = manager.apply_variables(
+        "{Discussion_Directory}/current_scene.md", mock_context)
+
+    assert result == (
+        "/discussion-root/0123456789abcdef/test_discussion_123/current_scene.md")
+    resolver.assert_called_once_with(
+        "test_discussion_123", api_key_hash="0123456789abcdef")
+
+
+def test_discussion_directory_separates_same_id_by_api_key_scope(
+        mock_context, tmp_path):
+    """The canonical variable keeps colliding discussion IDs in distinct key scopes."""
+    manager = WorkflowVariableManager()
+    mock_context.messages = []
+    mock_context.workflow_id = "workflow-a"
+    mock_context.api_key_hash = "1111111111111111"
+    first_path = manager.apply_variables("{Discussion_Directory}", mock_context)
+
+    mock_context.workflow_id = "workflow-b"
+    same_scope_other_workflow = manager.apply_variables(
+        "{Discussion_Directory}", mock_context)
+
+    mock_context.api_key_hash = "2222222222222222"
+    second_path = manager.apply_variables("{Discussion_Directory}", mock_context)
+
+    assert first_path == str(
+        tmp_path / "discussions" / "1111111111111111" / "test_discussion_123")
+    assert second_path == str(
+        tmp_path / "discussions" / "2222222222222222" / "test_discussion_123")
+    assert same_scope_other_workflow == first_path
+    assert first_path != second_path
+
+
+def test_discussion_directory_resolution_is_lazy(mocker, mock_context):
+    """Unrelated prompt substitutions do not create a discussion directory."""
+    manager = WorkflowVariableManager()
+    mock_context.messages = []
+    resolver = mocker.patch(
+        'Middleware.workflows.managers.workflow_variable_manager.get_discussion_folder_path')
+
+    variables = manager.generate_variables(mock_context, prompt="{Discussion_Id}")
+
+    assert variables['Discussion_Directory'] == ''
+    resolver.assert_not_called()
+
+
+def test_discussion_directory_fails_closed_without_discussion_id(mocker, mock_context):
+    """A missing ID must not turn a canonical path into a shared or root path."""
+    manager = WorkflowVariableManager()
+    mock_context.messages = []
+    mock_context.discussion_id = None
+    resolver = mocker.patch(
+        'Middleware.workflows.managers.workflow_variable_manager.get_discussion_folder_path')
+
+    with pytest.raises(ValueError, match="requires a discussion ID"):
+        manager.apply_variables("{Discussion_Directory}/current_scene.md", mock_context)
+
+    resolver.assert_not_called()
+
+
+def test_discussion_directory_name_in_plain_text_does_not_require_id(
+        mocker, mock_context):
+    """Only a real format expression activates canonical directory resolution."""
+    manager = WorkflowVariableManager()
+    mock_context.messages = []
+    mock_context.discussion_id = None
+    resolver = mocker.patch(
+        'Middleware.workflows.managers.workflow_variable_manager.get_discussion_folder_path')
+
+    result = manager.apply_variables(
+        "The Discussion_Directory variable is not used here.", mock_context)
+
+    assert result == "The Discussion_Directory variable is not used here."
+    resolver.assert_not_called()
+
+
+@pytest.mark.parametrize("template", [
+    "{{ Discussion_Directory | string }}/state.md",
+    "{% set directory = Discussion_Directory %}{{ directory }}/state.md",
+])
+def test_jinja_discussion_directory_fails_closed_without_discussion_id(
+        mocker, mock_context, template):
+    """Jinja references with whitespace receive the same missing-ID guard."""
+    manager = WorkflowVariableManager()
+    mock_context.messages = []
+    mock_context.discussion_id = None
+    mock_context.config = {'jinja2': True}
+    mocker.patch(
+        'Middleware.workflows.managers.workflow_variable_manager.get_discussion_folder_path')
+
+    with pytest.raises(ValueError, match="requires a discussion ID"):
+        manager.apply_variables(template, mock_context)
+
+
+def test_jinja_statement_directory_uses_scoped_path(mocker, mock_context):
+    manager = WorkflowVariableManager()
+    mock_context.messages = []
+    mock_context.config = {"jinja2": True}
+    resolver = mocker.patch(
+        "Middleware.workflows.managers.workflow_variable_manager.get_discussion_folder_path",
+        return_value="/scoped/discussion")
+    assert manager.apply_variables(
+        "{% set directory = Discussion_Directory %}{{ directory }}/state.md", mock_context
+    ) == "/scoped/discussion/state.md"
+    resolver.assert_called_once_with(mock_context.discussion_id, api_key_hash=mock_context.api_key_hash)
+
+
+def test_nested_discussion_directory_fails_closed_without_discussion_id(
+        mocker, mock_context):
+    """The second substitution pass enforces the same missing-ID guard."""
+    manager = WorkflowVariableManager()
+    mock_context.messages = []
+    mock_context.discussion_id = None
+    mock_context.workflow_config = {
+        "scene_file": "{Discussion_Directory}/current_scene.md",
+        "nodes": [],
+    }
+    mocker.patch(
+        'Middleware.workflows.managers.workflow_variable_manager.get_discussion_folder_path')
+
+    with pytest.raises(ValueError, match="requires a discussion ID"):
+        manager.apply_variables("{scene_file}", mock_context)
+
 
 def test_apply_variables_standard_format(mocker, mock_context):
     """

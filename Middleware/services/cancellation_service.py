@@ -3,9 +3,14 @@
 import logging
 import threading
 import time
+from functools import partial
 from typing import Set, Dict, Callable, List
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import (
+    get_sensitive_logger, is_encryption_active, set_encryption_context,
+)
+
+logger = get_sensitive_logger(__name__)
 
 # Entries older than this are pruned lazily on the next cancellation request.
 # A registered cancellation is normally acknowledged when its request tears
@@ -106,12 +111,32 @@ class CancellationService:
 
         # Call abort callbacks outside the lock to prevent deadlocks
         for callback in callbacks_to_call:
+            callback()
+
+    @staticmethod
+    def _invoke_abort_callback(request_id: str, callback: Callable[[], None], redact: bool) -> None:
+        """Invoke and diagnose a callback under its owner's captured privacy policy.
+
+        Args:
+            request_id (str): The request whose operation is being cancelled.
+            callback (Callable[[], None]): The registered operation cleanup.
+            redact (bool): Whether registration occurred in a private request.
+        """
+        previous = is_encryption_active()
+        active = previous or redact
+        set_encryption_context(active)
+        try:
+            logger.debug(f"Invoking abort callback for request_id: {request_id}")
             try:
-                logger.debug(f"Invoking abort callback for request_id: {request_id}")
                 callback()
-                logger.debug(f"Abort callback finished for request_id: {request_id}")
-            except Exception as e:
-                logger.error(f"Error executing abort callback for request_id {request_id}: {e}")
+            finally:
+                # Callback cleanup can change context before our own diagnostics run.
+                set_encryption_context(active)
+            logger.debug(f"Abort callback finished for request_id: {request_id}")
+        except Exception as exc:
+            logger.error(f"Error executing abort callback for request_id {request_id}: {exc}")
+        finally:
+            set_encryption_context(previous)
 
     def is_cancelled(self, request_id: str) -> bool:
         """
@@ -160,6 +185,10 @@ class CancellationService:
         when cancellation is requested. The callback should handle any cleanup needed
         to abort the operation (e.g., closing a response stream).
 
+        Captures the registering request's logging privacy. Invocation and service
+        diagnostics retain that policy even in another thread or greenlet, without
+        weakening an already private caller or leaving its thread-local state changed.
+
         Args:
             request_id (str): The unique identifier of the request.
             callback (Callable[[], None]): A function to call when the request is cancelled.
@@ -168,6 +197,8 @@ class CancellationService:
             logger.warning("Attempted to register abort callback with empty request_id")
             return
 
+        owned_callback = partial(
+            self._invoke_abort_callback, request_id, callback, is_encryption_active())
         invoke_immediately = False
         with self._set_lock:
             # Check if the request is already cancelled (Handles the race condition)
@@ -178,16 +209,12 @@ class CancellationService:
                 # Normal registration
                 if request_id not in self._abort_callbacks:
                     self._abort_callbacks[request_id] = []
-                self._abort_callbacks[request_id].append(callback)
+                self._abort_callbacks[request_id].append(owned_callback)
                 logger.debug(f"Registered abort callback for request_id: {request_id}")
 
         # Invoke the callback outside the lock if necessary
         if invoke_immediately:
-            try:
-                logger.info(f"Invoking immediate abort callback for request_id: {request_id}")
-                callback()
-            except Exception as e:
-                logger.error(f"Error executing immediate abort callback for request_id {request_id}: {e}")
+            owned_callback()
 
     def unregister_abort_callbacks(self, request_id: str) -> None:
         """

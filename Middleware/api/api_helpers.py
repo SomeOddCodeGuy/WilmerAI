@@ -1,7 +1,6 @@
 # /Middleware/api/api_helpers.py
 
 import json
-import logging
 import os
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -10,9 +9,12 @@ from flask import request as flask_request
 from Middleware.common import instance_global_variables
 from Middleware.services.response_builder_service import ResponseBuilderService
 from Middleware.utilities.config_utils import get_current_username, workflow_exists_in_shared_folder, \
-    get_config_property_if_exists, get_user_config_for, get_root_config_directory, _is_safe_flat_config_name
+    get_config_property_if_exists, get_user_config_for, get_root_config_directory, _is_safe_flat_config_name, \
+    get_allow_shared_workflows
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 response_builder = ResponseBuilderService()
 
 
@@ -136,8 +138,7 @@ def parse_model_field(model_value: Optional[str]) -> Tuple[Optional[str], Option
 
 def _workflow_exists_for_user(workflow_name: str, username: str) -> bool:
     """
-    Checks whether a workflow folder exists in the shared workflows folder
-    for a specific user.
+    Checks whether an enabled shared workflow folder exists for a specific user.
 
     Loads the user's config to determine their shared workflows folder,
     then checks if the workflow subfolder exists there.
@@ -147,7 +148,8 @@ def _workflow_exists_for_user(workflow_name: str, username: str) -> bool:
         username (str): The username whose config determines the shared folder.
 
     Returns:
-        bool: True if the workflow folder exists for that user.
+        bool: True if shared mode is enabled and the workflow folder exists for
+            that user, otherwise False.
     """
     # The workflow name comes from the request model field ("user:workflow"); a
     # traversal/absolute value must not resolve outside the user's shared folder.
@@ -156,10 +158,14 @@ def _workflow_exists_for_user(workflow_name: str, username: str) -> bool:
 
     try:
         user_config = get_user_config_for(username)
-        shared_override = get_config_property_if_exists('sharedWorkflowsSubDirectoryOverride', user_config)
-        shared_folder = shared_override if shared_override else '_shared'
     except Exception:
-        shared_folder = '_shared'
+        return False
+
+    if not get_config_property_if_exists('allowSharedWorkflows', user_config):
+        return False
+
+    shared_override = get_config_property_if_exists('sharedWorkflowsSubDirectoryOverride', user_config)
+    shared_folder = shared_override if shared_override else '_shared'
 
     config_dir = str(get_root_config_directory())
     folder_path = os.path.join(config_dir, 'Workflows', shared_folder, workflow_name)
@@ -210,6 +216,27 @@ def require_identified_user() -> Optional[str]:
             f"Multi-user mode is active. The model field must specify a "
             f"configured user (or user:workflow). "
             f"Available users: {', '.join(configured_users)}"
+        )
+    return None
+
+
+def require_shared_workflow_selection() -> Optional[str]:
+    """
+    Requires an advertised workflow model when shared mode is active.
+
+    This check runs after :func:`set_request_context_from_model` and
+    :func:`require_identified_user`, so the current user's configuration and
+    selected workflow are both request-scoped. Shared mode has no routing or
+    custom-workflow fallback because those modes are mutually exclusive.
+
+    Returns:
+        Optional[str]: An error description when shared mode is active without
+            a valid workflow selection, otherwise None.
+    """
+    if get_allow_shared_workflows() and not instance_global_variables.get_workflow_override():
+        return (
+            "Shared workflow mode is active. The model field must specify one "
+            "of the advertised shared workflows, such as 'username:workflow'."
         )
     return None
 

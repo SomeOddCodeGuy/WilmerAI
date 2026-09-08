@@ -1,10 +1,11 @@
 # middleware/utilities/structured_output_utils.py
 import json
-import logging
 import uuid
 from typing import Any, Dict, List, Optional
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 # Wrapper styles the "structuredOutput" ApiType block may declare. The block is
 # declarative, like "thinking" and "samplerFieldMap": "field" names the payload

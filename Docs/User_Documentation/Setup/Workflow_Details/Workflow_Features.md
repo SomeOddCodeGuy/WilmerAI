@@ -135,7 +135,10 @@ WilmerAI can process and understand images provided in a user's message through 
 
 The simplest approach is to set `acceptImages` to `true` on a `Standard` node. This passes images directly to the
 backend LLM along with the conversation. The endpoint must support vision/multimodal input. You can optionally limit
-the number of images sent with `maxImagesToSend` (keeping the most recent; `0` means no limit).
+the number of images sent with `maxImagesToSend` (keeping the most recent; `0` means no limit). An endpoint with
+`backendSupportsImages: false` overrides the node and receives a text-only request.
+
+Partial workflow example: supply any omitted `endpointName` and `preset` fields for LLM nodes before running it.
 
 ```json
 {
@@ -152,7 +155,8 @@ the number of images sent with `maxImagesToSend` (keeping the most recent; `0` m
 The **`ImageProcessor` node** takes any images from the user's latest turn, sends them to a configured vision-capable
 LLM, and generates a detailed text description. The aggregated text description is then made available as the node's
 output (`{agent#Output}`). This allows a subsequent, text-only `Standard` node to use the description as context,
-making image content available to the rest of the workflow as text.
+making image content available to the rest of the workflow as text. Its endpoint must not set
+`backendSupportsImages: false`; that override strips the image before the backend call.
 
 * **Key Nodes**: `Standard` (with `acceptImages`), `ImageProcessor`
 * **Detailed Documentation**: `A Comprehensive Guide to WilmerAI Workflow Nodes`
@@ -166,8 +170,9 @@ to read and write local files and perform basic data manipulation without needin
 script.
 
 * **File I/O**: The **`GetCustomFile`** node reads the contents of a text file, while the **`SaveCustomFile`** node
-  writes string content to a file. Both nodes support variable substitution in their `filepath` fields, including
-  `{Discussion_Id}` and `{YYYY_MM_DD}` for per-conversation or date-based file paths.
+  writes string content to a file. Both nodes support variable substitution in their `filepath` fields. Use
+  `{Discussion_Directory}` for per-discussion state so custom files follow built-in memory's optional API-key scope,
+  and `{YYYY_MM_DD}` for date-based names.
 * **Data Processing**: The **`StringConcatenator`** node joins a list of strings with a specified delimiter, and the
   **`ArithmeticProcessor`** node evaluates a simple mathematical expression.
 * **Data Extraction**: The **`JsonExtractor`** node extracts a specific field from a JSON string (automatically handling
@@ -233,6 +238,8 @@ tool definitions at all; `allowTools` is silently ignored there.
 
 Tool calling is controlled by the `allowTools` boolean property on workflow nodes. It defaults to `false`. When set to `true`, the node will include tool definitions in its LLM request if the frontend provided them.
 
+Partial workflow example: supply any omitted `endpointName` and `preset` fields for LLM nodes before running it.
+
 ```json
 {
   "title": "Respond to User",
@@ -274,6 +281,8 @@ The model generates from the standard position immediately after a tool result (
 are trained for) while still seeing the authored framing, and the exchange is seen exactly once. Because exactly
 one user turn is still sent, chat templates that reject consecutive same-role turns are unaffected.
 
+Partial workflow example: supply any omitted `endpointName` and `preset` fields for LLM nodes before running it.
+
 ```json
 {
   "title": "Respond to User",
@@ -300,6 +309,10 @@ Behavior details:
   setups) is recognized and excluded.
 - Enable it together with `allowTools` on the responding node. It is designed for tool-loop frontends (searches,
   file tools, code execution, image generation retries) talking to authored-prompt workflows.
+- The history-delivery behavior is independent of `allowTools`. An authored-prompt internal planner may enable
+  `appendNativeToolExchange` while leaving `allowTools` disabled. This lets the planner inspect the live assistant
+  call and matching result in their native roles without receiving tool definitions or giving the planner's output a
+  frontend execution path. The responding node still needs both properties when it must continue the tool loop.
 - **Old-model escape hatch:** a backend whose chat template cannot render tool turns (older models,
   strict-alternation templates without tool support) can opt out endpoint-wide with
   `"backendSupportsToolTurns": false` in its endpoint config; the node then falls back to the text-transcript
@@ -309,9 +322,11 @@ Behavior details:
 
 ### Lowercasing Tool Call Function Names
 
-Some local models (Gemma, Qwen, and others) produce tool call function names with capitalized first letters (e.g., `Glob` instead of `glob`, `Grep` instead of `grep`). This breaks agentic frontends like OpenCode that expect exact lowercase matches against their tool definitions. Setting `lowercaseToolCallFunctionNames` to `true` on the responding node causes WilmerAI to lowercase all tool call function names before relaying them to the frontend. This works for both streaming and non-streaming responses.
+Some local models (Gemma, Qwen, and others) produce tool call function names with capitalized first letters (e.g., `Glob` instead of `glob`, `Grep` instead of `grep`). This breaks agentic frontends that expect exact lowercase matches against their tool definitions. Setting `lowercaseToolCallFunctionNames` to `true` on the responding node causes WilmerAI to lowercase all tool call function names before relaying them to the frontend. This works for both streaming and non-streaming responses.
 
 This is off by default because some frontends (e.g., Claude Code) expect the original casing. Only enable it when proxying local models that produce incorrectly cased tool names.
+
+Partial workflow example: supply any omitted `endpointName` and `preset` fields for LLM nodes before running it.
 
 ```json
 {
@@ -353,18 +368,19 @@ both visible to downstream prompts.
 
 ## Structured Output (Grammar-Constrained Responses)
 
-WilmerAI can constrain an LLM's response to a JSON schema using the backend's own constrained-decoding support
-(grammar sampling). A constrained response is guaranteed to parse as JSON matching the schema; a small model that
-cannot reliably follow a "respond only with JSON" instruction cannot escape a grammar. The capability is declared
-per API type and used in two ways: automatically, to enforce demanded tool calls, and explicitly, by workflow
-authors pinning a node's output shape.
+WilmerAI can request a response constrained to a JSON schema using the backend's constrained-decoding support
+(grammar sampling). Enforcement depends on the backend and its support for the schema; consumers should validate
+the returned JSON before using it. The capability is declared per API type and used in two ways: automatically,
+for demanded tool calls, and explicitly, by workflow authors specifying a node's output shape.
 
 ### Backend Support (declared per API type)
 
 An ApiType config declares its constraint mechanism in a declarative `structuredOutput` block. `field` is the
 request-body key the schema is written to (dotted for nesting), and `style` is the wrapper shape:
 
-```json
+Configuration property fragment; insert these fields into the containing JSON object.
+
+```jsonc
 "structuredOutput": {
   "field": "response_format",
   "style": "openaiJsonSchema"
@@ -387,8 +403,8 @@ either wrapper style, needs only this JSON block (no Python changes).
 Three important caveats apply on every backend:
 
 - **The model does not see the schema.** Grammar constraint happens at decode time; the schema is not injected into
-  the prompt. Always describe the desired structure in the prompt as well: the grammar guarantees syntax, the
-  prompt supplies intent.
+  the prompt. Describe the desired structure in the prompt as well: an enforced grammar constrains syntax,
+  while the prompt supplies intent.
 - **A 200 response does not prove enforcement.** Some backends accept the constraint field and fail open (llama.cpp
   on a schema its converter cannot translate) or ignore it silently. WilmerAI parse-checks constrained tool rounds
   and never assumes; author-declared node schemas should be treated the same way by downstream consumers.
@@ -418,6 +434,8 @@ round machine-consumed, and the constrained output is one short JSON object.
 
 A `Standard` node can pin its own output shape. Write a JSON Schema file under
 `Public/Configs/StructuredOutputs/<your-folder>/` and reference it by name:
+
+Partial workflow example: supply any omitted `endpointName` and `preset` fields for LLM nodes before running it.
 
 ```json
 {
@@ -449,8 +467,9 @@ exactly like any other output. Resolution follows the usual named-collection rul
 subdirectory named by the user config's `structuredOutputConfigsSubDirectory` (defaulting to the username), then in
 the `StructuredOutputs` root.
 
-This turns prompt-contract patterns (routing decisions consumed by `ConditionalCustomWorkflow`, extraction nodes,
-state-document maintenance, classification with fixed enums) into guarantees instead of carefully-prompted hopes.
+This supports routing decisions consumed by `ConditionalCustomWorkflow`, extraction nodes, state-document
+maintenance, and classification with fixed enums. Validate the returned JSON and required fields before using
+the result, including when a backup endpoint serves the request.
 
 Details:
 
@@ -491,6 +510,8 @@ role message separates the assistant turns.
 Set `mergeConsecutiveAssistantMessages` to `true`. Runs of consecutive assistant messages are collapsed into a single
 assistant message, with their content joined by the delimiter (default `"\n"`).
 
+Partial workflow example: supply any omitted `endpointName` and `preset` fields for LLM nodes before running it.
+
 ```json
 {
   "type": "Standard",
@@ -504,6 +525,8 @@ assistant message, with their content joined by the delimiter (default `"\n"`).
 
 Set `insertUserTurnBetweenAssistantMessages` to `true`. A synthetic user message is inserted between each pair of
 consecutive assistant messages. The default text is `"Continue."`, but it can be customized.
+
+Partial workflow example: supply any omitted `endpointName` and `preset` fields for LLM nodes before running it.
 
 ```json
 {

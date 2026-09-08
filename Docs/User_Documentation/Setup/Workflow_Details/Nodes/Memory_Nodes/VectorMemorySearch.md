@@ -1,6 +1,6 @@
 ## The `VectorMemorySearch` Node
 
-This guide provides a comprehensive, code-validated overview of the `VectorMemorySearch` node. It details the node's
+This guide provides an overview of the `VectorMemorySearch` node. It details the node's
 precise execution logic, properties, and best practices for implementing Retrieval-Augmented Generation (RAG).
 
 ### Core Purpose
@@ -110,7 +110,9 @@ Notes:
 Place this node **early** in a workflow to gather relevant facts *before* the main response generation node. This allows
 the LLM to use the retrieved context to formulate a more informed answer.
 
-```json
+Annotated JSON example. Remove comments before saving it as a configuration file.
+
+```jsonc
 [
   {
     "title": "Step 1: Identify key topics in the user's prompt",

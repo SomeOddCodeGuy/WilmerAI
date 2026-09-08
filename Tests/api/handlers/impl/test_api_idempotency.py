@@ -25,6 +25,7 @@ def isolate_user_config(mocker):
     mocker.patch(f'{_HANDLER}.get_encrypt_using_api_key', return_value=False)
     mocker.patch(f'{_HANDLER}.get_redact_log_output', return_value=False)
     mocker.patch(f'{_HANDLER}.check_openwebui_tool_request', return_value=None)
+    mocker.patch('Middleware.api.api_helpers.get_allow_shared_workflows', return_value=False)
 
 
 @pytest.fixture

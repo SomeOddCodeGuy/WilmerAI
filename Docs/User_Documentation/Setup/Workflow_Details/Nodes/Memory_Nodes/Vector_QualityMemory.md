@@ -1,6 +1,6 @@
 ## The `QualityMemory` Node
 
-This guide provides a comprehensive, code-validated overview of the `QualityMemory` node. It details the node's precise
+This guide provides an overview of the `QualityMemory` node. It details the node's precise
 execution logic, configuration, and best practices, establishing it as the cornerstone of the WilmerAI memory creation
 system.
 
@@ -76,7 +76,9 @@ The `QualityMemory` node should be placed at the **end** of your primary respons
 potentially slow process of memory generation happens *after* the user has already received a fast reply. It's often
 paired with a `WorkflowLock` to prevent race conditions.
 
-```json
+Annotated JSON example. Remove comments before saving it as a configuration file.
+
+```jsonc
 {
   "nodes": [
     {

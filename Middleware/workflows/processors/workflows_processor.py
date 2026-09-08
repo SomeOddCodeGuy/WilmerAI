@@ -25,7 +25,9 @@ from Middleware.workflows.streaming.response_handler import StreamingResponseHan
 if TYPE_CHECKING:
     from Middleware.workflows.managers.workflow_variable_manager import WorkflowVariableManager
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 
 class WorkflowProcessor:

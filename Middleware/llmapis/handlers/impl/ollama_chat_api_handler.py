@@ -8,7 +8,9 @@ from Middleware.llmapis.handlers.base.base_chat_completions_handler import BaseC
 from Middleware.utilities.sensitive_logging_utils import sensitive_log_lazy, log_prompt_content
 from Middleware.utilities.text_utils import return_brackets, strip_data_uri_prefix
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 
 class OllamaChatHandler(BaseChatCompletionsHandler):

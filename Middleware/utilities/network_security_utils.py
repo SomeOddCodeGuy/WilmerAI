@@ -33,9 +33,7 @@ def _non_public_family(ip) -> Optional[str]:
     IPv4-mapped IPv6 addresses (``::ffff:a.b.c.d``) are unwrapped first so the decision is
     made about the IPv4 address the socket would actually reach.
 
-    Correctness depends on the interpreter's ``ipaddress`` classification, which was wrong
-    for several of these ranges before the CVE-2024-4032 fix (Python 3.11.9 / 3.12.4 /
-    3.13). The address-level regression tests pin the exact behavior relied on here.
+    Address classification follows the pinned interpreter's ``ipaddress`` rules.
 
     Args:
         ip (ipaddress.IPv4Address | ipaddress.IPv6Address): The address to judge.

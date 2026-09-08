@@ -4,13 +4,14 @@ import logging
 import os
 import sqlite3
 import textwrap
-import traceback
 from datetime import datetime, timedelta
 from typing import Optional
 
 from Middleware.utilities import config_utils
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 
 class LockingService:
@@ -234,8 +235,7 @@ class LockingService:
             cursor.execute(select_query, (workflow_lock_id,))
             result = cursor.fetchone()
         except Exception as e:
-            logger.error(f"Error in get_lock: {e}")
-            traceback.print_exc()
+            logger.exception("Error in get_lock: %s", e)
             raise
         finally:
             conn.close()

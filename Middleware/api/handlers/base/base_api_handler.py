@@ -13,6 +13,8 @@ class BaseApiHandler(ABC):
     from this class.
     """
 
+    SUPPORTED_MODES = frozenset({"workflow"})
+
     @abstractmethod
     def register_routes(self, app: Flask) -> None:
         """

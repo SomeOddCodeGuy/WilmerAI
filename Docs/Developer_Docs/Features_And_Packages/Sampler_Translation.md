@@ -61,6 +61,7 @@ repeat_penalty  repeat_last_n  presence_penalty  frequency_penalty
 dry_multiplier  dry_base  dry_allowed_length  dry_penalty_last_n  dry_sequence_breakers
 xtc_probability  xtc_threshold  mirostat  mirostat_tau  mirostat_eta
 seed  stop  samplers  logit_bias  ignore_eos  n_probs  min_keep  grammar  json_schema
+thinking_budget_tokens
 ```
 
 Plus two special block keys that are not flat samplers:
@@ -85,7 +86,7 @@ detail is in each config file.
 
 | ApiType file | Wire protocol | Mapped fields | `chat_template_kwargs` | Thinking | Notable native renames |
 | --- | --- | --- | --- | --- | --- |
-| `LlamaCppServer` | openAIChatCompletion | 31 (full canonical) | Yes | `enable_thinking` in `chat_template_kwargs` | identity map |
+| `LlamaCppServer` | openAIChatCompletion | 32 (full canonical) | Yes | `enable_thinking` in `chat_template_kwargs` | identity map, including top-level `thinking_budget_tokens` |
 | `OllamaApiChat` / `OllamaApiGenerate` | ollamaApiChat / ollamaApiGenerate | 14 | No | top-level `think` | identity (handler nests under `options`) |
 | `KoboldCpp` | koboldCppGenerate | 24 | No | unsupported | `typical_p`→`typical`, `top_n_sigma`→`nsigma`, `repeat_penalty`→`rep_pen`, `repeat_last_n`→`rep_pen_range`, `seed`→`sampler_seed`, `stop`→`stop_sequence` |
 | `Open-AI-API` | openAIChatCompletion | 7 | No | top-level `reasoning_effort` | identity (small set: no `top_k`/`min_p`/`mirostat`/etc.) |
@@ -94,7 +95,7 @@ detail is in each config file.
 | `Text-Generation-WebUI` | openAIChatCompletion | 22 | No | unsupported | `repeat_penalty`→`repetition_penalty`, `repeat_last_n`→`repetition_penalty_range`, `mirostat`→`mirostat_mode`, `grammar`→`grammar_string` |
 | `Claude` | claudeMessages | 4 | No | unsupported | `stop`→`stop_sequences` (only `temperature`/`top_p`/`top_k`/`stop` exist) |
 
-Notes and assumptions made while authoring:
+### Backend capabilities and limitations
 
 - **Drop-and-warn, never error.** A canonical knob absent from a target's `samplerFieldMap` (e.g.
   `min_p` to Claude/OpenAI) is dropped with a clear warn-level log naming the field, the ApiType, and
@@ -105,15 +106,13 @@ Notes and assumptions made while authoring:
   (currently `LlamaCppServer`). For others the whole object is dropped with a log, so it is never sent
   to e.g. Claude or real OpenAI. Its *inner* keys are never validated; they are defined by the loaded
   model's chat template, not by Wilmer.
-- **Thinking is conservative on cloud/uncertain backends.** Only the cases with a clear native
-  mechanism are mapped (`enable_thinking` for llama.cpp, `think` for Ollama, `reasoning_effort` for
-  OpenAI). Claude, mlx-lm, KoboldCpp, Text-Generation-WebUI, and legacy completions are marked
-  `unsupported` for `thinkingMode` in this version; control thinking on those via the endpoint-level
+- **Thinking controls are mapped per backend.** Supported mappings are `enable_thinking` for llama.cpp,
+  `think` for Ollama, and `reasoning_effort` for OpenAI. Claude, mlx-lm, KoboldCpp, Text-Generation-WebUI,
+  and legacy completions are marked
+  `unsupported` for `thinkingMode`; control thinking on those via the endpoint-level
   `removeThinking` strip or native means.
-- **Per-model gating is out of scope (by design).** Whether a *specific model* rejects samplers (e.g.
-  adaptive Claude 4.7+ / OpenAI reasoning models rejecting `temperature`) is the user's
-  responsibility; Wilmer only knows ApiType-level support and does not track individual model
-  releases.
+- **Compatibility is checked at the ApiType level.** WilmerAI does not track individual model releases or
+  validate their sampler restrictions. Users must select samplers supported by their configured model.
 
 -----
 
@@ -156,10 +155,11 @@ ApiType files need no migration.
   `Open-AI-API` (`reasoning_effort`).
 - **`mode: "unsupported"`**: `thinkingMode` is dropped with a warning.
 
-Thinking budget is intentionally **not** a canonical field; it rides in raw `chat_template_kwargs`
-(e.g. `"thinking_budget": 0`) for backends that accept that object, because its behavior is
-model/template-dependent and often a no-op (stock Qwen templates read `enable_thinking`, not
-`thinking_budget`).
+A template-level thinking budget is intentionally **not** a canonical field; it rides in raw
+`chat_template_kwargs` (e.g. `"thinking_budget": 0`) because its behavior is model/template-dependent
+and often a no-op (stock Qwen templates read `enable_thinking`, not `thinking_budget`). The distinct
+llama.cpp server request field `thinking_budget_tokens` is a canonical top-level sampler and is sent
+unchanged by `LlamaCppServer`.
 
 -----
 

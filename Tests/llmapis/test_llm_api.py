@@ -280,6 +280,32 @@ class TestLlmApiService:
         assert "images" in passed_conversation[0]
         assert passed_conversation[0]["images"] == ["base64-string"]
 
+    def test_endpoint_capability_overrides_image_request(self, mock_configs, mocker):
+        """A text-only endpoint strips images even when its caller requests them."""
+        mocker.patch("Middleware.llmapis.llm_api.LlmApiService.create_api_handler")
+        service = LlmApiService(endpoint="test", presetname="test", max_tokens=128)
+        service.endpoint_file = {
+            **service.endpoint_file,
+            "backendSupportsImages": False,
+        }
+        mock_handler_instance = MagicMock()
+        service._api_handler = mock_handler_instance
+
+        original_conversation = [
+            {"role": "user", "content": "What is this?", "images": ["base64-string"]},
+        ]
+
+        service.get_response_from_llm(
+            conversation=original_conversation,
+            llm_takes_images=True,
+        )
+
+        passed_conversation = (
+            mock_handler_instance.handle_non_streaming.call_args.kwargs["conversation"]
+        )
+        assert "images" not in passed_conversation[0]
+        assert original_conversation[0]["images"] == ["base64-string"]
+
     def test_get_response_from_llm_handles_exceptions(self, mock_configs, mocker):
         """
         Tests that exceptions from the handler are caught, the busy flag is reset,

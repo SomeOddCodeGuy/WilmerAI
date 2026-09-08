@@ -9,7 +9,9 @@ from typing import Dict, List, Any, Optional, Tuple
 # Import the aggregation utility
 from Public.workflow_python_scripts._isevendays_mcp_scripts.workflow_utils import aggregate_generator_input
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 try:
     from Public.workflow_python_scripts._isevendays_mcp_scripts.mcp_service_discoverer import MCPServiceDiscoverer, DEFAULT_MCPO_URL
     from Public.workflow_python_scripts._isevendays_mcp_scripts.mcp_prompt_utils import (
@@ -57,9 +59,10 @@ def Invoke(messages, **kwargs):
 
     Args:
         messages (list): List of messages (may be empty or not contain system prompt).
-        default_prompt_path (str): Path to default prompt file.
-        mcpo_url (str): Base URL for MCPO server.
-        user_identified_services (str): Comma-separated list of service names identified in user messages (might be a generator).
+        **kwargs: Optional default_prompt_path (str), mcpo_url (str), and
+            user_identified_services (str or generator). The path defaults to
+            the configured tool prompt, the URL to DEFAULT_MCPO_URL, and service
+            names to an empty string. Service names are comma-separated.
 
     Returns:
         dict: Containing messages, chat_system_prompt, discovered_tools_map.
@@ -169,4 +172,4 @@ def Invoke(messages, **kwargs):
         "messages": messages, 
         "chat_system_prompt": system_prompt_content, 
         "discovered_tools_map": discovered_tools_map
-    } 
+    }

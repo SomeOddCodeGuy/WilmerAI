@@ -16,7 +16,9 @@ from Middleware.utilities.file_utils import load_timestamp_file, save_timestamp_
 from Middleware.utilities.hashing_utils import hash_single_message
 from Middleware.utilities.sensitive_logging_utils import sensitive_log
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 # A sentinel key stored in the timestamp file to represent a pending (uncommitted)
 # assistant response.  The flow is: (1) save_placeholder_timestamp() writes this key

@@ -1,6 +1,6 @@
 ## The `GetCurrentSummaryFromFile` Node
 
-This guide provides a code-validated overview of the `GetCurrentSummaryFromFile` node. It details the simple, direct
+This guide provides an overview of the `GetCurrentSummaryFromFile` node. It details the simple, direct
 function as fast file reader.
 
 ### Core Purpose
@@ -39,7 +39,9 @@ checks, triggers no updates, and has no complex logic, making it the fastest way
 Use this node when you need the absolute fastest, no-frills read of the chat summary and are either managing the update
 process manually or do not require the summary to be perfectly up-to-date.
 
-```json
+Annotated JSON example. Remove comments before saving it as a configuration file.
+
+```jsonc
 [
   {
     "title": "Step 1: Quickly grab the current conversation summary",

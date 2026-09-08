@@ -34,6 +34,10 @@ def mock_dependencies(mocker):
         'Middleware.api.workflow_gateway.get_shared_workflows_folder',
         return_value=os.path.join('/configs', 'Workflows', '_shared')
     )
+    mock_get_allow_shared = mocker.patch(
+        'Middleware.api.workflow_gateway.config_utils.get_allow_shared_workflows',
+        return_value=False
+    )
 
     # Mock utility functions
     mocker.patch('Middleware.api.workflow_gateway.extract_discussion_id', return_value='test-discussion-id')
@@ -55,6 +59,7 @@ def mock_dependencies(mocker):
         'get_active_custom_workflow_name': mock_get_name,
         'get_active_workflow_override': mock_get_override,
         'get_shared_workflows_folder': mock_get_shared_folder,
+        'get_allow_shared_workflows': mock_get_allow_shared,
         'PromptCategorizationService': mock_prompt_cat_service,
         'WorkflowManager': mock_workflow_manager,
         'get_liveness_tool_call': mock_liveness
@@ -183,6 +188,19 @@ def test_handle_user_prompt_workflow_override_takes_priority_over_config(mock_de
     mock_dependencies['get_custom_workflow_is_active'].assert_not_called()
     mock_dependencies['get_active_custom_workflow_name'].assert_not_called()
     mock_dependencies['PromptCategorizationService'].assert_not_called()
+
+
+def test_handle_user_prompt_shared_mode_never_falls_through_without_selection(mock_dependencies):
+    """Shared mode cannot silently fall through to custom or routing mode."""
+    mock_dependencies['get_allow_shared_workflows'].return_value = True
+
+    with pytest.raises(ValueError, match="requires a valid shared workflow"):
+        handle_user_prompt("req-shared", [{"role": "user", "content": "Hi"}], stream=False)
+
+    mock_dependencies['get_custom_workflow_is_active'].assert_not_called()
+    mock_dependencies['get_active_custom_workflow_name'].assert_not_called()
+    mock_dependencies['PromptCategorizationService'].assert_not_called()
+    mock_dependencies['WorkflowManager'].run_custom_workflow.assert_not_called()
 
 
 def test_handle_user_prompt_routes_sanitized_messages_not_raw(mock_dependencies, mocker):

@@ -16,6 +16,7 @@ def _hermetic_chat_template_name(mocker):
     mocker.patch(
         'Middleware.workflows.processors.workflows_processor.get_chat_template_name',
         return_value='fake_template')
+    mocker.patch('Middleware.workflows.processors.workflows_processor.LockingService')
 
 
 @pytest.fixture
@@ -391,4 +392,3 @@ class TestWorkflowProcessorCancellation:
         # before the post-return node, and acknowledged the cancellation.
         assert post_node_executions == []
         assert not cancellation_service.is_cancelled(request_id)
-

@@ -271,10 +271,9 @@ def test_images_do_not_leak_into_subsequent_imageless_request(base_handler_args)
     assert "images" not in second_payload
 
 
-def test_handle_non_streaming_http_error(mocker, base_handler_args):
+def test_handle_non_streaming_ambiguous_error(mocker, base_handler_args):
     """
-    Ensures that an HTTP request failure is retried 3 times and then correctly
-    propagated as an exception.
+    An ambiguous request failure propagates without replaying the generation.
     """
     handler = KoboldCppApiHandler(**base_handler_args, stream=False)
     mock_session = mocker.patch.object(handler, 'session', spec=requests.Session)
@@ -283,4 +282,4 @@ def test_handle_non_streaming_http_error(mocker, base_handler_args):
     with pytest.raises(requests.exceptions.RequestException, match="Connection failed"):
         handler.handle_non_streaming(prompt="Test prompt")
 
-    assert mock_session.post.call_count == 3
+    assert mock_session.post.call_count == 1

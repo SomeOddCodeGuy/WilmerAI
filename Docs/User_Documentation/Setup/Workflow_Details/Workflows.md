@@ -1,8 +1,7 @@
 ## A Technical Guide to Authoring WilmerAI Workflows
 
-This guide provides the complete, validated rules, structure, and component details for generating valid and effective
-workflows for the WilmerAI system. It has been verified against the system's source code (`workflow_manager.py`,
-`workflow_variable_manager.py`, and `workflow_processor.py`) to ensure total accuracy.
+This guide describes workflow structure, node configuration, and execution behavior in WilmerAI. The relevant
+implementation is in `workflow_manager.py`, `workflow_variable_manager.py`, and `workflow_processor.py`.
 
 ### Core Principle: The Workflow
 
@@ -49,6 +48,8 @@ custom variables.
 
 The root of the JSON **must be an object**. This object should contain a required `nodes` key (a list of node objects)
 and any number of other top-level keys that will serve as custom variables.
+
+Partial workflow example: supply any omitted `endpointName` and `preset` fields for LLM nodes before running it.
 
 ```json
 {
@@ -130,6 +131,8 @@ property.
 
 **Child Workflow Example (`summarize.json`)**
 
+Partial workflow example: supply any omitted `endpointName` and `preset` fields for LLM nodes before running it.
+
 ```json
 [
   {
@@ -144,7 +147,8 @@ property.
 
 ## Part 3: A Catalog of Node Types
 
-This is a catalog of available node types, validated against the `WorkflowManager`'s `node_handlers` dictionary.
+The following catalog describes available node types. `WorkflowManager` registers node handlers in its
+`node_handlers` dictionary.
 
 #### Core & Utility Nodes
 
@@ -153,10 +157,10 @@ This is a catalog of available node types, validated against the `WorkflowManage
 * **`PythonModule`**: Executes a custom Python script as long as it matches the required signature, and returns the
   string output from that script as the nodes output.
 * **`GetCustomFile`**: Loads a `.txt` file from disk and places its content into the node's output. Its `filepath` field
-  supports variables, including `{Discussion_Id}` and `{YYYY_MM_DD}` for dynamic, per-conversation or date-based paths.
+  supports variables. Use `{Discussion_Directory}` for per-discussion state and `{YYYY_MM_DD}` for dated files.
 * **`SaveCustomFile`**: Writes string content to a local text file. Its `filepath` and `content` fields support
-  variables, including `{Discussion_Id}` and `{YYYY_MM_DD}` for dynamic paths. The node's output is a success or error
-  message.
+  variables. Use `{Discussion_Directory}` for per-discussion state so custom files follow built-in memory's optional
+  API-key scope. The node's output is a success or error message.
 * **`ImageProcessor`**: Generates a text description from an image provided by the user.
 * **`StaticResponse`**: Returns a hardcoded string from its `content` field. Can act as a responder node and supports
   streaming.
@@ -206,8 +210,12 @@ This is a catalog of available node types, validated against the `WorkflowManage
 
 #### External Integration Nodes
 
-* **`WebFetch`**: Issues an HTTP/HTTPS request to a configured URL via the `requests` library and returns the
-  response as text, parsed JSON, a status/headers/body envelope, or HTML stripped to visible text.
+* **`WebFetch`**: Issues an HTTP/HTTPS request to a configured URL via Python Requests (default) or the system curl
+  executable and returns the response as text, parsed JSON, a status/headers/body envelope, or HTML stripped to
+  visible text.
+* **`WebPageFetch`**: Retrieves one public HTML, XHTML, or text page through a bodyless GET. It enables robots.txt,
+  public-destination validation, domain pacing, redirect validation, page content-type checks, and bounded transfer
+  and decoding by default. It never loads page subresources.
 * **`CurlCommand`**: Runs the system `curl` binary with a JSON list of arguments (no shell) and returns its output.
 * **`MCPToolCall`**: Invokes a single tool on a named MCP server registered under `Public/Configs/MCPServers/`.
 
@@ -324,10 +332,9 @@ node that will run in the main workflow, even if it exists in a child workflow.
 All of this occurs automatically, without the `returnToUser` flag set. That flag can be left at false, or removed
 all-together, and the response of the last node will still occur.
 
-The `returnToUser` flag is specifically designed to OVERRIDE this default behavior. If you were to list Node 3-2,
-the last node of the child workflow `search_wikipedia`, as `returnToUser`, that node's output would be streamed to
-the user. Because every request to Wilmer can only have a single node respond to the user, this means Node 4 will
-not send its response to the user; that work will simply be lost.
+To make the child workflow supply the main response, mark its calling `CustomWorkflow` node as `returnToUser` in
+the parent. The child can then select its own responder. A child flag alone cannot override a non-responder parent:
+the parent forces that child into non-responder mode and captures its result, leaving Node 4 as the main responder.
 
 **In the vast majority of cases, you do not need to include returnToUser on any node, and do not need to set it to
 true. That field was specifically created for a very niche use-case where the user would want to have work continue
@@ -354,3 +361,8 @@ prompt. Collection-mode nodes (no `prompt`) already send native tool history and
 When using local models that produce capitalized tool call function names (e.g., `Glob` instead of `glob`), set
 `"lowercaseToolCallFunctionNames": true` on the same responding node to normalize the casing before it reaches the
 frontend. This is off by default because some frontends (e.g., Claude Code) require the original casing.
+
+### Conversation chunk processing
+
+ConversationChunkProcessor processes complete groups of new messages through a child workflow, storing a
+per-discussion cursor. See the [node guide](Nodes/ConversationChunkProcessor.md) for inputs, state and result behavior.

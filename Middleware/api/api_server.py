@@ -2,7 +2,6 @@
 
 import importlib
 import inspect
-import logging
 import os
 from typing import Optional
 
@@ -10,8 +9,14 @@ from flask import Flask  # Import Flask for type hinting
 
 from Middleware.api.app import app
 from Middleware.api.handlers.base.base_api_handler import BaseApiHandler
+from Middleware.common import instance_global_variables
+from Middleware.utilities.sensitive_logging_utils import protect_flask_error_logging
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
+
+_WILMER_PROXY_HANDLER_FILES = frozenset({"wilmer_proxy_openai_api_handler.py"})
 
 
 class ApiServer:
@@ -33,6 +38,7 @@ class ApiServer:
                                             for dependency injection during testing.
         """
         self.app = app_instance if app_instance is not None else app
+        protect_flask_error_logging(self.app)
         self._discover_and_register_handlers()
         self._apply_concurrency_middleware()
 
@@ -54,11 +60,18 @@ class ApiServer:
                        registration of a handler.
         """
         handlers_root_dir = os.path.join(os.path.dirname(__file__), 'handlers')
+        active_mode = instance_global_variables.RUNTIME_MODE
         logger.info(f"Discovering API handlers in: {handlers_root_dir}")
+        logger.info(f"Registering API handlers for runtime mode: {active_mode}")
 
         for root, _, files in os.walk(handlers_root_dir):
             for filename in files:
                 if filename.endswith('.py') and not filename.startswith('__') and not filename.startswith('base_'):
+                    is_wilmer_proxy_handler = filename in _WILMER_PROXY_HANDLER_FILES
+                    if active_mode == "wilmerproxy" and not is_wilmer_proxy_handler:
+                        continue
+                    if active_mode != "wilmerproxy" and is_wilmer_proxy_handler:
+                        continue
 
                     # Construct the full, importable module path from the file path.
                     relative_path = os.path.relpath(os.path.join(root, filename), handlers_root_dir)
@@ -73,6 +86,11 @@ class ApiServer:
                         module = importlib.import_module(module_name)
                         for name, obj in inspect.getmembers(module, inspect.isclass):
                             if issubclass(obj, BaseApiHandler) and not inspect.isabstract(obj):
+                                supported_modes = getattr(obj, "SUPPORTED_MODES", frozenset({"workflow"}))
+                                if active_mode not in supported_modes:
+                                    logger.debug(
+                                        f"Skipping API handler {name}; it does not support mode {active_mode}")
+                                    continue
                                 handler_instance = obj()
                                 handler_instance.register_routes(self.app)
                                 logger.info(f"Successfully registered routes from {name} in {module_name}")
@@ -80,8 +98,12 @@ class ApiServer:
                         # This error often points to specific structural issues in the project.
                         logger.error(
                             f"Failed to import handler from {module_name}: {e}. Check for circular imports or missing __init__.py files.")
+                        if active_mode == "wilmerproxy":
+                            raise
                     except Exception as e:
                         logger.error(f"Failed to load or register handler from {module_name}: {e}")
+                        if active_mode == "wilmerproxy":
+                            raise
 
     def _apply_concurrency_middleware(self):
         """Wraps the WSGI app with concurrency-limiting middleware if configured."""
@@ -95,4 +117,3 @@ class ApiServer:
                 acquire_timeout=instance_global_variables.CONCURRENCY_TIMEOUT
             )
             logger.info("Concurrency limiting middleware applied")
-

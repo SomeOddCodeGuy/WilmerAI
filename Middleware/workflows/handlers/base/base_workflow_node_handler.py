@@ -1,12 +1,13 @@
 # /Middleware/workflows/handlers/base/base_workflow_node_handler.py
 
-import logging
 from abc import ABC, abstractmethod
 from typing import Any
 
 from Middleware.workflows.models.execution_context import ExecutionContext
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 
 class BaseHandler(ABC):

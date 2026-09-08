@@ -1,7 +1,9 @@
 import types
 import logging
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 def aggregate_generator_input(input_arg):
     """Aggregates input if it's a generator type.
@@ -31,4 +33,4 @@ def aggregate_generator_input(input_arg):
             return f"[Error aggregating stream: {e}]"
     # If not a generator, assume it's already a string or compatible type
     logger.debug(f"Input type {type(input_arg)} is not a generator, returning as is.")
-    return input_arg 
+    return input_arg

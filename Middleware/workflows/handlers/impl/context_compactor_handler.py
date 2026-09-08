@@ -1,4 +1,3 @@
-import logging
 import threading
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -16,7 +15,9 @@ from Middleware.utilities.text_utils import rough_estimate_token_length
 from Middleware.workflows.handlers.base.base_workflow_node_handler import BaseHandler
 from Middleware.workflows.models.execution_context import ExecutionContext
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 # Per-discussion locks to prevent concurrent compaction of the same discussion.
 # Capped at _MAX_COMPACTOR_LOCKS to prevent unbounded growth on long-running servers.

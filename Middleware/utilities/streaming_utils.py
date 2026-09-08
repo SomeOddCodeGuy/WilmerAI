@@ -7,7 +7,9 @@ from typing import Any, Dict, Generator
 
 from Middleware.utilities.sensitive_logging_utils import sensitive_log
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 
 def stream_static_content(content: str) -> Generator[Dict[str, Any], None, None]:

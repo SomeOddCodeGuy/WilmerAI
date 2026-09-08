@@ -1,7 +1,6 @@
 # Middleware/api/workflow_gateway.py
 
 import json
-import logging
 import os
 from typing import Any, Dict, List, Generator, Optional, Union
 
@@ -17,7 +16,9 @@ from Middleware.utilities.prompt_extraction_utils import extract_discussion_id
 from Middleware.utilities.text_utils import replace_brackets_in_list
 from Middleware.workflows.managers.workflow_manager import WorkflowManager
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 response_builder = ResponseBuilderService()
 
 # Machinery-injected turns must be one-shot: the model sees them exactly once,
@@ -400,10 +401,10 @@ def handle_user_prompt(request_id: str, prompt_collection: List[Dict[str, Any]],
     strip_machinery_turns and collapse_duplicate_tool_calls). Users without
     that setting never have their conversation rewritten.
 
-    The workflow is determined by the following priority:
-    1. Workflow override from API model field (if set via api_helpers.set_workflow_override)
-    2. Custom workflow from user config (if get_custom_workflow_is_active is True)
-    3. Dynamic routing via PromptCategorizationService
+    The workflow is determined by the following mutually exclusive modes:
+    1. Shared workflow selected by the API model field when shared mode is on
+    2. Custom workflow when shared mode is off and custom override is on
+    3. Dynamic routing when both shared mode and custom override are off
 
     Args:
         request_id (str): The unique identifier for this request.
@@ -447,6 +448,11 @@ def handle_user_prompt(request_id: str, prompt_collection: List[Dict[str, Any]],
             api_key=api_key,
             tools=tools,
             tool_choice=tool_choice
+        )
+
+    if config_utils.get_allow_shared_workflows():
+        raise ValueError(
+            "Shared workflow mode requires a valid shared workflow in the request model field."
         )
 
     if not get_custom_workflow_is_active():

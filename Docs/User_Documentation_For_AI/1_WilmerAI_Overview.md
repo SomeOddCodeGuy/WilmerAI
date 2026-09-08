@@ -10,6 +10,10 @@ extract data, etc. The output of each node is available to all subsequent nodes.
 The final node's output (or whichever node is designated the responder) is returned to the frontend as if WilmerAI were
 a normal LLM.
 
+WilmerAI also has a separate `wilmerproxy` runtime mode. WilmerProxy mode is an allowlisted OpenAI relay to another
+WilmerAI instance. It does not execute nodes or load the normal request through workflows. Start it with
+`--Mode WilmerProxy --WilmerProxyConfig <name>` and configure it under `Public/Configs/WilmerProxy/`.
+
 ## Endpoints
 
 WilmerAI serves:
@@ -36,6 +40,7 @@ Public/Configs/
   Endpoints/       # LLM connection configs (URL, API type, model name)
   Presets/         # Generation parameters (temperature, top_k, etc.)
   PromptTemplates/ # Chat templates for different model families
+  WilmerProxy/     # Named WilmerProxy-mode allowlists and upstream policies
   Routing/         # Prompt router config (domains -> workflows)
   Users/           # Per-user settings (port, paths, features)
   Workflows/       # Workflow JSON files
@@ -43,7 +48,8 @@ Public/Configs/
     <username>/    # User-specific workflows
 ```
 
-Each workflow node specifies an `endpointName` (which LLM to call) and optionally a `preset` (generation params).
+Each Standard node requires an `endpointName` (which LLM to call) and a `preset` (generation parameters or an endpoint
+with embedded preset samplers). Specialized nodes that do not load LLM settings have their own required fields.
 These are **references to JSON config filenames** (without `.json`) that the user has created in those directories.
 For example, `"endpointName": "My-Claude-Endpoint"` refers to `Public/Configs/Endpoints/<subdirectory>/My-Claude-Endpoint.json`,
 where `<subdirectory>` is the user's `endpointConfigsSubDirectory` setting (e.g. `_shared` for the default `chat-ui` user).
@@ -56,7 +62,9 @@ workflows from all users. Requests route to the correct user via the model field
 
 ## Workflow JSON Structure
 
-```json
+Illustrative fragment; replace omitted content before using it in a configuration.
+
+```text
 {
   "my_custom_var": "Reusable text or persona definition",
   "nodes": [

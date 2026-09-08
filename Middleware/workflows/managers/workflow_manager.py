@@ -24,10 +24,13 @@ from Middleware.workflows.handlers.impl.standard_node_handler import StandardNod
 from Middleware.workflows.handlers.impl.sub_workflow_handler import SubWorkflowHandler
 from Middleware.workflows.handlers.impl.tool_node_handler import ToolNodeHandler
 from Middleware.workflows.handlers.impl.web_fetch_handler import WebFetchHandler
+from Middleware.workflows.handlers.impl.web_page_fetch_handler import WebPageFetchHandler
 from Middleware.workflows.managers.workflow_variable_manager import WorkflowVariableManager
 from Middleware.workflows.processors.workflows_processor import WorkflowProcessor
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 
 class WorkflowManager:
@@ -196,6 +199,7 @@ class WorkflowManager:
         sub_workflow_handler = SubWorkflowHandler(**common_dependencies)
         context_compactor_handler = ContextCompactorHandler(**common_dependencies)
         web_fetch_handler = WebFetchHandler(**common_dependencies)
+        web_page_fetch_handler = WebPageFetchHandler(**common_dependencies)
         curl_command_handler = CurlCommandHandler(**common_dependencies)
         mcp_tool_call_handler = MCPToolCallHandler(**common_dependencies)
 
@@ -250,6 +254,7 @@ class WorkflowManager:
             "ContextCompactor": context_compactor_handler,
 
             "WebFetch": web_fetch_handler,
+            "WebPageFetch": web_page_fetch_handler,
             "CurlCommand": curl_command_handler,
             "MCPToolCall": mcp_tool_call_handler,
         }

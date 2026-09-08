@@ -4,9 +4,10 @@ The routing configuration files, located in `Public/Configs/Routing/`, define ho
 to different processing workflows. Each JSON file maps prompt categories (e.g., "Coding", "Factual") to a specific
 workflow file.
 
-When a request is received and the `customWorkflowOverride` setting in the user's configuration is `false`, the system
-first runs a "categorization workflow." This initial workflow uses an LLM to analyze the request and assign it to one of
-the categories defined in the routing file. The system then executes the workflow associated with that category.
+When a request is received and both `allowSharedWorkflows` and `customWorkflowOverride` in the user's configuration are
+`false`, the system first runs a "categorization workflow." This initial workflow uses an LLM to analyze the request
+and assign it to one of the categories defined in the routing file. The system then executes the workflow associated
+with that category.
 
 This process allows different types of prompts to be handled by specialized workflows. A user's active routing file is
 specified by the `routingConfig` field in their `Public/Configs/Users/<username>.json` file.
@@ -60,7 +61,9 @@ For each `Category Key`, the value is a nested JSON object containing the follow
 
 Filename: `assistantSingleModelCategoriesConfig.json`
 
-```json
+Annotated JSON example. Remove comments before saving it as a configuration file.
+
+```jsonc
 {
   // The unique identifier for the route. This is the target output
   // for the categorization LLM.
@@ -86,7 +89,8 @@ Filename: `assistantSingleModelCategoriesConfig.json`
 
 #### **The Routing Process**
 
-1. **Initiation**: A request is received. The system checks that the user's `customWorkflowOverride` setting is `false`.
+1. **Initiation**: A request is received. The system checks that both `allowSharedWorkflows` and
+   `customWorkflowOverride` are `false`.
 2. **Loading**: The `PromptCategorizationService` reads the routing file specified in the user's `routingConfig`
    setting.
 3. **Prompt Assembly**: The service constructs a prompt for the categorization LLM. This prompt includes the user's

@@ -85,8 +85,9 @@ def resolve_port():
 
     Priority:
     1. CLI ``--port`` flag (stored in ``instance_global_variables.PORT``).
-    2. Single-user mode: read from the user's config file (backwards compatible).
-    3. Multi-user mode: default to 5050 with a warning that per-user port
+    2. WilmerProxy mode: read from the selected WilmerProxy configuration.
+    3. Single-user mode: read from the user's config file (backwards compatible).
+    4. Multi-user mode: default to 5050 with a warning that per-user port
        settings do not apply.
 
     Returns:
@@ -94,6 +95,10 @@ def resolve_port():
     """
     if instance_global_variables.PORT is not None:
         return instance_global_variables.PORT
+
+    if instance_global_variables.RUNTIME_MODE == "wilmerproxy":
+        from Middleware.wilmer_proxy.config import load_wilmer_proxy_config
+        return load_wilmer_proxy_config().port
 
     users = instance_global_variables.USERS or []
     is_multi_user = len(users) > 1
@@ -121,18 +126,24 @@ def resolve_file_logging():
 
     Priority:
     1. CLI ``--file-logging`` flag (stored in ``instance_global_variables.FILE_LOGGING``).
-    2. Single-user mode: the user's ``useFileLogging`` config setting.
-    3. Legacy mode (no ``--User`` arg): ``useFileLogging`` from the
+    2. WilmerProxy mode: the selected configuration's ``useFileLogging`` setting.
+    3. Single-user mode: the user's ``useFileLogging`` config setting.
+    4. Legacy mode (no ``--User`` arg): ``useFileLogging`` from the
        ``_current-user.json`` user's config.
-    4. Multi-user mode: off unless the flag is passed.
+    5. Multi-user mode: off unless the flag is passed.
 
-    Config read failures degrade to ``False`` rather than blocking startup.
+    Workflow-user config read failures return ``False``. Invalid WilmerProxy
+    configuration propagates to startup.
 
     Returns:
         bool: True when file logging should be enabled.
     """
     if instance_global_variables.FILE_LOGGING is not None:
         return instance_global_variables.FILE_LOGGING
+
+    if instance_global_variables.RUNTIME_MODE == "wilmerproxy":
+        from Middleware.wilmer_proxy.config import load_wilmer_proxy_config
+        return load_wilmer_proxy_config().use_file_logging
 
     users = instance_global_variables.USERS or []
     if len(users) == 1:

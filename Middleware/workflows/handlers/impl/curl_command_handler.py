@@ -8,13 +8,16 @@ import threading
 from typing import Any, Dict, FrozenSet, List
 
 from Middleware.utilities.network_security_utils import check_url_allowed
+from Middleware.utilities.process_utils import run_process_readers
 from Middleware.workflows.handlers.base.base_workflow_node_handler import BaseHandler
 from Middleware.workflows.handlers.impl.extension_node_helpers import (
     maybe_stream, resolve_allowed_hosts, validate_bool, validate_max_bytes, validate_timeout,
 )
 from Middleware.workflows.models.execution_context import ExecutionContext
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 _READ_CHUNK_SIZE = 65536
 _DEFAULT_TIMEOUT_SECONDS = 30
@@ -156,8 +159,8 @@ class CurlCommandHandler(BaseHandler):
             _CURL_BINARY, *max_filesize_args, *redirect_guard_args, *proxy_args, *resolved_args
         ]
 
-        logger.debug("CurlCommand running %r (timeout=%s, outputFormat=%s)",
-                     command, timeout, output_format)
+        logger.debug("CurlCommand running with %s arguments (timeout=%s, outputFormat=%s)",
+                     len(command) - 1, timeout, output_format)
 
         return self._execute(command, timeout, max_bytes, on_error, output_format, context)
 
@@ -213,29 +216,10 @@ class CurlCommandHandler(BaseHandler):
 
         stdout_box: Dict[str, Any] = {}
         stderr_box: Dict[str, Any] = {}
-        out_thread = threading.Thread(
-            target=self._read_body, args=(proc, cap, stdout_box), daemon=True
-        )
-        err_thread = threading.Thread(
-            target=self._read_diagnostic, args=(proc.stderr, cap, stderr_box), daemon=True
-        )
-        out_thread.start()
-        err_thread.start()
-
-        timed_out = False
-        try:
-            # Returns promptly once curl exits (including when _read_body kills it
-            # on a cap breach), and otherwise after `timeout` seconds.
-            proc.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            proc.kill()
-            proc.wait()
-        finally:
-            out_thread.join()
-            err_thread.join()
-            self._close_stream(proc.stdout)
-            self._close_stream(proc.stderr)
+        timed_out = run_process_readers(proc, timeout, (
+            (self._read_body, (proc, cap, stdout_box)),
+            (self._read_diagnostic, (proc.stderr, cap, stderr_box)),
+        ))
 
         stdout_text = stdout_box.get("data", b"").decode("utf-8", errors="replace")
         stderr_text = stderr_box.get("data", b"").decode("utf-8", errors="replace")

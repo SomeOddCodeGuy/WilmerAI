@@ -48,10 +48,9 @@ Each field is explained in detail below.
     * **Required**: Yes
     * **Description**: The full, absolute or relative path to the text file you want to load. The file path resolution
       is **case-insensitive**, meaning `C:\Docs\file.txt` will match `C:\docs\File.TXT`. This field supports variable
-      substitution, allowing you to use placeholders like `{Discussion_Id}` and `{YYYY_MM_DD}` to create dynamic,
-      per-conversation or date-based file paths.
+      substitution. Use `{Discussion_Directory}` as the base for discussion state and `{YYYY_MM_DD}` for dated files.
     * **Example**: `"D:\\WilmerAI\\Public\\references\\project_history.txt"`
-    * **Example with variables**: `"/Users/socg/sessions/{Discussion_Id}_notes.txt"` or
+    * **Example with variables**: `"{Discussion_Directory}/notes.txt"` or
       `"/data/logs/{YYYY_MM_DD}_actions.txt"`
 
 * #### **`delimiter`**
@@ -150,7 +149,9 @@ date-based file paths. This is useful for loading session-specific notes, daily 
 
 #### Available Variables for Filepaths
 
-* **`{Discussion_Id}`**: The unique identifier for the current conversation. Useful for per-session files.
+* **`{Discussion_Directory}`**: The canonical, optionally API-key-scoped folder for the current discussion. Use this
+  for per-discussion files.
+* **`{Discussion_Id}`**: The raw discussion identifier. Do not use it by itself as a storage boundary.
 * **`{YYYY_MM_DD}`**: Today's date in underscore-separated format (e.g., `2025_12_07`). Useful for daily logs.
 * Any other workflow variable (e.g., `{agent1Output}`, custom variables defined in the workflow JSON).
 
@@ -160,11 +161,12 @@ date-based file paths. This is useful for loading session-specific notes, daily 
 {
   "title": "Load Session Notes",
   "type": "GetCustomFile",
-  "filepath": "/data/sessions/{Discussion_Id}_notes.txt"
+  "filepath": "{Discussion_Directory}/notes.txt"
 }
 ```
 
-If the `Discussion_Id` is `conv-abc-123`, this will load the file `/data/sessions/conv-abc-123_notes.txt`.
+This loads `notes.txt` beside the built-in memory files for the current discussion. If a Bearer key is present, the
+resolved path automatically includes its storage scope.
 
 #### Example: Loading Daily Action Items
 
@@ -184,7 +186,7 @@ If today is December 7, 2025, this will load the file `/data/logs/2025_12_07_act
 {
   "title": "Load Session-Specific Daily Log",
   "type": "GetCustomFile",
-  "filepath": "/data/{YYYY_MM_DD}/{Discussion_Id}_log.txt"
+  "filepath": "{Discussion_Directory}/log_{YYYY_MM_DD}.txt"
 }
 ```
 
@@ -211,3 +213,5 @@ It's crucial to understand how the node behaves in specific situations:
   `"No filepath specified"`.
 * **Empty Discussion_Id**: If `{Discussion_Id}` is used but no discussion ID is present in the context, it will be
   replaced with an empty string, which may result in an invalid filepath.
+* **Missing Discussion ID for Discussion_Directory**: Referencing `{Discussion_Directory}` without a discussion ID
+  stops the workflow. It never falls back to a shared directory.

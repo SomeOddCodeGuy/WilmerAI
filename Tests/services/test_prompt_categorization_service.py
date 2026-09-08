@@ -374,7 +374,7 @@ class TestCategorizationAndRouting:
         """End-to-end router-failure fallback: when the categorization LLM's output
         matches no configured category, the request must run '_DefaultWorkflow' via
         run_custom_workflow, and no category workflow may be instantiated. This is
-        the fallback Chris mirrors every user's main workflow into."""
+        the fallback Socg mirrors every user's main workflow into."""
         mock_categorization_wm = MagicMock()
         mock_categorization_wm.run_workflow.return_value = "gibberish that matches nothing"
         mocker.patch.object(service, '_configure_workflow_manager',

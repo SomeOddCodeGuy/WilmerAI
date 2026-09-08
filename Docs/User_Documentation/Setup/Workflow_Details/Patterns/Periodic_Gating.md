@@ -32,7 +32,7 @@ turn, inside the Run branch.
 
 ## Why each piece is there
 
-- **The counter lives on disk** (per conversation, via `{Discussion_Id}` in the path), because a workflow is stateless
+- **The counter lives on disk** (per discussion, under `{Discussion_Directory}`), because a workflow is stateless
   between invocations; the file *is* the memory of how many turns have passed.
 - **`ArithmeticProcessor` returns `"-1"` for any non-numeric input**, which handles first-run for free. A missing
   counter file reads back as a "file not found" marker; `{marker} + 1` is non-numeric, so it evaluates to `-1`, and
@@ -50,9 +50,9 @@ turn, inside the Run branch.
 ```json
 [
   { "title": "Load the counter", "type": "GetCustomFile",
-    "filepath": "{someDir}/turn_counter_{Discussion_Id}.txt", "delimiter": "", "customReturnDelimiter": "\n" },
+    "filepath": "{Discussion_Directory}/turn_counter.txt", "delimiter": "", "customReturnDelimiter": "\n" },
   { "title": "Load the state to pass through", "type": "GetCustomFile",
-    "filepath": "{someDir}/record_{Discussion_Id}.md", "delimiter": "", "customReturnDelimiter": "\n" },
+    "filepath": "{Discussion_Directory}/record.md", "delimiter": "", "customReturnDelimiter": "\n" },
   { "title": "Increment", "type": "ArithmeticProcessor", "expression": "{agent1Output} + 1" },
   { "title": "Time to run?", "type": "Conditional", "condition": "{agent3Output} >= 10" },
   { "title": "Run every 10 turns, otherwise tick", "type": "ConditionalCustomWorkflow",
@@ -67,17 +67,19 @@ turn, inside the Run branch.
 ```json
 [
   { "title": "Save the incremented counter", "type": "SaveCustomFile",
-    "filepath": "{someDir}/turn_counter_{Discussion_Id}.txt", "content": "{agent1Input}", "mode": "overwrite" },
+    "filepath": "{Discussion_Directory}/turn_counter.txt", "content": "{agent1Input}", "mode": "overwrite" },
   { "title": "Return the state unchanged", "type": "StaticResponse", "content": "{agent2Input}" }
 ]
 ```
 
 **`Counter_Run.json`**, which resets first, then does the periodic work:
 
-```json
+Annotated JSON example. Remove comments before saving it as a configuration file.
+
+```jsonc
 [
   { "title": "Reset the counter", "type": "SaveCustomFile",
-    "filepath": "{someDir}/turn_counter_{Discussion_Id}.txt", "content": "0", "mode": "overwrite" },
+    "filepath": "{Discussion_Directory}/turn_counter.txt", "content": "0", "mode": "overwrite" },
   { "title": "Do the periodic work", "type": "Standard", "endpointName": "Worker-Endpoint", "preset": "Worker-Endpoint",
     "systemPrompt": "…", "prompt": "…process the recent batch…", "returnToUser": false }
   // …save/return as needed…
@@ -122,7 +124,8 @@ recent gap while the periodic step maintains the durable record.
 - **One counter can gate several steps.** Increment it in one place, have each gated step check it, and reset it once
   after the last step runs. Order matters: a step that resets the counter before the others have checked it will skip
   them.
-- **Per-conversation isolation:** `{Discussion_Id}` in the counter path keeps each conversation's count separate.
+- **Per-discussion isolation:** `{Discussion_Directory}` keeps the counter with built-in discussion state and includes
+  the optional API-key storage scope.
 - **Sub-workflows are isolated.** Pass the counter and any state into the Run/Tick children via `scoped_variables`.
 
 See also [The Decision Tree to Return a File](Decision_Tree_To_Return_File.md), which gates on *whether something

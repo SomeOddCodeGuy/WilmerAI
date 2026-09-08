@@ -1,0 +1,26 @@
+{
+  "port": 5050,
+  "useFileLogging": false,
+  "upstreams": {
+    "main": {
+      "baseUrl": "http://127.0.0.1:5060",
+      "authorizationMode": "passthrough",
+      "forwardHeaders": [
+        "X-Idempotency-Key"
+      ],
+      "connectTimeoutSeconds": 10,
+      "readTimeoutSeconds": 14400,
+      "verifyTls": true
+    }
+  },
+  "models": {
+    "general": {
+      "upstream": "main",
+      "targetModel": "chat-ui:general"
+    },
+    "task": {
+      "upstream": "main",
+      "targetModel": "chat-ui:task"
+    }
+  }
+}

@@ -10,7 +10,9 @@ from Middleware.llmapis.handlers.base.base_chat_completions_handler import BaseC
 from Middleware.llmapis.handlers.base.image_injection import inject_images_into_messages
 from Middleware.utilities.sensitive_logging_utils import sensitive_log
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 
 class ClaudeApiHandler(BaseChatCompletionsHandler):

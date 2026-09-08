@@ -1,6 +1,5 @@
 # Middleware/workflows/handlers/impl/memory_node_handler.py
 
-import logging
 from dataclasses import replace as dc_replace
 from typing import Any, Callable
 
@@ -13,7 +12,9 @@ from Middleware.workflows.handlers.base.base_workflow_node_handler import BaseHa
 from Middleware.workflows.models.execution_context import ExecutionContext
 from Middleware.workflows.tools.slow_but_quality_rag_tool import SlowButQualityRAGTool
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 
 class MemoryNodeHandler(BaseHandler):

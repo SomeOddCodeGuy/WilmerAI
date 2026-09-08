@@ -18,5 +18,5 @@ VALID_NODE_TYPES = [
     "GetCustomFile", "ImageProcessor",
     "VectorMemorySearch", "SaveCustomFile", "StaticResponse", "ArithmeticProcessor", "Conditional",
     "StringConcatenator", "JsonExtractor", "TagTextExtractor", "DelimitedChunker", "ContextCompactor",
-    "WebFetch", "CurlCommand", "MCPToolCall"
+    "WebFetch", "WebPageFetch", "CurlCommand", "MCPToolCall"
 ]

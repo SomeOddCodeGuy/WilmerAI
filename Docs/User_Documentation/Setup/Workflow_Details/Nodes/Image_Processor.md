@@ -1,6 +1,6 @@
 ## The `ImageProcessor` Node
 
-This guide provides a comprehensive, code-validated overview of the `ImageProcessor` node for WilmerAI. It details the
+This guide provides an overview of the `ImageProcessor` node for WilmerAI. It details the
 node's precise execution logic, properties, and best practices to enable developers and AI agents to author effective
 image-aware workflows.
 
@@ -31,6 +31,7 @@ output. The node does **not** process images independently in parallel; it proce
     * It creates a temporary, isolated context for the LLM call.
     * This context includes the **entire conversation history**, but with only the **single image** currently being
       processed attached to its originating message.
+    * With the required nonempty authored `prompt`, the selected image is also passed explicitly to the outbound request builder. Its original position in a long conversation does not affect whether the vision endpoint receives it. Leaving `prompt` blank selects chat-history dispatch instead, where the message window can exclude an older image; use a nonempty prompt for the per-image behavior described here.
     * It calls the vision LLM specified in `endpointName` with this context, the `systemPrompt`, and the `prompt`.
     * The resulting text description for that single image is stored.
 
@@ -67,13 +68,12 @@ workflow.
 
 ### Node Properties
 
-This table details all the configuration properties for an `ImageProcessor` node, validated against the handler's source
-code.
+This table describes the configuration properties for an `ImageProcessor` node.
 
 | Property               | Type    | Required? | Description                                                                                                                                                                                                                                                                               |
 |:-----------------------|:--------|:----------|:------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | **`type`**             | String  | Yes     | Must be exactly `"ImageProcessor"`.                                                                                                                                                                                                                                                       |
-| **`endpointName`**     | String  | Yes     | The name of the vision-capable LLM endpoint that will analyze the image. **Supports LIMITED variables: only `{agent#Input}` from parent workflows and static workflow variables, NOT `{agent#Output}` which doesn't exist yet.**                                                        |
+| **`endpointName`**     | String  | Yes     | The name of the vision-capable LLM endpoint that will analyze the image. The endpoint must not set `backendSupportsImages: false`, which forces a text-only backend payload. **Supports LIMITED variables: only `{agent#Input}` from parent workflows and static workflow variables, NOT `{agent#Output}` which doesn't exist yet.**                                                        |
 | **`systemPrompt`**     | String  | Yes     | The system prompt sent to the **vision LLM**. This instructs the model on *how* to describe the image (e.g., its persona, desired level of detail, output format). It supports all standard workflow variables.                                                                           |
 | **`prompt`**           | String  | Yes     | The user prompt sent to the **vision LLM**. This guides the model on *what* to focus on, often using conversation variables like `{chat_user_prompt_last_five}` for context. It supports all standard workflow variables.                                                                 |
 | **`preset`**           | String  | Yes     | The name of the generation preset (defining temperature, tokens, etc.) to be used by the vision LLM endpoint. **Supports LIMITED variables like endpointName.**                                                                                                                            |
@@ -166,7 +166,9 @@ This workflow demonstrates the recommended pattern. The first node processes any
 directly into the chat history. The second node is a standard text-based agent that can now "see" the image content
 because it's part of the conversation log it receives.
 
-```json
+Annotated JSON example. Remove comments before saving it as a configuration file.
+
+```jsonc
 [
   {
     "title": "Step 1: Analyze and Describe All User Images",

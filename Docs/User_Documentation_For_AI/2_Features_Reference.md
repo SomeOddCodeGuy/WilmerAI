@@ -22,9 +22,11 @@ WilmerAI emulates OpenAI and Ollama APIs. Frontends connect to WilmerAI as if it
 - `GET /api/tags`: List available models.
 - `DELETE /api/chat`, `DELETE /api/generate`: Cancel in-progress request with `{"request_id": "..."}`.
 
-All POST endpoints support cancellation via client disconnection (close the HTTP connection). Disconnection
-cancels the backend generation and frees the request's slot, covering both mid-stream and pre-response
-(before the first token) disconnects.
+Streaming responses support disconnect cleanup. Eventlet heartbeats enable detection during prefill; fallback
+streaming detects closure when synchronous execution returns control. Closing a response before iteration releases
+request bookkeeping and stops scheduled Eventlet work. Synchronous non-streaming requests have no disconnect watcher.
+Explicit cancellation closes owned pools and any attached response, but Session.close alone does not guarantee that
+a request blocked before response headers is interrupted; transport timeouts still apply.
 
 ### Idempotent Retries
 
@@ -34,6 +36,22 @@ retries of one logical request; use a fresh value per new request. When a key ar
 WilmerAI cancels the abandoned original and serves the new request fresh, so a retry never double-generates on
 the backend. Retry only on failures that happen before the response starts. Header absent = legacy behavior.
 Keys are process-local (not persisted across restarts).
+
+### WilmerProxy Runtime Mode
+
+Start a filter instance with `--Mode WilmerProxy --WilmerProxyConfig <name>` to expose selected aliases from one or
+more upstream WilmerAI instances. Config files live at `Public/Configs/WilmerProxy/<name>.json`. Each public model maps
+independently to an `upstream` name and exact downstream `targetModel`.
+
+WilmerProxy mode registers only the OpenAI model, chat-completion, and legacy-completion routes. It replaces only the
+top-level model value and forwards the otherwise complete JSON object. It bypasses workflow request normalization,
+workflow execution, endpoint configs, `llmapis`, and response building. Successful streams and upstream error bodies
+are relayed instead of reconstructed.
+
+Each upstream authorization policy is `passthrough`, `configured`, or `omit`. Additional request headers use the
+explicit `forwardHeaders` allowlist, which defaults to `X-Idempotency-Key`. Requests are not retried and redirects are
+not followed. Redirect bodies remain under relay ownership. Location or Content-Location headers that cannot be
+serialized as URLs are omitted while the upstream status and body are preserved.
 
 ### Streaming
 
@@ -54,7 +72,7 @@ WilmerAI connects to LLM backends through three config layers:
 2. **ApiType** (`ApiTypes/`): the "how". Maps property names to the backend's API schema (OpenAI, Ollama, Claude, etc.).
 3. **Preset** (`Presets/`): the "what". Generation parameters (temperature, top_p, stop sequences, etc.).
 
-Each workflow node specifies an `endpointName` and optionally a `preset`. Different nodes in the same workflow
+Each Standard node requires an `endpointName` and a `preset`. Different nodes in the same workflow
 can use different endpoints, allowing you to mix local and cloud models in one request.
 
 Supported backend types: OpenAI-compatible (chat + completions), Anthropic Claude, Ollama (chat + generate),
@@ -73,10 +91,11 @@ Routes incoming requests to different workflows based on user intent. Uses a two
 matched to routing config -> corresponding workflow executes. If no match after `maxCategorizationAttempts`,
 falls back to `_DefaultWorkflow`.
 
-**Enable:** Set `customWorkflowOverride: false` in user config, configure `routingConfig` and
-`categorizationWorkflow`.
+**Enable:** Set both `allowSharedWorkflows: false` and `customWorkflowOverride: false` in user config, then configure
+`routingConfig` and `categorizationWorkflow`.
 
-**Disable:** Set `customWorkflowOverride: true` and specify `customWorkflow` to use a single workflow for everything.
+**Disable:** Set `customWorkflowOverride: true` and specify `customWorkflow` to use a single workflow for everything,
+or set `allowSharedWorkflows: true` to select workflows through the request model field.
 
 Auto-generated variables for categorization workflows: `{category_colon_descriptions}`,
 `{categoriesSeparatedByOr}`, `{categoryNameBulletpoints}`, `{category_colon_descriptions_newline_bulletpoint}`.
@@ -167,20 +186,32 @@ See 5_Workflow_Memory.md for full memory node details and 4_Workflow_Variables.m
 ## Per-User Encryption and Data Isolation
 
 When a client sends `Authorization: Bearer <key>`:
-- **Directory isolation** activates automatically: discussion files stored under a hash-based subdirectory.
+- **Directory isolation** activates automatically for built-in discussion files. Workflow files receive the same scope
+  when their path starts with `{Discussion_Directory}`.
 - **Encryption** activates if `encryptUsingApiKey: true` in user config: files encrypted at rest with Fernet
   (AES-128-CBC + HMAC-SHA256) derived from the API key.
 
-When no API key is sent, behavior is unchanged (original directory, plaintext files).
+The key is a client storage namespace, not a validated login credential. Independent clients should use different
+high-entropy keys. When no key is sent, clients using the same discussion ID share the original directory.
 
 Encrypted files: memories, summaries, timestamps, vision cache, condensation tracker, context compactor state.
 **Not encrypted:** SQLite databases (vector memory, workflow locks), configuration files.
 
 **Log redaction:** Automatic when encryption is active. Can also be enabled independently with
 `redactLogOutput: true` in user config.
+OpenAI chat/completions and Ollama chat/generate provisionally redact diagnostics before user selection, then apply
+the selected user's policy before payload logging. Early selection errors stay redacted; ordinary requests retain
+normal diagnostics. Private payload logging does not invoke lazy serialization.
+Built-in module diagnostics, including provider parse failures, native MCP errors, memory summaries and image
+fallback errors, honor this request policy. Independent third-party loggers and startup messages are outside it.
+Eventlet reader cleanup diagnostics and WebPageFetch handler/service warnings use the same request policy, including
+warnings when an operator permits fetching after a robots failure.
+Cancellation callbacks capture the generation's privacy flag at registration. Cleanup and cancellation-service error
+logs keep that policy across threads or greenlets, preserve a private caller and restore caller state after invocation.
 
-**Key management:** WilmerAI does not store/validate keys. Lost key = unrecoverable files. Re-key and
-decrypt scripts available in `Scripts/`.
+**Key management:** WilmerAI does not store/validate keys. Lost keys make encrypted files unrecoverable. Preserve the
+original API key and workflow selection; disabling encryption does not decrypt existing files. Runtime encryption
+occurs during individual built-in discussion file writes.
 
 ---
 
@@ -268,6 +299,11 @@ then sent as native messages after the authored prompt (and excluded from the te
 generates from the standard post-tool-result position instead of imitating tool syntax as text. Collection-mode
 responders (no `prompt`) already send native tool history. Completions-paradigm backends ignore tools entirely.
 
+`appendNativeToolExchange` controls history delivery independently of `allowTools`. An authored-prompt internal
+planner can enable it while keeping `allowTools: false` to inspect the live call and result as native messages without
+receiving tool definitions or giving its output a frontend execution path. Only the responding node should enable
+`allowTools` when the frontend must execute the model's calls.
+
 Set `lowercaseToolCallFunctionNames: true` to lowercase function names in tool call responses before relaying
 them to the frontend. This fixes local models (Gemma, Qwen, etc.) that produce capitalized names like `Glob`
 instead of `glob`. Off by default; do not enable for frontends like Claude Code that expect original casing.
@@ -294,14 +330,15 @@ nodes; a 200 does not prove enforcement on fail-open backends.
 ## Workflow Selection via Model Field
 
 When `allowSharedWorkflows` is true, workflows in `_shared/` folders appear in the models list. The frontend
-selects a workflow by setting the model field:
+selects a workflow by setting the model field. Shared mode disables custom workflow and routing, and a request without
+a valid advertised workflow model returns HTTP 400.
 
 | Format | Behavior |
 |---|---|
 | `username:workflow` | Use specific workflow (and user in multi-user mode). |
-| `username` | Route to that user's default workflow. |
-| `workflow` | Use workflow from `_shared/` if it exists. |
-| Anything else | Normal routing/`customWorkflow`. |
+| `username` | Select the user, but reject the request because no shared workflow was selected. |
+| `workflow` | Use workflow from the shared folder if it exists (single-user mode only). |
+| Anything else | Reject the request because no valid shared workflow was selected. |
 
 Shared workflows are folders in `_shared/` containing a `_DefaultWorkflow.json` file.
 

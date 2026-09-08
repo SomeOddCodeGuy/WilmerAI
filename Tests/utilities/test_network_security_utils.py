@@ -186,11 +186,8 @@ def test_block_private_rejects_cgnat_hostname(mocker):
     assert nsu.check_url_allowed("http://shared.example/", block_private_addresses=True) is not None
 
 
-# --- explicit address-classification contract ---
-# Pins the exact addresses the guard must reject / permit, independent of which
-# ipaddress predicate fires. If the running interpreter mis-classifies any of these
-# (e.g. a pre-3.11.9 build affected by CVE-2024-4032), these tests fail loudly rather
-# than silently opening an SSRF hole.
+# Fixed address cases keep the destination policy independent of individual
+# ipaddress predicates and expose interpreter classification differences.
 _MUST_REJECT = [
     "127.0.0.1", "10.0.0.5", "192.168.1.50", "172.16.0.1", "169.254.169.254",
     "0.0.0.0", "::1", "::ffff:127.0.0.1",

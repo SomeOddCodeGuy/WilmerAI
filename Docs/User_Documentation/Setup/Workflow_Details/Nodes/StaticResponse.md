@@ -67,6 +67,8 @@ The `StaticResponse` node can be used in two primary ways.
 Here, the first node provides a static system prompt, which the second `Standard` node then uses to answer the user's
 question.
 
+Partial workflow example: supply any omitted `endpointName` and `preset` fields for LLM nodes before running it.
+
 ```json
 {
   "nodes": [

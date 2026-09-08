@@ -1,0 +1,23 @@
+{
+  "RespondingModel": "General-Endpoint",
+  "RespondingPreset": "General-Endpoint",
+  "RespondingResponseTokenSize": 8000,
+  "MinMessagesToSendRespondingLLM": 10,
+  "MaxTokensToSendRespondingLLM": 15000,
+  "nodes": [
+    {
+      "displayOnlyComment": "Meant for your best general llm.",
+      "title": "Run General Workflow",
+      "type": "CustomWorkflow",
+      "workflowName": "General",
+      "workflowUserFolderOverride": "_common",
+      "scoped_variables": [
+        "{RespondingModel}",
+        "{RespondingPreset}",
+        "{RespondingResponseTokenSize}",
+        "{MinMessagesToSendRespondingLLM}",
+        "{MaxTokensToSendRespondingLLM}"
+      ]
+    }
+  ]
+}

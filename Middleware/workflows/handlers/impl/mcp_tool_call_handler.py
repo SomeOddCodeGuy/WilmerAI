@@ -1,6 +1,5 @@
 # /Middleware/workflows/handlers/impl/mcp_tool_call_handler.py
 
-import logging
 from typing import Any, Dict
 
 from Middleware.workflows.tools.mcp_client_tool import MCPClient, MCPToolCallError
@@ -8,7 +7,9 @@ from Middleware.workflows.handlers.base.base_workflow_node_handler import BaseHa
 from Middleware.workflows.handlers.impl.extension_node_helpers import maybe_stream, validate_timeout
 from Middleware.workflows.models.execution_context import ExecutionContext
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 _DEFAULT_TIMEOUT_SECONDS = 30
 _VALID_ON_ERROR = ("raise", "return")

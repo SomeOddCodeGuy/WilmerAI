@@ -5,6 +5,30 @@ are always filenames without the `.json` extension.
 
 ---
 
+## WilmerProxy Config
+
+**Location:** `Public/Configs/WilmerProxy/<name>.json`
+
+Activate with `--Mode WilmerProxy --WilmerProxyConfig <name>`. WilmerProxy mode does not use a User config, workflows,
+endpoints, presets, or ApiTypes on the filter instance.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `port` | int | No, default 5050 | Listening port unless overridden by `--port`. |
+| `useFileLogging` | bool | No, default false | File logging fallback unless enabled by CLI. |
+| `upstreams` | object | Yes | Named upstream WilmerAI connection policies. Must be non-empty. |
+| `models` | object | Yes | Public alias to upstream and target-model mappings. Must be non-empty. |
+
+Each upstream requires `baseUrl`. Optional fields are `authorizationMode` (`passthrough`, `configured`, or `omit`),
+`apiKey` (required only for `configured`), `forwardHeaders` (default `["X-Idempotency-Key"]`),
+`connectTimeoutSeconds` (default 10), `readTimeoutSeconds` (default 14400), and `verifyTls` (default true).
+
+Each model value is `{"upstream": "main", "targetModel": "chat-ui:general"}`. The object key is the public alias.
+The upstream name is local to the WilmerProxy config; `targetModel` is the exact model identifier accepted by that
+upstream.
+
+---
+
 ## User Config
 
 **Location:** `Public/Configs/Users/<username>.json`
@@ -22,11 +46,14 @@ The central settings file for a WilmerAI user instance. Activate with `--User <u
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `customWorkflowOverride` | bool | Yes | If true, skip routing and always use `customWorkflow`. |
-| `customWorkflow` | string | Yes | Workflow name to use when `customWorkflowOverride` is true. |
-| `routingConfig` | string | Yes | Routing config filename (from `Routing/`). Used when `customWorkflowOverride` is false. |
-| `categorizationWorkflow` | string | Yes | Workflow that categorizes prompts into routing categories. |
+| `customWorkflowOverride` | bool | Yes | If true and shared mode is off, always use `customWorkflow`. |
+| `customWorkflow` | string | Custom mode | Workflow name used in custom mode. |
+| `routingConfig` | string | Router mode | Routing config filename from `Routing/`. |
+| `categorizationWorkflow` | string | Router mode | Workflow that categorizes prompts into routing categories. |
 | `maxCategorizationAttempts` | int | No (default: 1) | Retries before falling back to `_DefaultWorkflow`. |
+
+Mode precedence is shared, then custom, then router. `allowSharedWorkflows: true` disables both custom and router
+entry points. Otherwise `customWorkflowOverride: true` selects custom mode, and `false` selects router mode.
 
 ### Memory Workflows
 
@@ -81,7 +108,7 @@ root) is used in place if found; no automatic migration is performed.
 |---|---|---|---|
 | `separateConversationInVariables` | bool | false | Use custom delimiter between messages in `chat_user_prompt_*` variables. |
 | `conversationSeparationDelimiter` | string | `"\n"` | Delimiter to use when `separateConversationInVariables` is true. |
-| `userWideWorkflowVariables` | object | none | Operator-defined shared `{placeholders}` available to every workflow (e.g. a base directory for a workflow's state files), so a value is set once instead of repeated per workflow. Lowest precedence: never shadows a built-in or a workflow-level key; a value may itself reference another variable, resolved on a second pass. |
+| `userWideWorkflowVariables` | object | none | Operator-defined shared `{placeholders}` available to every workflow, such as a base directory for shared reference assets. Do not use it as the root for per-discussion state; use `{Discussion_Directory}` so paths inherit API-key and discussion isolation. Lowest precedence: never shadows a built-in or a workflow-level key; a value may itself reference another variable, resolved on a second pass. |
 
 ### Feature Toggles
 
@@ -91,7 +118,7 @@ root) is used in place if found; no automatic migration is performed.
 | `offlineWikiApiHost` | string | none | Wikipedia API host (e.g., `"127.0.0.1"`). |
 | `offlineWikiApiPort` | int | none | Wikipedia API port (e.g., `5728`). |
 | `useFileLogging` | bool | false | Write logs to file (single-user fallback; use `--file-logging` in multi-user). |
-| `allowSharedWorkflows` | bool | false | List `_shared/` workflow folders in models API endpoints. |
+| `allowSharedWorkflows` | bool | false | Select shared-only mode and list shared workflow folders in models API endpoints. |
 | `encryptUsingApiKey` | bool | false | Encrypt discussion files using the `Authorization: Bearer` key. |
 | `redactLogOutput` | bool | false | Redact user content from all log output. |
 | `interceptOpenWebUIToolRequests` | bool | false | Intercept OpenWebUI tool-selection requests with empty response. |
@@ -117,12 +144,13 @@ Defines a connection to a specific LLM backend. Referenced by `endpointName` in 
 | `maxContextTokenSize` | int | Yes | Maximum context size in tokens for this model. |
 | `modelNameToSendToAPI` | string | Yes | Model identifier sent in API requests (e.g., `"llama3:8b-instruct-q5_K_M"`). |
 | `dontIncludeModel` | bool | Yes | If true, omit model name from request payload. |
+| `backendSupportsImages` | bool | No (default `true`) | Set `false` for a text-only model. Overrides workflow image passthrough and strips `images` before this endpoint's backend payload is built. |
 | `promptTemplate` | string | Yes | Prompt template name (from `PromptTemplates/`). Used for completions-style formatting. |
 | `apiKey` | string | No | API key for authentication (sent as Bearer token). |
 | `addGenerationPrompt` | bool | No | Append assistant turn prefix to signal model to begin generating. |
 | `backupEndpointName` | string | No | Name of another endpoint in the same `Endpoints/` subdirectory to fail over to if a request to this endpoint raises **any** exception (connection error, request timeout, HTTP error, or any other backend failure). Failover fires at most once per distinct endpoint; cycles are detected and rejected. |
 | `backupPresetName` | string | No | Preset name the backup loads on failover. Defaults to the originating request's preset name, resolved against the backup's own preset type. Set it when the backup's API type has no preset of that name. |
-| `allowRemoteBackup` | bool | false | Opt-in for a public-IP backup. Failover sends the prompt to the backup's host, so a public-IP backup is blocked by default; set `true` on the backup endpoint to permit off-machine failover. Loopback/private/LAN backups are always allowed; hostname backups are allowed but logged. |
+| `allowRemoteBackup` | bool | false | Opt-in for a public-IP backup. Failover sends the prompt to the backup's host, so a public-IP backup is blocked by default; set `true` on the backup endpoint to permit off-machine failover. Loopback/private/LAN backups are always allowed; hostnames with any public DNS result require the same opt-in. Unresolved hostnames are allowed with a warning. |
 
 ### Context Window Management
 
@@ -209,8 +237,7 @@ generation fields apply. Referenced by `embeddingEndpointName` (memory settings 
 Defines LLM generation parameters (temperature, top_p, etc.). Key-value pairs are injected directly into
 the API request payload. The parameter names must be valid for the target backend.
 
-**Lookup order:** User-specific path first (`<ApiPresetType>/<username>/<preset>.json`), then global
-(`<ApiPresetType>/<preset>.json`).
+**Lookup order:** First check whether `preset` names an endpoint with embedded `presetSamplers`; translate those values to the target endpoint's ApiType. Otherwise load a legacy preset from the user's configured preset subdirectory, then the ApiType root. An endpoint's `appendPresetName` file supplies the final native-field overrides.
 
 **Important:** Max response tokens are controlled by the workflow node's `maxResponseSizeInTokens`, not by the preset.
 
@@ -233,7 +260,8 @@ For Ollama backends, the handler automatically nests these under an `options` ob
 
 **Location:** `Public/Configs/Routing/<name>.json`
 
-Maps prompt categories to workflows. Used when `customWorkflowOverride` is false.
+Maps prompt categories to workflows. Used in router mode, when both `allowSharedWorkflows` and
+`customWorkflowOverride` are false.
 
 Structure: each top-level key is a category name (convention: `UPPERCASE_SNAKE_CASE`). Value is an object with:
 

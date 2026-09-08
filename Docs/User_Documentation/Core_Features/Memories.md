@@ -251,7 +251,9 @@ timeline with other nodes in the same workflow.
 
 *Example `_DiscussionId-MemoryFile-Workflow-Settings.json`:*
 
-```json
+Annotated JSON example. Remove comments before saving it as a configuration file.
+
+```jsonc
 {
   // Sets the default behavior for the QualityMemory node.
   "useVectorForQualityMemory": true,
@@ -355,6 +357,12 @@ maintaining a profile of the user's life, a roleplay maintaining world state and
 state" a persona needs to keep straight. See the memory nodes guide (`Setup/Workflow_Details/Workflow_Nodes_Memories.md`)
 for full details, and the `_example_assistant_with_vector_memory` workflow folder for a working example.
 
+In that example, vector memories, the state document, its backup, timestamps, and file-memory artifacts all use the
+canonical API-key and discussion directory. The `personaDir/user-persona.txt` and `assistant-persona.txt` files are
+different: they are read-only configuration inputs shared by every request that selects the same workflow config.
+Do not place client-specific private information in those shared files on a multi-client instance. A client-specific
+profile should live under `{Discussion_Directory}` or be represented by the isolated state document.
+
 -----
 
 ## Memory Condensation
@@ -415,10 +423,10 @@ To regenerate all memories for a discussion, **delete the corresponding memory f
 3. `vector_memory.db` (Searchable Vector Memory; older discussions may instead have a legacy
    `<id>_vector_memory.db` under `Public/`)
 
-If per-user encryption is active (i.e., an `Authorization: Bearer <key>` header is being sent), these files are
-located under a hash-based subdirectory within the discussion directory (e.g.,
-`{discussionDirectory}/{api_key_hash}/{discussion_id}/`). Note that encrypted files are not human-readable; they
-appear as binary data. See the **Per-User Encryption** guide for details.
+Supplying an `Authorization: Bearer <key>` header selects a hash-based discussion directory, for example
+`{discussionDirectory}/{api_key_hash}/{discussion_id}/`, even when encryption is disabled. Enabling
+`encryptUsingApiKey` additionally encrypts supported JSON files and built-in state documents in that directory.
+SQLite vector memory remains readable text and metadata. See the **Per-User Encryption** guide for details.
 
 **Important:** To prevent state conflicts, delete all memory files for a given discussion ID. When a workflow with a
 memory creator node is next run, the system will detect the missing files and regenerate them from the full chat

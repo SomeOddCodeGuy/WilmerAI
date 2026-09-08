@@ -1,7 +1,6 @@
 # /Middleware/services/prompt_categorization_service.py
 
 import json
-import logging
 import string
 from typing import List, Dict, Union, Generator
 
@@ -10,7 +9,9 @@ from Middleware.utilities.config_utils import get_active_categorization_workflow
 from Middleware.utilities.sensitive_logging_utils import log_prompt_content
 from Middleware.workflows.managers.workflow_manager import WorkflowManager
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 
 class PromptCategorizationService:

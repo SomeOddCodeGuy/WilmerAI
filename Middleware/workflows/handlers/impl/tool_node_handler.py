@@ -1,5 +1,4 @@
 import logging
-import traceback
 from typing import Any
 
 from Middleware.workflows.handlers.base.base_workflow_node_handler import BaseHandler
@@ -12,7 +11,9 @@ from Middleware.workflows.tools.offline_researcher_api_tool import (
 from Middleware.workflows.tools.offline_wikipedia_api_tool import OfflineWikiApiClient
 from Middleware.workflows.tools.slow_but_quality_rag_tool import SlowButQualityRAGTool
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 
 class ToolNodeHandler(BaseHandler):
@@ -142,8 +143,7 @@ class ToolNodeHandler(BaseHandler):
             try:
                 args[i] = self.workflow_variable_service.apply_variables(str(arg), context)
             except Exception as e:
-                logger.error(f"Arg could not have variable applied. Exception: {e}")
-                traceback.print_exc()
+                logger.exception("Arg could not have variable applied. Exception: %s", e)
                 raise
 
         for key, value in kwargs.items():

@@ -11,7 +11,9 @@ from typing import Dict, Any, Optional, List
 from Middleware.common import instance_global_variables
 from Middleware.utilities import config_utils
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 
 def _utc_now_iso() -> str:
@@ -74,26 +76,28 @@ class ResponseBuilderService:
         Lists the model ids Wilmer advertises, aggregated across configured users.
 
         For each user, if allowSharedWorkflows is enabled, their shared workflows
-        are listed as ``username:workflow``; otherwise (including when the user's
-        config cannot be loaded, which is logged) the bare username is listed.
+        are listed as ``username:workflow``. An enabled but empty shared folder
+        contributes no models because the bare username is not executable in
+        shared mode. When shared mode is disabled, or when the user's config
+        cannot be loaded, the bare username is listed.
 
         Returns:
             List[str]: The advertised model id strings.
         """
         model_ids = []
         for username in self._get_configured_users():
-            user_ids = []
             try:
                 user_config = config_utils.get_user_config_for(username)
                 allow_shared = config_utils.get_config_property_if_exists('allowSharedWorkflows', user_config)
                 if allow_shared:
                     shared_folder = self._get_shared_folder_for_user(user_config)
                     workflows = config_utils.get_available_shared_workflows(shared_folder_override=shared_folder)
-                    user_ids = [f"{username}:{workflow}" for workflow in workflows]
+                    model_ids.extend(f"{username}:{workflow}" for workflow in workflows)
+                else:
+                    model_ids.append(username)
             except Exception as e:
                 logger.warning(f"Could not load config for user '{username}': {e}")
-
-            model_ids.extend(user_ids if user_ids else [username])
+                model_ids.append(username)
         return model_ids
 
     def build_openai_models_response(self) -> Dict[str, Any]:

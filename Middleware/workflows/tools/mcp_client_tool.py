@@ -2,14 +2,15 @@
 
 import asyncio
 import json
-import logging
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from typing import Any, Coroutine, Dict, List, Optional
 
 from Middleware.utilities.config_utils import load_mcp_server_config
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 _VALID_TRANSPORTS = ("stdio", "sse", "streamable_http")
 

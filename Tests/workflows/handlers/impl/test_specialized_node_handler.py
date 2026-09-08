@@ -543,6 +543,7 @@ class TestHandleImageProcessorNode:
         call_context = mock_dispatch.call_args.kwargs['context']
         assert call_context.messages[0]["images"] == ["img1_data"]
         assert mock_dispatch.call_args.kwargs['llm_takes_images'] is True
+        assert mock_dispatch.call_args.kwargs['explicit_images'] == ["img1_data"]
 
     @patch('Middleware.workflows.handlers.impl.specialized_node_handler.LLMDispatchService.dispatch',
            side_effect=["desc1", "desc2"])
@@ -640,6 +641,7 @@ class TestHandleImageProcessorNode:
                 if i != msg_idx:
                     assert "images" not in msg
             assert call_obj.kwargs['llm_takes_images'] is True
+            assert call_obj.kwargs['explicit_images'] == [image]
 
 
 class TestHandleImageProcessorNodeWithCaching:
@@ -812,6 +814,7 @@ class TestHandleImageProcessorNodeWithCaching:
                 if i != msg_idx:
                     assert "images" not in msg
             assert call_obj.kwargs['llm_takes_images'] is True
+            assert call_obj.kwargs['explicit_images'] == [image]
 
     @patch('Middleware.workflows.handlers.impl.specialized_node_handler.write_vision_responses')
     @patch('Middleware.workflows.handlers.impl.specialized_node_handler.read_vision_responses', return_value={})

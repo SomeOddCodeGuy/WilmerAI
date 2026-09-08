@@ -5,7 +5,9 @@ from typing import List, Dict, Tuple
 from Middleware.utilities.sensitive_logging_utils import sensitive_log
 from Middleware.utilities.text_utils import chunk_messages_by_token_size, messages_to_text_block
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 def chunk_messages_with_hashes(messages: List[Dict[str, str]], chunk_size: int = 500,
                                use_first_message_hash: bool = False) -> List[Tuple[str, str]]:

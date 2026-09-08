@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 from unittest.mock import MagicMock, mock_open
 
@@ -44,7 +45,7 @@ class TestResolveCaseInsensitivePath:
         result = _resolve_case_insensitive_path('/mock/path/file.txt')
 
         assert result == mock_path_instance
-        mock_path_instance.exists.assert_called_once()
+        mock_path_instance.stat.assert_called_once()
         mock_Path_class.assert_called_once_with('/mock/path/file.txt')
 
     def test_path_exists_case_insensitive_match(self, mocker):
@@ -56,6 +57,7 @@ class TestResolveCaseInsensitivePath:
 
         mock_path_instance = MagicMock(spec=Path)
         mock_path_instance.exists.return_value = False
+        mock_path_instance.stat.side_effect = FileNotFoundError
         mock_path_instance.parent.exists.return_value = True
         mock_path_instance.parent.iterdir.return_value = [correct_path]
         mock_path_instance.name = 'file.txt'
@@ -72,6 +74,7 @@ class TestResolveCaseInsensitivePath:
         """
         mock_path_instance = MagicMock(spec=Path)
         mock_path_instance.exists.return_value = False
+        mock_path_instance.stat.side_effect = FileNotFoundError
         mock_path_instance.parent.exists.return_value = True
         mock_path_instance.parent.iterdir.return_value = [Path('/mock/path/other.txt')]
         mock_path_instance.name = 'nonexistent.txt'
@@ -87,7 +90,9 @@ class TestResolveCaseInsensitivePath:
         """
         mock_path_instance = MagicMock(spec=Path)
         mock_path_instance.exists.return_value = False
+        mock_path_instance.stat.side_effect = FileNotFoundError
         mock_path_instance.parent.exists.return_value = False
+        mock_path_instance.parent.stat.side_effect = FileNotFoundError
         mocker.patch('Middleware.utilities.file_utils.Path', return_value=mock_path_instance)
 
         result = _resolve_case_insensitive_path('/nonexistent/dir/file.txt')
@@ -204,6 +209,41 @@ class TestSaveCustomFile:
         save_custom_file(filepath, "hello", mode="append")
 
         assert Path(filepath).read_text(encoding='utf-8') == "hello"
+
+    @pytest.mark.parametrize("failure", [PermissionError, OSError])
+    def test_append_preserves_file_after_metadata_error(self, tmp_path, monkeypatch, failure):
+        target = tmp_path / "notes.txt"
+        original = b"Existing notes\n"
+        target.write_bytes(original)
+        original_stat = os.stat
+
+        def fail_target_stat(path, *args, **kwargs):
+            if os.fspath(path) == str(target):
+                raise failure("Synthetic metadata failure")
+            return original_stat(path, *args, **kwargs)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(os, "stat", fail_target_stat)
+            with pytest.raises(failure, match="Synthetic metadata failure"):
+                save_custom_file(str(target), "Added notes\n", mode="append")
+
+        assert target.read_bytes() == original
+        assert list(tmp_path.iterdir()) == [target]
+
+    def test_append_preserves_file_after_read_error(self, tmp_path, monkeypatch):
+        target = tmp_path / "notes.txt"
+        target.write_bytes(b"Existing notes\n")
+        original_read = Path.read_text
+
+        def fail_read(path, *args, **kwargs):
+            if path == target:
+                raise PermissionError("Synthetic read failure")
+            return original_read(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", fail_read)
+        with pytest.raises(PermissionError, match="Synthetic read failure"):
+            save_custom_file(str(target), "Added notes\n", mode="append")
+        assert target.read_bytes() == b"Existing notes\n"
 
     def test_save_custom_file_io_error(self, mocker):
         """
@@ -594,6 +634,7 @@ class TestReadCondensationTracker:
         """Verifies that an empty dict is returned when the resolved path does not exist on disk."""
         mock_path = MagicMock(spec=Path)
         mock_path.exists.return_value = False
+        mock_path.stat.side_effect = FileNotFoundError
         mocker.patch('Middleware.utilities.file_utils._resolve_case_insensitive_path', return_value=mock_path)
 
         result = read_condensation_tracker('/fake/tracker.json')
@@ -663,6 +704,7 @@ class TestReadVisionResponses:
         """Verifies that an empty dict is returned when the resolved path does not exist on disk."""
         mock_path = MagicMock(spec=Path)
         mock_path.exists.return_value = False
+        mock_path.stat.side_effect = FileNotFoundError
         mocker.patch('Middleware.utilities.file_utils._resolve_case_insensitive_path', return_value=mock_path)
 
         result = read_vision_responses('/fake/cache.json')
@@ -830,7 +872,7 @@ class TestPlainTextFileIO:
     def test_failed_backup_aborts_write_and_keeps_current_content(self, tmp_path, mocker):
         filepath = str(tmp_path / "doc.md")
         write_plain_text_file(filepath, "v1")
-        mocker.patch('Middleware.utilities.file_utils.shutil.copy2', side_effect=OSError("disk full"))
+        mocker.patch('Middleware.utilities.file_utils._atomic_write_bytes', side_effect=OSError("disk full"))
 
         with pytest.raises(OSError):
             write_plain_text_file(filepath, "v2", backup_suffix=".bak")

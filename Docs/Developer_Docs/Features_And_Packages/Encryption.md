@@ -1,9 +1,12 @@
 ### **Developer Guide: Per-User Encryption and API Key Directory Isolation**
 
+> **EXPERIMENTAL. MAKE AN INDEPENDENT BACKUP BEFORE ENABLING ENCRYPTION.** Encryption is disabled by default. Keep your original API key
+> and exact workflow-selection name; existing encrypted files require both. Disabling encryption does not decrypt existing files.
+
 This guide provides a deep dive into the architecture and implementation of WilmerAI's per-user encryption and
-directory isolation feature. This feature ensures that when a client sends an `Authorization: Bearer <key>` header,
-all discussion files are stored in an isolated directory and, when encryption is enabled, encrypted at rest using a
-key derived from the API key.
+directory isolation feature. When a client sends an `Authorization: Bearer <key>` header, built-in discussion state is
+stored in the key's directory scope. Workflow-authored state uses the same scope when its path starts with
+`{Discussion_Directory}`. Supported built-in files are encrypted at rest when encryption is enabled.
 
 -----
 
@@ -12,10 +15,10 @@ key derived from the API key.
 WilmerAI is often deployed as a shared middleware instance serving multiple users or front-end applications. The
 encryption and isolation feature addresses two concerns in this scenario:
 
-- **Directory Isolation**: API keys act as user identifiers. Each API key's discussion files (memories, chat
-  summaries, timestamps, vision cache, condensation trackers, context compactor state) are stored under a
-  subdirectory derived from a hash of the API key. This prevents file collisions or data leakage between different
-  API keys, even if they share the same `discussionId`. This activates automatically when an API key is present.
+- **Directory Isolation**: API keys act as client storage namespace secrets. Each key's built-in discussion files
+  (memories, chat summaries, timestamps, vision cache, condensation trackers, context compactor state) are stored under
+  a subdirectory derived from a hash of the key. Workflow files rooted at `{Discussion_Directory}` use that same
+  directory. This prevents file collisions between different keys even if they share the same `discussionId`.
 
 - **File Encryption**: All discussion JSON files can be encrypted at rest using Fernet symmetric encryption. The
   encryption key is derived from the API key itself, so only a client with the correct API key can read the data.
@@ -23,9 +26,9 @@ encryption and isolation feature addresses two concerns in this scenario:
   are stored as plaintext even if an API key is present.
 
 Directory isolation activates automatically when an `Authorization: Bearer <key>` header is present on the incoming
-HTTP request. File encryption additionally requires `encryptUsingApiKey: true` in the user config. When no API key is
-present, the system behaves identically to previous versions: files are stored in the original flat directory structure
-and remain plaintext. This makes the feature fully backwards compatible.
+HTTP request. File encryption additionally requires `encryptUsingApiKey: true` in the selected workflow config. The
+Bearer value is not validated as a login credential. When no key is present, clients using the same `discussionId`
+share the same directory.
 
 SQLite database encryption is not included in this implementation. The vector memory databases
 (`<id>_vector_memory.db`) and the locking database remain unencrypted. Encrypting SQLite requires compiling against
@@ -42,9 +45,6 @@ complicates cross-platform distribution. This is deferred as a non-trivial task.
 | `Middleware/utilities/sensitive_logging_utils.py` | Thread-local redaction context and sensitive logging helpers. Prevents user content from appearing in logs when redaction is active (via encryption or the `redactLogOutput` config setting). |
 | `Middleware/utilities/file_utils.py` | All JSON file I/O. Every read/write function accepts an optional `encryption_key` parameter. |
 | `Middleware/utilities/config_utils.py` | Path resolution. `get_discussion_file_path()` and all derived path functions accept an optional `api_key_hash` parameter for directory isolation. Also provides `get_encrypt_using_api_key()` (reads `encryptUsingApiKey`) and `get_redact_log_output()` (reads `redactLogOutput`). |
-| `Scripts/rekey_encrypted_files.py` | Standalone script to re-key or decrypt all discussion files for a given user and API key. |
-| `Scripts/rekey_encrypted_files.sh` | Shell wrapper that activates the project venv and runs the Python script (macOS/Linux). |
-| `Scripts/rekey_encrypted_files.bat` | Batch wrapper that activates the project venv and runs the Python script (Windows). |
 | `Middleware/workflows/models/execution_context.py` | The `ExecutionContext` dataclass carries `api_key: Optional[str]` so all node handlers can access it. |
 | `Middleware/api/api_helpers.py` | Shared `extract_api_key()` function that reads the `Authorization: Bearer` header. |
 | `Middleware/api/handlers/impl/openai_api_handler.py` | OpenAI-compatible API endpoints. Calls `api_helpers.extract_api_key()`. |
@@ -52,6 +52,7 @@ complicates cross-platform distribution. This is deferred as a non-trivial task.
 | `Middleware/api/workflow_gateway.py` | Passes the API key from the API layer to the `WorkflowManager`. |
 | `Middleware/workflows/managers/workflow_manager.py` | Passes the API key to the `WorkflowProcessor`. |
 | `Middleware/workflows/processors/workflows_processor.py` | Stores the API key as `self.api_key` and threads it into `ExecutionContext` and all services that need it. |
+| `Middleware/workflows/managers/workflow_variable_manager.py` | Exposes the resolved canonical directory as `{Discussion_Directory}` without exposing the raw key or its hash. |
 
 -----
 
@@ -95,9 +96,15 @@ The module provides two derivation functions from a raw API key string:
 
 The per-user salt ensures that even if two users happen to use the same API key string, they derive different
 encryption keys. The ``get_encryption_key_if_available`` convenience helper automatically fetches the current
-username via ``get_current_username()`` and passes it to ``derive_fernet_key``. The rekey script passes the
-``--user`` argument as the username. The fixed fallback salt exists for standalone or testing scenarios where no
-username is available. The iteration count of 100,000 adds computational cost to brute-force attempts.
+username via ``get_current_username()`` and passes it to ``derive_fernet_key``. The fixed fallback salt exists for
+standalone or testing scenarios where no username is available. The iteration count of 100,000 adds computational
+cost to brute-force attempts.
+
+In current deployments, this "username" is the selected file under `Public/Configs/Users`, which commonly represents a
+workflow selection rather than a human identity. Directory scope depends only on the API-key hash, but the encryption
+key also depends on this selection. Consequently, the same key and discussion ID can resolve to one directory while
+different workflow selections derive incompatible encryption keys. Until a versioned key-derivation migration removes
+that coupling, encrypted discussions must keep using the same selected user config.
 
 Two convenience wrappers handle the common pattern of "derive if present, else None":
 
@@ -147,6 +154,13 @@ All derived path functions propagate this parameter:
 
 The hash-based subdirectory is created automatically by `os.makedirs()` when files are first written.
 
+`WorkflowVariableManager.generate_variables()` exposes the same directory to operator-authored workflows as
+`{Discussion_Directory}`. It delegates to `get_discussion_folder_path(context.discussion_id,
+api_key_hash=context.api_key_hash)`. The variable is resolved lazily, cannot be overridden by a user-wide variable, and
+raises `ValueError` when referenced without a discussion ID. This fail-closed behavior prevents a missing ID from
+turning a path such as `{Discussion_Directory}/state.md` into a shared or filesystem-root path. The raw API key and hash
+are intentionally not exposed as workflow variables.
+
 ### File Encryption (`file_utils.py`)
 
 Two internal helper functions handle all encrypted I/O:
@@ -166,6 +180,14 @@ When `encryption_key` is `None`:
 - Reads the file as plaintext JSON (original behavior).
 
 #### `_write_json_file(file_path, data, encryption_key=None)`
+
+Before replacing an existing file, the writer reads it through `_read_json_file` with the supplied key. An incompatible
+key, disabled encryption on ciphertext, invalid JSON, or an I/O error aborts the write and preserves the existing file.
+This applies to direct timestamp, tracker, and vision-cache writes as well as read-modify-write memory operations.
+
+Built-in JSON and state-document existence checks use `_path_exists`, which calls `Path.stat()` and treats only
+`FileNotFoundError` as absence. Other metadata errors propagate before reading defaults or replacing files, including
+state backups. Python 3.14's `Path.exists()` suppresses these errors and must not be used for these preservation checks.
 
 When `encryption_key` is provided:
 1. Serializes data to JSON bytes.
@@ -190,13 +212,23 @@ Every public file I/O function in `file_utils.py` accepts and passes through an 
 
 ### Graceful Fallback (Plaintext-to-Encrypted Migration)
 
-The `_read_json_file` fallback is the key mechanism for migration. When encryption is enabled for the first time
-(i.e., a client starts sending an API key), existing plaintext files are read successfully because the decryption
+The `_read_json_file` fallback supports enabling `encryptUsingApiKey` in an already keyed directory.
+Existing plaintext files are read successfully because the decryption
 failure triggers a plaintext fallback. On the next write, the file is encrypted. From that point on, the file is
 encrypted and only readable with the correct API key.
 
-This means there is no migration step required. Existing unencrypted discussions are transparently upgraded to
-encrypted storage on their next write.
+Enabling encryption on an already keyed directory encrypts its readable plaintext files on their next write.
+Starting to send an API key instead selects a new keyed directory; it does not inherit previously unkeyed data.
+
+`read_plain_text_file` tries decryption and permits UTF-8 plaintext migration only when the raw bytes do not resemble
+a Fernet token. `looks_like_fernet_token` recognizes the usual prefix (including truncated tokens) and a complete binary
+envelope. Missing or incompatible keys therefore cannot turn recognizable ciphertext into state-document workflow input.
+Arbitrary corruption cannot always be distinguished from arbitrary plaintext; independent backups are still required.
+
+`write_plain_text_file` validates the current file and any existing backup with the supplied key before replacement.
+It prepares the new encrypted bytes before changing the backup, then atomically writes the previous raw contents to the
+backup and the new contents to the current file. A failed backup write preserves both existing versions. Backup bytes
+retain their previous encryption format, so a plaintext-to-encrypted transition initially leaves a plaintext backup.
 
 -----
 
@@ -278,14 +310,19 @@ All JSON discussion files written through `file_utils.py`:
 - Condensation tracker files (`_condensation_tracker.json`)
 - Context compactor state files (`_context_compactor_old.json`, `_context_compactor_oldest.json`)
 
+The built-in `state_document.md` and its `.bak` backup also use optional Fernet encryption through the text-file
+helpers. Custom workflow text files remain plaintext.
+
 ### What Is NOT Encrypted
 
 - **SQLite databases**: The vector memory database (`_vector_memory.db`) and the locking database remain unencrypted.
   SQLite encryption requires SQLCipher or a similar native-compiled fork, which adds cross-platform build complexity.
-  In practice, vector embeddings do not directly expose conversation text, but the locking database may contain
-  discussion IDs. See section 7 for more details on the challenges involved.
+  Vector memory databases also store readable memory text and metadata, not only embeddings. Locking databases may
+  contain discussion IDs. Protect their directories accordingly. See section 7 for implementation considerations.
 - **Configuration files**: User configs, workflow configs, endpoint configs, and all files under `Public/Configs/` are
   not encrypted. These are system configuration, not per-user discussion data.
+- **Custom text files**: `GetCustomFile`, `SaveCustomFile`, and `ConversationChunkProcessor` files are plaintext. Using
+  `{Discussion_Directory}` gives them the canonical API-key directory scope, but does not encrypt their content.
 - **Log files**: Application logs remain plaintext. However, when encryption is enabled, sensitive content (prompts,
   LLM responses, payloads) is redacted from logs. See section 5.1 below.
 
@@ -295,6 +332,8 @@ All JSON discussion files written through `file_utils.py`:
   to previous versions.
 - Existing unencrypted files are readable even after encryption is enabled, thanks to the decryption fallback in
   `_read_json_file`. They are transparently encrypted on the next write.
+- Starting to send an API key creates a new keyed directory. Keyed requests do not fall back to unkeyed files. Any
+  intended data must be copied into the keyed scope explicitly so a client cannot inherit legacy shared state.
 
 ### Discussion File Directory Layout Migration
 
@@ -306,10 +345,9 @@ All discussion files have been consolidated into per-discussion-id subdirectorie
 3. If the legacy file exists, its path is returned (no automatic move)
 4. If neither exists, the new nested path is returned (new files are always created in the nested structure)
 
-This means all existing flat files (e.g., `{discussion_id}_timestamps.json`) continue to be readable. When the
-file is next written, it is written to the nested location. The old flat file remains on disk but is no longer
-read once the nested file exists. This applies to all discussion file types: memories, chat summaries, timestamps,
-condensation trackers, vision responses, and context compactor state.
+Existing flat files remain readable and continue to be written at their resolved flat path. Normal saves do not move
+them. New files use nested storage; an existing nested file takes precedence. Relocating legacy files is an explicit
+operator migration performed while the server is stopped.
 
 With API key isolation, the layout adds a hash-based subdirectory:
 `{dir}/{api_key_hash}/{discussion_id}/{file_name}.json`. The legacy fallback does not apply in this case since
@@ -343,13 +381,21 @@ greenlet-local, so each greenlet has its own context.
 
 **Context lifecycle:**
 
-1. At the API handler entry point (after extracting the API key), `set_encryption_context()` is called with
-   `True` if either: (a) `api_key` is present and `get_encrypt_using_api_key()` returns `True`, or (b)
-   `get_redact_log_output()` returns `True`.
+1. The OpenAI chat/completions and Ollama chat/generate handlers call `begin_request_privacy()` before parsing
+   request data or selecting a user. This provisionally redacts diagnostics, including early failures and rejected
+   user selections. Once a user is identified, `resolve_request_privacy()` applies that user's policy: active if
+   (a) an API key is present and `get_encrypt_using_api_key()` is true, or (b) `get_redact_log_output()` is true.
+   Payload logging and lazy sanitization occur only after this decision and shared-workflow validation.
 2. For Eventlet greenlets and streaming generators that run outside the original request context, the redaction
    state is captured before spawning and re-set inside the new greenlet/generator. This follows the same pattern
    used for `captured_workflow_override`.
 3. The `finally` block in each API handler's `post()` method calls `clear_encryption_context()`.
+4. `set_encryption_context(True)` also records the decision on Flask's request-local `g`. The Flask error logger
+   filter uses this retained flag after view cleanup and removes message arguments, exception text and stack details.
+   Only `resolve_request_privacy(False)` clears the provisional Flask marker when ordinary logging is selected.
+   A new request receives a fresh flag; clearing thread state does not expose an earlier private view exception.
+5. Streaming WSGI iterators restore the captured state for each advance and close, then restore their caller's
+   previous state. Escaping private exceptions have generic messages and suppressed chains for server-side tracebacks.
 
 **Logging helpers:**
 
@@ -378,14 +424,20 @@ All log statements that could contain user text have been converted to use the s
   (`timestamp_service`, `workflows_processor`, `response_handler`), and Claude prefill content
   (`claude_api_handler`).
 
-Non-sensitive operational logs (request IDs, timing, node execution summaries, endpoint names) are never redacted.
+All built-in Middleware module loggers use `get_sensitive_logger()`, including provider parsers, native MCP,
+memory chunking and summary writes, image fallback, shared services and API callers. Caller re-logging therefore honors the same policy as the node that first reported the
+error. Raw stderr traceback calls are avoided. Some operational messages from these adapters are also replaced with
+the redaction marker; ordinary diagnostics remain available when redaction is disabled. Custom Python modules must
+use these helpers themselves; arbitrary print calls and independent loggers are outside this policy.
 
 ### How to Add New Sensitive Log Statements
 
 When adding a log statement that could contain user content:
 
 ```python
-from Middleware.utilities.sensitive_logging_utils import sensitive_log, sensitive_log_lazy, log_prompt_content
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger, sensitive_log, sensitive_log_lazy, log_prompt_content
+
+logger = get_sensitive_logger(__name__)
 
 # For general sensitive content:
 sensitive_log(logger, logging.INFO, "Some content: %s", user_content)
@@ -403,13 +455,24 @@ Use `sensitive_log_lazy` when one or more arguments involve expensive computatio
 lambdas are only called when the message will actually be emitted, avoiding unnecessary work when the content would
 be redacted.
 
-Do not use `logger.info()` or `logger.debug()` directly for messages that could contain user text.
+Use `get_sensitive_logger()` for built-in module loggers so every severity and exception path honors the current
+request policy. Direct logging methods on that adapter are protected. Third-party library loggers, startup print
+messages and operator scripts with independent loggers are outside this boundary. Thread or greenlet callbacks
+must still capture and restore the request context as described above.
+
+`CancellationService.register_abort_callback()` captures the registering request's redaction flag in its stored
+callable. Both immediate and deferred invocation run through `_invoke_abort_callback()`, outside the registry lock.
+That helper combines the captured flag with the invoking caller's flag using logical OR. Callback diagnostics and
+the service's own exception logging therefore remain private when either request requires it. The helper restores
+the caller's thread/greenlet-local flag in `finally`, including control-flow interruption, and reapplies the effective
+policy before logging an exception from a callback that changed the context. Flask retains its error-redaction marker
+for the enclosing request after private callback work. No API key, prompt or complete request context is captured.
 
 -----
 
 ## 6\. Dependency: `cryptography` Library
 
-The `cryptography` library (`cryptography~=48.0` in `requirements.txt`) is the sole new
+The `cryptography` library (`cryptography==50.0.0` in `requirements.txt`) is the sole new
 dependency. It is licensed under the Apache 2.0 / BSD 3-Clause dual license. License files are included in
 `ThirdParty-Licenses/cryptography/`.
 
@@ -469,7 +532,8 @@ To change the PBKDF2 parameters (iterations, salt format, algorithm), modify `de
 `encryption_utils.py`. Be aware that changing these parameters will make all previously encrypted files unreadable
 unless a migration path is implemented. The decryption fallback only handles the plaintext-to-encrypted transition,
 not changes in encryption parameters. Similarly, if a user renames their WilmerAI username, the per-user salt
-changes and their previously encrypted files become unreadable without a re-key operation.
+changes and their previously encrypted files require the original selection to remain readable. Preserve the existing
+parameters and selection when reading those files.
 
 ### The `encryptUsingApiKey` Config Setting
 
@@ -477,24 +541,21 @@ The `encryptUsingApiKey` boolean in the user config (default: `false`) controls 
 returns a key or `None`. Directory isolation via `get_api_key_hash_if_available` is unaffected by this setting; it
 always returns a hash when an API key is present.
 
+Only a JSON boolean is accepted when the setting is non-null. Strings such as `"false"`, numbers, and collections raise
+`ValueError` instead of being interpreted through Python truthiness. Missing or null settings remain disabled.
+Key derivation parameters and API-key hashing must remain compatible with existing files. The application has no
+key storage or recovery mechanism; encrypted files require their original API key.
+
 The config check is performed inside `get_encryption_key_if_available` via a lazy import of
 `config_utils.get_encrypt_using_api_key()`. This means all existing call sites (which call
 `get_encryption_key_if_available(context.api_key)`) automatically respect the config without changes.
 
-### Re-keying and Decryption Scripts
+### Reading Existing Encrypted Files
 
-The `Scripts/` directory contains `rekey_encrypted_files.py` along with `.sh` and `.bat` wrappers. The shell wrappers
-activate the project's virtual environment before invoking the Python script, so the `cryptography` library is available
-without a separate install.
-
-The Python script:
-1. Reads the user config to find the `discussionDirectory`.
-2. Computes the old API key hash to locate the directory.
-3. Walks all `.json` files, decrypts each with the old key, and either re-encrypts with the new key or writes plaintext.
-4. If re-keying, renames the directory from the old hash to the new hash.
-
-The script uses `derive_fernet_key` and `encrypt_bytes`/`decrypt_bytes` directly, bypassing
-`get_encryption_key_if_available` so it works regardless of the `encryptUsingApiKey` config setting.
+Runtime encryption remains opt-in and occurs during individual built-in file writes. It does not recursively scan
+or encrypt a directory. Existing ciphertext remains readable with the original API key and workflow selection;
+`decrypt_bytes` remains the low-level in-memory primitive used by those readers. Disabling encryption does not
+convert ciphertext to plaintext or move files between key namespaces.
 
 ### Adding SQLite Encryption
 
@@ -545,3 +606,13 @@ The sensitive logging tests (`test_sensitive_logging_utils.py`) cover:
 - `sensitive_log` emitting content when inactive and redacting when active.
 - `log_prompt_content` emitting separator lines when inactive and a single redacted marker when active.
 - Context toggling during a sequence of log calls.
+
+### Extension diagnostics and atomic writes
+
+CurlCommand omits command arguments from diagnostics even when content redaction is disabled. Its errors, the shipped
+MCP helper chain, and built-in web/wiki/research tool diagnostics use get_sensitive_logger. The adapter routes all
+levels through the current request redaction context. Redacted exception calls suppress exception and stack details
+as well as the message. Custom Python modules must use the same helpers for request-sensitive diagnostics.
+
+The shared atomic byte writer retries short writes until all bytes are written, then fsyncs and replaces the destination.
+A zero-progress write or write error preserves the previous destination and removes the temporary file.

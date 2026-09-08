@@ -7,7 +7,9 @@ from typing import Optional
 
 from Middleware.common import instance_global_variables
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 
 def _expand_user_path(path):
@@ -833,8 +835,8 @@ def try_get_endpoint_config(endpoint: str) -> Optional[dict]:
 # portion of every endpoint-derived token budget, reclaiming context the
 # conservative estimate would otherwise waste. The multiplier is the minimum
 # estimate-to-real inflation at which the level stays safe: 'conservative' (1.0)
-# is safe for any model (the estimator never under-counts); higher levels assume
-# the model's tokenizer is at least that efficient and so are opt-in per endpoint.
+# uses the unscaled estimate; no character/word heuristic guarantees a fit for
+# every tokenizer. Higher levels reclaim more space and are opt-in per endpoint.
 # This value only tunes Wilmer's internal budgeting; it is never sent to the
 # inference engine.
 ESTIMATION_LEVEL_KEY = "wilmerContextEstimationLevel"
@@ -1168,19 +1170,28 @@ def get_available_shared_workflows(shared_folder_override=None):
 
 def workflow_exists_in_shared_folder(folder_name):
     """
-    Checks if a workflow folder exists in the shared workflows folder.
+    Checks if an enabled shared workflow folder exists.
+
+    Shared workflow selection is only active when ``allowSharedWorkflows`` is
+    enabled for the current user. A folder that happens to exist under the
+    shared directory must not bypass the user's custom-workflow or routing
+    mode when shared workflows are disabled.
 
     Args:
         folder_name (str): The name of the folder to check.
 
     Returns:
-        bool: True if the folder exists, False otherwise.
+        bool: True if shared mode is enabled and the folder exists, otherwise
+            False.
     """
     # The folder name comes from the request model field and is used to select a
     # workflow folder (and thus which workflow, including PythonModule/CurlCommand
     # nodes, executes). Reject a traversal/absolute name before the isdir check so a
     # crafted value cannot resolve outside the shared workflows folder.
     if not _is_safe_flat_config_name(folder_name):
+        return False
+
+    if not get_allow_shared_workflows():
         return False
 
     config_dir = get_root_config_directory()
@@ -1401,7 +1412,11 @@ def get_encrypt_using_api_key() -> bool:
         bool: Whether file encryption is enabled.
     """
     value = get_config_value('encryptUsingApiKey')
-    return bool(value) if value is not None else False
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise ValueError("encryptUsingApiKey must be a JSON boolean (true or false)")
+    return value
 
 
 def get_redact_log_output() -> bool:
@@ -1490,5 +1505,3 @@ def get_discussion_context_compactor_oldest_file_path(discussion_id, api_key_has
         str: The full path to the discussion's context compactor 'Oldest' file.
     """
     return get_discussion_file_path(discussion_id, 'context_compactor_oldest', api_key_hash=api_key_hash)
-
-

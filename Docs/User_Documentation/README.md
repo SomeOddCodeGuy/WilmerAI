@@ -38,6 +38,10 @@ WilmerAI emulates the APIs of popular services like **OpenAI** and **Ollama**. T
 front-end applications directly to WilmerAI without any code changes. The client application believes it is
 communicating with a standard LLM service, while WilmerAI orchestrates complex workflows in the background.
 
+WilmerAI can also run in WilmerProxy mode in front of another WilmerAI instance. WilmerProxy exposes only
+configured model aliases and relays OpenAI completion requests without running the filter instance's workflow engine.
+See [WilmerProxy Mode](Core_Features/WilmerProxy_Mode.md).
+
 #### **Endpoint Behavior**
 
 How a client application should format its requests depends on the type of endpoint it is connecting to.
@@ -100,11 +104,17 @@ WilmerAI includes a four-part memory system that provides long-term context for 
 
 ### Per-User Encryption and Data Isolation
 
-When a client sends an `Authorization: Bearer <key>` header, WilmerAI stores all discussion files in an isolated
-directory derived from the API key. This allows multiple users or applications to share a single WilmerAI instance
-without risk of data leakage. Directory isolation activates automatically based on the presence of the header. To also
-encrypt files at rest, set `"encryptUsingApiKey": true` in your user configuration file. Without an API key, behavior
-is unchanged. See [Per-User Encryption and Data Isolation](Core_Features/Per_User_Encryption.md) for full details.
+> **Encryption is off by default. If enabled, losing the API key permanently loses access to encrypted data.**
+> There is no key reset or recovery mechanism, and encrypted backups also require the key. Save it securely and
+> back up existing files before enabling encryption.
+
+When a client sends an `Authorization: Bearer <key>` header, WilmerAI stores built-in discussion state in a directory
+derived from the key. Workflow-authored discussion files receive the same scope when their paths start with
+`{Discussion_Directory}`. Each independent client should use a different high-entropy key and send it consistently on
+every request. The key is a storage namespace, not a validated login credential. To also encrypt supported built-in
+files at rest, set `"encryptUsingApiKey": true` in the selected workflow configuration. Without a key, clients that use
+the same discussion ID share the same storage directory. See
+[Per-User Encryption and Data Isolation](Core_Features/Per_User_Encryption.md) for full details.
 
 ### External Tool Integration
 
@@ -118,7 +128,7 @@ Front-ends that use OpenAI-style tool calling work through WilmerAI end to end: 
 backend, tool call responses relay back, and multi-round tool loops work reliably through authored-prompt workflows
 via native delivery of the live tool exchange. On backends with constrained decoding, demanded tool calls
 (`tool_choice` forced or `"required"`) are grammar-enforced, and any workflow node can pin its output to a JSON
-Schema so downstream nodes consume guaranteed-parseable JSON. See
+Schema on supported endpoints. Downstream nodes should validate the returned JSON before using it. See
 [Tool Calling and Structured Output](Core_Features/Tool_Calling_And_Structured_Output.md).
 
 -----
@@ -159,6 +169,7 @@ WilmerAI
 │     │  │  └─ ...
 │     │  └─ ...
 │     ├─ PromptTemplates
+│     ├─ WilmerProxy
 │     ├─ Routing
 │     ├─ Users
 │     └─ Workflows
@@ -189,6 +200,8 @@ Contains all user-facing JSON configuration files.
 * **`Presets/`**: Contains json files with LLM generation parameters (temperature, top\_k, etc.). These are applied per
   workflow node.
 * **`PromptTemplates/`**: Contains the json files that specify various prompt templates. Used in Endpoint configs
+* **`WilmerProxy/`**: Contains named allowlists and upstream connection policies used by `--Mode WilmerProxy`. See
+  [WilmerProxy Mode](Core_Features/WilmerProxy_Mode.md).
 * **`Routing/`**: Contains json files that specify the central semantic router instructions for users/workflows that do
   routing. You specify the domains you are routing to here, and what workflows they correspond with.
 * **`Users/`**: Contains json files with all of the specific settings for a user, including things like what port the
@@ -207,6 +220,9 @@ server.py. Takes the following optional parameters:
 
 * `--ConfigDirectory`: String input that specifies where the Public/Configs folder is at.
 * `--User`: String input that specifies the name of the user you'd like to start the app as. Can be repeated for multi-user mode.
+* `--Mode`: `Workflow` by default, or `WilmerProxy` to run the dedicated allowlisting relay.
+* `--WilmerProxyConfig`: Configuration filename from `Public/Configs/WilmerProxy`, without `.json`. Required in
+  WilmerProxy mode.
 * `--port`: Integer input that specifies the port to listen on. In single-user mode, falls back to the user's config. In multi-user mode, defaults to 5050.
 * `--listen`: Listen on the network. With no value, binds to 0.0.0.0 (all interfaces). Optionally accepts a specific address.
 * `--concurrency`: Integer input that sets the max concurrent requests (or LLM calls in endpoint mode). 0 = no limit. Default: 1.
@@ -226,6 +242,10 @@ Main script of the app.
 When loading a user that has `allowSharedWorkflows` set to true, WilmerAI allows front-end applications to select
 specific workflows by using the model field in API requests. This enables users to switch between different workflows
 directly from their front-end's model dropdown without changing configuration files.
+
+Shared workflow mode is mutually exclusive with custom workflow and router modes. When it is enabled, WilmerAI ignores
+`customWorkflowOverride`, `customWorkflow`, `routingConfig`, and `categorizationWorkflow`. A request that does not name
+a valid advertised shared workflow returns HTTP 400 instead of falling through to custom workflow or routing.
 
 ### How It Works
 
@@ -291,9 +311,9 @@ The API accepts these model field formats:
 | Format | Example | Behavior |
 |--------|---------|----------|
 | `username:workflow` | `chat-ui:general` | Uses the specified workflow (and user in multi-user mode) |
-| `username` | `chat-ui` | In multi-user mode, routes to that user's default workflow |
-| `workflow` | `general` | Uses workflow if it exists in `_shared/` |
-| Anything else | `gpt-4` | Falls back to normal routing |
+| `username` | `chat-ui` | Selects the user in multi-user mode, but shared mode rejects it because no workflow was selected |
+| `workflow` | `general` | Uses the workflow if it exists in the shared folder (single-user mode only) |
+| Anything else | `gpt-4` | Shared mode rejects it because no valid workflow was selected |
 
 ### workflowConfigsSubDirectoryOverride
 

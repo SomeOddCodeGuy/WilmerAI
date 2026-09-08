@@ -1,9 +1,11 @@
 import base64
+import binascii
 import hashlib
-import logging
 from typing import Optional
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 _Fernet = None
 _PBKDF2HMAC = None
@@ -102,6 +104,25 @@ def decrypt_bytes(token: bytes, fernet_key: bytes) -> bytes:
     """
     _ensure_cryptography()
     return _Fernet(fernet_key).decrypt(token)
+
+
+def looks_like_fernet_token(data: bytes) -> bool:
+    """Recognize encrypted text that must not fall back to plaintext.
+
+    Args:
+        data (bytes): File contents, potentially a damaged Fernet token.
+
+    Returns:
+        bool: Whether the contents have a Fernet prefix or binary envelope.
+    """
+    stripped = data.strip()
+    if stripped.startswith(b'gAAAA'):
+        return True
+    try:
+        token = base64.b64decode(stripped, altchars=b'-_', validate=True)
+    except (ValueError, binascii.Error):
+        return False
+    return len(token) >= 73 and token[0] == 0x80
 
 
 def get_encryption_key_if_available(api_key: Optional[str]) -> Optional[bytes]:

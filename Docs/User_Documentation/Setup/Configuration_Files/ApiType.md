@@ -172,7 +172,9 @@ Each `ApiTypes` JSON file contains a single object with the following key-value 
 
 Here is a fully-commented example for an Ollama Chat API (`/api/chat`).
 
-```json
+Annotated JSON example. Remove comments before saving it as a configuration file.
+
+```jsonc
 {
   // A friendly name for UI or logging purposes. Not used by the program.
   "nameForDisplayOnly": "Ollama Chat API (e.g., Llama3)",
@@ -211,7 +213,7 @@ Here is a fully-commented example for an Ollama Chat API (`/api/chat`).
 
 #### Image Support
 
-Image processing is handled automatically by the ImageProcessor workflow node. When the ImageProcessor node is used,
-images are passed to the LLM and the handler formats them appropriately for each API type. For non-ImageProcessor nodes,
-images are automatically filtered out. This means you do not need separate "image-specific" API types: the same API
-type works for both text-only and vision-capable workflows.
+ImageProcessor requests image handling, and Standard nodes can opt in with `acceptImages: true`. The endpoint must
+also permit images through `backendSupportsImages` (true by default), and the selected API handler/backend must
+support them. When image handling is not requested or the endpoint disables it, images are filtered out. Supported
+handlers format the selected images for their API; separate "image-specific" API types are not needed.

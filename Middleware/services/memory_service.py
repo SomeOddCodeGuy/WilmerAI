@@ -11,7 +11,9 @@ from Middleware.utilities.file_utils import read_chunks_with_hashes, read_plain_
 from Middleware.utilities.hashing_utils import extract_text_blocks_from_hashed_chunks
 from Middleware.utilities.sensitive_logging_utils import sensitive_log
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 # Entity expansion harvests entities from this many top base-search results.
 ENTITY_EXPANSION_SEED_ROWS = 10

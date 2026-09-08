@@ -2,7 +2,7 @@
 
 The **`StringConcatenator`** node is a flexible utility for combining multiple strings into a single text block. It
 takes a list of strings, resolves any variables within them, and joins them together using a specified delimiter. This
-is perfect for assembling complex prompts, formatting reports, or creating structured text from various data points
+can be used to assemble prompts, format reports, or create structured text from various data points
 within the workflow. If designated as a responder, this node can also stream its output just like a `StaticResponse`
 node.
 

@@ -15,7 +15,9 @@ class DynamicModuleError(Exception):
         self.module_name = module_name
         self.details = details
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 
 def _resolve_module_path(module_path):

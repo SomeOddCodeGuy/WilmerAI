@@ -44,6 +44,8 @@ requires specifying the script's location and any arguments to be passed to it.
 
 ### **Example Configuration**
 
+Partial workflow example: supply any omitted `endpointName` and `preset` fields for LLM nodes before running it.
+
 ```json
 {
   "nodes": [

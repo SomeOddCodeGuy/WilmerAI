@@ -13,6 +13,10 @@ Here are some resources to get you start
 
 ## Testing
 
+Use Python 3.13.14 or a later 3.13 patch, or 3.14.5 or a later 3.14 patch, and activate the project environment.
+The `.python-version` file records the development default, not the only version that can run the tests. See the
+[test environment setup](Docs/Developer_Docs/Features_And_Packages/Unit_Tests.md#1-environment-setup) for instructions.
+
 Testing is done via Pytest. You can run them by
 
 * pip install -r requirements-test.txt

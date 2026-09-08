@@ -1,6 +1,6 @@
 ## The `GetCurrentStateDocument` Node
 
-This guide provides a code-validated overview of the `GetCurrentStateDocument` node. It details the
+This guide provides an overview of the `GetCurrentStateDocument` node. It details the
 node's function as a direct reader of the discussion's state document.
 
 ### Core Purpose
@@ -65,7 +65,9 @@ happening to surface them. Place this node early in a workflow and inject its ou
 prompts of your thinking and responder nodes; use `VectorMemorySearch` alongside it to recall the
 episodic long tail that does not belong in an always-on document.
 
-```json
+Annotated JSON example. Remove comments before saving it as a configuration file.
+
+```jsonc
 [
   {
     "title": "Step 1: Load the current state document",

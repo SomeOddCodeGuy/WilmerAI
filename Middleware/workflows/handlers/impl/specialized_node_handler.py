@@ -19,7 +19,9 @@ from Middleware.utilities.streaming_utils import stream_static_content
 from Middleware.workflows.handlers.base.base_workflow_node_handler import BaseHandler
 from Middleware.workflows.models.execution_context import ExecutionContext
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 # Default template for the message injected into the conversation when an
 # ImageProcessor node runs with addAsUserMessage enabled.
@@ -481,7 +483,7 @@ class SpecializedNodeHandler(BaseHandler):
 
         This method loads the content of a text file specified by the 'filepath' field.
         It reads the file and returns its content as a single string. The filepath field
-        supports variable substitution (e.g., {Discussion_Id}, {YYYY_MM_DD}).
+        supports variable substitution (e.g., {Discussion_Directory}, {YYYY_MM_DD}).
 
         Args:
             context (ExecutionContext): The central object containing all runtime data for the node.
@@ -531,7 +533,7 @@ class SpecializedNodeHandler(BaseHandler):
 
         This method saves the provided 'content' to a file specified by 'filepath'.
         It resolves any variables in both the content and filepath before writing the file.
-        The filepath field supports variable substitution (e.g., {Discussion_Id}, {YYYY_MM_DD}).
+        The filepath field supports variable substitution (e.g., {Discussion_Directory}, {YYYY_MM_DD}).
 
         Args:
             context (ExecutionContext): The central object containing all runtime data for the node.
@@ -665,7 +667,11 @@ class SpecializedNodeHandler(BaseHandler):
             per_image_messages[msg_idx]["images"] = [single_image]
             temp_context = dc_replace(context, messages=per_image_messages)
 
-            response = LLMDispatchService.dispatch(context=temp_context, llm_takes_images=True)
+            response = LLMDispatchService.dispatch(
+                context=temp_context,
+                llm_takes_images=True,
+                explicit_images=[single_image],
+            )
             llm_responses.append(response)
 
         image_descriptions = "\n-------------\n".join(filter(None, llm_responses))
@@ -742,7 +748,11 @@ class SpecializedNodeHandler(BaseHandler):
                     per_image_messages[orig_idx]["images"] = [single_image]
                     temp_context = dc_replace(context, messages=per_image_messages)
 
-                    response = LLMDispatchService.dispatch(context=temp_context, llm_takes_images=True)
+                    response = LLMDispatchService.dispatch(
+                        context=temp_context,
+                        llm_takes_images=True,
+                        explicit_images=[single_image],
+                    )
                     llm_responses.append(response)
 
                 description = "\n-------------\n".join(filter(None, llm_responses))
@@ -896,11 +906,7 @@ class SpecializedNodeHandler(BaseHandler):
             if extracted:
                 return extracted
 
-        # Tag was absent, unclosed, or wrapped only whitespace. If a defaultText is
-        # configured, return it (with workflow-variable substitution applied) so a
-        # downstream node never silently receives an empty string. This is what lets
-        # the OpenCode planners turn a malformed/empty <next_step> into a usable
-        # fallback instruction for the doer instead of a blank one.
+        # A configured fallback keeps missing or empty tags usable by downstream nodes.
         default_template = context.config.get("defaultText")
         if default_template:
             return self.workflow_variable_service.apply_variables(default_template, context)

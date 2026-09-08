@@ -1,12 +1,13 @@
 # Middleware/services/idempotency_service.py
 
-import logging
 import threading
 import time
 from collections import OrderedDict
 from typing import Dict, Optional, Tuple
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 # Upper bound on how many logical requests can be tracked in flight at once.
 # The map normally shrinks as requests finish (release() removes their entry),

@@ -1,6 +1,6 @@
 ## The `RecentMemory` Node
 
-This guide provides a comprehensive, code-validated overview of the legacy `RecentMemory` node. It details its
+This guide provides an overview of the legacy `RecentMemory` node. It details its
 inefficient dual-function logic and provides modern alternatives.
 
 ### Core Purpose
@@ -39,7 +39,9 @@ The node performs two major operations in strict sequence, blocking execution un
 
 ### Workflow Strategy and Annotated Example
 
-```json
+Annotated JSON example. Remove comments before saving it as a configuration file.
+
+```jsonc
 // LEGACY WORKFLOW (NOT RECOMMENDED)
 [
   {

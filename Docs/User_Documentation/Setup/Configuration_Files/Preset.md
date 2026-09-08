@@ -73,8 +73,9 @@ The key-value pairs defined in a preset's JSON file are injected directly into t
 
 ##### **Standard Behavior**
 
-For most backends, such as KoboldCpp and OpenAI-compatible APIs, the keys from the preset are merged into the top level
-of the JSON payload.
+For most backends the keys from a raw preset file are merged into the top level of the JSON payload.
+The following example uses the OpenAI-compatible native `stop` field. KoboldCpp instead uses `stop_sequence`;
+ClaudeMessages uses `stop_sequences`. Raw preset files must use the target backend's native names.
 
 * **Example `creative.json` Preset:**
 
@@ -82,7 +83,7 @@ of the JSON payload.
   {
     "temperature": 1.2,
     "top_p": 0.9,
-    "stop_sequence": [
+    "stop": [
       "Human:",
       "\n"
     ]
@@ -96,7 +97,7 @@ of the JSON payload.
     "prompt": "Once upon a time...",
     "temperature": 1.2,
     "top_p": 0.9,
-    "stop_sequence": [
+    "stop": [
       "Human:",
       "\n"
     ],
@@ -128,8 +129,9 @@ for `ollamaApiChat` would place the parameters inside an `options` object.
   }
   ```
 
-The handler adapts the payload structure, but the parameter names (`temperature`, `top_p`, `stop`) and their values must
-be valid for the target LLM backend. Always consult the API documentation for the specific backend in use.
+The handler adapts the payload structure, but does not translate raw preset field names between backends.
+The canonical sampler translation used by an endpoint's `presetSamplers` is a separate path. Use native field names
+in files under `Presets/<ApiPresetType>`.
 
 One Ollama-specific exception to the `options` nesting: the `think` key is lifted back out to the top level of the
 request, because Ollama reads the reasoning toggle as a top-level field rather than a sampler option. So a preset
@@ -150,7 +152,7 @@ toggle in its request body. The table below summarizes what is possible per `Api
 
 | `presetType` | Handler payload shape | Disabling thinking from the preset |
 | --- | --- | --- |
-| `LlamaCppServer` | OpenAI `chat/completions`, preset keys merged top-level | Supported. `"chat_template_kwargs": { "enable_thinking": false, "thinking_budget": 0 }`. To enable, supply `"chat_template_kwargs": { "thinking_budget": <n> }` and omit `enable_thinking`. |
+| `LlamaCppServer` | OpenAI `chat/completions`, preset keys merged top-level | Supported. `"chat_template_kwargs": { "enable_thinking": false, "thinking_budget": 0 }`. The separate `thinking_budget_tokens` sampler is sent at the request's top level. To enable template-controlled thinking, supply `"chat_template_kwargs": { "thinking_budget": <n> }` and omit `enable_thinking`. |
 | `ClaudeMessages` | Anthropic `messages`, preset keys merged top-level | Supported, and off by default: omit the `thinking` key entirely. To enable, add `"thinking": { "type": "enabled", "budget_tokens": <n> }`. |
 | `Text-Generation-WebUI` | OpenAI `chat/completions`, preset keys merged top-level | Best effort only. `"chat_template_kwargs": { "enable_thinking": false }` is honored only if the loaded backend forwards `chat_template_kwargs` into the chat template; not every TGW loader does. |
 | `OllamaApiChat` / `OllamaApiGenerate` | sampler keys nested under `options`; `think` lifted to top level | Supported. Set `"think": false` in the preset. The handler lifts the `think` key out of `options` to the top level of the request, where Ollama reads it; all other keys stay under `options`. Omit `think` (or set it `true`) to let a thinking model reason. |
@@ -182,7 +184,9 @@ conversation that downstream nodes and the user see.
 
 This is an annotated example of a preset configured for a KoboldCpp backend, demonstrating various supported parameters.
 
-```json
+Annotated JSON example. Remove comments before saving it as a configuration file.
+
+```jsonc
 {
   // Controls randomness. Higher is more creative.
   "temperature": 0.7,

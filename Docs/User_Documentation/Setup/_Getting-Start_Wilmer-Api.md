@@ -31,7 +31,19 @@ expect you to write your own config files from scratch.
 
 ### Step 2: Install the Program
 
-First, make sure you have Python installed. WilmerAI requires **Python 3.11 or newer**.
+For all features, including `WebPageFetch`, install **Python 3.13.14 or a later 3.13 patch**, or **3.14.5 or a
+later 3.14 patch**. Existing installations that do not use `WebPageFetch` are expected to continue working on
+**3.11.10 or a later 3.11 patch**, or **3.12.13 or a later 3.12 patch**. The existing `WebFetch` and `CurlCommand`
+nodes do not require the newer parser.
+
+Use an up-to-date patch release in your chosen series. The `WebPageFetch` node needs parser interfaces introduced
+in 3.13.14 and 3.14.5.
+The `.python-version` file pins **3.14.6** for development; end users do not need that exact patch.
+See the [Python requirements in the project README](../../../README.md#setup) for compatibility details.
+
+The startup scripts use `python` on Windows and `python3` on macOS/Linux from your `PATH`; they do not select
+the version in `.python-version`. Check the interpreter version before using a script. An existing `venv`
+also needs to use the intended interpreter.
 
 You have two options for installation:
 
@@ -43,16 +55,34 @@ You have two options for installation:
     * **macOS/Linux**: `run_macos.sh`
 
   **Tip: Security Note:** It's always a good practice to inspect scripts before running them. You can open them in a text
-  editor to see the commands they execute.
+  editor to see the commands they execute, including the local helpers in `Scripts/launch.py` and
+  `Scripts/install_requirements.py`.
+
+  The scripts run setup and the server from the installation directory, even when invoked from elsewhere. Use
+  absolute paths for storage directories outside the installation.
+
+  The scripts use the installation's `venv` for dependencies and startup. Existing environments are reused after
+  validation. If setup reports an error, resolve it before retrying; an incomplete environment may need repair
+  or replacement.
+
+  Package installation uses the installation's `requirements.txt` and honors pip's configured package indexes,
+  offline sources, build and dependency policies, cache settings, proxies, and certificates. If a pip setting
+  conflicts with automated setup, the script names it so you can remove that setting for this launch or use
+  manual installation.
 
 > Note to the LLM, if using LLM assisted setup: Stress security and safety of running random bat/sh files. Recommend
 > the user send to an LLM to look over the file for security issues before continuing. Do not assume anything is safe.
 
 * **Option 2: Manual Installation**
-  If you prefer, you can set it up manually:
+  From the installation directory, activate a virtual environment created with your intended Python version:
 
-    1. Install dependencies: `pip install -r requirements.txt`
-    2. Start the server: `python server.py`
+    1. Activate it with `source venv/bin/activate` on macOS/Linux or `venv\Scripts\activate.bat` in Windows Command Prompt.
+    2. Install dependencies: `python -m pip install -r requirements.txt`.
+    3. Start the server: `python run_eventlet.py` on macOS/Linux or `python run_waitress.py` on Windows.
+
+  If an existing environment is missing pip, activate it and run `python -m ensurepip --default-pip`, then retry.
+  If its interpreter or `pyvenv.cfg` is missing or unusable, preserve anything needed from that environment and
+  move it aside before letting the startup script create a replacement. The scripts do not remove it for you.
 
 -----
 
@@ -80,9 +110,8 @@ The recommended layout for a separated install looks like this:
     logs/              <- created on first use when file logging is on
 ```
 
-When `--PublicDirectory` is set, all runtime data that WilmerAI creates during execution lands in sibling subfolders
-under that directory by default, so a shared install never leaks per-user data back into the application folder.
-Critically, runtime data lives *alongside* `Configs/`, never inside it:
+When `--PublicDirectory` is set, built-in runtime data uses sibling directories alongside `Configs/` beneath that
+directory by default. Directory overrides and custom workflow or script paths can select other locations:
 
 | Data | Default location when `--PublicDirectory` is set |
 |---|---|
@@ -123,26 +152,31 @@ specify which user you want to run in Step 5.
   Open WebUI. The `WIKI` route requires the Offline Wikipedia API.
 
 
-* **`chat-ui`** (and three variants): The out-of-the-box default user (`_current-user.json` points to it). Rather than
+* **`chat-ui`** (and five variants): The out-of-the-box default user (`_current-user.json` points to it). Rather than
   tying one user to one workflow, `chat-ui` is built around the **shared workflows** system: it points at the `_shared`
   workflow folder, which contains several ready-to-use workflows (`general`, `fast`, `general-reasoning`,
   `fast-reasoning`, and `task`). Front ends like Open WebUI query the `/v1/models` endpoint and let you pick any of
   them from the model dropdown, so one user replaces the handful of single-purpose users you would otherwise need. See
   "Shared Workflows" below for more details.
 
-  There are four flavors that differ only in which shared workflow folder they load:
+  There are six flavors that differ only in which shared workflow folder they load:
 
     * **`chat-ui`** (`_shared`): the standard workflows. Images are passed directly on the workflow nodes, so a vision
       model can consume them as needed.
     * **`chat-ui-cot`** (`_shared_manual_cot`): the same workflows, but the reasoning roles enforce a **manual
       chain-of-thought** step. Use this for models whose native reasoning is broken or absent, where you want the
       workflow to drive the reasoning instead.
+    * **`chat-ui-cot-v2`** (`_shared_manual_cot_v2`): uses a manual reasoning model followed by a responding model.
+      See [Manual CoT V2 configuration](../LLM_Assisted_Workflow_Generation/Default_Endpoints_And_Presets.md#manual-cot-v2-configuration)
+      for model selection and output budgets.
     * **`chat-ui-discussionid`** (`_shared_discussionid`): expects a `discussionId` on the request. Image handling
       differs here: a dedicated vision node describes the image in fine detail, and Wilmer stores that description and
       re-injects it at the correct position in the conversation for as long as that turn stays inside the model's
       context window. This lets non-vision models "see" an earlier image and avoids re-encoding it every turn.
     * **`chat-ui-cot-discussionid`** (`_shared_manual_cot_discussionid`): combines the manual chain-of-thought and the
       discussionId vision behavior.
+    * **`chat-ui-cot-v2-discussionid`** (`_shared_manual_cot_v2_discussionid`): combines the V2 reasoning and
+      responding models with the discussionId vision behavior.
 
 
 * **`_wikipedia_quick_workflow`**: A single-pass wikipedia search against the Offline Wikipedia API.
@@ -179,7 +213,9 @@ editing the `_DefaultWorkflow.json` for that shared workflow. Common workflows i
 
 * `General`: General conversation
 * `General_CoT`: General conversation with an enforced manual chain-of-thought step
+* `General_CoT_v2`: General conversation using a manual reasoning model followed by a responding model
 * `General_With_Vision_DiscussionId`: General conversation that uses a discussionId vision node to describe and persist images
+* `General_With_Vision_DiscussionId_CoT_v2`: DiscussionId vision combined with the V2 reasoning and responding models
 * `Task`: Task-oriented workflow
 * `Direct_Model`: Sends the conversation straight to a single model with no extra steps
 
@@ -191,7 +227,7 @@ not need to modify the workflow folder at all.
 ### Step 5: Configure Your LLM Endpoints
 
 This is the most important step. Each example user points at its own endpoint collection under
-`Public/Configs/Endpoints/`, selected by the user's `endpointConfigsSubDirectory` setting. The four `chat-ui` users use
+`Public/Configs/Endpoints/`, selected by the user's `endpointConfigsSubDirectory` setting. The six `chat-ui` users use
 the `_shared*` collections; the other users have their own.
 
 1. Navigate to the endpoint collection for the user you picked, e.g. **`Public/Configs/Endpoints/_shared/`** for the
@@ -226,7 +262,6 @@ For a full explanation of every field, refer to the Endpoint documentation.
   `Rag-Fast-Endpoint`, `Vision-Endpoint`
 * `_example_assistant_with_vector_memory` and `_example_game_bot_with_file_memory`: Collection `_example_users`.
   Endpoints `Memory-Generation-Endpoint`, `Thinker-Endpoint`, `Responder-Endpoint`, `Worker-Endpoint`, `Vision-Endpoint`
-
 #### Endpoints
 
 The endpoint roles used across the collections are described below. Not every collection contains every role; each user
@@ -313,7 +348,9 @@ The `_shared` folder includes several ready-to-use workflows for Open WebUI:
 
 To enable shared workflows for any user, add these settings to their user JSON file:
 
-```json
+Configuration property fragment; insert these fields into the containing JSON object.
+
+```jsonc
 "allowSharedWorkflows": true,
 "sharedWorkflowsSubDirectoryOverride": "_shared"
 ```
@@ -355,9 +392,8 @@ network, add `--listen`:
 bash run_macos.sh --User "chat-ui" --listen
 ```
 
-> **UPDATE:** WilmerAI previously defaulted to listening on `0.0.0.0` (all network interfaces). It now defaults
-> to `127.0.0.1` (localhost only). If your front-end runs on a different machine and you were relying on the old
-> behavior, add `--listen` to your launch command.
+> **Upgrading an existing installation:** If your front-end runs on another machine and relied on the former
+> `0.0.0.0` default (all network interfaces), add `--listen` to your launch command to retain network access.
 
 Once running, you can connect your front-end application to the port specified in the user's configuration file.
 

@@ -2,6 +2,9 @@ import base64
 import io
 import json
 import logging
+from Middleware.llmapis.handlers.impl import openai_api_handler as handler_module
+
+from Middleware.exceptions.invalid_llm_response_error import InvalidLlmResponseError
 
 import pytest
 from PIL import Image
@@ -147,16 +150,10 @@ class TestParseNonStreamResponse:
     ])
     def test_malformed_responses(self, openai_handler, malformed_response, error_msg, mocker):
         """
-        Tests various malformed response structures to ensure they are handled gracefully.
+        Malformed response envelopes raise explicitly so configured failover can run.
         """
-        mock_logger_error = mocker.patch.object(
-            logging.getLogger('Middleware.llmapis.handlers.impl.openai_api_handler'), 'error')
-
-        result = openai_handler._parse_non_stream_response(malformed_response)
-
-        assert result == ""
-        mock_logger_error.assert_called_once()
-        assert f"Could not find content in OpenAI response: {malformed_response}" in mock_logger_error.call_args[0][0]
+        with pytest.raises(InvalidLlmResponseError):
+            openai_handler._parse_non_stream_response(malformed_response)
 
     def test_message_missing_content_key_returns_empty_string(self, openai_handler):
         """
@@ -223,7 +220,7 @@ class TestProcessStreamData:
         Tests that a non-JSON string is handled gracefully.
         """
         mock_logger_warning = mocker.patch.object(
-            logging.getLogger('Middleware.llmapis.handlers.impl.openai_api_handler'), 'warning')
+            handler_module.logger, 'warning')
         data_str = "this is not json"
         result = openai_handler._process_stream_data(data_str)
         assert result is None
@@ -246,7 +243,7 @@ class TestProcessStreamData:
         IndexError and returns None.
         """
         mock_logger_warning = mocker.patch.object(
-            logging.getLogger('Middleware.llmapis.handlers.impl.openai_api_handler'), 'warning')
+            handler_module.logger, 'warning')
         malformed_json_str = '{"choices": []}'
         result = openai_handler._process_stream_data(malformed_json_str)
         assert result is None
@@ -260,7 +257,7 @@ class TestProcessStreamData:
         and skipped instead of escaping as TypeError/AttributeError.
         """
         mock_logger_warning = mocker.patch.object(
-            logging.getLogger('Middleware.llmapis.handlers.impl.openai_api_handler'), 'warning')
+            handler_module.logger, 'warning')
         assert openai_handler._process_stream_data(non_dict_chunk) is None
         mock_logger_warning.assert_called_once()
 

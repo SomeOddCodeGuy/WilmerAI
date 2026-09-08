@@ -20,7 +20,7 @@ response.
 | **`type`**                                  | String  | Yes      | `Standard` | The node type. Best practice is to always include it for clarity.                                                                     |
 | **`title`**                                 | String  | No       | `""`       | A descriptive name for the node, used for logging and debugging.                                                                      |
 | **`endpointName`**                          | String  | Yes      | N/A        | The name of the LLM endpoint configuration. **Supports LIMITED variables: only `{agent#Input}` and static workflow variables, NOT `{agent#Output}`.**  |
-| **`preset`**                                | String  | Yes      | N/A        | The name of the generation preset to use. If omitted, the endpoint's default is used. **Supports LIMITED variables like endpointName.** |
+| **`preset`**                                | String  | Yes      | N/A        | The name of the generation preset to use. Supply an endpoint sampler-donor name or a legacy preset filename; there is no implicit default. **Supports LIMITED variables like endpointName.** |
 | **`returnToUser`**                          | Boolean | No       | `false`    | If `true`, this node's output is sent to the user. Only one node per workflow can be a responder.                                     |
 | **`systemPrompt`**                          | String  | Yes      | N/A        | The system prompt or initial instruction set for the LLM. Supports variable substitution.                                             |
 | **`prompt`**                                | String  | Yes      | N/A        | The main user-facing prompt. If this is empty, the node will use `lastMessagesToSendInsteadOfPrompt`. Supports variable substitution. |
@@ -40,12 +40,12 @@ response.
 | **`addOpenEndedAssistantTurnTemplate`**     | Boolean | No       | `false`    | Appends the start of an assistant turn template to the end of the final prompt.                                                       |
 | **`forceGenerationPromptIfEndpointAllows`** | Boolean | No       | `false`    | Forces the addition of a generation prompt even if other settings would normally suppress it.                                         |
 | **`blockGenerationPrompt`**                 | Boolean | No       | `false`    | Explicitly blocks the addition of any automatic generation prompt.                                                                    |
-| **`acceptImages`**                          | Boolean | No       | `false`    | If `true`, images attached to conversation messages are preserved and sent to the LLM backend. The endpoint must support vision/multimodal input. When `false`, images are stripped. If `true` but no images are present, the node behaves as a normal text request. |
+| **`acceptImages`**                          | Boolean | No       | `false`    | If `true`, images attached to conversation messages are preserved and sent to the LLM backend. The endpoint must support vision/multimodal input. An endpoint with `backendSupportsImages: false` overrides this setting and receives a text-only request. When `false`, images are stripped. If `true` but no images are present, the node behaves as a normal text request. |
 | **`maxImagesToSend`**                       | Integer | No       | `0`        | Only relevant when `acceptImages` is `true`. Limits the number of images sent to the backend, keeping the most recent. `0` means no limit. **Supports LIMITED variables like endpointName.** |
 | **`allowTools`**                            | Boolean | No       | `false`    | If `true`, tool definitions from the frontend request are forwarded to the LLM when this node executes. Tool call responses from the LLM are passed back to the frontend. Should typically only be enabled on the responding node. See [Tool Call Passthrough](Workflow_Features.md#tool-call-passthrough). |
-| **`appendNativeToolExchange`**              | Boolean | No       | `false`    | Authored-prompt nodes only. Delivers the conversation's trailing tool exchange (the assistant `tool_calls` turn the frontend just executed plus its `role: "tool"` results) as native messages after the authored prompt, excluding it from the text transcript, so the model generates from the standard post-tool-result position. Required for reliable multi-round tool loops through authored-prompt nodes. Inert on collection-mode nodes, on completions backends, and on endpoints declaring `backendSupportsToolTurns: false`. See [Delivering the Live Tool Exchange Natively](Workflow_Features.md#delivering-the-live-tool-exchange-natively-appendnativetoolexchange). |
+| **`appendNativeToolExchange`**              | Boolean | No       | `false`    | Authored-prompt nodes only. Delivers the conversation's trailing tool exchange (the assistant `tool_calls` turn the frontend just executed plus its `role: "tool"` results) as native messages after the authored prompt, excluding it from the text transcript, so the model generates from the standard post-tool-result position. Required for reliable multi-round tool loops through authored-prompt responders. It is independent of `allowTools`, so an internal planner can enable native history delivery while keeping tool definitions disabled. Inert on collection-mode nodes, on completions backends, and on endpoints declaring `backendSupportsToolTurns: false`. See [Delivering the Live Tool Exchange Natively](Workflow_Features.md#delivering-the-live-tool-exchange-natively-appendnativetoolexchange). |
 | **`lowercaseToolCallFunctionNames`**        | Boolean | No       | `false`    | If `true`, tool call function names in LLM responses are lowercased before being sent to the frontend. Fixes local models that produce capitalized names (e.g., `Glob` instead of `glob`). Works for both streaming and non-streaming. See [Lowercasing Tool Call Function Names](Workflow_Features.md#lowercasing-tool-call-function-names). |
-| **`structuredOutputFile`**                  | String  | No       | none       | Name of a JSON Schema file in `Public/Configs/StructuredOutputs/` that grammar-constrains this node's output (the backend must support constrained decoding; declared per API type). The node's output is guaranteed-parseable JSON matching the schema. Describe the desired structure in the prompt too; the model does not see the schema. See [Structured Output](Workflow_Features.md#structured-output-grammar-constrained-responses). |
+| **`structuredOutputFile`**                  | String  | No       | none       | Name of a JSON Schema file in `Public/Configs/StructuredOutputs/` that grammar-constrains this node's output (the backend must support constrained decoding; declared per API type). Enforcement depends on backend and schema support; downstream consumers should validate the returned JSON and required fields. Describe the desired structure in the prompt too; the model does not see the schema. See [Structured Output](Workflow_Features.md#structured-output-grammar-constrained-responses). |
 | **`mergeConsecutiveAssistantMessages`**     | Boolean | No       | `false`    | If `true`, consecutive assistant messages are merged into one before sending to the LLM. Only applies when `prompt` is empty. Tool-call sequences (assistant -> tool -> assistant) are not affected. See [Consecutive Assistant Message Normalization](Workflow_Features.md#consecutive-assistant-message-normalization). |
 | **`mergeConsecutiveAssistantMessagesDelimiter`** | String | No   | `"\n"`     | Delimiter for joined content when merging consecutive assistant messages. |
 | **`insertUserTurnBetweenAssistantMessages`** | Boolean | No      | `false`    | If `true`, a synthetic user message is inserted between consecutive assistant messages. Alternative to merging. See [Consecutive Assistant Message Normalization](Workflow_Features.md#consecutive-assistant-message-normalization). |
@@ -430,6 +430,7 @@ useful for parsing structured LLM outputs where the model wraps content in custo
 | **`title`**           | String | No       | `""`    | A descriptive name for the node.                                               |
 | **`tagToExtractFrom`** | String | Yes      | N/A     | The text string to search within. Supports variables.                          |
 | **`fieldToExtract`**    | String | Yes      | N/A     | The name of the tag to search for (without angle brackets). Supports variables.|
+| **`defaultText`**       | String | No       | `""`    | Fallback returned with variable substitution when the tag is absent, unclosed, mismatched, or contains only whitespace. |
 
 #### **Limitations and Key Usage Notes**
 
@@ -437,6 +438,8 @@ useful for parsing structured LLM outputs where the model wraps content in custo
 * **Case Sensitivity:** Tag matching is case-sensitive (`<Answer>` and `<answer>` are different).
 * **First Match:** If multiple instances of the tag exist, only the first match is extracted.
 * **Whitespace:** Leading/trailing whitespace is stripped from the extracted content.
+* **Fallback:** If extraction would return an empty string and `defaultText` is configured, the substituted fallback
+  is returned instead. A neutral fallback can prevent malformed model output from being passed to a downstream node.
 
 #### **Full Syntax Example**
 
@@ -524,7 +527,7 @@ inject large blocks of static text (like instructions or reference material) wit
 |:----------------------------|:-------|:---------|:--------|:------------------------------------------------------------------------------------------------------|
 | **`type`**                  | String | Yes      | N/A     | Must be `"GetCustomFile"`.                                                                            |
 | **`title`**                 | String | No       | `""`    | An optional, human-readable name for the node.                                                        |
-| **`filepath`**              | String | Yes      | N/A     | The full path to the text file to load. Supports variables including `{Discussion_Id}` and `{YYYY_MM_DD}`. |
+| **`filepath`**              | String | Yes      | N/A     | The full path to the text file to load. Use `{Discussion_Directory}` for discussion state; date and other workflow variables are also supported. |
 | **`delimiter`**             | String | No       | `\n`    | An optional string to search for and replace within the file's content.                               |
 | **`customReturnDelimiter`** | String | No       | `\n`    | An optional string that will replace every instance of the `delimiter`.                               |
 | **`headCount`** / **`tailCount`** | Integer | No | (none) | Optional, opt-in limiting. Return only the first N (`headCount`) or last N (`tailCount`) chunks, where chunks are split on `chunkDelimiter` (a newline by default). Set at most one; setting both returns an error. Applied before delimiter replacement. |
@@ -532,8 +535,9 @@ inject large blocks of static text (like instructions or reference material) wit
 
 #### **Limitations and Key Usage Notes**
 
-* **Variable Support:** The `filepath` field supports full variable substitution, including `{Discussion_Id}` for
-  per-conversation files and `{YYYY_MM_DD}` for date-based files.
+* **Variable Support:** The `filepath` field supports full variable substitution. Use `{Discussion_Directory}` for
+  per-discussion files so paths follow the same optional API-key scope as built-in memory. `{YYYY_MM_DD}` is available
+  for date-based names.
 * **File Not Found:** If the file doesn't exist, the node returns `"Custom instruction file did not exist"`.
 * **IMPORTANT:** Do not set a delimiter or custom delimiter if you want the file to be pulled as it was originally
   written.
@@ -560,7 +564,7 @@ This node loads session-specific notes using the conversation's unique identifie
 {
   "title": "Load Session Notes",
   "type": "GetCustomFile",
-  "filepath": "/data/sessions/{Discussion_Id}_notes.txt"
+  "filepath": "{Discussion_Directory}/notes.txt"
 }
 ```
 
@@ -577,14 +581,14 @@ during a workflow, such as an LLM's analysis, a conversation summary, or a repor
 |:---------------|:-------|:---------|:--------|:--------------------------------------------------------------------------------------------------------|
 | **`type`**     | String | Yes      | N/A     | Must be `"SaveCustomFile"`.                                                                             |
 | **`title`**    | String | No       | `""`    | An optional, human-readable name for the node.                                                          |
-| **`filepath`** | String | Yes      | N/A     | The full path where the file will be saved. Supports variables including `{Discussion_Id}` and `{YYYY_MM_DD}`. |
+| **`filepath`** | String | Yes      | N/A     | The full path where the file will be saved. Use `{Discussion_Directory}` for discussion state; date and other workflow variables are also supported. |
 | **`content`**  | String | Yes      | N/A     | The string content to be written to the file. Supports variables.                                       |
 | **`mode`**     | String | No       | `overwrite` | Either `"overwrite"` (default, replaces the file) or `"append"` (adds `content` to the end, creating the file if missing). The write is atomic. |
 
 #### **Limitations and Key Usage Notes**
 
-* **Variable Support:** Both `filepath` and `content` fields support full variable substitution, including
-  `{Discussion_Id}` for per-conversation files and `{YYYY_MM_DD}` for date-based files.
+* **Variable Support:** Both `filepath` and `content` fields support full variable substitution. Use
+  `{Discussion_Directory}` for per-discussion files so paths follow the same optional API-key scope as built-in memory.
 * **Error Handling:** The node returns a status message indicating success or failure (e.g., due to permissions).
 * **Directory Creation:** If parent directories don't exist, the node will attempt to create them.
 
@@ -662,7 +666,7 @@ subsequent nodes.
 | Property               | Type    | Required | Default | Description                                                                                                       |
 |:-----------------------|:--------|:---------|:--------|:------------------------------------------------------------------------------------------------------------------|
 | **`type`**             | String  | Yes      | N/A     | Must be `"ImageProcessor"`.                                                                                       |
-| **`endpointName`**     | String  | Yes      | N/A     | The name of the vision-capable LLM endpoint. **Supports LIMITED variables: only `{agent#Input}` and static workflow variables, NOT `{agent#Output}`.**  |
+| **`endpointName`**     | String  | Yes      | N/A     | The name of the vision-capable LLM endpoint. The endpoint must not set `backendSupportsImages: false`, which strips the image before the backend call. **Supports LIMITED variables: only `{agent#Input}` and static workflow variables, NOT `{agent#Output}`.**  |
 | **`systemPrompt`**     | String  | Yes      | N/A     | The system prompt for the vision LLM, instructing it on how to describe the image. Supports variables.            |
 | **`prompt`**           | String  | Yes      | N/A     | The user prompt for the vision LLM, guiding what to focus on. Supports variables.                                 |
 | **`preset`**           | String  | Yes      | N/A     | The generation preset for the vision LLM. **Supports LIMITED variables like endpointName.**                       |
@@ -833,9 +837,10 @@ Returns a specified number of the most relevant full articles.
 
 ### **External Tools: The `WebFetch` Node**
 
-The **`WebFetch`** node issues an HTTP request to a user-configured URL using the `requests` library and returns the
-response. It is intended for pulling data from arbitrary HTTP/HTTPS endpoints inside a workflow (for example, hitting an
-internal API and feeding the response into a later LLM node). All string fields support variable substitution.
+The **`WebFetch`** node issues an HTTP request to a user-configured URL using Python Requests by default or the system
+`curl` executable when selected. It is intended for pulling data from arbitrary HTTP/HTTPS endpoints inside a workflow
+(for example, hitting an internal API and feeding the response into a later LLM node). All string fields support
+variable substitution.
 
 #### **Properties**
 
@@ -845,16 +850,19 @@ internal API and feeding the response into a later LLM node). All string fields 
 | **`title`**        | String  | No       | `""`     | A human-readable name for the node.                                                                                    |
 | **`url`**          | String  | Yes      | N/A      | The target URL. Supports variable substitution.                                                                        |
 | **`method`**       | String  | No       | `"GET"`  | HTTP method. Common values: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`. Case-insensitive.                                 |
+| **`transport`**    | String  | No       | `"requests"` | `"requests"` or `"curl"` (case-insensitive). Curl must be available on `PATH` when selected. The handler does not set a User-Agent. |
 | **`headers`**      | Object  | No       | `{}`     | A JSON object of request headers. Values support variable substitution. Header keys are sent as written.               |
 | **`body`**         | String  | No       | None     | A raw request body string. Supports variable substitution.                                                             |
-| **`timeout`**      | Integer | No       | `30`     | Request timeout in seconds.                                                                                            |
+| **`timeout`**      | Number  | No       | `30`     | Request timeout in seconds. Requests applies a per-phase timeout; curl applies connection and total-transfer timeouts. |
 | **`outputFormat`** | String  | No       | `"text"` | One of `"text"` (response body as a string), `"json"` (response body re-serialized as JSON), `"full"` (status/headers/body wrapped in a JSON object), `"html-stripped"` (HTML run through a stdlib-only stripper that removes script/style/head/noscript/iframe content and returns the remaining visible text). |
 | **`onError`**      | String  | No       | `"raise"`| `"raise"` aborts the workflow on connection failure or HTTP 4xx/5xx. `"return"` causes the node to emit an error payload (shape matches `outputFormat`) so the workflow can branch on it. |
-| **`proxy`**        | String  | No       | None     | Optional proxy URL routed through both `http` and `https` traffic. Any scheme `requests` supports works: `socks5://`, `socks5h://`, `socks4://`, `http://`, `https://`. Supports variable substitution. An empty string is treated as "no proxy". |
-| **`caBundle`**     | String  | No       | None     | Opt-in. Path to a CA bundle (PEM) used to verify the server's TLS certificate; verification stays ON. Use for HTTPS endpoints behind a private/internal CA (e.g. `mkcert`). Default verification uses the bundled `certifi` roots, NOT the OS keychain. Supports variable substitution; empty string = not set; a non-existent path raises `ValueError`. |
-| **`verify`**       | Boolean | No       | `true`   | Opt-in. `true` (default) verifies against the default `certifi` store. `false` disables TLS verification entirely (logs a warning; vulnerable to MITM; prefer `caBundle`). An explicit `false` takes precedence over `caBundle`. |
+| **`proxy`**        | String  | No       | None     | Optional proxy URL routed through both `http` and `https` traffic. Scheme support depends on the selected transport. Supports variable substitution. An empty string is treated as "no proxy". |
+| **`caBundle`**     | String  | No       | None     | Opt-in. Path to a CA bundle (PEM) used to verify the server's TLS certificate; verification stays ON. Supports variable substitution; empty string = not set; a non-existent path raises `ValueError`. |
+| **`verify`**       | Boolean | No       | `true`   | Opt-in. `true` uses the selected transport's normal verified TLS behavior. `false` disables TLS verification entirely (logs a warning; vulnerable to MITM; prefer `caBundle`). An explicit `false` takes precedence over `caBundle`. |
 | **`allowRedirects`** | Boolean | No     | `true`   | Whether HTTP 3xx redirects are followed. Set `false` to stop a remote redirect from bouncing the request to another host. |
 | **`maxResponseBytes`** | Integer | No   | `10485760` | Body-size cap in bytes (10 MiB). The body is streamed and the read aborts past the cap. Set `0` to disable the cap. |
+| **`blockPrivateAddresses`** | Boolean | No | `false` | Opt-in SSRF guard that rejects non-public target addresses and checks each redirect before connecting. |
+| **`allowedHosts`** | List of strings | No | None | Opt-in hostname allowlist, re-checked for every redirect. Entries support variable substitution. |
 
 #### **Limitations and Key Usage Notes**
 
@@ -862,11 +870,12 @@ internal API and feeding the response into a later LLM node). All string fields 
   response encoding). For a clean text extraction from HTML, use `outputFormat: "html-stripped"`, which runs the body
   through a stdlib-only stripper (removing script/style/head/noscript/iframe content), or run the response through a
   `PythonModule` node for custom extraction.
-* **Privacy / SSRF.** This node makes outbound HTTP calls to the URLs you configure. Wilmer never adds anything to the
-  request beyond what you put in the node config. There is no host/IP allowlist, so treat any `url` built from
-  conversation-derived variables as untrusted input; see the [WebFetch node doc](Nodes/WebFetch.md) for the SSRF
-  warning and the `allowRedirects` control.
-* **TLS.** HTTPS is supported transparently via the `requests` library's certificate verification (always on).
+* **Privacy / SSRF.** This node makes outbound HTTP calls to the URLs you configure. It does not add a
+  project-specific User-Agent, cookies, telemetry, or hidden headers. Each selected client still sends its generic
+  defaults. Treat any `url` built from conversation-derived variables as untrusted input; see the
+  [WebFetch node doc](Nodes/WebFetch.md) for the address guards and transport-specific limitations.
+* **TLS.** HTTPS verification is on by default. Requests uses bundled `certifi` roots; curl uses the installed curl
+  executable's normal trust store.
 
 #### **Full Syntax Example**
 
@@ -877,6 +886,7 @@ internal API and feeding the response into a later LLM node). All string fields 
   "type": "WebFetch",
   "url": "https://api.example.com/users/{userId}",
   "method": "GET",
+  "transport": "requests",
   "headers": {
     "Authorization": "Bearer {apiToken}",
     "Accept": "application/json"
@@ -890,13 +900,64 @@ For detailed documentation including the full error-handling matrix, see [WebFet
 
 -----
 
+### **External Tools: The `WebPageFetch` Node**
+
+The **`WebPageFetch`** node retrieves one ordinary public webpage through a stateless, bodyless GET. It is distinct
+from the API-oriented `WebFetch` node: page-specific protections such as robots.txt evaluation, domain pacing,
+public-address checks, redirect validation, and content-type and response-size bounds are enabled when omitted.
+
+The node uses the Requests default User-Agent for both page and robots requests. It never loads images,
+scripts, stylesheets, video, or other linked resources. It accepts no caller headers, credentials, cookies, Referer,
+or request body for the destination. An explicitly configured proxy may use its own credentials.
+
+#### **Common Properties**
+
+| Property | Type | Required | Default | Description |
+|:---------|:-----|:---------|:--------|:------------|
+| **`type`** | String | Yes | N/A | Must be `"WebPageFetch"`. |
+| **`url`** | String | Yes | N/A | Absolute HTTP or HTTPS page URL. Supports variable substitution. |
+| **`timeout`** | Number | No | `30` | Timeout in seconds for each robots or page request. |
+| **`outputFormat`** | String | No | `"html-stripped"` | `"html-stripped"`, `"text"`, or `"full"`. |
+| **`onError`** | String | No | `"raise"` | `"raise"` aborts; `"return"` emits a failure payload. |
+| **`proxy`** | String | No | None | Proxy URL used for both robots and page requests. Supports variable substitution. |
+| **`respectRobots`** | Boolean | No | `true` | Retrieves and evaluates robots.txt before the page. |
+| **`blockPrivateAddresses`** | Boolean | No | `true` | Rejects non-public destinations on every hop. |
+| **`enableDomainPacing`** | Boolean | No | `true` | Shares a pacing lane across related subdomains. |
+| **`minimumDelaySeconds`** | Number | No | `5` | Minimum request interval before Crawl-delay or Request-rate increases it. |
+| **`allowRedirects`** | Boolean | No | `true` | Manually follows validated redirects. |
+| **`maxRedirects`** | Integer | No | `5` | Redirect cap, from 0 through 5. |
+| **`enforceContentType`** | Boolean | No | `true` | Allows HTML, XHTML, and plain text by default. |
+| **`maxTransferBytes`** | Integer | No | `5242880` | Maximum transferred body for robots and page responses. |
+| **`maxDecodedBytes`** | Integer | No | `26214400` | Maximum body after gzip or deflate decoding. |
+
+#### **Example**
+
+```json
+{
+  "title": "Read documentation page",
+  "agentName": "PageText",
+  "type": "WebPageFetch",
+  "url": "https://docs.example.com/{topic}",
+  "outputFormat": "html-stripped",
+  "respectRobots": true,
+  "blockPrivateAddresses": true,
+  "minimumDelaySeconds": 5
+}
+```
+
+For all controls, robots status behavior, identity and cookie isolation, pacing rules, output schemas, limits, and
+security limitations, see [WebPageFetch Node](Nodes/WebPageFetch.md).
+
+-----
+
 ### **External Tools: The `CurlCommand` Node**
 
 The **`CurlCommand`** node invokes the system `curl` binary via `subprocess.Popen` with `shell=False`, streaming its
 output so the response body can be bounded in-process. Arguments are
 supplied as a JSON list (no shell parsing), and each element is variable-substituted before being passed to curl. Use
 this node when you specifically need the `curl` binary itself, for example to use a curl-only flag or to mirror a
-shell command exactly. For most HTTP/HTTPS use cases, prefer the [WebFetch Node](#external-tools-the-webfetch-node).
+shell command exactly. For page retrieval, prefer the [WebPageFetch Node](#external-tools-the-webpagefetch-node). For
+general HTTP/API use cases, prefer the [WebFetch Node](#external-tools-the-webfetch-node).
 
 #### **Properties**
 
@@ -920,7 +981,7 @@ shell command exactly. For most HTTP/HTTPS use cases, prefer the [WebFetch Node]
   node, or use multiple `CurlCommand` nodes chained together.
 * **System binary required.** If `curl` is not on the host's PATH, the node raises `FileNotFoundError` at execution
   time.
-* **Privacy.** This node makes outbound HTTP/HTTPS calls only to the URLs you configure in the `args` list.
+* **Privacy.** This trusted-author node runs configured curl arguments. Other curl protocols and config files are supported; it is not an HTTP/HTTPS-only boundary. Command arguments are omitted from diagnostics, and request redaction applies to its logs.
 * **`shell=False` blocks shell injection, not curl's own options.** curl can read/write local files via `file://`,
   `-d @file`, and `-o`; a substituted value starting with `-` becomes a curl flag, and one starting with `@` in a data
   slot becomes a local-file read. `blockOptionInjection` (opt-in) blocks substituted `-` and `@` values; use

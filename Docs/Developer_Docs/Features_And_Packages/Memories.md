@@ -41,7 +41,8 @@ be strategically placed within workflows.
 
 * **Persistent Storage**: When a `discussionId` is active, the system maintains state in a user-specific directory using
   a set of discussion-specific files. When an API key is present on the request, these files are stored under a
-  hash-based subdirectory and encrypted at rest (see `Encryption.md` for details). The file path functions in
+  hash-based subdirectory. Supported files are encrypted at rest only when `encryptUsingApiKey` is enabled (see
+  `Encryption.md` for details). The file path functions in
   `config_utils.py` and the I/O functions in `file_utils.py` accept optional `api_key_hash` and `encryption_key`
   parameters respectively to support this:
 
@@ -54,6 +55,10 @@ be strategically placed within workflows.
     used in place for the lifespan of that discussion and no automatic migration is performed. The vector database
     followed a separate legacy naming convention (`{project_root}/Public/{discussion_id}_vector_memory.db`) that is
     also checked and stuck with when present.
+
+    Operator-authored workflow state should use `{Discussion_Directory}` as its base path. The variable delegates to
+    the same `get_discussion_folder_path()` call, including the request's API-key scope, and fails closed when no
+    discussion ID exists. A path built from only `{Discussion_Id}` does not inherit the API-key scope.
 
     1. **Memory File (`memories.json`)**: Stores discrete, summarized chunks of the conversation for file-based
        memory. Each chunk is saved with a hash of the last message it's based on, creating a traceable, append-only
@@ -392,6 +397,9 @@ These fields live in the discussion ID workflow settings file, alongside the vec
 * The feature is incremental-only: enabling it on an existing discussion does **not** trigger any reprocessing of
   historical memories. The document builds from the next conversation exchange onward, and users can seed it by
   hand-writing the markdown file.
+* The example's `personaDir/user-persona.txt` and `assistant-persona.txt` files are read-only workflow configuration,
+  not memory artifacts. They are shared by all requests selecting that user config and do not inherit API-key or
+  discussion isolation. Client-specific profile information must use `{Discussion_Directory}` or the state document.
 
 -----
 
@@ -456,9 +464,9 @@ conversation to provide context on its origin.
 
    ```python
    # In MemoryService class
-   def get_first_five_memories(self, discussion_id: str) -> str:
-       filepath = get_discussion_memory_file_path(discussion_id)
-       hashed_chunks = read_chunks_with_hashes(filepath)
+   def get_first_five_memories(self, discussion_id: str, encryption_key=None, api_key_hash=None) -> str:
+       filepath = get_discussion_memory_file_path(discussion_id, api_key_hash=api_key_hash)
+       hashed_chunks = read_chunks_with_hashes(filepath, encryption_key=encryption_key)
        if not hashed_chunks:
            return "No memories have been generated yet"
 
@@ -473,12 +481,14 @@ conversation to provide context on its origin.
    # In MemoryNodeHandler.handle()
    # ...
    elif node_type == "FirstFiveMemories":
-       return self.memory_service.get_first_five_memories(context.discussion_id)
+       return self.memory_service.get_first_five_memories(
+           context.discussion_id, encryption_key=context.encryption_key, api_key_hash=context.api_key_hash)
    # ...
    ```
 
 3. **Register the Node Type (in the Registrar)**: Open `Middleware/workflows/managers/workflow_manager.py` and add the
-   new `node_type` to the `node_handlers` dictionary in the constructor.
+   new `node_type` to the `node_handlers` dictionary in the constructor. Also add its exact name to
+   `VALID_NODE_TYPES` in `Middleware/common/constants.py`, which validates workflow configurations.
 
    ```python
    # In WorkflowManager.__init__()
@@ -521,6 +531,8 @@ key topics, and the second step will write a structured JSON memory object for e
    where `returnToUser` is `true`) will become the new memory.
 
    *Workflow Definition (`.../my-vector-memory-workflow.json`):*
+
+Partial workflow example: supply any omitted `endpointName` and `preset` fields for LLM nodes before running it.
 
    ```json
    [

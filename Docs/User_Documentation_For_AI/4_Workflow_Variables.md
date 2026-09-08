@@ -17,7 +17,9 @@ Variables use `{variable_name}` syntax in content fields. Enable `"jinja2": true
 
 Any top-level key in the workflow JSON (other than `nodes`) becomes a variable:
 
-```json
+Illustrative fragment; replace omitted content before using it in a configuration.
+
+```text
 {
   "persona": "You are a coding assistant.",
   "nodes": [{ "systemPrompt": "{persona}", ... }]
@@ -68,7 +70,11 @@ Each `chat_user_prompt_*` variable has a `templated_user_prompt_*` counterpart t
 | Variable | Description |
 |---|---|
 | `{Discussion_Id}` | Current conversation identifier. Empty string if none. |
+| `{Discussion_Directory}` | Canonical directory for current discussion state. Includes the optional API-key storage scope and raises an error if referenced without a discussion ID. Use as the base for per-discussion workflow files. |
 | `{time_context_summary}` | Natural language summary of conversation timeline. |
+
+Do not construct a state path from only `{Discussion_Id}`. That value does not include the API-key scope used by
+built-in memory. The raw API key and its hash are not workflow variables.
 
 **Do NOT use `{current_chat_summary}`**; it is defined but never populated. Use `GetCurrentSummaryFromFile` node instead.
 

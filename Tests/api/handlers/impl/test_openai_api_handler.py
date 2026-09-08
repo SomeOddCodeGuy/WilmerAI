@@ -16,6 +16,7 @@ def isolate_user_config(mocker):
     mocker.patch(f'{_HANDLER}.get_encrypt_using_api_key', return_value=False)
     mocker.patch(f'{_HANDLER}.get_redact_log_output', return_value=False)
     mocker.patch(f'{_HANDLER}.check_openwebui_tool_request', return_value=None)
+    mocker.patch('Middleware.api.api_helpers.get_allow_shared_workflows', return_value=False)
 
 
 @pytest.fixture
@@ -37,6 +38,27 @@ def test_get_models(client, mocker):
     response = client.get('/v1/models')
     assert response.status_code == 200
     assert response.json["data"][0]["id"] == "test-model"
+
+
+@pytest.mark.parametrize("path,payload", [
+    ('/chat/completions', {
+        "model": "chat-ui", "messages": [{"role": "user", "content": "Hello"}], "stream": False,
+    }),
+    ('/v1/completions', {"model": "chat-ui", "prompt": "Hello", "stream": False}),
+])
+def test_shared_mode_requires_advertised_workflow_model(client, mocker, path, payload):
+    """OpenAI-compatible request routes reject shared mode without a workflow model."""
+    mocker.patch(
+        f'{_HANDLER}.api_helpers.require_shared_workflow_selection',
+        return_value="Shared workflow mode requires a workflow model.",
+    )
+    mock_handle_prompt = mocker.patch(f'{_HANDLER}.handle_user_prompt')
+
+    response = client.post(path, json=payload)
+
+    assert response.status_code == 400
+    assert "Shared workflow mode" in response.json["error"]
+    mock_handle_prompt.assert_not_called()
 
 
 def test_chat_completions_non_streaming(client, mocker):
@@ -124,8 +146,8 @@ def test_chat_completions_streaming(client, mocker):
     assert call_args[2] == True  # stream=True
 
 
-def test_chat_completions_streaming_has_connection_close(client, mocker):
-    """Tests that streaming /chat/completions responses include Connection: close header."""
+def test_chat_completions_streaming_omits_application_connection_header(client, mocker):
+    """Tests that streaming /chat/completions leaves connection headers to the WSGI server."""
     mocker.patch('Middleware.api.handlers.impl.openai_api_handler.get_is_chat_complete_add_user_assistant',
                  return_value=False)
     mocker.patch('Middleware.api.handlers.impl.openai_api_handler.get_is_chat_complete_add_missing_assistant',
@@ -144,11 +166,13 @@ def test_chat_completions_streaming_has_connection_close(client, mocker):
     response = client.post('/chat/completions', json=payload)
 
     assert response.status_code == 200
-    assert response.headers.get('Connection') == 'close'
+    assert 'Connection' not in response.headers
+    assert response.data
+    response.close()
 
 
-def test_completions_streaming_has_connection_close(client, mocker):
-    """Tests that streaming /v1/completions responses include Connection: close header."""
+def test_completions_streaming_omits_application_connection_header(client, mocker):
+    """Tests that streaming /v1/completions leaves connection headers to the WSGI server."""
 
     def stream_generator():
         yield "data: chunk1\n\n"
@@ -160,7 +184,9 @@ def test_completions_streaming_has_connection_close(client, mocker):
     response = client.post('/v1/completions', json=payload)
 
     assert response.status_code == 200
-    assert response.headers.get('Connection') == 'close'
+    assert 'Connection' not in response.headers
+    assert response.data
+    response.close()
 
 
 def test_chat_completions_streaming_stops_after_done(client, mocker):
@@ -1049,7 +1075,7 @@ def test_chat_completions_encryption_context_true_with_bearer_key(client, mocker
     """With encryptUsingApiKey enabled and a Bearer key present, the request's
     encryption context must be activated."""
     mocker.patch(f'{_HANDLER}.get_encrypt_using_api_key', return_value=True)
-    spy = mocker.patch(f'{_HANDLER}.set_encryption_context')
+    spy = mocker.patch(f'{_HANDLER}.resolve_request_privacy')
     mocker.patch(f'{_HANDLER}.handle_user_prompt', return_value="ok")
     mock_builder = mocker.patch(f'{_HANDLER}.response_builder')
     mock_builder.build_openai_chat_completion_response.return_value = {"id": "test"}
@@ -1064,7 +1090,7 @@ def test_chat_completions_encryption_context_false_without_bearer_key(client, mo
     """encryptUsingApiKey without an actual key must NOT activate encryption
     (and redaction is off), so the context is set to False."""
     mocker.patch(f'{_HANDLER}.get_encrypt_using_api_key', return_value=True)
-    spy = mocker.patch(f'{_HANDLER}.set_encryption_context')
+    spy = mocker.patch(f'{_HANDLER}.resolve_request_privacy')
     mocker.patch(f'{_HANDLER}.handle_user_prompt', return_value="ok")
     mock_builder = mocker.patch(f'{_HANDLER}.response_builder')
     mock_builder.build_openai_chat_completion_response.return_value = {"id": "test"}

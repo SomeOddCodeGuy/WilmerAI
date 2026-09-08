@@ -8,7 +8,9 @@ from .base_llm_api_handler import LlmApiHandler
 from Middleware.utilities.sensitive_logging_utils import sensitive_log_lazy, log_prompt_content
 from Middleware.utilities.text_utils import return_brackets_in_string
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 
 class BaseCompletionsHandler(LlmApiHandler):

@@ -1,5 +1,6 @@
 import json
 import logging
+from Middleware.llmapis.handlers.impl import claude_api_handler as handler_module
 
 import pytest
 
@@ -207,7 +208,7 @@ class TestPreparePayload:
         workflow is diagnosable; the messages are passed through unchanged.
         """
         mock_logger_warning = mocker.patch.object(
-            logging.getLogger('Middleware.llmapis.handlers.impl.claude_api_handler'), 'warning')
+            handler_module.logger, 'warning')
         conversation = [
             {"role": "assistant", "content": "I begin."},
             {"role": "user", "content": "Odd, but continue."}
@@ -224,7 +225,7 @@ class TestPreparePayload:
         is removed from the payload and a warning is logged.
         """
         mock_logger_warning = mocker.patch.object(
-            logging.getLogger('Middleware.llmapis.handlers.impl.claude_api_handler'), 'warning')
+            handler_module.logger, 'warning')
         claude_handler.gen_input["repeat_penalty"] = 1.1
 
         conversation = [{"role": "user", "content": "Hi!"}]
@@ -318,7 +319,7 @@ class TestParseNonStreamResponse:
         Tests handling of a response missing the 'content' key.
         """
         mock_logger_error = mocker.patch.object(
-            logging.getLogger('Middleware.llmapis.handlers.impl.claude_api_handler'), 'error')
+            handler_module.logger, 'error')
 
         response_json = {'id': 'msg_123'}
         result = claude_handler._parse_non_stream_response(response_json)
@@ -333,7 +334,7 @@ class TestParseNonStreamResponse:
         logged and produce an empty string instead of escaping as AttributeError.
         """
         mock_logger_error = mocker.patch.object(
-            logging.getLogger('Middleware.llmapis.handlers.impl.claude_api_handler'), 'error')
+            handler_module.logger, 'error')
 
         response_json = {'content': ["not-a-dict"]}
         result = claude_handler._parse_non_stream_response(response_json)
@@ -373,7 +374,7 @@ class TestProcessStreamData:
     def test_invalid_json(self, claude_handler, mocker):
         """Tests that invalid JSON is handled gracefully."""
         mock_logger_warning = mocker.patch.object(
-            logging.getLogger('Middleware.llmapis.handlers.impl.claude_api_handler'), 'warning')
+            handler_module.logger, 'warning')
         result = claude_handler._process_stream_data("not json")
         assert result is None
         mock_logger_warning.assert_called_once()
@@ -381,7 +382,7 @@ class TestProcessStreamData:
     def test_non_dict_json_is_skipped_not_fatal(self, claude_handler, mocker):
         """Tests that a data line whose JSON parses to a non-dict is warned and skipped."""
         mock_logger_warning = mocker.patch.object(
-            logging.getLogger('Middleware.llmapis.handlers.impl.claude_api_handler'), 'warning')
+            handler_module.logger, 'warning')
         assert claude_handler._process_stream_data("123") is None
         assert claude_handler._process_stream_data('[1, 2]') is None
         assert mock_logger_warning.call_count == 2

@@ -6,11 +6,12 @@
 # _process_single_image_source; this module owns the shared traversal and the
 # text-only fallback used when image processing fails.
 
-import logging
 import traceback
 from typing import Any, Callable, Dict, List, Optional
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 # Appended to the last user message when image processing fails. This text is
 # API-visible payload content shared verbatim by both handlers.

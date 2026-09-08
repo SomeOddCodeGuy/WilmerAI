@@ -1,11 +1,12 @@
-import logging
 from typing import Any
 
 from Middleware.services.llm_dispatch_service import LLMDispatchService
 from Middleware.workflows.handlers.base.base_workflow_node_handler import BaseHandler
 from Middleware.workflows.models.execution_context import ExecutionContext
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 
 class StandardNodeHandler(BaseHandler):

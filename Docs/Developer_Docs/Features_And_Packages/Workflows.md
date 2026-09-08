@@ -127,31 +127,37 @@ This section details the responsibility of each key file in the `Middleware/work
     - `standard_node_handler.py`: Handles the `"Standard"` node type for LLM calls. Supports optional image
       passthrough via the `acceptImages` config flag, with `maxImagesToSend` controlling how many images reach the
       backend. When `acceptImages` is `true`, the handler passes `llm_takes_images=True` and the resolved
-      `max_images` count to `LLMDispatchService.dispatch()`.
-    - `tool_node_handler.py`: A router for tool-related nodes (`"PythonModule"`, `"OfflineWikiApi..."`, etc.).
+      `max_images` count to `LLMDispatchService.dispatch()`. The final `LlmApiService` boundary applies the resolved
+      endpoint's `backendSupportsImages` flag and strips images when that flag is `false`, regardless of the node.
+    - `tool_node_handler.py`: Routes `PythonModule` and `OfflineWikiApi...` nodes to their tool implementations.
     - `memory_node_handler.py`: A router for memory-related nodes (`"RecentMemory"`, `"VectorMemorySearch"`, etc.).
     - `sub_workflow_handler.py`: Handles nodes that trigger other workflows (`"CustomWorkflow"`,
-      `"ConditionalCustomWorkflow"`). It calls back to the `$WorkflowManager$` to run a nested workflow, resolving
-      and passing any `scoped_variables` from the parent context.
+      `"ConditionalCustomWorkflow"`, and `"ConversationChunkProcessor"`). It calls back to the `$WorkflowManager$`
+      to run a nested workflow, resolving and passing any `scoped_variables` from the parent context. See the
+      [ConversationChunkProcessor guide](../../User_Documentation/Setup/Workflow_Details/Nodes/ConversationChunkProcessor.md)
+      for chunk inputs, cursor state, and discussion-directory configuration.
     - `specialized_node_handler.py`: A router for miscellaneous nodes: `"WorkflowLock"`, `"GetCustomFile"`,
       `"SaveCustomFile"`, `"StaticResponse"`, `"ImageProcessor"`, `"JsonExtractor"`, `"ArithmeticProcessor"`,
       `"Conditional"`, `"StringConcatenator"`, `"TagTextExtractor"`, and `"DelimitedChunker"`.
     - `context_compactor_handler.py`: Handles the `"ContextCompactor"` node type, which compacts conversation
       history into rolling summaries.
-    - `web_fetch_handler.py`: Handles the `"WebFetch"` node type, which issues HTTP/HTTPS requests via the `requests`
-      library and returns the response as text, parsed JSON, a full status/headers/body envelope, or HTML stripped to
-      visible text. The HTML stripper is a small `html.parser` subclass (`_HtmlTextExtractor`) defined in the same
-      module, so there is no third-party HTML parsing dependency. Supports `onError: "return"` so the workflow can branch on
-      failures. Optional `proxy` field forwards a single URL to `requests` as `proxies={"http": ..., "https": ...}`;
-      any scheme `requests` supports works, including SOCKS via the `PySocks` extra.
-    - `curl_command_handler.py`: Handles the `"CurlCommand"` node type, which shells out to the system `curl` binary
-      with `shell=False`. Arguments are supplied as a JSON list and variable-substituted per
-      element. Output formats: `stdout`, `stdout+stderr`, or a JSON envelope with returncode. Same `onError` semantics
-      as `WebFetch`. Optional `proxy` field is translated to `-x <url>` and prepended to the `args` list before
-      invoking curl; the curl binary handles the proxy entirely on its own. curl is spawned via `subprocess.Popen`
-      and its stdout is read on a reader thread with a running byte total: the process is killed the instant the body
-      exceeds `maxResponseBytes` (stderr is drained concurrently and bounded to the same cap), giving a true in-process
-      cap that the injected `--max-filesize` alone cannot guarantee for chunked/unknown-length responses.
+    - `web_fetch_handler.py`: Handles the `"WebFetch"` node through `transport: "requests"` (the default) or
+      `"curl"`. Both transports share status handling, bounded response loading, redirect policy, and output formatting.
+      The curl transport disables curl configuration-file loading, restricts protocols to HTTP/HTTPS, and uses
+      private temporary files for configured headers and bodies so credentials stay out of process arguments.
+      It does not add a User-Agent option or header. Curl uses its own proxy and TLS configuration; address checks
+      remain best-effort because Python and curl parse and resolve the destination separately. See the
+      [WebFetch guide](../../User_Documentation/Setup/Workflow_Details/Nodes/WebFetch.md) for configuration and
+      redirect method/body rules, and the transport ownership section below for shared implementation contracts.
+    - `web_page_fetch_handler.py`: Handles the separate `"WebPageFetch"` node type. It enforces the GET-only,
+      bodyless, caller-headerless, and Requests-only node contract, validates all default-on policy fields, resolves
+      workflow variables, and delegates to the process-wide `WebPageFetchService`. It returns stripped page text by
+      default, with text and full JSON envelope options. See `WebPageFetch.md` for the complete service state machine,
+      robots rules, pacing, response bounds, and test boundaries.
+    - `curl_command_handler.py`: Handles `"CurlCommand"` through the system curl binary with `shell=False`.
+      JSON-list arguments receive variable substitution per element; the optional proxy becomes `-x <url>`.
+      It returns stdout, stdout plus stderr, or a JSON envelope with returncode, using the same `onError`
+      semantics as WebFetch. Both curl nodes share bounded output collection and process cleanup.
     - `mcp_tool_call_handler.py`: Handles the `"MCPToolCall"` node type, which invokes a single tool on a named MCP
       server. The server registry lives under `Public/Configs/MCPServers/` and is loaded via
       `config_utils.load_mcp_server_config`. The actual transport handling (stdio / sse / streamable_http) is
@@ -163,11 +169,41 @@ This section details the responsibility of each key file in the `Middleware/work
       Note that `asyncio.run` drives its loop synchronously, so the call blocks the calling eventlet greenlet for up to
       `timeout` seconds (pre-existing; the `wait_for` bound makes the worst case finite). Same `onError` semantics as
       `WebFetch`.
-    - `extension_node_helpers.py`: Shared helper module for the three extension-node handlers above (`WebFetch`,
-      `CurlCommand`, `MCPToolCall`): config-field validation (`validate_timeout`, `validate_bool`,
+    - `extension_node_helpers.py`: Shared helper module for the four extension-node handlers above (`WebFetch`,
+      `WebPageFetch`, `CurlCommand`, `MCPToolCall`): config-field validation (`validate_timeout`, `validate_bool`,
       `validate_max_bytes`), `resolve_allowed_hosts` (resolves the optional `allowedHosts` allowlist with per-entry
       variable substitution), and `maybe_stream` (wraps the result string in a static-content generator when the
       node is streaming).
+
+#### Fetch transport ownership
+
+`WebFetchHandler.handle()` owns its response through status validation, bounded loading, and formatting, closing
+it on success, error, or interruption. Body-loading helpers leave caller-owned responses open. Acquisition errors
+can carry a separate response, which is also closed. `request_without_redirects()` creates a private single-hop
+Requests session and binds its disposal to response closure. Implicit redirect preparation is disabled so
+intermediate bodies are not consumed before destination checks.
+
+Every redirect rechecks enabled address guards and applies the shared host, scheme, and effective-port
+credential policy.
+
+WebFetch keeps a cookie jar per node execution. Each Requests redirect rebuilds Cookie from that jar using normal
+domain, path, expiry, and Secure rules. It carries effective Authorization from the completed prepared request,
+including URL-derived Basic authentication, subject to destination authentication precedence. Crossing the
+credential boundary clears both inherited authentication and cookies, including on chains returning to the original
+origin. Prepared source and destination URLs determine that boundary so equivalent IDNA hostnames compare equally.
+WebPageFetch uses its separate stateless policy; curl authentication handling is transport-specific.
+
+`redirect_policy.resolve_redirect_url()` handles Location decoding and joining for both WebFetch transports and
+WebPageFetch. It interprets Latin-1-decoded header text as UTF-8, matching Requests, without reading a body or issuing
+a request. Invalid encoding follows the caller's redirect error policy. Curl header parsing preserves those bytes
+using CRLF/LF boundaries and space/tab trimming, including folded values.
+
+Both curl nodes invoke list-form commands with `shell=False` and drain stdout and stderr concurrently. Stdout is
+counted while reading and the child is killed when `maxResponseBytes` is exceeded, including for unknown-length
+responses; stderr is also bounded. `process_utils.run_process_readers()` owns reader startup and process waiting. An incomplete wait kills
+and reaps the child before reader joins; partial startup is covered. Reap and each join have a one-second cleanup
+budget, separate from the request timeout. Pipes close on all paths, and cleanup errors preserve the original
+interruption. Descendant process trees and platform-specific termination require separate handling.
 
 #### `streaming/`
 
@@ -202,7 +238,8 @@ default), tool definitions are silently suppressed.
 {
   "type": "Standard",
   "allowTools": true,
-  "endpoint": "my-endpoint",
+  "endpointName": "my-endpoint",
+  "preset": "my-preset",
   "prompt": ""
 }
 ```
@@ -211,7 +248,7 @@ Memory nodes, summarizer nodes, categorizer nodes, and other internal processing
 enabled. Only nodes that produce a final response to the client should use it, and typically only the responder node
 in a workflow.
 
-### Data Flow
+### Tool data flow
 
 1. **Ingestion:** The API gateway (`openai_api_handler.py`) extracts `tools` and `tool_choice` from the incoming
    request payload and passes them into the workflow system.
@@ -265,6 +302,11 @@ in a workflow.
    backend opts out endpoint-wide instead of every workflow dropping the flag; read in `dispatch()` from
    `llm_handler.llm.endpoint_file`, defaulting to true). Tests: `Tests/services/test_llm_dispatch_service.py`
    (`TestExtractTrailingToolExchange`, `TestAppendNativeToolExchangeDispatch`).
+   This history-delivery property is independent of `allowTools`. An authored-prompt internal planner may enable
+   `appendNativeToolExchange` while leaving `allowTools` disabled. That combination lets the planner evaluate the live
+   assistant call and matching tool result in their native roles without receiving the frontend's tool definitions or
+   giving the planner's output a frontend execution path. The responder still needs both properties when it must
+   continue the tool loop.
 4. **LLM Handler:** `$LlmApiService.get_response_from_llm()$` includes the tool definitions in the payload sent to
    the backend. The internal canonical format is OpenAI's tool format; the Claude and Ollama handlers convert as
    needed (see the LLM APIs developer documentation).
@@ -360,7 +402,7 @@ This is the most flexible way to extend the system.
    {
      "type": "DatabaseQuery",
      "connectionString": "your_db_connection_string",
-     "query": "SELECT * FROM users WHERE name = '{chat_user_prompt_last_one}';"
+     "query": "SELECT name FROM users ORDER BY name LIMIT 10;"
    }
    ```
 
@@ -374,21 +416,18 @@ This is the most flexible way to extend the system.
 
    class DatabaseQueryHandler(BaseHandler):
        def handle(self, context: ExecutionContext) -> str:
-           # Access all required data directly from the context object
-           query_template = context.config.get("query")
-           
-           # Use the variable service (also on the context) to resolve placeholders
-           resolved_query = context.workflow_variable_service.apply_variables(
-               query_template, context
-           )
+           query = context.config["query"]
            
            connection_string = context.config.get("connectionString")
            
            # ... (database connection and query logic) ...
            
-           result = f"Executed: {resolved_query}"
+           result = "Query completed"
            return result
    ```
+
+   This is an extension outline, not a built-in database node. Keep query structure operator-authored. If the handler
+   accepts user values, pass them as database-driver bound parameters; never format conversation text into SQL.
 
 3. **Register the Handler:** In `Middleware/workflows/managers/workflow_manager.py`, import your new handler and add it
    to the `self.node_handlers` dictionary in the `__init__` method.

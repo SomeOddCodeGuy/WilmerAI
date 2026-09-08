@@ -3,38 +3,45 @@
 import json
 import logging
 import os
+import re
+import shutil
+import subprocess
+import tempfile
+import threading
 from html.parser import HTMLParser
-from typing import Any, Dict, FrozenSet, List, Optional
-from urllib.parse import urljoin, urlsplit
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple
+from urllib.parse import urlsplit
 
 import requests
 
 from Middleware.utilities.network_security_utils import check_url_allowed
+from Middleware.utilities.process_utils import run_process_readers
+from Middleware.utilities.redirect_policy import (
+    SENSITIVE_HEADERS, should_strip_credentials, request_without_redirects,
+    redirect_method_and_body, resolve_redirect_url,
+)
 from Middleware.workflows.handlers.base.base_workflow_node_handler import BaseHandler
 from Middleware.workflows.handlers.impl.extension_node_helpers import (
     maybe_stream, resolve_allowed_hosts, validate_bool, validate_max_bytes, validate_timeout,
 )
 from Middleware.workflows.models.execution_context import ExecutionContext
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 _DEFAULT_TIMEOUT_SECONDS = 30
-# Redirect status codes followed when the (opt-in) address guard is active and we
-# follow redirects manually so each hop's host can be validated before connecting.
 _REDIRECT_STATUS = frozenset({301, 302, 303, 307, 308})
 _MAX_REDIRECTS = 10
-# Default body-size cap (bytes). A reasonable default that prevents a huge or
-# chunked-infinite response from being buffered into memory, while remaining
-# generous for normal text/JSON/HTML payloads. Set `maxResponseBytes` to 0 (or
-# a negative number) on the node to disable the cap.
 _DEFAULT_MAX_RESPONSE_BYTES = 10 * 1024 * 1024  # 10 MiB
 _VALID_OUTPUT_FORMATS = ("text", "json", "full", "html-stripped")
 _VALID_ON_ERROR = ("raise", "return")
-# Credential-bearing headers that must not be carried to a different host across a
-# redirect (mirrors requests/browser behavior). The manual-redirect path is only
-# active under the address guard, where requests is not following redirects itself,
-# so this stripping has to be done here.
-_CROSS_HOST_SENSITIVE_HEADERS = frozenset({"authorization", "cookie", "proxy-authorization"})
+_VALID_TRANSPORTS = ("requests", "curl")
+_CURL_RESPONSE_TOO_LARGE_EXIT_CODE = 63
+_CURL_TIMEOUT_EXIT_CODE = 28
+_CURL_READ_CHUNK_SIZE = 65536
+_HTTP_HEADER_NAME_PATTERN = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+_CROSS_HOST_SENSITIVE_HEADERS = SENSITIVE_HEADERS
 
 
 class _ResponseTooLargeError(Exception):
@@ -133,7 +140,7 @@ class WebFetchHandler(BaseHandler):
     """
     Handles the execution of 'WebFetch' nodes.
 
-    Issues an HTTP request to a user-configured URL using the `requests` library
+    Issues an HTTP request to a user-configured URL using the selected transport
     and returns the response in the configured output format. All string fields
     (url, header values, body) support workflow variable substitution.
     """
@@ -166,6 +173,13 @@ class WebFetchHandler(BaseHandler):
             raise ValueError("WebFetch node requires a 'url' field.")
 
         method = str(config.get("method", "GET")).upper()
+        transport_value = config.get("transport", "requests")
+        if not isinstance(transport_value, str):
+            raise ValueError(
+                f"WebFetch 'transport' must be one of {_VALID_TRANSPORTS}; "
+                f"got {transport_value!r}."
+            )
+        transport = transport_value.lower()
         timeout = validate_timeout(config.get("timeout", _DEFAULT_TIMEOUT_SECONDS), "WebFetch")
         output_format = config.get("outputFormat", "text")
         on_error = config.get("onError", "raise")
@@ -185,6 +199,10 @@ class WebFetchHandler(BaseHandler):
             raise ValueError(
                 f"WebFetch 'onError' must be one of {_VALID_ON_ERROR}; got {on_error!r}."
             )
+        if transport not in _VALID_TRANSPORTS:
+            raise ValueError(
+                f"WebFetch 'transport' must be one of {_VALID_TRANSPORTS}; got {transport_value!r}."
+            )
 
         url = self.workflow_variable_service.apply_variables(url_template, context)
 
@@ -198,62 +216,65 @@ class WebFetchHandler(BaseHandler):
         proxies = self._resolve_proxies(proxy_template, context)
         verify = self._resolve_verify(config.get("verify", True), config.get("caBundle"), context)
 
-        logger.debug("WebFetch issuing %s %s (timeout=%s, outputFormat=%s, proxy=%s, verify=%s)",
-                     method, url, timeout, output_format, bool(proxies), verify)
+        logger.debug(
+            "WebFetch issuing %s %s (transport=%s, timeout=%s, outputFormat=%s, "
+            "proxy=%s, verify=%s)",
+            method,
+            url,
+            transport,
+            timeout,
+            output_format,
+            bool(proxies),
+            verify,
+        )
 
         cap_enabled = max_bytes > 0
+        response = None
+        error_response = None
         try:
-            response = self._request_with_guard(
-                method=method,
-                url=url,
-                headers=headers,
-                data=body,
-                timeout=timeout,
-                proxies=proxies,
-                verify=verify,
-                allow_redirects=allow_redirects,
-                stream=cap_enabled,
-                block_private=block_private,
-                allowed_hosts=allowed_hosts,
-            )
-            response.raise_for_status()
-            if cap_enabled:
-                self._load_capped_content(response, max_bytes)
-        except (requests.exceptions.RequestException, _ResponseTooLargeError) as exc:
-            logger.warning("WebFetch request failed: %s", exc)
-            if on_error == "raise":
-                # Don't read the (possibly huge) error body, but close the streamed
-                # response so its socket/connection isn't held open until GC.
+            try:
+                response = self._request_with_guard(
+                    method=method,
+                    url=url,
+                    headers=headers,
+                    data=body,
+                    timeout=timeout,
+                    proxies=proxies,
+                    verify=verify,
+                    allow_redirects=allow_redirects,
+                    stream=cap_enabled,
+                    block_private=block_private,
+                    allowed_hosts=allowed_hosts,
+                    transport=transport,
+                    max_bytes=max_bytes,
+                )
+                response.raise_for_status()
                 if cap_enabled:
-                    err_response = getattr(exc, "response", None)
-                    if err_response is not None:
-                        err_response.close()
-                raise
-            if cap_enabled:
-                # The error return path renders response.text below; for a streamed
-                # response that would lazily pull the ENTIRE error body off the socket
-                # with no limit, defeating maxResponseBytes when a hostile endpoint
-                # answers with a multi-gigabyte/chunked-infinite error body. Bound it.
-                err_response = getattr(exc, "response", None)
-                if err_response is not None:
-                    self._load_capped_error_body(err_response, max_bytes)
-            result = self._format_error(exc, output_format)
-            return maybe_stream(result, context)
+                    self._load_capped_content(response, max_bytes)
+            except (requests.exceptions.RequestException, _ResponseTooLargeError) as exc:
+                error_response = getattr(exc, "response", None)
+                logger.warning("WebFetch request failed: %s", exc)
+                if on_error == "raise":
+                    raise
+                if cap_enabled and error_response is not None:
+                    self._load_capped_error_body(error_response, max_bytes)
+                return maybe_stream(self._format_error(exc, output_format), context)
 
-        try:
-            result = self._format_response(response, output_format)
-        except ValueError as exc:
-            # outputFormat:"json" calls response.json(), which raises a
-            # JSONDecodeError (a ValueError subclass) on a non-JSON 200 body.
-            # Honor onError just like a transport/HTTP failure rather than
-            # letting the decode error escape uncaught. Pass the response so the
-            # decoded body is returned per the onError table ("response body if
-            # available"); JSONDecodeError carries no .response of its own.
-            logger.warning("WebFetch could not format response as %s: %s", output_format, exc)
-            if on_error == "raise":
-                raise
-            result = self._format_error(exc, output_format, response=response)
-        return maybe_stream(result, context)
+            try:
+                result = self._format_response(response, output_format)
+            except ValueError as exc:
+                logger.warning("WebFetch could not format response as %s: %s", output_format, exc)
+                if on_error == "raise":
+                    raise
+                result = self._format_error(exc, output_format, response=response)
+            return maybe_stream(result, context)
+        finally:
+            try:
+                if error_response is not None and error_response is not response:
+                    error_response.close()
+            finally:
+                if response is not None:
+                    response.close()
 
     def _request_with_guard(
         self,
@@ -269,14 +290,14 @@ class WebFetchHandler(BaseHandler):
         stream: bool,
         block_private: bool,
         allowed_hosts: FrozenSet[str],
+        transport: str,
+        max_bytes: int,
     ):
         """Issues the request, enforcing the SSRF address policy on every hop.
 
-        When neither ``blockPrivateAddresses`` nor ``allowedHosts`` is set the guard is
-        inert and ``requests`` handles redirects itself (the node's original behavior).
-        When the guard is active, redirects are followed manually so each hop's host is
-        validated BEFORE the connection is made; an out-of-policy target raises
-        ``_AddressNotAllowedError`` (honored by ``onError`` like any other failure).
+        Redirects are followed explicitly so each hop can be validated without
+        implicitly draining its body. Requests cookies belong to this operation
+        and are cleared when a redirect crosses the credential boundary.
 
         Args:
             method (str): The HTTP method to use.
@@ -290,6 +311,8 @@ class WebFetchHandler(BaseHandler):
             stream (bool): Whether to stream the response body (cap enabled).
             block_private (bool): Whether to block private/internal addresses.
             allowed_hosts (FrozenSet[str]): The lowercased host allowlist (empty = no allowlist).
+            transport (str): The selected HTTP transport ("requests" or "curl").
+            max_bytes (int): Maximum response body size, or a non-positive value for no cap.
 
         Returns:
             requests.Response: The response from the final (non-redirect) hop.
@@ -299,8 +322,114 @@ class WebFetchHandler(BaseHandler):
             requests.exceptions.TooManyRedirects: When the redirect chain exceeds the limit.
         """
         guard_active = block_private or bool(allowed_hosts)
-        if not guard_active:
-            return requests.request(
+        cookie_jar = requests.cookies.RequestsCookieJar() if transport == "requests" else None
+        current_url, current_method, current_data, current_headers = url, method, data, headers
+        for _ in range(_MAX_REDIRECTS + 1):
+            if guard_active:
+                reason = check_url_allowed(current_url, block_private, allowed_hosts)
+                if reason:
+                    raise _AddressNotAllowedError(
+                        f"WebFetch blocked a request to a disallowed address: {reason}."
+                    )
+            response = self._request_once(
+                transport=transport,
+                method=current_method,
+                url=current_url,
+                headers=current_headers,
+                data=current_data,
+                timeout=timeout,
+                proxies=proxies,
+                verify=verify,
+                stream=stream,
+                max_bytes=max_bytes,
+                cookie_jar=cookie_jar,
+            )
+            if not allow_redirects or response.status_code not in _REDIRECT_STATUS:
+                return response
+            location = response.headers.get("location")
+            if not location:
+                return response
+            try:
+                try:
+                    prepared_request = getattr(response, 'request', None)
+                    source_url = (prepared_request.url
+                                  if cookie_jar is not None and prepared_request is not None
+                                  else current_url)
+                    next_url = resolve_redirect_url(source_url, location)
+                    comparison_url = next_url
+                    if cookie_jar is not None:
+                        # Compare transport hostnames, including equivalent IDNA spellings.
+                        destination = requests.PreparedRequest()
+                        destination.prepare_url(next_url, None)
+                        comparison_url = destination.url
+                    strip_credentials = should_strip_credentials(source_url, comparison_url)
+                except (ValueError, UnicodeError) as exc:
+                    raise requests.exceptions.InvalidURL("Redirect URL could not be parsed") from exc
+                current_method, current_data, current_headers = redirect_method_and_body(
+                    current_method, current_data, current_headers, response.status_code)
+                if cookie_jar is not None:
+                    # Rebuild from response cookies, including renewal, expiry and path scope.
+                    current_headers = {k: v for k, v in current_headers.items() if k.lower() != 'cookie'}
+                    if not strip_credentials and prepared_request is not None:
+                        # URL-derived authentication exists only on the prepared request.
+                        authorization = prepared_request.headers.get('Authorization')
+                        if authorization is not None:
+                            current_headers = {k: v for k, v in current_headers.items()
+                                               if k.lower() != 'authorization'}
+                            current_headers['Authorization'] = authorization
+                if strip_credentials:
+                    if cookie_jar is not None:
+                        cookie_jar.clear()
+                    current_headers = {
+                        k: v for k, v in current_headers.items()
+                        if k.lower() not in _CROSS_HOST_SENSITIVE_HEADERS
+                    }
+            finally:
+                response.close()
+            current_url = next_url
+        raise requests.exceptions.TooManyRedirects(
+            f"WebFetch exceeded the maximum of {_MAX_REDIRECTS} redirects."
+        )
+
+    def _request_once(
+        self,
+        *,
+        transport: str,
+        method: str,
+        url: str,
+        headers: Dict[str, str],
+        data: Optional[str],
+        timeout: float,
+        proxies: Optional[Dict[str, str]],
+        verify: Any,
+        stream: bool,
+        max_bytes: int,
+        cookie_jar=None,
+    ) -> requests.Response:
+        """Issues one non-redirecting request through the selected transport.
+
+        Args:
+            transport (str): Validated transport name, requests or curl.
+            method (str): HTTP method for this hop.
+            url (str): Resolved and validated destination URL.
+            headers (Dict[str, str]): Request headers; empty uses client defaults.
+            data (Optional[str]): Request body, or None for no body.
+            timeout (float): Request timeout in seconds.
+            proxies (Optional[Dict[str, str]]): Scheme-to-proxy mapping, or None.
+            verify (Any): True, False, or a CA bundle path for TLS verification.
+            stream (bool): Whether Requests defers reading the response body.
+            max_bytes (int): Curl response cap; non-positive disables the cap.
+                Requests body limits are enforced by the caller.
+            cookie_jar (Optional[requests.cookies.RequestsCookieJar]): Cookies shared
+                between Requests hops of this operation; unused by curl.
+
+        Returns:
+            requests.Response: Caller-owned response. Closing a Requests response
+                also closes its private session; curl returns an already buffered body.
+        """
+        if transport == "requests":
+            return request_without_redirects(
+                cookie_jar=cookie_jar,
                 method=method,
                 url=url,
                 headers=headers if headers else None,
@@ -308,55 +437,343 @@ class WebFetchHandler(BaseHandler):
                 timeout=timeout,
                 proxies=proxies,
                 verify=verify,
-                allow_redirects=allow_redirects,
-                stream=stream,
-            )
-
-        current_url, current_method, current_data, current_headers = url, method, data, headers
-        for _ in range(_MAX_REDIRECTS + 1):
-            reason = check_url_allowed(current_url, block_private, allowed_hosts)
-            if reason:
-                raise _AddressNotAllowedError(
-                    f"WebFetch blocked a request to a disallowed address: {reason}."
-                )
-            response = requests.request(
-                method=current_method,
-                url=current_url,
-                headers=current_headers if current_headers else None,
-                data=current_data,
-                timeout=timeout,
-                proxies=proxies,
-                verify=verify,
                 allow_redirects=False,
                 stream=stream,
             )
-            if not allow_redirects or response.status_code not in _REDIRECT_STATUS:
-                return response
-            location = response.headers.get("location")
-            if not location:
-                return response
-            next_url = urljoin(current_url, location)
-            # Mirror browser/requests redirect semantics: 301/302/303 demote a non-GET/HEAD
-            # to GET and drop the request body; 307/308 preserve both.
-            if response.status_code in (301, 302, 303) and current_method not in ("GET", "HEAD"):
-                current_method = "GET"
-                current_data = None
-                current_headers = {
-                    k: v for k, v in (current_headers or {}).items()
-                    if k.lower() not in ("content-length", "content-type")
-                }
-            if not self._same_host(current_url, next_url):
-                # Don't leak credentials to a different host on a redirect. requests
-                # does this for its own redirects; the manual path must do it too.
-                current_headers = {
-                    k: v for k, v in (current_headers or {}).items()
-                    if k.lower() not in _CROSS_HOST_SENSITIVE_HEADERS
-                }
-            response.close()
-            current_url = next_url
-        raise requests.exceptions.TooManyRedirects(
-            f"WebFetch exceeded the maximum of {_MAX_REDIRECTS} redirects."
+        return self._request_with_curl(
+            method=method,
+            url=url,
+            headers=headers,
+            data=data,
+            timeout=timeout,
+            proxies=proxies,
+            verify=verify,
+            max_bytes=max_bytes,
         )
+
+    def _request_with_curl(
+        self,
+        *,
+        method: str,
+        url: str,
+        headers: Dict[str, str],
+        data: Optional[str],
+        timeout: float,
+        proxies: Optional[Dict[str, str]],
+        verify: Any,
+        max_bytes: int,
+    ) -> requests.Response:
+        """Issues one request with curl and adapts the result to ``requests.Response``.
+
+        Curl is passed an argument list with ``shell=False``. ``--disable`` prevents
+        local curl configuration files from silently adding headers or credentials.
+        No User-Agent option or header is added here; curl uses its generic default
+        unless the workflow author explicitly supplies a ``User-Agent`` header.
+
+        Args:
+            method (str): HTTP method for this hop.
+            url (str): Resolved and validated destination URL.
+            headers (Dict[str, str]): Request headers written to a temporary input file.
+            data (Optional[str]): Body encoded as UTF-8, or None for no body.
+            timeout (float): Curl connection and total-operation timeout in seconds,
+                also bounding the process wait.
+            proxies (Optional[Dict[str, str]]): Scheme-to-proxy mapping, or None.
+            verify (Any): True, False, or a CA bundle path for TLS verification.
+            max_bytes (int): Response body and retained diagnostic byte cap;
+                non-positive disables the cap.
+
+        Returns:
+            requests.Response: Caller-owned response with a buffered body after the
+                subprocess and temporary files have been cleaned up.
+        """
+        curl_executable = shutil.which("curl")
+        if curl_executable is None:
+            raise requests.exceptions.RequestException(
+                "WebFetch transport 'curl' requires a curl executable on PATH."
+            )
+
+        timeout_text = str(timeout)
+        with tempfile.TemporaryDirectory(prefix="web-fetch-") as temp_directory:
+            response_headers_path = os.path.join(temp_directory, "response-headers")
+            command = [
+                curl_executable,
+                "--disable",
+                "--globoff",
+                "--silent",
+                "--show-error",
+                "--proto",
+                "=http,https",
+                "--request",
+                method,
+                "--connect-timeout",
+                timeout_text,
+                "--max-time",
+                timeout_text,
+                "--dump-header",
+                response_headers_path,
+            ]
+
+            if headers:
+                request_headers_path = os.path.join(temp_directory, "request-headers")
+                self._write_curl_headers(request_headers_path, headers)
+                command.extend(("--header", f"@{request_headers_path}"))
+            if data is not None:
+                request_body_path = os.path.join(temp_directory, "request-body")
+                with open(request_body_path, "wb") as request_body_file:
+                    request_body_file.write(data.encode("utf-8"))
+                command.extend(("--data-binary", f"@{request_body_path}"))
+            if proxies:
+                scheme = (urlsplit(url).scheme or "http").lower()
+                proxy = proxies.get(scheme) or proxies.get("http") or proxies.get("https")
+                if proxy:
+                    command.extend(("--proxy", proxy))
+            if verify is False:
+                command.append("--insecure")
+            elif isinstance(verify, str):
+                command.extend(("--cacert", verify))
+            if max_bytes > 0:
+                command.extend(("--max-filesize", str(max_bytes)))
+            command.extend(("--url", url))
+
+            try:
+                process = subprocess.Popen(
+                    command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    shell=False,
+                )
+            except OSError as exc:
+                raise requests.exceptions.RequestException(
+                    f"WebFetch could not start curl: {exc}."
+                ) from exc
+
+            cap = max_bytes if max_bytes > 0 else 0
+            body_box: Dict[str, Any] = {}
+            error_box: Dict[str, Any] = {}
+            timed_out = run_process_readers(process, timeout, (
+                (self._read_curl_body, (process, cap, body_box)),
+                (self._read_curl_diagnostic, (process.stderr, cap, error_box)),
+            ))
+
+            if timed_out:
+                raise requests.exceptions.Timeout(
+                    f"WebFetch curl request exceeded the {timeout}-second timeout."
+                )
+            if body_box.get("truncated"):
+                raise _ResponseTooLargeError(
+                    f"WebFetch response exceeded the {max_bytes}-byte cap (maxResponseBytes)."
+                )
+
+            response = self._build_curl_response(
+                url=url,
+                method=method,
+                response_headers_path=response_headers_path,
+                body=body_box.get("data", b""),
+            )
+            if process.returncode == _CURL_RESPONSE_TOO_LARGE_EXIT_CODE:
+                raise _ResponseTooLargeError(
+                    f"WebFetch response exceeded the {max_bytes}-byte cap (maxResponseBytes)."
+                )
+            if process.returncode != 0:
+                error_text = error_box.get("data", b"").decode(
+                    "utf-8", errors="replace"
+                ).strip()
+                message = error_text or f"curl exited with status {process.returncode}"
+                error_type = (
+                    requests.exceptions.Timeout
+                    if process.returncode == _CURL_TIMEOUT_EXIT_CODE
+                    else requests.exceptions.RequestException
+                )
+                error_response = response if response.status_code > 0 else None
+                raise error_type(
+                    f"WebFetch curl request failed: {message}", response=error_response
+                )
+            if response.status_code == 0:
+                raise requests.exceptions.RequestException(
+                    "WebFetch curl request did not return a valid HTTP status."
+                )
+            return response
+
+    @staticmethod
+    def _read_curl_body(process: Any, cap: int, box: Dict[str, Any]) -> None:
+        """Reads curl stdout incrementally and kills the process if it exceeds the cap.
+
+        Args:
+            process (Any): Curl subprocess with a readable stdout pipe.
+            cap (int): Maximum retained bytes; non-positive disables the cap.
+            box (Dict[str, Any]): Output mapping populated with data bytes and a
+                truncated flag indicating whether the cap stopped the process.
+        """
+        chunks: List[bytes] = []
+        total = 0
+        truncated = False
+        try:
+            while True:
+                chunk = process.stdout.read(_CURL_READ_CHUNK_SIZE)
+                if not chunk:
+                    break
+                if cap > 0 and total + len(chunk) > cap:
+                    chunks.append(chunk[:cap - total])
+                    truncated = True
+                    process.kill()
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+        except (OSError, ValueError):
+            pass
+        finally:
+            box["data"] = b"".join(chunks)
+            box["truncated"] = truncated
+
+    @staticmethod
+    def _read_curl_diagnostic(stream: Any, cap: int, box: Dict[str, Any]) -> None:
+        """Drains curl stderr while retaining at most the configured byte cap.
+
+        Args:
+            stream (Any): Readable stderr pipe to drain through EOF.
+            cap (int): Maximum retained bytes; non-positive disables the cap.
+            box (Dict[str, Any]): Output mapping populated with retained data bytes.
+        """
+        chunks: List[bytes] = []
+        total = 0
+        try:
+            while True:
+                chunk = stream.read(_CURL_READ_CHUNK_SIZE)
+                if not chunk:
+                    break
+                if cap <= 0:
+                    chunks.append(chunk)
+                    continue
+                remaining = cap - total
+                if remaining > 0:
+                    chunks.append(chunk[:remaining])
+                    total += min(len(chunk), remaining)
+        except (OSError, ValueError):
+            pass
+        finally:
+            box["data"] = b"".join(chunks)
+
+    @staticmethod
+    def _close_curl_stream(stream: Any) -> None:
+        """Closes a curl pipe without masking the request result.
+
+        Args:
+            stream (Any): Pipe to close, or None when no pipe was opened.
+        """
+        try:
+            if stream is not None:
+                stream.close()
+        except (OSError, ValueError):
+            pass
+
+    @staticmethod
+    def _write_curl_headers(path: str, headers: Dict[str, str]) -> None:
+        """Writes validated request headers to a private temporary curl input file.
+
+        Args:
+            path (str): Destination file in the operation's private temporary directory.
+            headers (Dict[str, str]): Header names and values to validate and serialize.
+
+        Raises:
+            ValueError: If a name is invalid or a value contains a forbidden delimiter.
+            OSError: If the header file cannot be written.
+        """
+        lines = []
+        for name, value in headers.items():
+            if not _HTTP_HEADER_NAME_PATTERN.fullmatch(name):
+                raise ValueError(f"WebFetch header name is invalid: {name!r}.")
+            if any(character in value for character in ("\r", "\n", "\x00")):
+                raise ValueError(f"WebFetch header {name!r} contains an invalid line break.")
+            lines.append(f"{name}: {value}\n")
+        with open(path, "w", encoding="utf-8", newline="") as header_file:
+            header_file.writelines(lines)
+
+    @classmethod
+    def _build_curl_response(
+        cls,
+        *,
+        url: str,
+        method: str,
+        response_headers_path: str,
+        body: bytes,
+    ) -> requests.Response:
+        """Builds a Requests-compatible response from curl's output files.
+
+        Args:
+            url (str): URL of the completed request hop.
+            method (str): HTTP method recorded on the prepared request.
+            response_headers_path (str): Curl header-output file; missing means no headers.
+            body (bytes): Already buffered response body.
+
+        Returns:
+            requests.Response: Buffered response with parsed metadata and text encoding.
+                A zero status indicates that no valid HTTP status was parsed.
+        """
+        try:
+            with open(response_headers_path, "rb") as header_file:
+                raw_headers = header_file.read()
+        except FileNotFoundError:
+            raw_headers = b""
+
+        status_code, reason, headers = cls._parse_curl_headers(raw_headers)
+
+        response = requests.Response()
+        response.status_code = status_code
+        response.reason = reason
+        response.headers = requests.structures.CaseInsensitiveDict(headers)
+        response.url = url
+        response.request = requests.Request(method=method, url=url).prepare()
+        response._content = body
+        response._content_consumed = True
+        response.encoding = requests.utils.get_encoding_from_headers(response.headers)
+        return response
+
+    @staticmethod
+    def _parse_curl_headers(raw_headers: bytes) -> Tuple[int, Optional[str], Dict[str, str]]:
+        """Parses the final HTTP header block emitted by curl.
+
+        Args:
+            raw_headers (bytes): Curl header output, possibly containing multiple blocks.
+
+        Returns:
+            Tuple[int, Optional[str], Dict[str, str]]: Status code, reason phrase, and
+                headers from the final HTTP block. No block yields (0, None, {});
+                an invalid status code yields zero.
+        """
+        text = raw_headers.decode("iso-8859-1", errors="replace")
+        final_lines: List[str] = []
+        # Unicode whitespace operations can discard UTF-8 continuation bytes decoded as Latin-1.
+        for block in re.split(r"\r?\n\r?\n", text):
+            lines = re.split(r"\r?\n", block)
+            if lines and lines[0].startswith("HTTP/"):
+                final_lines = lines
+        if not final_lines:
+            return 0, None, {}
+
+        status_parts = final_lines[0].split(None, 2)
+        try:
+            status_code = int(status_parts[1])
+        except (IndexError, ValueError):
+            status_code = 0
+        reason = status_parts[2] if len(status_parts) > 2 else None
+        headers: Dict[str, str] = {}
+        last_name: Optional[str] = None
+        for line in final_lines[1:]:
+            if line[:1] in (" ", "\t") and last_name is not None:
+                value = line.strip(" \t")
+                headers[last_name] = f"{headers[last_name]} {value}"
+                continue
+            if ":" not in line:
+                continue
+            name, value = line.split(":", 1)
+            name = name.strip(" \t")
+            value = value.strip(" \t")
+            if name in headers:
+                headers[name] = f"{headers[name]}, {value}"
+            else:
+                headers[name] = value
+            last_name = name
+        return status_code, reason, headers
 
     @staticmethod
     def _same_host(url_a: str, url_b: str) -> bool:
@@ -408,35 +825,20 @@ class WebFetchHandler(BaseHandler):
         ca_bundle_template: Any,
         context: ExecutionContext,
     ):
-        """Resolves the TLS-verification setting for the request.
-
-        Both controls are strictly OPT-IN: the defaults (``verify`` absent ->
-        True, ``caBundle`` absent -> None) reproduce the node's original
-        always-on certifi verification byte-for-byte, so existing nodes are
-        unaffected.
-
-        The returned value is suitable for ``requests``' ``verify`` parameter:
-        - ``True``  -> default verification against the bundled certifi CA store.
-        - a path    -> verify against a custom CA bundle (PEM) the author supplies
-                       via ``caBundle`` (e.g. a private/internal CA). Verification
-                       stays ON; this just adds trust for that CA.
-        - ``False`` -> verification disabled (only when the author explicitly sets
-                       ``verify: false``).
-
-        Precedence: an explicit ``verify: false`` disables verification and
-        ``caBundle`` is ignored. Otherwise a non-empty ``caBundle`` is used.
+        """Resolve TLS verification and the optional CA bundle.
 
         Args:
-            verify_value (Any): The configured ``verify`` flag (a boolean).
-            ca_bundle_template (Any): The configured ``caBundle`` path (None or a string).
-            context (ExecutionContext): The runtime context used for variable substitution.
+            verify_value (Any): Boolean verification flag; False takes precedence over caBundle.
+            ca_bundle_template (Any): Optional CA bundle path template used when verification is
+                enabled.
+            context (ExecutionContext): Workflow values used to resolve the path.
 
         Returns:
-            Any: True, False, or a resolved CA bundle path, per the precedence above.
+            Union[bool, str]: True for transport-default verification, False to disable it, or
+                the resolved CA bundle path.
 
         Raises:
-            ValueError: When ``verify`` is not a boolean, ``caBundle`` is set but is not
-                a string, or the resolved ``caBundle`` path does not point at a file.
+            ValueError: If the flag is not boolean or an enabled CA bundle setting is invalid.
         """
         verify = validate_bool(verify_value, "verify", "WebFetch")
         if not verify:
@@ -494,8 +896,8 @@ class WebFetchHandler(BaseHandler):
 
         Reading incrementally with a running total prevents a huge or
         chunked-infinite response from being buffered entirely into memory.
-        Raises ``_ResponseTooLargeError`` (and closes the connection) once the
-        cap is exceeded.
+        Raises ``_ResponseTooLargeError`` once the cap is exceeded. The caller
+        owns response cleanup across reading and formatting.
 
         Args:
             response (requests.Response): The streamed response to read and populate.
@@ -511,21 +913,17 @@ class WebFetchHandler(BaseHandler):
                 continue
             total += len(chunk)
             if total > max_bytes:
-                response.close()
                 raise _ResponseTooLargeError(
                     f"WebFetch response exceeded the {max_bytes}-byte cap (maxResponseBytes)."
                 )
             chunks.append(chunk)
-        # Populate the response so .text/.json() work normally downstream. This sets
-        # `requests.Response` private internals (_content/_content_consumed), the
-        # standard idiom for a manually-streamed read, valid against the pinned
-        # `requests` version; revisit here if that pin is ever bumped.
+        # Requests text/JSON access must use the bounded body without reading again.
         response._content = b"".join(chunks)
         response._content_consumed = True
 
     @staticmethod
     def _load_capped_error_body(response: requests.Response, max_bytes: int) -> None:
-        """Reads at most ``max_bytes`` of a failed streamed response, then closes it.
+        """Reads at most ``max_bytes`` of a failed response owned by the caller.
 
         Mirrors ``_load_capped_content`` but, because the request has already
         failed and the body is only needed for the error payload, it truncates at
@@ -534,7 +932,7 @@ class WebFetchHandler(BaseHandler):
         oversized error body cannot be buffered in full via ``response.text``.
 
         Args:
-            response (requests.Response): The failed streamed response to read and close.
+            response (requests.Response): The caller-owned failed response to read.
             max_bytes (int): The maximum number of bytes to retain from the body.
         """
         chunks: List[bytes] = []
@@ -555,8 +953,6 @@ class WebFetchHandler(BaseHandler):
             # Already on the error path; if the bounded re-read itself fails, keep
             # whatever was captured rather than masking the original failure.
             logger.debug("WebFetch bounded error-body read failed: %s", exc)
-        finally:
-            response.close()
         response._content = b"".join(chunks)
         response._content_consumed = True
 
@@ -613,4 +1009,3 @@ class WebFetchHandler(BaseHandler):
                 return _strip_html(response.text)
             return response.text
         return str(exc)
-
