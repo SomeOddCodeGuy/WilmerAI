@@ -1,6 +1,6 @@
 ## The `ChatSummaryMemoryGatheringTool` Node (LEGACY)
 
-This guide provides a comprehensive, code-validated overview of the `ChatSummaryMemoryGatheringTool` node. It details
+This guide provides an overview of the `ChatSummaryMemoryGatheringTool` node. It details
 this specialized retriever's precise execution logic, properties, and its role in advanced, custom memory-management
 workflows.
 
@@ -47,7 +47,9 @@ retrieve general memories for RAG, but rather collects the specific "new materia
 This node should be used as the first step in a multi-stage workflow designed to manually update the rolling chat
 summary. It provides the input for a subsequent summarizer node.
 
-```json
+Annotated JSON example. Remove comments before saving it as a configuration file.
+
+```jsonc
 [
   {
     "title": "Step 1: Gather all new memory chunks since last summary",

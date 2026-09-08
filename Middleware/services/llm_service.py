@@ -8,7 +8,9 @@ from Middleware.utilities.config_utils import get_chat_template_name, \
     get_endpoint_config, get_api_type_config
 from Middleware.utilities.text_utils import redact_sensitive_data
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 
 class LlmHandlerService:

@@ -25,7 +25,9 @@ from Middleware.utilities.text_utils import get_message_chunks, clear_out_user_a
     rough_estimate_token_length
 from Middleware.workflows.models.execution_context import ExecutionContext
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 # Per-discussion locks to prevent concurrent condensation of the same memory file.
 # Capped at _MAX_CONDENSATION_LOCKS to prevent unbounded growth on long-running servers.

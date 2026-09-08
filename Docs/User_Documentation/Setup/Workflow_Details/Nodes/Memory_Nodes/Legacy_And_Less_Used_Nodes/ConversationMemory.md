@@ -1,6 +1,6 @@
 ## The `ConversationMemory` Node (Legacy)
 
-This guide provides a code-validated overview of the legacy `ConversationMemory` node.
+This guide provides an overview of the legacy `ConversationMemory` node.
 
 ### Core Purpose
 
@@ -32,7 +32,9 @@ conversational memories. This process is not as configurable or efficient as the
 This node is superseded by the modern creator/retriever pattern and is **not recommended** for new workflows due to its
 inefficiency and lack of configurability.
 
-```json
+Annotated JSON example. Remove comments before saving it as a configuration file.
+
+```jsonc
 // LEGACY WORKFLOW (NOT RECOMMENDED)
 [
   {

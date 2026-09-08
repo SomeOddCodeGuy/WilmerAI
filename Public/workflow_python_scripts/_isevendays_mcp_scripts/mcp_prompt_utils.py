@@ -3,7 +3,9 @@ import re
 import json
 from typing import List, Dict, Any, Optional
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 def _format_mcp_tools_for_llm_prompt(tools_map: Dict) -> str:
     """Format discovered tools (from map) as a system prompt section for LLMs.
@@ -134,4 +136,4 @@ def _integrate_tools_into_prompt(original_prompt: str, tools_prompt_section: str
 
             updated_prompt = original_prompt.rstrip() + separator + tools_prompt_section.strip()
 
-    return updated_prompt 
+    return updated_prompt

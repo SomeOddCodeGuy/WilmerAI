@@ -1,12 +1,13 @@
 # middleware/llmapis/handlers/impl/koboldcpp_api_handler.py
 import json
-import logging
 from typing import Dict, List, Optional, Any
 
 from Middleware.llmapis.handlers.base.base_completions_handler import BaseCompletionsHandler
 from Middleware.utilities.text_utils import strip_data_uri_prefix
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 
 class KoboldCppApiHandler(BaseCompletionsHandler):

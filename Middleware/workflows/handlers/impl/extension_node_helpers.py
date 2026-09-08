@@ -1,8 +1,8 @@
-# /Middleware/workflows/handlers/impl/extension_node_helpers.py
-#
-# Helpers shared by the extension-node handlers (CurlCommand, WebFetch,
-# MCPToolCall). Each function that raises takes the node name so its error
-# message matches what the node previously raised on its own.
+"""Shared extension-node validation and output helpers.
+
+Validation errors include the node name so configuration failures identify
+the handler whose settings need attention.
+"""
 
 from typing import Any, FrozenSet
 

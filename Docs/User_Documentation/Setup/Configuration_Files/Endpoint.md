@@ -93,10 +93,10 @@ window. Both default to "off / no change", so existing endpoints behave exactly 
 
 ##### `wilmerContextEstimationLevel`
 
-* **Description**: Calibrates Wilmer's deliberately conservative token estimator for this endpoint's model. The
-  estimator never under-counts (so it is safe on dense text and small-vocabulary tokenizers), but it can over-count
-  real tokens by up to ~1.85x on efficient large-vocabulary models, which wastes most of a big context window. This
-  level scales the budgets Wilmer derives from the window so they reclaim that wasted headroom. It is **internal
+* **Description**: Calibrates Wilmer's character/word token estimate for this endpoint's model. The estimate is
+  deliberately conservative, but it cannot guarantee a fit for every tokenizer or input. Larger multipliers reclaim
+  headroom when the estimate exceeds the model's actual token count, at the cost of more overflow risk. This
+  level scales the budgets Wilmer derives from the window. It is **internal
   budgeting only and is never sent to the inference engine** (it never changes `maxContextTokenSize` /
   `truncate_length`). It is active only while `clampPromptToContextWindow` is on for the node; with the clamp off it
   has no effect. Allowed values and their budget multipliers: `conservative` (1.0, the default, no change),
@@ -136,6 +136,18 @@ These fields control how the model is identified in the API request.
 * **Data Type**: `boolean`
 * **Required**: Yes
 * **Example**: `true`
+
+##### `backendSupportsImages`
+
+* **Description**: Declares whether this endpoint's model can accept image input. Defaults to `true` when absent.
+  Set it to `false` for a text-only model. This endpoint-level restriction overrides every workflow request for image
+  passthrough, including `acceptImages: true` on a `Standard` node and calls made by an `ImageProcessor` node. WilmerAI
+  removes each message's `images` field before building the backend payload. The LLM request still runs with its text
+  content, so do not select a text-only endpoint for an `ImageProcessor` node that is expected to describe images.
+  Each endpoint in a failover chain applies its own setting.
+* **Data Type**: `boolean`
+* **Required**: No (default `true`)
+* **Example**: `false`
 
 ##### `promptTemplate`
 
@@ -209,24 +221,33 @@ These fields control how the model is identified in the API request.
   public address. Failover forwards the full conversation and prompt to the backup, so Wilmer **blocks failover to a
   backup whose host is a public IP by default** (safe-by-default): a primary that fails over to such a backup raises a
   clear error instead of silently sending the prompt off-machine. Set `allowRemoteBackup` to `true` on the **backup
-  endpoint** to permit it. This flag is only needed for a backup at a *public IP literal*: a backup on loopback or a
+  endpoint** to permit it. This applies to public IP literals and hostnames with any public DNS result. A backup on loopback or a
   private/LAN address (`127.0.0.1`, `10.x`, `172.16-31.x`, `192.168.x`, `localhost`) is treated as local and never
-  blocked, and a backup referenced by *hostname* (which cannot be classified without DNS) is allowed but logged loudly
-  as possible off-machine egress.
+  blocked. Hostnames are resolved synchronously. A hostname with only local results is local; an unresolved hostname
+  is allowed but logged as possible off-machine egress.
 * **Data Type**: `boolean`
 * **Required**: No (required only to use a public-IP backup)
 * **Example**: `true`
 
-When a failover occurs, it is logged at `WARNING` level so that the swap is visible in the logs, which is useful for
-diagnosing intermittent connectivity issues. When a failover is triggered, the internal retry behaviour of the primary
-endpoint is also suppressed: instead of spending time retrying HTTP 5xx responses or connection errors on the primary,
-the middleware moves to the backup on the first failure so that the user-facing delay is minimised. Endpoints at the
-tail of a failover chain (with no backup of their own) retain their normal retry behaviour.
+When a failover occurs, it is logged at `WARNING` level. An endpoint with a backup makes one attempt before moving
+to that backup. Without a backup, connection establishment failures and HTTP 500, 502, 503, or 504 responses can
+receive up to three total attempts, with short waits of 0.25 and 0.5 seconds. Cancellation stops those waits.
+This policy applies to both streaming and non-streaming generation, and to the shared embeddings transport.
+
+Permanent client errors, read timeouts, ambiguous connection failures after submission, and malformed JSON are
+not automatically repeated at the same endpoint. OpenAI-compatible chat responses with missing or invalid required
+structure raise an error rather than silently returning an empty answer. These errors can still trigger an explicitly
+configured backup. A valid empty answer or tool-only response remains valid and does not itself trigger failover.
+
+Once a stream has yielded a chunk, a subsequent failure is reported without restarting generation or switching
+backends. This prevents mixing partial answers. Endpoints at the tail of a backup chain use their own normal retry
+policy; three attempts is a per-endpoint limit, not a limit for the whole chain.
 
 **Data egress note.** Failover forwards the full request (conversation, system prompt, prompt) to whatever
 `backupEndpointName` resolves to, using that backup's own URL and API key. Because a transient *local* failure could
 otherwise send the user's prompt off-machine silently, the egress guard above applies: a public-IP backup is blocked
-unless it sets `allowRemoteBackup: true`, a hostname backup is allowed but logged loudly, and a local/LAN backup is
+unless it sets `allowRemoteBackup: true`. The same rule applies to hostnames resolving to a public address. An unresolved
+hostname is allowed with a warning, and a local/LAN backup is
 allowed silently. The guard classifies the host only by address; it does not inspect what the backend then does with
 the data. Be deliberate about pairing a local primary with any non-local backup if the prompt content should never
 leave the machine.
@@ -430,6 +451,7 @@ translated to whichever endpoint is actually being called.
   dry_multiplier  dry_base  dry_allowed_length  dry_penalty_last_n  dry_sequence_breakers
   xtc_probability  xtc_threshold  mirostat  mirostat_tau  mirostat_eta
   seed  stop  samplers  logit_bias  ignore_eos  n_probs  min_keep  grammar  json_schema
+  thinking_budget_tokens
   ```
   Plus two special keys: `thinkingMode` and `chat_template_kwargs` (below). Max-tokens, the streaming
   flag, and context size are **not** sampler keys; they come from the node/endpoint as before.
@@ -454,6 +476,10 @@ translated to whichever endpoint is actually being called.
 * **Data Type**: `object`
 * **Required**: No
 * **Example**: `{ "thinking_budget": 0 }`
+
+For llama.cpp's distinct top-level server option, set `thinking_budget_tokens` directly in
+`presetSamplers`. Wilmer sends it at the top level of the request rather than inside
+`chat_template_kwargs`.
 
 ##### Omitting a field, and sending a literal `null`
 

@@ -73,6 +73,19 @@ def parse_and_apply_launch_arguments(description):
                         help="Override directory for per-discussion data files (memories, "
                              "summaries, vector DBs). Takes precedence over the discussionDirectory "
                              "user config setting.")
+    parser.add_argument("--Mode", "--mode", dest="Mode", type=str.lower,
+                        choices=("workflow", "wilmerproxy"), default=None,
+                        help="Runtime mode. 'workflow' runs normal Wilmer processing (default); "
+                             "'WilmerProxy' exposes an allowlisted relay to other Wilmer instances.")
+    parser.add_argument(
+        "--WilmerProxyConfig",
+        "--wilmer-proxy-config",
+        dest="WilmerProxyConfig",
+        type=str,
+        default=None,
+        help="WilmerProxy configuration name from Public/Configs/WilmerProxy. Required when "
+             "--Mode WilmerProxy is selected.",
+    )
     parser.add_argument("--file-logging", action='store_true', default=None,
                         help="Enable file logging. In single-user mode, falls back to the "
                              "user's useFileLogging config setting. In multi-user mode, "
@@ -102,6 +115,21 @@ def parse_and_apply_launch_arguments(description):
         parser.error("--concurrency must be >= 0")
     if args.concurrency_timeout <= 0:
         parser.error("--concurrency-timeout must be > 0")
+
+    requested_mode = args.Mode or instance_global_variables.RUNTIME_MODE
+    requested_wilmer_proxy_config = (
+        args.WilmerProxyConfig.strip()
+        if args.WilmerProxyConfig and args.WilmerProxyConfig.strip()
+        else None
+    )
+    selected_wilmer_proxy_config = (
+        requested_wilmer_proxy_config or instance_global_variables.WILMER_PROXY_CONFIG)
+    if requested_mode == "wilmerproxy" and not selected_wilmer_proxy_config:
+        parser.error(
+            "--WilmerProxyConfig is required when --Mode WilmerProxy is selected")
+    if requested_mode != "wilmerproxy" and requested_wilmer_proxy_config:
+        parser.error(
+            "--WilmerProxyConfig may only be used with --Mode WilmerProxy")
 
     if len(args.positional) > 0 and args.positional[0].strip():
         instance_global_variables.CONFIG_DIRECTORY = args.positional[0].strip().rstrip('/\\')
@@ -133,6 +161,10 @@ def parse_and_apply_launch_arguments(description):
         instance_global_variables.USER_LEVEL_SQLITE_DIRECTORY = args.UserLevelSqlLiteDirectory.strip().rstrip('/\\')
     if args.DiscussionDirectory and args.DiscussionDirectory.strip():
         instance_global_variables.DISCUSSION_DIRECTORY = args.DiscussionDirectory.strip().rstrip('/\\')
+
+    instance_global_variables.RUNTIME_MODE = requested_mode
+    instance_global_variables.WILMER_PROXY_CONFIG = (
+        selected_wilmer_proxy_config if requested_mode == "wilmerproxy" else None)
 
     if args.file_logging is not None:
         instance_global_variables.FILE_LOGGING = args.file_logging

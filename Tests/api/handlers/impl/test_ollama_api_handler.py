@@ -14,6 +14,28 @@ def isolate_user_config(mocker):
     mocker.patch(f'{_HANDLER}.get_encrypt_using_api_key', return_value=False)
     mocker.patch(f'{_HANDLER}.get_redact_log_output', return_value=False)
     mocker.patch(f'{_HANDLER}.check_openwebui_tool_request', return_value=None)
+    mocker.patch('Middleware.api.api_helpers.get_allow_shared_workflows', return_value=False)
+
+
+@pytest.mark.parametrize("path,payload", [
+    ('/api/chat', {
+        "model": "chat-ui", "messages": [{"role": "user", "content": "Hello"}], "stream": False,
+    }),
+    ('/api/generate', {"model": "chat-ui", "prompt": "Hello", "stream": False}),
+])
+def test_shared_mode_requires_advertised_workflow_model(client, mocker, path, payload):
+    """Ollama-compatible request routes reject shared mode without a workflow model."""
+    mocker.patch(
+        f'{_HANDLER}.api_helpers.require_shared_workflow_selection',
+        return_value="Shared workflow mode requires a workflow model.",
+    )
+    mock_handle_prompt = mocker.patch(f'{_HANDLER}.handle_user_prompt')
+
+    response = client.post(path, json=payload)
+
+    assert response.status_code == 400
+    assert "Shared workflow mode" in response.json["error"]
+    mock_handle_prompt.assert_not_called()
 
 
 def test_eventlet_path_runs_post_return_nodes_to_completion(app, mocker):
@@ -223,8 +245,8 @@ def test_get_version(client, mocker):
     assert response.json["version"] == "0.9"
 
 
-def test_generate_streaming_has_connection_close(client, mocker):
-    """Tests that streaming /api/generate responses include Connection: close header."""
+def test_generate_streaming_omits_application_connection_header(client, mocker):
+    """Tests that streaming /api/generate leaves connection headers to the WSGI server."""
 
     def stream_generator():
         yield '{"response": "chunk1"}'
@@ -236,11 +258,13 @@ def test_generate_streaming_has_connection_close(client, mocker):
     response = client.post('/api/generate', json=payload)
 
     assert response.status_code == 200
-    assert response.headers.get('Connection') == 'close'
+    assert 'Connection' not in response.headers
+    assert response.data
+    response.close()
 
 
-def test_chat_streaming_has_connection_close(client, mocker):
-    """Tests that streaming /api/chat responses include Connection: close header."""
+def test_chat_streaming_omits_application_connection_header(client, mocker):
+    """Tests that streaming /api/chat leaves connection headers to the WSGI server."""
 
     def stream_generator():
         yield '{"content": "chunk1"}\n'
@@ -256,7 +280,9 @@ def test_chat_streaming_has_connection_close(client, mocker):
     response = client.post('/api/chat', json=payload)
 
     assert response.status_code == 200
-    assert response.headers.get('Connection') == 'close'
+    assert 'Connection' not in response.headers
+    assert response.data
+    response.close()
 
 
 def test_chat_streaming_stops_after_done_true(client, mocker):

@@ -9,7 +9,9 @@ from typing import List, Optional
 
 from Middleware.utilities import config_utils
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 # This prevents exceeding SQLite's expression depth limit (SQLITE_LIMIT_EXPR_DEPTH).
 MAX_KEYWORDS_FOR_SEARCH = 60

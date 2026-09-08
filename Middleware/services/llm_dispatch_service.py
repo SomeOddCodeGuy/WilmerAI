@@ -1,7 +1,6 @@
 # /Middleware/services/llm_dispatch_service.py
 
 import json
-import logging
 from typing import Any, List, Optional, Tuple
 
 from Middleware.utilities.prompt_extraction_utils import (
@@ -33,7 +32,9 @@ from Middleware.utilities.structured_output_utils import (
 from Middleware.utilities.text_utils import rough_estimate_token_length
 from Middleware.workflows.models.execution_context import ExecutionContext
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 # --- Pre-send context clamp tuning -------------------------------------------------
 # Tokens held back from the endpoint window when computing the conversation budget,
@@ -128,6 +129,33 @@ class LLMDispatchService:
         if max_images > 0:
             all_images = all_images[-max_images:]
         return all_images
+
+    @staticmethod
+    def _resolve_prompt_images(messages, config, max_images, explicit_images):
+        """Resolve images for a fresh authored-prompt request.
+
+        Most callers rely on the configured recent-message window. Callers that
+        have already selected an exact image, such as ``ImageProcessor``, can
+        supply it explicitly so its original history position cannot remove it
+        from the outbound request.
+
+        Args:
+            messages (list): The full conversation messages.
+            config (dict): The node configuration.
+            max_images (int): Maximum number of images to return. 0 means no limit.
+            explicit_images (Optional[List[str]]): Caller-selected image sources,
+                or None to gather images from recent messages.
+
+        Returns:
+            list: Image sources to attach to the authored prompt.
+        """
+        if explicit_images is None:
+            return LLMDispatchService._gather_recent_images(messages, config, max_images)
+
+        images = list(explicit_images)
+        if max_images > 0:
+            images = images[-max_images:]
+        return images
 
     @staticmethod
     def _merge_consecutive_assistant_messages(messages, delimiter="\n"):
@@ -663,20 +691,24 @@ class LLMDispatchService:
     def dispatch(
             context: ExecutionContext,
             llm_takes_images: bool = False,
-            max_images: int = 0
+            max_images: int = 0,
+            explicit_images: Optional[List[str]] = None,
     ) -> Any:
         """
         Prepares prompts and dispatches them to the configured LLM handler.
 
         Args:
             context (ExecutionContext): The context object containing all runtime state.
-            llm_takes_images (bool): If True, images on messages are preserved for the LLM.
+            llm_takes_images (bool): If True, requests image passthrough. The resolved
+                endpoint may still disable it with ``backendSupportsImages=false``.
             max_images (int): Maximum number of images to send.  0 means no limit.
+            explicit_images (Optional[List[str]]): Exact image sources to attach
+                when dispatch builds a fresh authored-prompt request. None uses
+                the configured recent-message image window.
 
         Returns:
             Any: The raw response from the LLM handler (e.g., a string or a generator).
         """
-        # All required data is now pulled from the context object
         llm_handler = context.llm_handler
         config = context.config
 
@@ -908,8 +940,8 @@ class LLMDispatchService:
             # data, so pass gathered images in a minimal conversation.
             image_conversation = None
             if llm_takes_images:
-                recent_images = LLMDispatchService._gather_recent_images(
-                    message_copy, config, max_images)
+                recent_images = LLMDispatchService._resolve_prompt_images(
+                    message_copy, config, max_images, explicit_images)
                 if recent_images:
                     image_conversation = [{"role": "user", "content": "", "images": recent_images}]
 
@@ -954,8 +986,8 @@ class LLMDispatchService:
             else:
                 user_msg = {"role": "user", "content": prompt}
                 if llm_takes_images:
-                    recent_images = LLMDispatchService._gather_recent_images(
-                        message_copy, config, max_images)
+                    recent_images = LLMDispatchService._resolve_prompt_images(
+                        message_copy, config, max_images, explicit_images)
                     if recent_images:
                         user_msg["images"] = recent_images
                 collection.append(user_msg)

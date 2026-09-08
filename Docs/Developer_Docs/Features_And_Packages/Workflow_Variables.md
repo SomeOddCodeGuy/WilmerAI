@@ -75,7 +75,8 @@ alter how messages are joined into a string:
 - **Node-level `addUserAssistantTags`** (boolean, default `false`): When `true`, each message is prefixed with its role
   (`User: `, `Assistant: `, `System: `). This is a per-node setting read from `context.config`, so different nodes in the
   same workflow can produce differently formatted conversation strings. Does not affect the `templated_user_prompt_*`
-  variables, which already have their own template-driven formatting.
+  variables, which already have their own template-driven formatting. All shipped workflows leave this setting
+  disabled, including both LLM nodes in each `_common` General CoT workflow.
 - **User-level `separateConversationInVariables`** (boolean, default `false`) and **`conversationSeparationDelimiter`**
   (string, default `"\n"`): When `separateConversationInVariables` is `true`, the delimiter from
   `conversationSeparationDelimiter` replaces the default `\n` between messages. Read via `get_separate_conversation_in_variables()`
@@ -152,14 +153,19 @@ A variety of pre-formatted date and time strings are available.
 
 - `{Discussion_Id}`: The unique identifier for the current conversation/discussion. Useful for creating per-conversation
   files or organizing data by session. If no discussion ID is present, this will be an empty string.
+- `{Discussion_Directory}`: The canonical directory for all state belonging to the current discussion. It is returned by
+  `config_utils.get_discussion_folder_path()` and therefore follows the configured discussion root, path validation,
+  legacy-folder stickiness, and the request's optional API-key hash scope. Use this variable as the base for workflow
+  files that contain discussion state. Referencing it without a discussion ID raises `ValueError` so a missing ID cannot
+  collapse a write into a shared directory.
 - `{time_context_summary}`: A human-readable summary of when the conversation started (e.g., "The user started this
   conversation a few minutes ago").
 
 #### **Dynamic File Path Variables**
 
-The `{Discussion_Id}` and `{YYYY_MM_DD}` variables are particularly useful with the `GetCustomFile` and `SaveCustomFile`
-nodes, which support variable substitution in their `filepath` fields. This enables per-conversation or date-based file
-storage patterns.
+Use `{Discussion_Directory}` with `GetCustomFile`, `SaveCustomFile`, and any other node that stores per-discussion
+state. `{Discussion_Id}` identifies the discussion but does not include the API-key storage scope. Constructing a path
+from only `{Discussion_Id}` can therefore bypass the isolation used by built-in memories.
 
 **Implementation Details:**
 - The `filepath` field in both nodes is processed through `WorkflowVariableManager.apply_variables()` before the file
@@ -172,10 +178,15 @@ storage patterns.
 ```json
 {
   "type": "SaveCustomFile",
-  "filepath": "/data/{YYYY_MM_DD}/{Discussion_Id}_output.txt",
+  "filepath": "{Discussion_Directory}/daily_output_{YYYY_MM_DD}.txt",
   "content": "{agent1Output}"
 }
 ```
+
+With no Bearer key, the canonical layout is
+`<discussion-root>/<Discussion_Id>/`. With a Bearer key, it is
+`<discussion-root>/<api-key-hash>/<Discussion_Id>/`. The raw API key and its hash are intentionally not exposed as
+workflow variables.
 
 -----
 
@@ -187,6 +198,8 @@ There are two ways to use variables in your prompts: standard formatting and the
 
 By default, you can insert any variable into a prompt using curly braces. The system uses Python's `str.format()` method
 for substitution.
+
+Partial workflow example: supply any omitted `endpointName` and `preset` fields for LLM nodes before running it.
 
 ```json
 {
@@ -203,6 +216,8 @@ For more complex logic, like loops or conditionals, you can enable the Jinja2 te
 This is especially useful with the `{messages}` variable, which provides the entire conversation history as a list.
 
 **Example: A node that summarizes a conversation using a Jinja2 loop.**
+
+Partial workflow example: supply any omitted `endpointName` and `preset` fields for LLM nodes before running it.
 
 ```json
 {
@@ -223,6 +238,8 @@ Adding a new, reusable variable to a workflow **requires no code changes**.
 
 Add your new key-value pair to the top level of your workflow's JSON file (e.g., in
 `Public/Configs/Workflows/my_workflow.json`).
+
+Partial workflow example: supply any omitted `endpointName` and `preset` fields for LLM nodes before running it.
 
 ```json
 {
@@ -263,7 +280,8 @@ The system isolates custom variable additions to the JSON configuration file; no
 
 ### Early Variable Substitution for `endpointName` and `preset`
 
-As of recent updates, the `endpointName` and `preset` fields support a special form of **early variable substitution**. This occurs in `WorkflowProcessor._process_section()` BEFORE the LLM handler is loaded and BEFORE nodes execute.
+The `endpointName` and `preset` fields support **early variable substitution** in
+`WorkflowProcessor._process_section()`, before the LLM handler is loaded and before nodes execute.
 
 **Technical Implementation:**
 - The processor creates a minimal `ExecutionContext` with only pre-execution variables
@@ -360,10 +378,24 @@ the `__WILMER_L_CURLY__`/`__WILMER_R_CURLY__` sentinel tokens, the same mechanis
 content. After `str.format()` completes, `return_brackets_in_string()` restores them to real braces in the final output.
 
 Custom workflow config variables (top-level keys in the JSON file) are intentionally NOT escaped, because they support
-nested variable resolution (e.g., `"my_path": "data/{Discussion_Id}/output.txt"` must have its `{Discussion_Id}`
-resolved on the second format pass).
+nested variable resolution (e.g., `"my_path": "{Discussion_Directory}/output.txt"` must have its
+`{Discussion_Directory}` resolved on the second format pass).
 
 **Key files:**
 - `/Middleware/utilities/text_utils.py`: `escape_brackets_in_string()` (forward), `return_brackets_in_string()` (reverse)
 - `/Middleware/workflows/managers/workflow_variable_manager.py`: escaping in `generate_variables()`, restoration in `apply_variables()`
 - `/Middleware/utilities/prompt_extraction_utils.py`: `enrich_messages_with_tool_calls()` also escapes tool call text
+
+### Reserved directory references
+
+Discussion_Directory is resolved lazily using the node's template language: Formatter.parse for standard fields,
+including nested format specifications, and Jinja's parsed undeclared-variable set for Jinja expressions/statements.
+Each standard substitution pass regenerates variables against that pass's template. A reference requires a discussion
+ID and delegates to the canonical API-key-scoped path resolver. For example,
+`{Discussion_Directory:>{width}}/notes.txt` with width zero retains the same scoped directory as an unformatted field.
+
+If reference parsing fails, detection conservatively checks for the `Discussion_Directory` name so the
+missing-discussion-ID guard still applies. Rendering handles errors independently: a first-pass `KeyError` returns
+the original prompt with brace sentinels restored; a second-pass `KeyError` retains the partially resolved text.
+Other formatting errors propagate. Reference scanning preserves these fallbacks for literal JSON and
+brace-containing prompts.

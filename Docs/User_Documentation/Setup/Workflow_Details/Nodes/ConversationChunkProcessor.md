@@ -31,9 +31,8 @@ The freshest partial group (fewer than `chunkSize` messages) and the `lookbackMe
 they are picked up once enough messages accumulate to complete a chunk. A live responder still sees those recent
 messages directly, so nothing is invisible in the meantime.
 
-Because the cursor is a set of message hashes, an edited or regenerated message near the boundary still matches an
-earlier message in the stored chunk, so a single edit resumes from just before it instead of forcing a full
-re-processing of the whole history.
+The cursor stores the last-message hash of each completed chunk. If the latest boundary message changes, matching
+can resume from an earlier stored chunk boundary. It cannot re-anchor to arbitrary messages within the last chunk.
 
 -----
 
@@ -46,7 +45,7 @@ re-processing of the whole history.
 | **`workflowName`**     | String           | Yes      | N/A     | The sub-workflow to run once per chunk (without `.json`).                                                                                                                                              |
 | **`chunkSize`**        | Integer          | No       | `10`    | Number of messages per chunk.                                                                                                                                                                          |
 | **`lookbackMessages`** | Integer          | No       | `4`     | How many of the freshest messages to leave unprocessed each run (they are handled once they fall into a completed chunk). Larger values keep the very latest exchanges out of the record for longer.   |
-| **`cursorDirectory`**  | String           | Yes      | N/A     | Directory the cursor file is written to. Supports variables (e.g. `"{gameTempDir}"`).                                                                                                                  |
+| **`cursorDirectory`**  | String           | Yes      | N/A     | Directory the cursor file is written to. Use `"{Discussion_Directory}"` so the cursor follows the discussion's optional API-key storage scope.                                                        |
 | **`returnFile`**       | String           | No       | `null`  | If set, the node returns this file's resolved content after processing, so a later node can keep reading the record it maintains. If unset, the node returns a short status string. Supports variables. |
 | **`scoped_variables`** | Array of Strings | No       | `[]`    | Extra inputs passed to the sub-workflow *after* the chunk. See Data Flow. May only reference outputs of nodes that ran earlier in the parent workflow.                                                  |
 
@@ -64,8 +63,8 @@ also, as text, as **`{agent1Input}`**. Any `scoped_variables` follow it as `{age
   "workflowName": "KeyEvents_ChunkUpdate",
   "chunkSize": 10,
   "lookbackMessages": 4,
-  "cursorDirectory": "{gameTempDir}",
-  "returnFile": "{gameTempDir}/key_events_{Discussion_Id}.md",
+  "cursorDirectory": "{Discussion_Directory}",
+  "returnFile": "{Discussion_Directory}/key_events.md",
   "scoped_variables": [ "{agent7Output}" ]
 }
 ```
@@ -77,7 +76,7 @@ sub-workflow needs (a summary, world info, a loaded file) must be produced by a 
 ### The cursor file
 
 The node writes one cursor file per `id` per discussion, named `chunk_cursor_<id>_<DiscussionId>.txt`, into
-`cursorDirectory`. It holds the message hashes of the last processed chunk. Deleting it makes the node re-process the
+`cursorDirectory`. It holds one last-message hash per completed chunk. Deleting it makes the node re-process the
 whole conversation from the start on the next turn (a clean way to rebuild a record).
 
 ### Notes
@@ -85,9 +84,10 @@ whole conversation from the start on the next turn (a clean way to rebuild a rec
 - **Complete chunks only.** A remainder smaller than `chunkSize` is not processed until it grows into a full chunk, so a
   record built this way lags the very latest messages by up to `chunkSize` messages. This is the same trade-off the
   file-memory system makes, and it is fine whenever whatever consumes the record also sees the recent conversation.
-- **Per-conversation isolation.** The cursor path includes `{Discussion_Id}`; each conversation keeps its own cursor.
-- **No discussion id.** Without a discussion id the cursor file falls back to a shared name, exactly as the other
-  per-discussion files in a workflow do.
+- **Per-discussion isolation.** Set `cursorDirectory` to `{Discussion_Directory}`. It includes the discussion ID and,
+  when supplied, the Bearer key's storage scope.
+- **No discussion ID.** `{Discussion_Directory}` fails closed without a discussion ID. The processor does not write a
+  cursor into a shared fallback directory.
 - **Weak models.** If the per-chunk sub-workflow asks a model to emit a list, keep its response size capped. A chunk is
   small and bounded, so this is far less prone to the runaway repetition that open-ended "summarize everything" prompts
   can trigger on small models. Pairing it with a periodic de-duplication pass (see

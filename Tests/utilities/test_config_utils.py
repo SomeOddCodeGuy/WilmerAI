@@ -786,6 +786,7 @@ class TestConfigUtils:
 
         mocker.patch('Middleware.utilities.config_utils.get_root_config_directory', return_value=str(tmp_path))
         mocker.patch('Middleware.utilities.config_utils.get_shared_workflows_folder', return_value='_shared')
+        mocker.patch('Middleware.utilities.config_utils.get_allow_shared_workflows', return_value=True)
 
         assert config_utils.workflow_exists_in_shared_folder('coding-workflow') is True
 
@@ -799,6 +800,7 @@ class TestConfigUtils:
 
         mocker.patch('Middleware.utilities.config_utils.get_root_config_directory', return_value=str(tmp_path))
         mocker.patch('Middleware.utilities.config_utils.get_shared_workflows_folder', return_value='_shared')
+        mocker.patch('Middleware.utilities.config_utils.get_allow_shared_workflows', return_value=True)
 
         assert config_utils.workflow_exists_in_shared_folder('some-workflow.json') is False
         assert config_utils.workflow_exists_in_shared_folder('some-workflow') is False
@@ -812,6 +814,7 @@ class TestConfigUtils:
 
         mocker.patch('Middleware.utilities.config_utils.get_root_config_directory', return_value=str(tmp_path))
         mocker.patch('Middleware.utilities.config_utils.get_shared_workflows_folder', return_value='_shared')
+        mocker.patch('Middleware.utilities.config_utils.get_allow_shared_workflows', return_value=True)
 
         assert config_utils.workflow_exists_in_shared_folder('NonExistent') is False
 
@@ -821,8 +824,20 @@ class TestConfigUtils:
         """
         mocker.patch('Middleware.utilities.config_utils.get_root_config_directory', return_value=str(tmp_path))
         mocker.patch('Middleware.utilities.config_utils.get_shared_workflows_folder', return_value='_shared')
+        mocker.patch('Middleware.utilities.config_utils.get_allow_shared_workflows', return_value=True)
 
         assert config_utils.workflow_exists_in_shared_folder('AnyWorkflow') is False
+
+    def test_workflow_exists_in_shared_folder_disabled(self, mocker):
+        """Shared folders are not selectable when shared mode is disabled."""
+        mocker.patch('Middleware.utilities.config_utils.get_allow_shared_workflows', return_value=False)
+        mock_isdir = mocker.patch(
+            'Middleware.utilities.config_utils.os.path.isdir',
+            side_effect=AssertionError("filesystem must not be probed when shared mode is disabled"),
+        )
+
+        assert config_utils.workflow_exists_in_shared_folder('coding-workflow') is False
+        mock_isdir.assert_not_called()
 
 
 class TestGetConnectTimeout:
@@ -1407,6 +1422,8 @@ class TestWorkflowExistsInSharedFolderTraversal:
                      return_value='/cfg')
         mocker.patch('Middleware.utilities.config_utils.get_shared_workflows_folder',
                      return_value='_shared')
+        mocker.patch('Middleware.utilities.config_utils.get_allow_shared_workflows',
+                     return_value=True)
 
         assert config_utils.workflow_exists_in_shared_folder('coding') is True
         mock_isdir.assert_called_once_with(os.path.join('/cfg', 'Workflows', '_shared', 'coding'))

@@ -312,13 +312,14 @@ cohesive summary. It uses two special placeholders, `[CHAT_SUMMARY]` and `[LATES
 * **`loopIfMemoriesExceed`**: (Optional) The batch size for processing new memories in a loop. Defaults to `3`.
 * **`systemPrompt` / `prompt`**: (Required) Prompts for the summarization LLM. Must contain the `[CHAT_SUMMARY]` and
   `[LATEST_MEMORIES]` placeholders.
-* **`endpointName`**: (Optional) The LLM endpoint to use for summarization. **Supports LIMITED variables: only `{agent#Input}` and static workflow variables, NOT `{agent#Output}`.**
-* **`preset`**: (Optional) The generation preset to use. **Supports LIMITED variables like endpointName.**
+* **`endpointName`**: (Required for summarization calls) The LLM endpoint. **Supports LIMITED variables: only `{agent#Input}` and static workflow variables, NOT `{agent#Output}`.**
+* **`preset`**: (Required with `endpointName`) The generation preset. **Supports LIMITED variables like endpointName.**
 
 #### **Actions & Output**
 
-* **Action**: This node **generates** the text for a new summary. It does not write to a file itself.
-* **Output**: Returns a single string containing the newly generated summary text.
+* **Action**: Generates and saves summaries as eligible memory batches are processed, recording the last included
+  memory hash. If there are too few new memories, it retains the existing summary.
+* **Output**: Returns the new or existing summary text.
 
 -----
 

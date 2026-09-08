@@ -1,8 +1,7 @@
 ### A Technical Guide to WilmerAI Workflow Variables
 
-This guide provides a comprehensive and validated reference to all dynamic variables available within the WilmerAI
-workflow system. It has been corrected against the system's source code to ensure accuracy and prevent the generation of
-invalid workflows.
+This guide describes dynamic variables available within the WilmerAI workflow system and how to use them in
+workflow configuration.
 
 #### Core Principle: Dynamic Substitution
 
@@ -18,6 +17,8 @@ with real-time data. This happens automatically before a node is executed.
 By default, simply place the variable name in curly braces within any valid string property. The system uses Python's
 `str.format()` method for substitution.
 
+Partial workflow example: supply any omitted `endpointName` and `preset` fields for LLM nodes before running it.
+
 ```json
 {
   "title": "Greet User with Time",
@@ -31,6 +32,8 @@ By default, simply place the variable name in curly braces within any valid stri
 
 For advanced logic like loops or conditionals, add **`"jinja2": true`** to the node's configuration. This allows you to
 use the full Jinja2 syntax.
+
+Partial workflow example: supply any omitted `endpointName` and `preset` fields for LLM nodes before running it.
 
 ```json
 {
@@ -83,7 +86,9 @@ You **CAN** use variables in fields that are treated as content for the node to 
 ```
 
 **Example of INCORRECT usage:**
-```json
+Annotated JSON example. Remove comments before saving it as a configuration file.
+
+```jsonc
 {
   "nodes": [{
     "type": "Standard",
@@ -111,6 +116,8 @@ key that is not `"nodes"` will automatically become an available variable for us
 
 **Correct Example `my_workflow.json`:**
 
+Partial workflow example: supply any omitted `endpointName` and `preset` fields for LLM nodes before running it.
+
 ```json
 {
   "shared_persona": "You are a witty AI assistant who loves puns.",
@@ -131,7 +138,8 @@ key that is not `"nodes"` will automatically become an available variable for us
 
 ### Part 2: Complete Variable & Placeholder Reference
 
-This is an exhaustive list of all available variables, validated against `workflow_variable_manager.py`.
+The following reference covers workflow variables and placeholders. Variable generation is implemented in
+`workflow_variable_manager.py`.
 
 #### Custom Workflow Variables
 
@@ -159,7 +167,8 @@ single newline. Two optional settings alter this behavior:
 
 * **Node-level `addUserAssistantTags`** (boolean, default `false`): When `true`, each message is prefixed with its
   role (e.g., `User: `, `Assistant: `). This is set per-node, so different nodes can have different behavior. See the
-  [Standard Node](Nodes/Standard_Conversational.md) documentation for details.
+  [Standard Node](Nodes/Standard_Conversational.md) documentation for details. All shipped workflows leave this
+  setting disabled, including the General CoT workflows.
 * **User-level `separateConversationInVariables`** (boolean, default `false`) and
   **`conversationSeparationDelimiter`** (string, default `"\n"`): When `separateConversationInVariables` is `true`,
   the delimiter specified in `conversationSeparationDelimiter` is used between messages instead of the default newline.
@@ -240,20 +249,25 @@ This allows downstream prompts to see what tools were invoked without the full t
 
 * **`{Discussion_Id}`**: The unique identifier for the current conversation/discussion. This is useful for creating
   per-conversation files or organizing data by session. If no discussion ID is present, this will be an empty string.
+* **`{Discussion_Directory}`**: The canonical directory for the current discussion. It automatically follows the
+  configured discussion storage root and, when the request supplies a Bearer key, that key's isolated storage scope.
+  Use it as the base for files that contain discussion state. If a workflow references this variable without a
+  discussion ID, the workflow stops instead of writing to a shared fallback directory.
 * **`{time_context_summary}`**: A natural language summary of the conversation's timeline (e.g., "The user started this
   conversation a few minutes ago").
 
-##### Using `{Discussion_Id}` and `{YYYY_MM_DD}` for Dynamic File Paths
+##### Using `{Discussion_Directory}` for Dynamic File Paths
 
-These variables are particularly useful with the `GetCustomFile` and `SaveCustomFile` nodes, which support variable
-substitution in their `filepath` fields. This allows you to create per-conversation or date-based file storage.
+Use `{Discussion_Directory}` with `GetCustomFile` and `SaveCustomFile` for per-discussion state. Do not build a state
+path from only `{Discussion_Id}`: that identifies the discussion, but it does not include the API-key storage scope used
+by WilmerAI's built-in memories.
 
 **Example: Per-Conversation Notes**
 
 ```json
 {
   "type": "GetCustomFile",
-  "filepath": "/data/sessions/{Discussion_Id}_notes.txt"
+  "filepath": "{Discussion_Directory}/notes.txt"
 }
 ```
 
@@ -262,7 +276,7 @@ substitution in their `filepath` fields. This allows you to create per-conversat
 ```json
 {
   "type": "SaveCustomFile",
-  "filepath": "/data/logs/{YYYY_MM_DD}_report.txt",
+  "filepath": "{Discussion_Directory}/report_{YYYY_MM_DD}.txt",
   "content": "{agent1Output}"
 }
 ```
@@ -272,10 +286,14 @@ substitution in their `filepath` fields. This allows you to create per-conversat
 ```json
 {
   "type": "SaveCustomFile",
-  "filepath": "/data/{YYYY_MM_DD}/{Discussion_Id}_output.txt",
+  "filepath": "{Discussion_Directory}/output_{YYYY_MM_DD}.txt",
   "content": "Generated at {current_time_12h}:\n\n{agent1Output}"
 }
 ```
+
+Without a Bearer key, the directory is `<discussion-root>/<Discussion_Id>/`. With a Bearer key, it is
+`<discussion-root>/<api-key-hash>/<Discussion_Id>/`. A key supplies a storage namespace. It is not validated as a login
+credential unless authentication is enforced by a separate trusted layer.
 
 See the `GetCustomFile` and `SaveCustomFile` node documentation for more details.
 

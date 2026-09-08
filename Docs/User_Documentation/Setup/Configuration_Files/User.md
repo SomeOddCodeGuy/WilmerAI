@@ -47,9 +47,9 @@ Each User JSON file contains a single object with the following key-value pairs.
 
 ##### `customWorkflowOverride`
 
-* **Description**: A boolean flag that controls the routing system. If set to `true`, the prompt categorization and
-  routing logic is bypassed, and all incoming prompts are forced to execute the workflow specified in the
-  `customWorkflow` field.
+* **Description**: Selects custom workflow mode when `true` and `allowSharedWorkflows` is `false`. In custom workflow
+  mode, prompt categorization and routing are bypassed, and all incoming prompts execute the workflow specified in
+  `customWorkflow`. This setting is ignored when `allowSharedWorkflows` is `true`.
 * **Data Type**: `boolean`
 * **Required**: Yes
 * **Example**: `false`
@@ -58,32 +58,32 @@ Each User JSON file contains a single object with the following key-value pairs.
 
 ##### `customWorkflow`
 
-* **Description**: The name of the workflow to execute for all prompts when `customWorkflowOverride` is `true`. The
-  value must match a workflow file name (without the `.json` extension) located in
+* **Description**: The name of the workflow to execute for all prompts in custom workflow mode. The value must match a
+  workflow file name (without the `.json` extension) located in
   `Public/Configs/Workflows/<username>/`.
 * **Data Type**: `string`
-* **Required**: Yes
+* **Required**: Only when `allowSharedWorkflows` is `false` and `customWorkflowOverride` is `true`
 * **Example**: `"CodingWorkflow-LargeModel-Centric"`
 
 -----
 
 ##### `routingConfig`
 
-* **Description**: The name of the routing configuration file to use when `customWorkflowOverride` is `false`. This
-  file, located in `Public/Configs/Routing/`, maps prompt categories (e.g., "Coding", "General Chat") to specific
-  workflows.
+* **Description**: The name of the routing configuration file to use in router mode, which is active when both
+  `allowSharedWorkflows` and `customWorkflowOverride` are `false`. This file, located in `Public/Configs/Routing/`,
+  maps prompt categories (e.g., "Coding", "General Chat") to specific workflows.
 * **Data Type**: `string`
-* **Required**: Yes
+* **Required**: Only in router mode
 * **Example**: `"assistantSingleModelCategoriesConfig"`
 
 -----
 
 ##### `categorizationWorkflow`
 
-* **Description**: The name of the workflow that analyzes an incoming prompt and assigns it a category from the
-  `routingConfig` file. The output of this workflow determines which subsequent workflow is executed.
+* **Description**: The name of the workflow that analyzes an incoming prompt in router mode and assigns it a category
+  from the `routingConfig` file. The output determines which subsequent workflow is executed.
 * **Data Type**: `string`
-* **Required**: Yes
+* **Required**: Only in router mode
 * **Example**: `"CustomCategorizationWorkflow"`
 
 -----
@@ -93,7 +93,7 @@ Each User JSON file contains a single object with the following key-value pairs.
 * **Description**: The maximum number of times the categorization workflow will run before falling back to the default
   workflow (`_DefaultWorkflow`). If the LLM's output does not match any configured category after this many attempts,
   the request is routed to the default workflow. A value of `1` means a single attempt with no retries. Higher values
-  allow retries at the cost of additional LLM calls. Only relevant when `customWorkflowOverride` is `false`.
+  allow retries at the cost of additional LLM calls. Only relevant in router mode.
 * **Data Type**: `integer`
 * **Required**: No
 * **Default**: `1`
@@ -276,9 +276,8 @@ Each User JSON file contains a single object with the following key-value pairs.
 
 * **Description**: The delimiter string inserted between messages in `chat_user_prompt_*` conversation variables when
   `separateConversationInVariables` is `true`. Common values include `"\n\n"` for double-newline separation, or a
-  visible marker like `"\n*** END MESSAGE ***\n"`. Escape sequences such as `\n` are interpreted as literal characters
-  in JSON; to get an actual newline, use the JSON unicode escape `\u000a` or rely on the JSON string supporting
-  embedded newlines.
+  visible marker like `"\n*** END MESSAGE ***\n"`. JSON decodes `\n` and `\u000a` into actual newlines.
+  To store a literal backslash followed by `n`, use `\\n`. Unescaped newlines inside JSON strings are invalid.
 * **Data Type**: `string`
 * **Required**: No
 * **Default**: `"\n"`
@@ -290,24 +289,25 @@ Each User JSON file contains a single object with the following key-value pairs.
 
 * **Description**: An object of operator-defined shared variables exposed as `{placeholders}` to every workflow this
   user runs. Each key/value becomes a substitution variable usable in any node prompt, system prompt, or path field, and
-  a value may itself reference another variable (e.g. `"{Discussion_Id}"`), which resolves on a second substitution
+  a value may itself reference another variable (e.g. `"{YYYY_MM_DD}"`), which resolves on a second substitution
   pass. The intended use is a single source of truth for values that would otherwise be repeated across many workflow
-  files: for example, a base directory for a workflow's on-disk state files, changed in one place instead of in each
-  workflow. These are the lowest-precedence variables: a built-in (date/time, `Discussion_Id`, the conversation
+  files, such as a shared operator-managed reference directory. For per-discussion state, use the built-in
+  `{Discussion_Directory}` variable instead so the path follows API-key storage isolation. These are the
+  lowest-precedence variables: a built-in (date/time, `Discussion_Id`, `Discussion_Directory`, the conversation
   variables) or a workflow-level key of the same name always wins, so a custom entry can only fill a name nothing else
   defines and can never shadow a built-in.
 * **Data Type**: `object` (string keys to string values)
 * **Required**: No
 * **Default**: none
-* **Example**: `{ "stateFilesDir": "./Public/workflow_state" }`
+* **Example**: `{ "referenceFilesDir": "./Public/reference_files" }`
 
 -----
 
 ##### `livenessToolCall`
 
 * **Description**: A harmless tool call that Wilmer injects into a streamed response when the responding workflow
-  node has opted in and the response would otherwise end with no tool call in it. Agentic frontends
-  (OpenCode, Cline, pi, and similar) end their autonomous loop the moment a response arrives without a tool call;
+  node has opted in and the response would otherwise end with no tool call in it. Some agentic frontends end their
+  autonomous loop the moment a response arrives without a tool call;
   if a workflow-driven task still has work left, that ends the run and leaves it waiting on a human. With this
   configured, Wilmer appends the given tool call and closes the response with `finish_reason: tool_calls`, so the
   frontend executes the no-op, calls back, and the task keeps moving unattended. The tool named here must be valid
@@ -390,10 +390,11 @@ Each User JSON file contains a single object with the following key-value pairs.
 
 ##### `allowSharedWorkflows`
 
-* **Description**: If `true`, the `/v1/models` and `/api/tags` API endpoints return workflow folders from
-  `Public/Configs/Workflows/_shared/` as selectable models. This allows front-end applications to select different
-  workflow folders via the model dropdown. If `false` or omitted (the default), only the username is returned as a
-  model, and workflow selection occurs through the normal routing or `customWorkflow` settings.
+* **Description**: If `true`, selects shared workflow mode and makes it mutually exclusive with custom workflow and
+  router modes. The `/v1/models` and `/api/tags` endpoints return workflow folders from
+  `Public/Configs/Workflows/_shared/` as selectable models. Each request must name one of those advertised models.
+  `customWorkflowOverride`, `customWorkflow`, `routingConfig`, and `categorizationWorkflow` are ignored. If `false` or
+  omitted, workflow selection uses custom workflow mode or router mode.
 * **Data Type**: `boolean`
 * **Required**: No
 * **Default**: `false`
@@ -403,11 +404,19 @@ Each User JSON file contains a single object with the following key-value pairs.
 
 ##### `encryptUsingApiKey`
 
-* **Description**: If `true`, enables per-user encryption of all discussion files (memories, timestamps, summaries,
-  etc.) using the API key provided in the `Authorization: Bearer <key>` header. When enabled, files are encrypted at
+> **Warning: loss of the API key permanently loses access to encrypted data.** WilmerAI has no key reset or recovery
+> mechanism. Encrypted backups also require the key. Save the exact key securely and back up existing files before
+> enabling this setting. Keep the original workflow-selection name, which also participates in key derivation.
+
+* **Description**: If `true`, enables per-user encryption of supported built-in discussion JSON files and state
+  documents using the API key provided in the `Authorization: Bearer <key>` header. When enabled, files are encrypted at
   rest using Fernet symmetric encryption derived from the API key, and stored under a hash-based subdirectory for
   directory isolation. Requires the `cryptography` library. Without an API key in the request, this setting has no
   effect.
+  Existing plaintext is encrypted on its next write. Custom text files and SQLite databases are not covered.
+  Switching this setting off does not decrypt existing files. Preserve the original key and workflow selection
+  to read existing encrypted files.
+  See [the encryption guide](../../Core_Features/Per_User_Encryption.md).
 * **Data Type**: `boolean`
 * **Required**: No
 * **Default**: `false`
@@ -468,17 +477,19 @@ Each User JSON file contains a single object with the following key-value pairs.
 
 Here is a fully-commented example user configuration file.
 
-```json
+Annotated JSON example. Remove comments before saving it as a configuration file.
+
+```jsonc
 {
   // The network port for this WilmerAI instance to listen on.
   "port": 5006,
   // If true, LLM responses are streamed incrementally back to the client.
   "stream": true,
-  // If true, bypasses routing and uses 'customWorkflow' for all requests.
+  // If true while shared workflows are off, bypasses routing and uses 'customWorkflow' for all requests.
   "customWorkflowOverride": false,
-  // The workflow to use when 'customWorkflowOverride' is true.
+  // The workflow to use in custom workflow mode.
   "customWorkflow": "CodingWorkflow-LargeModel-Centric",
-  // The routing configuration file that maps categories to workflows.
+  // The routing configuration file used when shared workflows and custom override are both false.
   "routingConfig": "assistantSingleModelCategoriesConfig",
   // The workflow that categorizes incoming prompts.
   "categorizationWorkflow": "CustomCategorizationWorkflow",

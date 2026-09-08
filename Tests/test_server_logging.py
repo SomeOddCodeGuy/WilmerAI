@@ -4,11 +4,22 @@ application initialization)."""
 
 import logging
 import os
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
 from Middleware.common import instance_global_variables
+
+
+@pytest.fixture(autouse=True)
+def restore_runtime_mode_globals():
+    """Keep WilmerProxy-mode tests from leaking process-wide settings."""
+    original_mode = instance_global_variables.RUNTIME_MODE
+    original_wilmer_proxy_config = instance_global_variables.WILMER_PROXY_CONFIG
+    yield
+    instance_global_variables.RUNTIME_MODE = original_mode
+    instance_global_variables.WILMER_PROXY_CONFIG = original_wilmer_proxy_config
 
 
 class TestUserInjectionFilter:
@@ -204,6 +215,17 @@ class TestResolvePort:
         instance_global_variables.USERS = ["alice", "bob"]
         assert resolve_port() == 8080
 
+    def test_wilmer_proxy_mode_reads_port_from_wilmer_proxy_config(self):
+        from Middleware.common.server_startup import resolve_port
+        instance_global_variables.PORT = None
+        instance_global_variables.RUNTIME_MODE = "wilmerproxy"
+        instance_global_variables.WILMER_PROXY_CONFIG = "frontend-filter"
+        with patch(
+                "Middleware.wilmer_proxy.config.load_wilmer_proxy_config",
+                return_value=SimpleNamespace(port=6061)) as load:
+            assert resolve_port() == 6061
+        load.assert_called_once_with()
+
     def test_multi_user_defaults_to_5050(self, capsys):
         """Multi-user mode without --port defaults to 5050 and warns on stderr."""
         from Middleware.common.server_startup import resolve_port
@@ -296,6 +318,17 @@ class TestResolveFileLogging:
                    return_value={"useFileLogging": True}) as mock_cfg:
             assert resolve_file_logging() is False
             mock_cfg.assert_not_called()
+
+    def test_wilmer_proxy_mode_reads_file_logging_from_wilmer_proxy_config(self):
+        from Middleware.common.server_startup import resolve_file_logging
+        instance_global_variables.FILE_LOGGING = None
+        instance_global_variables.RUNTIME_MODE = "wilmerproxy"
+        instance_global_variables.WILMER_PROXY_CONFIG = "frontend-filter"
+        with patch(
+                "Middleware.wilmer_proxy.config.load_wilmer_proxy_config",
+                return_value=SimpleNamespace(use_file_logging=True)) as load:
+            assert resolve_file_logging() is True
+        load.assert_called_once_with()
 
     def test_single_user_reads_config_true(self):
         """Absent flag + single user: the user's useFileLogging setting decides."""

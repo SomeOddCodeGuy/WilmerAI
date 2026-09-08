@@ -49,7 +49,7 @@ When an `MCPToolCall` node runs, WilmerAI:
 4. Closes the connection.
 5. Returns the tool's result as a string.
 
-There is no connection pooling in this release. Each invocation is independent.
+Connections are not pooled. Each invocation is independent.
 
 -----
 

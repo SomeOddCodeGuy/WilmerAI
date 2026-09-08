@@ -46,10 +46,9 @@ Each field is explained in detail below.
     * **Type**: `String`
     * **Required**: Yes
     * **Description**: The full, absolute or relative path where the file will be saved. If the parent directories do
-      not exist, the node will attempt to create them. This field supports variable substitution, allowing you to use
-      placeholders like `{Discussion_Id}` and `{YYYY_MM_DD}` to create dynamic, per-conversation or date-based file
-      paths.
-    * **Example with variables**: `"/Users/socg/sessions/{Discussion_Id}_output.txt"` or
+      not exist, the node will attempt to create them. This field supports variable substitution. Use
+      `{Discussion_Directory}` as the base for discussion state and `{YYYY_MM_DD}` for dated files.
+    * **Example with variables**: `"{Discussion_Directory}/output.txt"` or
       `"/data/logs/{YYYY_MM_DD}_report.txt"`
 
 * #### **`content`**
@@ -104,6 +103,8 @@ Let's say a previous "Standard" node (the first node in the workflow) generated 
 
 #### Workflow Nodes:
 
+Partial workflow example: supply any omitted `endpointName` and `preset` fields for LLM nodes before running it.
+
 ```json
 [
   {
@@ -142,7 +143,9 @@ date-based file paths. This is useful for saving session-specific outputs, daily
 
 #### Available Variables for Filepaths
 
-* **`{Discussion_Id}`**: The unique identifier for the current conversation. Useful for per-session files.
+* **`{Discussion_Directory}`**: The canonical, optionally API-key-scoped folder for the current discussion. Use this
+  for per-discussion files.
+* **`{Discussion_Id}`**: The raw discussion identifier. Do not use it by itself as a storage boundary.
 * **`{YYYY_MM_DD}`**: Today's date in underscore-separated format (e.g., `2025_12_07`). Useful for daily logs.
 * Any other workflow variable (e.g., `{agent1Output}`, custom variables defined in the workflow JSON).
 
@@ -152,12 +155,13 @@ date-based file paths. This is useful for saving session-specific outputs, daily
 {
   "title": "Save Session Summary",
   "type": "SaveCustomFile",
-  "filepath": "/data/sessions/{Discussion_Id}_summary.txt",
+  "filepath": "{Discussion_Directory}/summary.txt",
   "content": "Session Summary:\n{agent1Output}"
 }
 ```
 
-If the `Discussion_Id` is `conv-abc-123`, this will save to `/data/sessions/conv-abc-123_summary.txt`.
+This saves `summary.txt` beside the built-in memory files for the current discussion. If a Bearer key is present, the
+resolved path automatically includes its storage scope.
 
 #### Example: Saving Daily Reports
 
@@ -183,7 +187,7 @@ file intact.
   "title": "Supersede a stale entry",
   "type": "SaveCustomFile",
   "mode": "replace",
-  "filepath": "/data/notes/{Discussion_Id}_tracked_lists.md",
+  "filepath": "{Discussion_Directory}/tracked_lists.md",
   "find": "{agent1Output}",
   "content": "{agent2Output}"
 }
@@ -199,7 +203,7 @@ If `{agent1Output}` is not found in the file, nothing is written and the node re
   "title": "Retire a resolved item",
   "type": "SaveCustomFile",
   "mode": "remove",
-  "filepath": "/data/notes/{Discussion_Id}_tracked_lists.md",
+  "filepath": "{Discussion_Directory}/tracked_lists.md",
   "find": "{agent1Output}"
 }
 ```
@@ -213,7 +217,7 @@ Every line containing the resolved `{agent1Output}` text is deleted. Note that `
 {
   "title": "Save Session-Specific Daily Log",
   "type": "SaveCustomFile",
-  "filepath": "/data/{YYYY_MM_DD}/{Discussion_Id}_output.txt",
+  "filepath": "{Discussion_Directory}/output_{YYYY_MM_DD}.txt",
   "content": "Generated at {current_time_12h}:\n\n{agent1Output}"
 }
 ```
@@ -230,7 +234,7 @@ It's crucial to understand how the node behaves in specific situations:
   design: workflows are operator-authored, the same trust boundary as code. For that reason, never interpolate a
   model- or user-derived variable (such as an `{agentNOutput}`) into `filepath`: a manipulated value could write to,
   or edit lines out of, any file the process can access. Keep `filepath` built from literals and operator-controlled
-  variables like `{Discussion_Id}` or dates.
+  variables like `{Discussion_Directory}` or dates.
 * **Variable Substitution**: Both the `filepath` and `content` fields are processed through the workflow variable
   manager before the file is saved. This means you can use any available workflow variable in both fields.
 * **File System Errors**: If the file cannot be written due to permissions issues or other I/O errors, the node will
@@ -241,8 +245,8 @@ It's crucial to understand how the node behaves in specific situations:
 * **Missing `content`**: If the `content` field is missing from the configuration, the node will return the string:
   `"No content specified"`, except for `"remove"` and `"trim"`, which do not use `content`. Note that an empty string
   (`"content": ""`) is valid and will result in an empty file being created.
-* **Append Mode**: With `"mode": "append"`, `content` is added to the end of the existing file rather than replacing it;
-  a missing file is created.
+* **Append Mode**: With `"mode": "append"`, `content` is added to the end of the existing file; a missing file is
+  created. If the existing file cannot be accessed or read, the node returns an error and leaves it unchanged.
 * **Replace / Remove Modes**: With `"mode": "replace"` or `"mode": "remove"`, a `find` value is required; omitting it
   returns `"SaveCustomFile: mode '<mode>' requires a 'find' value"`. These modes edit an existing file in place and
   never create one; when the file is missing or `find` is not present, no write occurs and the node returns a
@@ -256,5 +260,7 @@ It's crucial to understand how the node behaves in specific situations:
   `"SaveCustomFile: 'mode' must be one of 'overwrite', 'append', 'replace', 'remove', or 'trim', got '<value>'"`.
 * **Empty Discussion_Id**: If `{Discussion_Id}` is used but no discussion ID is present in the context, it will be
   replaced with an empty string, which may result in an invalid filepath.
+* **Missing Discussion ID for Discussion_Directory**: Referencing `{Discussion_Directory}` without a discussion ID
+  stops the workflow. It never falls back to a shared directory.
 * **Directory Creation**: If the parent directories in the filepath do not exist, the node will attempt to create them
   automatically.

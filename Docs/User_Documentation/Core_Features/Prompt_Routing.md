@@ -18,12 +18,16 @@ system uses these two components together to route each incoming message.
 The two settings that turn routing on live in the user profile. For a complete, shipping example, see the
 `_simple_router_no_memory` user:
 
-```json
+Configuration property fragment; insert these fields into the containing JSON object.
+
+```jsonc
   "routingConfig": "_exampleCustomCategoriesConfig",
   "categorizationWorkflow": "CustomCategorizationWorkflow",
 ```
 
 ### 1\. The Routing Configuration File
+
+Prompt routing is active only when both `allowSharedWorkflows` and `customWorkflowOverride` are `false`.
 
 The first component is the routing configuration, specified in the `routingConfig` file. This file is a map that
 connects category names to their descriptions and the workflow that should handle them.

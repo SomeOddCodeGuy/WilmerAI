@@ -47,7 +47,9 @@ from Public.workflow_python_scripts._isevendays_mcp_scripts import mcp_tool_exec
 # Import DEFAULT_MCPO_URL from the centralized location using absolute import
 from Public.workflow_python_scripts._isevendays_mcp_scripts.mcp_service_discoverer import DEFAULT_MCPO_URL
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 def parse_string_messages(messages_str: str) -> List[Dict[str, str]]:
     """Parse a single string potentially containing role prefixes into a list

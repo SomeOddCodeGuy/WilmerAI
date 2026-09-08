@@ -30,6 +30,9 @@ conversational agents.
   **`$ResponseBuilderService$`** as the single source of truth for all outgoing API schemas, ensuring responses match
   the
   client's expectations.
+* **WilmerProxy Runtime:** Can expose selected model aliases from another WilmerAI instance while bypassing
+  workflow ingestion, workflow execution, `llmapis`, and response reconstruction. See
+  `Features_And_Packages/WilmerProxy_Mode.md`.
 * **Stateful Conversation Management:** Manages short-term and long-term memory using a `discussionId` to track
   conversational context. This includes summarized memory chunks, rolling chat summaries, and a discussion-specific
   vector database for keyword-based retrieval.
@@ -96,6 +99,10 @@ A typical request in WilmerAI follows this path, transforming a client request i
 Outputs from **non-responding nodes** are saved internally by the `$WorkflowProcessor$` as variables (e.g.,
 `{agent1Output}`) for use by later nodes.
 
+This flow describes the default `workflow` runtime mode. In `wilmerproxy` mode, only the WilmerProxy handler is
+registered. It validates and maps the model allowlist, then relays the request through `Middleware/wilmer_proxy/`. See
+`Features_And_Packages/WilmerProxy_Mode.md` for the separate execution path and its preservation contract.
+
 -----
 
 ## 3\. Directory Breakdown
@@ -152,22 +159,13 @@ WilmerAI
 │   │   ├── __init__.py
 │   │   ├── llm_api.py
 │   │   └── sampler_translation.py
-│   ├── manager/
-│   │   ├── __init__.py
-│   │   ├── app.py
-│   │   ├── configs_repo.py
-│   │   ├── connectivity.py
-│   │   ├── constants.py
-│   │   ├── doctor.py
-│   │   ├── inspection.py
-│   │   ├── registry.py
-│   │   ├── samplers.py
-│   │   ├── stamping.py
-│   │   ├── static/
-│   │   └── templates/
 │   ├── models/
 │   │   ├── __init__.py
 │   │   └── llm_handler.py
+│   ├── wilmer_proxy/
+│   │   ├── __init__.py
+│   │   ├── config.py
+│   │   └── transport.py
 │   ├── services/
 │   │   ├── __init__.py
 │   │   ├── cancellation_service.py
@@ -178,7 +176,8 @@ WilmerAI
 │   │   ├── memory_service.py
 │   │   ├── prompt_categorization_service.py
 │   │   ├── response_builder_service.py
-│   │   └── timestamp_service.py
+│   │   ├── timestamp_service.py
+│   │   └── web_page_fetch_service.py
 │   ├── utilities/
 │   │   ├── __init__.py
 │   │   ├── config_utils.py
@@ -187,6 +186,7 @@ WilmerAI
 │   │   ├── file_utils.py
 │   │   ├── hashing_utils.py
 │   │   ├── network_security_utils.py
+│   │   ├── process_utils.py
 │   │   ├── prompt_extraction_utils.py
 │   │   ├── prompt_template_utils.py
 │   │   ├── search_utils.py
@@ -211,7 +211,8 @@ WilmerAI
 │   │   │   │   ├── standard_node_handler.py
 │   │   │   │   ├── sub_workflow_handler.py
 │   │   │   │   ├── tool_node_handler.py
-│   │   │   │   └── web_fetch_handler.py
+│   │   │   │   ├── web_fetch_handler.py
+│   │   │   │   └── web_page_fetch_handler.py
 │   │   │   └── __init__.py
 │   │   ├── managers/
 │   │   │   ├── __init__.py
@@ -256,9 +257,8 @@ WilmerAI
 ├── Scripts/
 │   ├── __init__.py
 │   ├── backfill_embeddings.py
-│   ├── rekey_encrypted_files.bat
-│   ├── rekey_encrypted_files.py
-│   └── rekey_encrypted_files.sh
+│   ├── install_requirements.py
+│   └── launch.py
 │
 ├── Tests/
 │   ├── api/
@@ -297,17 +297,6 @@ WilmerAI
 │   │   ├── test_llm_api_embedding_guard.py
 │   │   ├── test_llm_api_failover.py
 │   │   └── test_sampler_translation.py
-│   ├── manager/
-│   │   ├── __init__.py
-│   │   ├── conftest.py
-│   │   ├── test_configs_repo.py
-│   │   ├── test_connectivity.py
-│   │   ├── test_doctor.py
-│   │   ├── test_inspection.py
-│   │   ├── test_manager_app.py
-│   │   ├── test_registry.py
-│   │   ├── test_samplers.py
-│   │   └── test_stamping.py
 │   ├── models/
 │   │   └── test_llm_handler.py
 │   ├── services/
@@ -319,20 +308,24 @@ WilmerAI
 │   │   ├── test_memory_service.py
 │   │   ├── test_prompt_categorization_service.py
 │   │   ├── test_response_builder_service.py
-│   │   └── test_timestamp_service.py
+│   │   ├── test_timestamp_service.py
+│   │   └── test_web_page_fetch_service.py
 │   ├── scripts/
 │   │   ├── __init__.py
-│   │   └── test_rekey_encrypted_files.py
+│   │   ├── test_backfill_embeddings.py
+│   │   ├── test_install_requirements.py
+│   │   └── test_launch.py
 │   ├── utilities/
 │   │   ├── test_config_utils.py
-│   │   ├── test_config_utils_hardening.py
 │   │   ├── test_datetime_utils.py
 │   │   ├── test_encryption_utils.py
 │   │   ├── test_file_utils.py
 │   │   ├── test_hashing_utils.py
 │   │   ├── test_network_security_utils.py
+│   │   ├── test_process_utils.py
 │   │   ├── test_prompt_extraction_utils.py
 │   │   ├── test_prompt_template_utils.py
+│   │   ├── test_request_error_redaction.py
 │   │   ├── test_search_utils.py
 │   │   ├── test_sensitive_logging_utils.py
 │   │   ├── test_streaming_utils.py
@@ -349,17 +342,22 @@ WilmerAI
 │   │       ├── test_sanitize_llm_response.py
 │   │       └── test_workflow_utils.py
 │   ├── workflows/
+│   │   ├── test_game_discussion_paths.py
+│   │   ├── test_shipped_config_integrity.py
+│   │   ├── test_shipped_workflow_state_isolation.py
 │   │   ├── handlers/
 │   │   │   └── impl/
 │   │   │       ├── test_context_compactor_handler.py
 │   │   │       ├── test_curl_command_handler.py
+│   │   │       ├── test_fetch_resource_ownership.py
 │   │   │       ├── test_mcp_tool_call_handler.py
 │   │   │       ├── test_memory_node_handler.py
 │   │   │       ├── test_specialized_node_handler.py
 │   │   │       ├── test_standard_node_handler.py
 │   │   │       ├── test_sub_workflow_node_handler.py
 │   │   │       ├── test_tool_node_handler.py
-│   │   │       └── test_web_fetch_handler.py
+│   │   │       ├── test_web_fetch_handler.py
+│   │   │       └── test_web_page_fetch_handler.py
 │   │   ├── managers/
 │   │   │   ├── test_workflow_manager.py
 │   │   │   └── test_workflow_variable_manager.py
@@ -406,13 +404,16 @@ This is the application's core logic.
 * **`common/`**: Shared process-level state and startup plumbing: `instance_global_variables.py` (request-scoped
   context, concurrency globals), `launch_arguments.py` (the single command-line parser shared by all three server
   entry points), and `server_startup.py` (logging/startup helpers shared by the entry points).
-* **`services/`**: Contains stateless, reusable business logic. Key services include:
+* **`services/`**: Contains reusable business logic, including both stateless helpers and explicitly process-scoped
+  services. Key services include:
   \* `$response_builder_service.py$`: The **single source of truth** for constructing all API-specific JSON responses
   and streaming chunks, ensuring schema compliance.
   \* `$MemoryService$`: Centralizes all logic for memory retrieval (reading) from memory files or the vector database.
   \* `$LLMDispatchService$`: Orchestrates the final call to the `$LlmApiService$` to get a response from a language
   model.
-* **`utilities/`**: A collection of stateless helper modules.
+  \* `web_page_fetch_service.py`: Holds the process-wide in-memory robots cache, domain pacing lanes, redirects,
+  cooldowns, and bounded page transport for `WebPageFetch`. See `Features_And_Packages/WebPageFetch.md`.
+* **`utilities/`**: Shared helpers for text, storage, request context, and resource ownership.
   \* `text_utils.py`: Contains `rough_estimate_token_length()`, the heuristic token counter used throughout the
   codebase for estimating token counts without a model-specific tokenizer. It uses a word-based ratio (1.35
   tokens/word) and a character-based ratio (3.5 chars/token), taking the higher of the two and applying a
@@ -424,9 +425,12 @@ This is the application's core logic.
   \* `encryption_utils.py`: Handles per-user encryption and API key hashing. Provides Fernet key derivation via
   PBKDF2, encrypt/decrypt functions, and API key hashing for directory isolation. The `cryptography` library is
   lazily imported so there is zero cost when no API key is present. See `Encryption.md` for details.
-  \* `sensitive_logging_utils.py`: Thread-local encryption context and sensitive logging helpers. When an encrypted
-  user's request is being processed, all log statements that could contain user content are automatically redacted.
-  See `Encryption.md` section 5.1 for details.
+  \* `sensitive_logging_utils.py`: Request redaction context, sensitive logging adapters, and Flask error filtering.
+  Participating loggers redact messages and tracebacks when the request policy is active. Custom loggers and direct
+  output must use the helpers explicitly. See `Features_And_Packages/Encryption.md` section 5.1 for details.
+  \* `process_utils.py`: Owns configured curl children through reader startup, normal completion, timeout, and
+  interruption. Stops and reaps interrupted children before joining readers, then closes pipes. See
+  `Features_And_Packages/Workflows.md` for cleanup budgets and exception behavior.
   \* `vector_db_utils.py`: The abstraction layer for the SQLite FTS5 vector memory database.
 * **`workflows/`**: The heart of the workflow engine. This is the most important directory for understanding the
   project's logic.
@@ -440,7 +444,7 @@ This is the application's core logic.
   `context_compactor_handler.py`, the handler for the `ContextCompactor` node type (see `ContextCompactor.md` for
   details on the compaction algorithm and file format), and `extension_node_helpers.py`, the shared helper module
   (config-field validation, `allowedHosts` resolution with variable substitution, and streaming wrap-up) used by the
-  `WebFetch`, `CurlCommand`, and `MCPToolCall` handlers.
+  `WebFetch`, `WebPageFetch`, `CurlCommand`, and `MCPToolCall` handlers.
   * **`streaming/`**: Contains the crucial **`$StreamingResponseHandler$`**. This class encapsulates all logic for
   cleaning and formatting a raw LLM stream into a final, client-ready SSE stream.
   * **`models/`**: Defines core data structures. The key file is **`$execution_context.py$`**, which defines the
@@ -460,6 +464,8 @@ Contains all user-facing JSON configuration files.
 * **`Presets/`**: Contains json files with LLM generation parameters (temperature, top\_k, etc.). These are applied per
   workflow node.
 * **`PromptTemplates/`**: Contains the json files that specify various prompt templates. Used in Endpoint configs
+* **`WilmerProxy/`**: Named WilmerProxy-mode allowlists, upstream targets, authorization policies, and transport
+  settings. See `Features_And_Packages/WilmerProxy_Mode.md`.
 * **`Routing/`**: Contains json files that specify the central semantic router instructions for users/workflows that do
   routing. You specify the domains you are routing to here, and what workflows they correspond with.
 * **`Users/`**: Contains json files with all of the specific settings for a user, including things like what port
@@ -471,7 +477,8 @@ Contains all user-facing JSON configuration files.
     * **`_shared/`**: A special folder for shared workflows. Workflows placed directly in `_shared/` (or its subfolders)
       are listed by the `/v1/models` and `/api/tags` endpoints when `allowSharedWorkflows` is enabled, allowing
       front-end applications to select them via the model dropdown. The folder name can be customized via
-      `sharedWorkflowsSubDirectoryOverride` in the User config.
+      `sharedWorkflowsSubDirectoryOverride` in the User config. Enabling shared workflows selects a distinct mode:
+      custom workflow and router entry points are ignored, and every request must select an advertised shared model.
     * **Shared/override workflow folders**: When `workflowConfigsSubDirectoryOverride` is set in the User config (e.g., to
       `coding-workflows`), workflows are loaded from that named folder under `Workflows/` (e.g.,
       `Workflows/coding-workflows/`) instead of the user's default (username) folder. This lets multiple users share one
@@ -479,8 +486,11 @@ Contains all user-facing JSON configuration files.
 
 ### **`run_macos/run_windows`**
 
-Scripts to automatically generate a venv, install the requirements.txt for the app, and run the application by calling
-server.py. Takes two optional parameters:
+These wrappers delegate to `Scripts/launch.py`, which creates or verifies the installation's virtual environment,
+installs `requirements.txt` through `Scripts/install_requirements.py`, and starts Eventlet or Waitress from the
+installation directory. Pip configuration is preserved, with conflicting destination settings reported before installation. See
+[Installation launchers](Features_And_Packages/Launchers.md) for environment validation, reuse of
+older environments, and failure behavior. Supported application parameters include:
 
 * `--PublicDirectory`: String input that specifies where the `Public/` folder is at (the parent of `Configs`,
   `DiscussionIds`, `SqlLiteDBs`, and `logs`). When set, all runtime data defaults to subfolders under this path unless
@@ -491,6 +501,9 @@ server.py. Takes two optional parameters:
   governs runtime-data subfolders. New installations should prefer `--PublicDirectory`.
 * `--User`: Specifies the user(s) to start the app as. Can be repeated for multi-user mode
   (e.g., `--User user-one --User user-two`). The concurrency gate serializes all requests across all users.
+* `--Mode`: Selects `Workflow` (default) or the dedicated `WilmerProxy` runtime.
+* `--WilmerProxyConfig`: Selects `Public/Configs/WilmerProxy/<name>.json`. It is required with
+  `--Mode WilmerProxy` and is invalid in workflow mode.
 * `--port`: The port to listen on. In single-user mode, falls back to the user's config. In multi-user mode,
   per-user port settings are ignored and this defaults to `5050` if not specified.
 * `--listen`: Listen on the network. Without a value, binds to `0.0.0.0` (all interfaces). Optionally accepts
@@ -544,7 +557,7 @@ backlog at once. See `Features_And_Packages/Memories.md`.
   outputs, service instances). This makes node handlers simple to write and test, as they receive all their dependencies
   in one place.
 
-* **Proxy Behavior & `API_TYPE`**: WilmerAI can act as a proxy. A client can connect to it as if it were an OpenAI
+* **API Translation Behavior & `API_TYPE`**: In workflow mode, a client can connect as if WilmerAI were an OpenAI
   server, while Wilmer, in the background, talks to an Ollama backend. The request-scoped `API_TYPE` (set via
   `set_api_type()` and read via `get_api_type()`) tracks what kind of API the front-end client expects. This is used by
   the **`$ResponseBuilderService$`** at the end of the process to format the response correctly for that client.
@@ -568,12 +581,13 @@ backlog at once. See `Features_And_Packages/Memories.md`.
   consistent behavior.
 
 * **Per-User Encryption & Directory Isolation**: When an `Authorization: Bearer <key>` header is present, all
-  discussion files are stored under a hash-based subdirectory and encrypted at rest using Fernet symmetric encryption.
+  built-in discussion paths use a hash-based subdirectory. With `encryptUsingApiKey: true`, supported JSON and state
+  document files are encrypted with Fernet; SQLite and custom workflow text files remain plaintext.
   The API key is extracted at the API handler layer, threaded through the entire call chain via the `api_key` parameter,
   and stored on the `ExecutionContext`. Consumers derive the encryption key and directory hash locally using helpers in
-  `encryption_utils.py`. When encryption is enabled, all log statements containing user content are automatically
-  redacted via `sensitive_logging_utils.py`. Without an API key, behavior is unchanged (plaintext files, flat
-  directory, full logging). See `Encryption.md` for the full developer guide.
+  `encryption_utils.py`. Built-in content logging and shipped MCP helper diagnostics honor the request redaction
+  context via `sensitive_logging_utils.py`; custom Python modules must use those helpers too. Without an API key,
+  paths are unkeyed and files are plaintext. `redactLogOutput` can enable redaction independently. See `Encryption.md`.
 
 -----
 
@@ -808,17 +822,17 @@ for line in response.iter_lines():
 
 Comprehensive unit tests are provided in:
 
-- `tests/services/test_cancellation_service.py`: Service-level tests
-- `tests/api/handlers/impl/test_api_cancellation.py`: API handler tests
-- `tests/workflows/processors/test_workflow_processor_cancellation.py`: Workflow processor tests
-- `tests/llmapis/handlers/base/test_base_llm_api_handler_cancellation.py`: LLM API layer tests
-- `tests/integration/test_nested_workflow_cancellation.py`: End-to-end integration tests
+- `Tests/services/test_cancellation_service.py`: Service-level tests
+- `Tests/api/handlers/impl/test_api_cancellation.py`: API handler tests
+- `Tests/workflows/processors/test_workflow_processor_cancellation.py`: Workflow processor tests
+- `Tests/llmapis/handlers/base/test_base_llm_api_handler_cancellation.py`: LLM API layer tests
+- `Tests/integration/test_nested_workflow_cancellation.py`: End-to-end integration tests
 
 Run tests with:
 
 ```bash
-pytest tests/services/test_cancellation_service.py -v
-pytest tests/ -k cancellation -v
+pytest Tests/services/test_cancellation_service.py -v
+pytest Tests/ -k cancellation -v
 ```
 
 -----

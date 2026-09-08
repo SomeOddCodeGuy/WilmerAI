@@ -1,6 +1,6 @@
 ## The `chatSummarySummarizer` Node
 
-This guide provides a comprehensive, code-validated overview of the `chatSummarySummarizer` node. It details its
+This guide provides an overview of the `chatSummarySummarizer` node. It details its
 iterative logic and its role as the core engine for creating and updating rolling chat summaries.
 
 ### Core Purpose
@@ -59,7 +59,9 @@ These are special, context-specific keywords that are essential for this node to
 This node is the core of a manual summary update workflow, often used after `ChatSummaryMemoryGatheringTool` and before
 `WriteCurrentSummaryToFileAndReturnIt`.
 
-```json
+Annotated JSON example. Remove comments before saving it as a configuration file.
+
+```jsonc
 {
   "title": "Update the Rolling Conversation Summary",
   "type": "chatSummarySummarizer",

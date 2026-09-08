@@ -1,12 +1,13 @@
 # /Middleware/llmapis/handlers/impl/embedding_api_handler.py
 
-import logging
 from typing import Dict, List, Optional
 
 from Middleware.common.constants import EMBEDDING_API_TYPES
 from Middleware.llmapis.handlers.base.base_api_transport import BaseApiTransport
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 
 class EmbeddingApiHandler(BaseApiTransport):

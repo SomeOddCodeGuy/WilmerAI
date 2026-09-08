@@ -1,6 +1,6 @@
 ## The `FullChatSummary` Node
 
-This guide provides a comprehensive, code-validated overview of the `FullChatSummary` node. It details the node's
+This guide provides an overview of the `FullChatSummary` node. It details the node's
 complex execution logic, properties, and performance implications, highlighting its role as a combined creator and
 retriever.
 
@@ -56,7 +56,9 @@ This node performs two major operations in strict sequence:
 Use this node when a task requires broad, high-level context of the entire conversation. To avoid unexpected delays,
 consider using `isManualConfig: true` and managing summary updates in a separate, dedicated workflow.
 
-```json
+Annotated JSON example. Remove comments before saving it as a configuration file.
+
+```jsonc
 [
   {
     "title": "Step 1: Retrieve the complete story so far",

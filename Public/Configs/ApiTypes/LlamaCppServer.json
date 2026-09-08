@@ -46,6 +46,7 @@
     "n_probs": "n_probs",
     "min_keep": "min_keep",
     "grammar": "grammar",
-    "json_schema": "json_schema"
+    "json_schema": "json_schema",
+    "thinking_budget_tokens": "thinking_budget_tokens"
   }
 }

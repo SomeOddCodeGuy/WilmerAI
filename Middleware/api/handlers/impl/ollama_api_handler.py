@@ -21,10 +21,12 @@ from Middleware.utilities.config_utils import get_is_chat_complete_add_user_assi
 from Middleware.common.instance_global_variables import clear_api_type
 from Middleware.utilities.prompt_extraction_utils import parse_conversation
 from Middleware.utilities.sensitive_logging_utils import (
-    set_encryption_context, clear_encryption_context, sensitive_log_lazy,
+    begin_request_privacy, resolve_request_privacy, clear_encryption_context, sensitive_log_lazy,
 )
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 response_builder = ResponseBuilderService()
 
 
@@ -68,8 +70,6 @@ def _handle_streaming_request(config: base_streaming.StreamingApiConfig, request
     """
     Streams the workflow response using the shared API streaming machinery.
 
-    handle_user_prompt is passed at call time so tests can patch it on this module.
-
     Args:
         config (StreamingApiConfig): The route's streaming values (chat or generate).
         request_id (str): The unique identifier for this request.
@@ -107,6 +107,7 @@ class GenerateAPI(MethodView):
         g.current_request_id = request_id
 
         try:
+            begin_request_privacy()
             instance_global_variables.set_api_type("ollamagenerate")
             api_key = api_helpers.extract_api_key()
 
@@ -117,11 +118,6 @@ class GenerateAPI(MethodView):
             if data is None:
                 logger.error("Failed to parse JSON in GenerateAPI")
                 return jsonify({"error": "Invalid JSON data"}), 400
-
-            sensitive_log_lazy(logger, logging.DEBUG,
-                               "GenerateAPI request data (ID: %s): %s",
-                               lambda: request_id,
-                               lambda: json.dumps(_sanitize_log_data(data)))
 
             model: str = data.get("model")
             if not model:
@@ -134,8 +130,15 @@ class GenerateAPI(MethodView):
             rejection = api_helpers.require_identified_user()
             if rejection:
                 return jsonify({"error": rejection}), 400
+            resolve_request_privacy((bool(api_key) and get_encrypt_using_api_key()) or get_redact_log_output())
+            rejection = api_helpers.require_shared_workflow_selection()
+            if rejection:
+                return jsonify({"error": rejection}), 400
 
-            set_encryption_context((bool(api_key) and get_encrypt_using_api_key()) or get_redact_log_output())
+            sensitive_log_lazy(logger, logging.DEBUG,
+                               "GenerateAPI request data (ID: %s): %s",
+                               lambda: request_id,
+                               lambda: json.dumps(_sanitize_log_data(data)))
 
             prompt: str = data.get("prompt", "")
             system: str = data.get("system", "")
@@ -203,6 +206,7 @@ class ApiChatAPI(MethodView):
         g.current_request_id = request_id
 
         try:
+            begin_request_privacy()
             instance_global_variables.set_api_type("ollamaapichat")
             api_key = api_helpers.extract_api_key()
 
@@ -214,11 +218,6 @@ class ApiChatAPI(MethodView):
                 return jsonify({"error": "Invalid JSON data"}), 400
 
             logger.info(f"ApiChatAPI request received (ID: {request_id})")
-            sensitive_log_lazy(logger, logging.INFO,
-                               "ApiChatAPI request data (ID: %s): %s",
-                               lambda: request_id,
-                               lambda: json.dumps(_sanitize_log_data(request_data)))
-
             if 'model' not in request_data or 'messages' not in request_data:
                 return jsonify({"error": "Both 'model' and 'messages' fields are required."}), 400
 
@@ -230,8 +229,15 @@ class ApiChatAPI(MethodView):
             rejection = api_helpers.require_identified_user()
             if rejection:
                 return jsonify({"error": rejection}), 400
+            resolve_request_privacy((bool(api_key) and get_encrypt_using_api_key()) or get_redact_log_output())
+            rejection = api_helpers.require_shared_workflow_selection()
+            if rejection:
+                return jsonify({"error": rejection}), 400
 
-            set_encryption_context((bool(api_key) and get_encrypt_using_api_key()) or get_redact_log_output())
+            sensitive_log_lazy(logger, logging.INFO,
+                               "ApiChatAPI request data (ID: %s): %s",
+                               lambda: request_id,
+                               lambda: json.dumps(_sanitize_log_data(request_data)))
 
             # Intercept OpenWebUI tool-selection requests if the user has opted in
             tool_response = check_openwebui_tool_request(request_data, 'ollamaapichat')

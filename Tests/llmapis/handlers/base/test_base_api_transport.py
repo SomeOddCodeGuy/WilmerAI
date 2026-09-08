@@ -73,11 +73,9 @@ class TestExecuteNonStreamingPost:
         mock_post.assert_not_called()
         mock_close.assert_called_once()
 
-    def test_http_error_status_is_retried_then_raised(self, transport,
+    def test_permanent_http_error_is_not_retried(self, transport,
                                                       setup_cancellation_service, mocker):
-        """An HTTP error surfaced by raise_for_status (HTTPError is a
-        RequestException) goes through the manual retry loop: 3 attempts, then
-        the error propagates."""
+        """A permanent client error fails after one POST under the bounded policy."""
         mock_response = MagicMock()
         mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError("400 Client Error")
         mock_post = mocker.patch.object(transport.session, "post", return_value=mock_response)
@@ -85,7 +83,7 @@ class TestExecuteNonStreamingPost:
         with pytest.raises(requests.exceptions.HTTPError, match="400 Client Error"):
             transport.execute_non_streaming_post("http://localhost:9000/v1/x", {})
 
-        assert mock_post.call_count == 3
+        assert mock_post.call_count == 1
 
     def test_non_request_exception_raises_immediately_without_retry(self, transport,
                                                                     setup_cancellation_service, mocker):
@@ -100,21 +98,20 @@ class TestExecuteNonStreamingPost:
 
         assert mock_post.call_count == 1
 
-    def test_abort_callback_unregistered_after_each_attempt(self, transport,
+    def test_abort_callback_covers_all_attempts(self, transport,
                                                             setup_cancellation_service, mocker):
-        """Each retry attempt registers a fresh abort callback and the finally
-        block unregisters it, so a failed request leaves no dangling callback."""
+        """One abort callback covers the entire request, including retry backoff."""
         request_id = "transport_cb_lifecycle_1"
         mock_register = mocker.patch.object(cancellation_service, "register_abort_callback")
         mock_unregister = mocker.patch.object(cancellation_service, "unregister_abort_callbacks")
         mocker.patch.object(transport.session, "post",
-                            side_effect=requests.exceptions.ConnectionError("down"))
+                            side_effect=requests.exceptions.ConnectTimeout("down"))
 
         with pytest.raises(requests.exceptions.ConnectionError):
             transport.execute_non_streaming_post("http://x", {}, request_id=request_id)
 
-        assert mock_register.call_count == 3
-        assert mock_unregister.call_count == 3
+        assert mock_register.call_count == 1
+        assert mock_unregister.call_count == 1
         assert all(c.args[0] == request_id for c in mock_unregister.call_args_list)
 
 
@@ -147,7 +144,7 @@ class TestAbortHandle:
 
         handle.abort()
 
-        mock_session.adapters.clear.assert_called_once()
+        mock_session.adapters.clear.assert_not_called()
         mock_session.close.assert_called_once()
         mock_response.close.assert_called_once()
         # The response reference is dropped so a second abort cannot double-close it.

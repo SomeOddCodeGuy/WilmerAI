@@ -1,8 +1,7 @@
 ### **A Technical Guide to Conversation Timestamps**
 
-This guide provides a complete technical reference for WilmerAI's automated conversation timestamping system. The
-information is validated against the system's source code to ensure accuracy. This system provides crucial temporal
-context to LLMs, allowing them to be aware of the passage of time within a conversation.
+This guide describes WilmerAI's automated conversation timestamping system. The system supplies timestamps and
+elapsed-time information to LLMs as context within a conversation.
 
 #### **Core Principle: Automated Temporal Context**
 
@@ -31,6 +30,8 @@ These properties are added to any `Standard` node object in your workflow's JSON
 #### **Example `Standard` Node Configuration**
 
 This example shows a node configured to inject relative timestamps and use the immediate commit logic for group chats.
+
+Partial workflow example: supply any omitted `endpointName` and `preset` fields for LLM nodes before running it.
 
 ```json
 {
@@ -149,6 +150,8 @@ The `{time_context_summary}` variable can be used in any valid content field, bu
 #### **Example Workflow Node**
 
 This node uses the summary variable to give the LLM temporal context at the start of its processing.
+
+Partial workflow example: supply any omitted `endpointName` and `preset` fields for LLM nodes before running it.
 
 ```json
 {

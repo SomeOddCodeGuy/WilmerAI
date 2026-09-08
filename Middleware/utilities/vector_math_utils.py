@@ -8,12 +8,13 @@ this completes in milliseconds without any numeric library: math.sumprod (C
 speed, Python 3.12+) is used when available, with a pure-Python fallback.
 """
 
-import logging
 import math
 from array import array
 from typing import Iterable, List, Sequence, Tuple
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 # math.sumprod was added in Python 3.12; fall back to a pure-Python dot product
 # on older interpreters.

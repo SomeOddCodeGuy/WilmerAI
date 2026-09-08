@@ -24,7 +24,12 @@ LLAMACPP_API = {
     "presetType": "LlamaCppServer",
     "supportsChatTemplateKwargs": True,
     "thinking": {"location": "chat_template_kwargs", "field": "enable_thinking", "mode": "bool"},
-    "samplerFieldMap": {"temperature": "temperature", "min_p": "min_p", "top_p": "top_p"},
+    "samplerFieldMap": {
+        "temperature": "temperature",
+        "min_p": "min_p",
+        "top_p": "top_p",
+        "thinking_budget_tokens": "thinking_budget_tokens",
+    },
 }
 
 CLAUDE_API = {
@@ -52,11 +57,17 @@ def _build(mocker, *, endpoint=None, api_type=LLAMACPP_API, donor=None, preset_f
 
 class TestPresetResolution:
     def test_embedded_block_translated(self, mocker):
-        donor = {"presetSamplers": {"temperature": 0.6, "min_p": 0.05, "thinkingMode": "off"}}
+        donor = {"presetSamplers": {
+            "temperature": 0.6,
+            "min_p": 0.05,
+            "thinking_budget_tokens": 8192,
+            "thinkingMode": "off",
+        }}
         gen_input = _build(mocker, donor=donor)
         assert gen_input == {
             "temperature": 0.6,
             "min_p": 0.05,
+            "thinking_budget_tokens": 8192,
             "chat_template_kwargs": {"enable_thinking": False},
         }
 
@@ -160,6 +171,23 @@ class TestSetGenInput:
         h = self._handler({"temperature": 0.5}, self.API, {"maxContextTokenSize": 4096}, stream=True)
         h.set_gen_input()
         assert h.gen_input == {"temperature": 0.5, "stream": True, "max_tokens": 100, "truncation_length": 4096}
+
+    def test_payload_keeps_thinking_budget_tokens_at_top_level(self):
+        h = self._handler(
+            {
+                "thinking_budget_tokens": 8192,
+                "chat_template_kwargs": {"enable_thinking": True},
+            },
+            self.API,
+            {},
+        )
+        payload = h._prepare_payload(
+            conversation=[{"role": "user", "content": "test"}],
+            system_prompt=None,
+            prompt=None,
+        )
+        assert payload["thinking_budget_tokens"] == 8192
+        assert payload["chat_template_kwargs"] == {"enable_thinking": True}
 
     def test_no_max_token_property_name_skips_injection(self):
         # An ApiType without maxNewTokensPropertyName cannot receive a max-tokens

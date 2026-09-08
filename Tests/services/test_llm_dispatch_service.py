@@ -140,6 +140,27 @@ class TestLLMDispatchServiceCompletions:
         call_kwargs = mock_context.llm_handler.llm.get_response_from_llm.call_args.kwargs
         assert call_kwargs["conversation"] is None
 
+    def test_dispatch_explicit_image_bypasses_completions_image_window(self, mock_context, mocker):
+        """A caller-selected historical image must reach a fresh prompt even
+        when its source message is outside the default recent-image window."""
+        mocker.patch('Middleware.services.llm_dispatch_service.format_system_prompt_with_template',
+                     return_value="formatted_system")
+        mock_context.config = {"systemPrompt": "Sys", "prompt": "Describe the image."}
+        mock_context.messages = (
+            [{"role": "user", "content": "old", "images": ["historical-image"]}]
+            + [{"role": "user", "content": f"filler {i}"} for i in range(5)]
+        )
+
+        LLMDispatchService.dispatch(
+            context=mock_context,
+            llm_takes_images=True,
+            explicit_images=["historical-image"],
+        )
+
+        call_kwargs = mock_context.llm_handler.llm.get_response_from_llm.call_args.kwargs
+        assert call_kwargs["conversation"] == [
+            {"role": "user", "content": "", "images": ["historical-image"]}]
+
     def test_dispatch_completions_without_images_keeps_conversation_none(self, mock_context, mocker):
         """With no images in recent messages, the completions path still sends
         conversation=None even when the endpoint takes images."""
@@ -385,6 +406,32 @@ class TestLLMDispatchServiceChat:
         user_msg = conversation[-1]
         assert user_msg["role"] == "user"
         assert user_msg["images"] == ["img_base64_1", "img_base64_2", "img_base64_3"]
+
+    def test_dispatch_explicit_image_bypasses_chat_image_window(self, mock_context):
+        """A fresh chat prompt uses the exact caller-selected image instead of
+        rediscovering images by their position in conversation history."""
+        mock_context.llm_handler.takes_message_collection = True
+        mock_context.config = {"prompt": "Describe this image."}
+        mock_context.messages = (
+            [{"role": "user", "content": "old", "images": ["historical-image"]}]
+            + [{"role": "user", "content": f"filler {i}"} for i in range(4)]
+            + [{"role": "user", "content": "current", "images": ["current-image"]}]
+        )
+
+        LLMDispatchService.dispatch(
+            context=mock_context,
+            llm_takes_images=True,
+            explicit_images=["historical-image"],
+        )
+
+        call_kwargs = mock_context.llm_handler.llm.get_response_from_llm.call_args.kwargs
+        assert call_kwargs["conversation"] == [
+            {
+                "role": "user",
+                "content": "Describe this image.",
+                "images": ["historical-image"],
+            }
+        ]
 
     def test_dispatch_no_images_key_when_messages_lack_images(self, mock_context):
         """

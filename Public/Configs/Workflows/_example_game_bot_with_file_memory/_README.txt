@@ -9,12 +9,14 @@ backstory, works out which character speaks next, and then writes the response w
 --- Setup ---
 
 1. Open the user file (_example_game_bot_with_file_memory.json) and set discussionDirectory and sqlLiteDirectory to a
-   folder of your choice, or leave them blank to default to the Public directory. Persistent memory only activates when
-   a [DiscussionId] tag is present somewhere in a user or system message; without it, nothing is stored between turns.
+   folder of your choice, or leave them blank to default to the Public directory. This workflow requires a
+   [DiscussionId] tag in a user or system message. Without it, discussion-directory resolution raises an error
+   before the initial file reads. Keep the same ID across turns that should share memory.
 
-2. In the same user file, set the "gameTempDir" workflow variable to a folder where this game's custom files live. The
-   workflow reads three plain-text files from that folder. All three are optional; if a file is missing or empty the
-   workflow still runs, it just has less context to work with. Create the ones you want:
+2. The workflow reads three plain-text files from `{Discussion_Directory}`, the same canonical per-discussion directory
+   used by WilmerAI's built-in memories and summaries. Do not add a `gameTempDir` variable. All three files are optional;
+   if a file is missing or empty the workflow still runs, it just has less context to work with. Make one request first
+   so the directory is created, then add the files you want:
 
    - character_guidance.txt : How the NPCs behave and speak: reaction tendencies, speech styles, personality notes,
      and any house rules for the game. This is injected into every analysis step and the final response.
@@ -25,10 +27,20 @@ backstory, works out which character speaks next, and then writes the response w
      narrative, but small facts that matter to a single character tend to get washed out of it; this file is where you
      keep them. In this file-memory example you maintain it by hand. It is read on every turn.
 
+   The resolved directory is `<discussionDirectory>/<DiscussionId>/`, or
+   `<discussionDirectory>/<API-key-hash>/<DiscussionId>/` when the request supplies an Authorization Bearer key.
+   Clients that use a Bearer key must keep using the same key for that discussion. Different clients should use
+   different high-entropy keys when their discussion IDs might overlap. A Bearer value supplies a storage namespace;
+   WilmerAI does not validate it as a login credential by itself.
+
 3. Memory is generated automatically as the game runs. The long-term memory file (chronological story summaries), the
    rolling chat summary, and automatic condensation of older memories into denser ones are all configured in
    _DiscussionId-MemoryFile-Workflow-Settings.json. Condensation is on by default so the memory file stays a manageable
    size over very long sessions.
+
+4. Existing installations require a one-time manual move. The old `gameTempDir` was shared by every discussion. Copy
+   each of its three files into every canonical discussion directory that should use those contents. Do not keep the old
+   shared path in these workflow files, because doing so bypasses API-key storage isolation.
 
 --- Endpoints ---
 

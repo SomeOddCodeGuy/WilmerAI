@@ -73,7 +73,8 @@ A request to an LLM follows a clear, sequential path from service instantiation 
    **`request_id`** for cancellation.
 
 5. **Initial Prompt Manipulation**: Inside `$get_response_from_llm()$`, some initial modifications occur. If the
-   target LLM cannot handle images, the `images` key is stripped from all messages here. For the **completions** path
+   caller does not request images, or the endpoint declares `backendSupportsImages: false`, the `images` key is
+   stripped from all messages here. For the **completions** path
    (where `system_prompt` and `prompt` strings are passed directly), `addTextToStartOfSystem` and
    `addTextToStartOfPrompt` are applied to those strings. For the **chat completions** path (where a `conversation`
    list is passed instead), these text injections are handled one layer deeper in
@@ -123,13 +124,18 @@ such as a `$WorkflowProcessor$` or `$StreamingResponseHandler$`, which consume t
   state; `$LlmApiHandler$` layers streaming and payload/prompt concerns on top of it, and `$EmbeddingApiHandler$`
   uses it as-is.
 * **Key Components**:
-    * `$BaseApiTransport$`: Owns the persistent `requests.Session`, the retry policy (`urllib3 Retry` with 5xx
-      backoff, or `total=0` when `suppress_retries` is set), and the connect timeout from `$get_connect_timeout()$`.
-    * `$execute_non_streaming_post()$`: The cancellation-aware non-streaming POST skeleton: pre-flight cancellation
-      check, bounded manual retry loop (3 attempts, or 1 with `suppress_retries`), abort-callback registration per
-      attempt, cancellation-aware error interpretation (a session closed by abort reads as cancelled, not as an
-      error), and finally-block unregistration of the abort callback. Returns the parsed JSON body, or `None` if
-      the request was cancelled.
+    * `$BaseApiTransport$`: Owns the persistent `requests.Session`, the shared POST retry policy, and the
+      connect timeout from `$get_connect_timeout()$`. HTTP/HTTPS adapter retries are always disabled.
+    * `$_post_with_retries()$`: Opens streaming or non-streaming responses with at most three application
+      attempts, or one with `suppress_retries`. Retries confirmed connection establishment failures and HTTP
+      500/502/503/504. Closes failed responses before backoff. It does not iterate successful streams or decode JSON.
+    * `$_wait_before_retry()$`: Waits 0.25 seconds before the second attempt and 0.5 seconds before the third,
+      polling cancellation at intervals of at most 0.05 seconds. Uses ordinary sleep, which is cooperative when
+      Eventlet patches the time module.
+    * `$execute_non_streaming_post()$`: Registers one abort callback across the entire request, including
+      attempts and backoff; delegates to the shared POST policy and decodes JSON once. Closes the response and
+      unregisters callbacks on exit. Returns `None` only for cancellation; a literal JSON `null` body raises
+      `InvalidLlmResponseError`, including for embedding callers, to keep malformed output distinct from cancellation.
     * `$_AbortHandle$`: The cancellation state shared between a request and the `$CancellationService$`. Its
       `abort()` method is registered as the abort callback and aggressively closes the session (and any attached
       in-flight response) to interrupt the stream or prefill phase. Used by both the non-streaming skeleton here
@@ -143,8 +149,8 @@ such as a `$WorkflowProcessor$` or `$StreamingResponseHandler$`, which consume t
   inherits from `$BaseApiTransport$`.
 * **Key Components**:
     * `$LlmApiHandler(BaseApiTransport, ABC)$`: The abstract base class for the LLM handler hierarchy.
-    * `$handle_streaming()`: Owns the streaming request path: prepares the payload, sends the streaming POST over
-      the inherited session, iterates the response (SSE or line-delimited JSON per `$_iterate_by_lines$`), and
+    * `$handle_streaming()`: Owns the streaming request path: prepares the payload, opens the streaming POST through
+      the shared retry policy, iterates the response (SSE or line-delimited JSON per `$_iterate_by_lines$`), and
       checks `cancellation_service.is_cancelled(request_id)` before processing each line. Registers an
       `$_AbortHandle$` so cancellation can tear down the connection mid-stream or during prefill.
     * `$handle_non_streaming()`: Contributes payload preparation and response parsing; the HTTP retry loop,
@@ -179,7 +185,7 @@ such as a `$WorkflowProcessor$` or `$StreamingResponseHandler$`, which consume t
       type detection), and HTTP URLs.
     * **`$KoboldCppApiHandler$`**: Inherits from `$BaseCompletionsHandler$`. It implements `_get_api_endpoint_url` to
       return the correct Kobold endpoint. As a completions handler, it flattens conversation into a single prompt string
-      and does not process images.
+      and adds selected user-message images to the KoboldCpp generation payload.
 
 **Note on Image/Multimodal Support**: Images are carried as a per-message `"images"` key on regular message dicts (e.g.,
 `{"role": "user", "content": "What's this?", "images": ["base64data"]}`). There are no separate `role: "images"` messages.
@@ -188,9 +194,13 @@ Chat completion handlers (`OllamaChatHandler`, `OpenAiApiHandler`, `ClaudeApiHan
 For `OpenAiApiHandler` and `ClaudeApiHandler`, the shared traversal and the text-only error fallback live in
 `handlers/base/image_injection.py`; each handler supplies its own block format (`_process_single_image_source`),
 image placement (Claude prepends, OpenAI appends), and API-visible fallback note text.
-Completions handlers (e.g., `KoboldCppApiHandler`) do not process images. The `LlmApiService` gatekeeper
-strips the `"images"` key from all messages when `llm_takes_images` is False, ensuring non-vision models never see image
-data. Separate "ImageSpecific" handlers are no longer needed and have been deprecated.
+`KoboldCppApiHandler` also supports images in its completions payload; the OpenAI completions handler does not.
+The `LlmApiService` gatekeeper
+strips the `"images"` key from all messages when `llm_takes_images` is False. It also computes an effective image flag
+from the endpoint's `backendSupportsImages` property, which defaults to True. When the endpoint property is False, it
+overrides a True caller flag and strips images at the final endpoint boundary. Failover delegates the original
+conversation and requested image flag so each backup applies its own endpoint capability. Separate "ImageSpecific"
+handlers are no longer needed and have been deprecated.
 
 The `Standard` node supports direct image passthrough via `acceptImages: true` in its config, with an optional
 `maxImagesToSend` integer to cap the number of images sent to the backend (keeping the most recent). The
@@ -202,7 +212,10 @@ The `ImageProcessor` workflow node supports optional per-discussion caching of v
 `saveVisionResponsesToDiscussionId` property. When enabled, vision LLM responses are stored in
 `{discussion_id}/vision_responses.json` (keyed by a hash of the message's role, content, and sorted image data).
 Cache reads/writes use `read_vision_responses` / `write_vision_responses` in `file_utils.py`, and the hash function
-is `hash_message_with_images` in `hashing_utils.py`.
+is `hash_message_with_images` in `hashing_utils.py`. For both cached misses and uncached processing, the node passes
+each already-selected image to `LLMDispatchService.dispatch()` through `explicit_images`. This keeps workflow-variable
+rendering on the full temporary conversation while preventing the authored-prompt image lookback from dropping an
+image whose source message is older than that lookback.
 
 ### `handlers/impl/embedding_api_handler.py`
 
@@ -334,31 +347,58 @@ to respond, and we do not want to spuriously failover on long reads.
   raises **after** one or more tokens have been emitted, the original exception is re-raised; streaming failover cannot
   recover mid-stream because the client has already received partial data.
 
-### Retry Suppression
+### Retry Policy and Suppression
 
-When an endpoint has a backup configured, its `$LlmApiHandler$` is instantiated with `suppress_retries=True`. This has
-two effects on the handler's HTTP behaviour:
+All handlers using `BaseApiTransport`, including embeddings, disable urllib3 adapter retries. One application
+policy opens both streaming and non-streaming POST responses. There are at most three attempts per endpoint,
+with 0.25-second and 0.5-second cancellation-aware waits between attempts.
 
-1. The underlying `$urllib3 Retry$` adapter is configured with `total=0`, disabling the automatic 5xx retry loop.
-2. The manual retry loop in `$BaseApiTransport.execute_non_streaming_post()$` (which `$handle_non_streaming()$`
-   delegates to) collapses to a single attempt (`retries = 1` instead of `retries = 3`).
+Retries are limited to Requests `ConnectTimeout`, connection errors carrying urllib3 `NewConnectionError`
+(including the `MaxRetryError.reason` wrapper and name-resolution establishment failures), and HTTP statuses
+500, 502, 503, and 504. A generic `ConnectionError` is insufficient evidence that the request was not submitted.
+Read timeouts, interrupted responses, SSL/proxy configuration errors, other HTTP statuses (including 429),
+invalid JSON, and invalid response envelopes propagate without another attempt at the same endpoint.
 
-Endpoints without a backup (typically the tail of a chain, or endpoints configured without failover) retain the original
-retry behaviour: 5 `urllib3` retries with exponential backoff on 5xx responses, and 3 manual attempts on network
-exceptions in the non-streaming path.
+When a backup is configured, `suppress_retries=True` reduces the primary to one attempt. The service's existing
+failover policy can then delegate exceptions to that explicitly configured backup. This includes malformed response
+errors and read failures; suppressing same-endpoint replay does not disable configured failover. The endpoint at the
+tail of a backup chain uses its own normal three-attempt policy. The attempt count is per endpoint, not per chain,
+and does not replace connect/read timeouts or limit an otherwise permitted redirect chain.
+
+Successful streaming response iteration occurs outside the retry loop. A stream interruption is never retried at
+the same endpoint, even before its first chunk. Existing failover can switch to a backup before the first yielded
+chunk; after any chunk is yielded, the service propagates the failure without restarting output.
+
+### Invalid OpenAI Chat Responses
+
+`OpenAiApiHandler._parse_non_stream_response()` raises `InvalidLlmResponseError` (a `ValueError` subclass) when
+the top-level value is not an object, `choices` is missing/not a nonempty array, its first entry is not an object,
+or `choices[0].message` is missing/not an object. Present content must be a string or null. Present `tool_calls`
+must be an array of objects or null. These exceptions describe the failing structure without embedding the response
+body. The service can use an explicitly configured backup; without one, the error reaches the caller.
+
+A structurally valid message with absent, null, or empty content returns an empty string. Tool-only messages
+return the structured tool result. Cancellation remains separate from malformed responses. Envelope validation
+does not inspect tool argument semantics.
 
 ### Egress Guard
+
+The shared BaseApiTransport session extends Requests redirect authentication handling through
+`Middleware/utilities/redirect_policy.py`. On a host change, HTTPS downgrade, or effective port change, it strips
+Authorization, Cookie, Proxy-Authorization, x-api-key and api-key. Same-origin redirects and Requests' conventional
+same-host HTTP port 80 to HTTPS port 443 upgrade retain credentials. This applies to streaming, non-streaming and
+embedding calls that use the shared transport. It does not prevent a permitted 307/308 redirect from forwarding the
+request body; configure a final trusted endpoint URL and treat its redirect behavior as part of its data policy.
 
 Failover ships the whole conversation/prompt to the backup's host, so `$_build_backup_service()$` classifies that host
 before delegating (`_classify_backup_host`, parsing the backup endpoint's `endpoint` URL):
 
 - **local** (loopback / RFC1918-private / link-local IP, or `localhost`/`*.localhost`): allowed silently.
-- **remote** (a public IP literal): **blocked** with a `$RuntimeError$` unless the backup endpoint sets
+- **remote** (a public IP literal or a hostname with any public DNS result): **blocked** with a `$RuntimeError$` unless the backup endpoint sets
   `allowRemoteBackup: true`. This is safe-by-default: a transient local failure cannot silently send the prompt to a
   public address.
-- **unknown** (a hostname that cannot be classified without DNS): allowed, but logged at `$WARNING$` as possible
-  off-machine egress (a synchronous guard deliberately does not resolve DNS, and blanket-blocking hostnames would break
-  the common case of referencing a backend by name).
+- **unknown** (a hostname whose DNS lookup fails or returns no usable addresses): allowed, but logged at `$WARNING$`
+  as possible off-machine egress. Hostnames are resolved synchronously; a name whose results are all local is local.
 
 The guard classifies by address only; it does not inspect what the backend does with the data. `allowRemoteBackup` is
 read from the backup endpoint's config (the host that would receive the traffic opts in).
@@ -394,10 +434,9 @@ failover.
   exception type and message, and the backup name being attempted.
 * A stream failure after tokens have already been emitted logs an `$ERROR$` explaining that failover is not possible.
 * Cycles raise `$RuntimeError$` naming the offending endpoint chain.
-* The primary handler's `$close()$` is invoked exactly once before delegation; the backup service manages its own
-  handler lifecycle.
-* `$is_busy_flag$` is cleared before delegation and remains `False` after the backup returns or after the chain is
-  exhausted.
+* Non-streaming failure closes the primary and clears `$is_busy_flag$` before delegation. Streaming releases the
+  endpoint semaphore before delegation, then closes the primary and clears its busy flag in the outer finalizer
+  after the backup iterator completes or closes. The backup service manages its own handler lifecycle.
 
 ### Caller Transparency
 

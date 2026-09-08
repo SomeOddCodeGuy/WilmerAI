@@ -4,7 +4,9 @@ import logging
 import re
 from typing import List, Dict
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 # Lower-cased key names whose values redact_sensitive_data() masks in log output.
 _SENSITIVE_KEYS = frozenset({

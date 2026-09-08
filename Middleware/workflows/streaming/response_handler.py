@@ -12,7 +12,9 @@ from Middleware.utilities.config_utils import get_is_chat_complete_add_user_assi
 from Middleware.utilities.sensitive_logging_utils import sensitive_log
 from Middleware.utilities.streaming_utils import StreamingThinkRemover, strip_leading_response_prefixes
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 
 class StreamingResponseHandler:
@@ -389,6 +391,24 @@ class StreamingResponseHandler:
         return calls
 
     def process_stream(self, raw_dict_generator: Generator[Dict[str, Any], None, None]) -> Generator[str, None, None]:
+        """
+        Processes an upstream LLM stream and guarantees its teardown.
+
+        Args:
+            raw_dict_generator (Generator[Dict[str, Any], None, None]): A generator
+                of token dictionaries from an LLM handler.
+
+        Yields:
+            str: Formatted SSE or NDJSON strings ready to be sent to the client.
+        """
+        try:
+            yield from self._process_stream_events(raw_dict_generator)
+        finally:
+            close_stream = getattr(raw_dict_generator, "close", None)
+            if callable(close_stream):
+                close_stream()
+
+    def _process_stream_events(self, raw_dict_generator: Generator[Dict[str, Any], None, None]) -> Generator[str, None, None]:
         """
         Processes a raw dictionary stream from an LLM and yields formatted SSE strings.
 

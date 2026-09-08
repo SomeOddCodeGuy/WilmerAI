@@ -11,6 +11,8 @@ LOGGING_DIRECTORY = "logs"
 FILE_LOGGING = None  # None = check user's config (single-user) or default off (multi-user); True/False = explicit CLI flag
 USER_LEVEL_SQLITE_DIRECTORY = None  # --UserLevelSqlLiteDirectory override for per-user SQLite databases
 DISCUSSION_DIRECTORY = None  # --DiscussionDirectory override for per-discussion data files
+RUNTIME_MODE = "workflow"  # "workflow" runs workflows; "wilmerproxy" relays allowlisted OpenAI requests
+WILMER_PROXY_CONFIG = None  # Base name under Public/Configs/WilmerProxy in WilmerProxy mode
 CONCURRENCY_LIMIT = 1
 CONCURRENCY_TIMEOUT = 900
 # Concurrency enforcement layer:

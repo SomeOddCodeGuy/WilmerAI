@@ -5,7 +5,6 @@ import json
 import logging
 import os
 import socket
-import traceback
 from copy import deepcopy
 from typing import Any, Dict, Generator, List, Optional, Set, Union
 from urllib.parse import urlsplit
@@ -28,7 +27,9 @@ from Middleware.utilities.config_utils import (
 )
 from Middleware.utilities.sensitive_logging_utils import sensitive_log
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 
 def _acquire_endpoint_gate() -> bool:
@@ -409,7 +410,9 @@ class LlmApiService:
             conversation (Optional[List[Dict[str, str]]]): The conversation history.
             system_prompt (Optional[str]): The system prompt.
             prompt (Optional[str]): The user prompt.
-            llm_takes_images (bool): Flag indicating if the LLM can process images.
+            llm_takes_images (bool): Whether the caller requests image passthrough.
+                An endpoint with ``backendSupportsImages`` set to ``false``
+                overrides this value and receives a text-only conversation.
             request_id (Optional[str]): The request ID for cancellation tracking.
             tools (Optional[List[Dict[str, Any]]]): Tool definitions in OpenAI format.
             tool_choice (Optional[Any]): Tool selection policy.
@@ -425,12 +428,21 @@ class LlmApiService:
         """
         self.is_busy_flag = True
         try:
+            endpoint_supports_images = self.endpoint_file.get("backendSupportsImages", True)
+            effective_llm_takes_images = llm_takes_images and endpoint_supports_images
+            if llm_takes_images and not endpoint_supports_images:
+                logger.debug(
+                    "Endpoint '%s' declares backendSupportsImages=false. "
+                    "Stripping images from this request.",
+                    self._endpoint_name,
+                )
+
             # The no-images strip below already produces fresh message dicts, so only
             # the images path needs a deep copy to keep the caller's conversation
             # (reused verbatim by delegate_kwargs on failover) isolated from the
             # handler. Skipping deepcopy on the common path avoids copying the whole
             # history on every LLM call.
-            if not llm_takes_images:
+            if not effective_llm_takes_images:
                 logger.debug("llm_api does not take images. Stripping images key from messages.")
                 conversation_copy = (
                     [{k: v for k, v in msg.items() if k != "images"} for msg in conversation]
@@ -550,8 +562,7 @@ class LlmApiService:
                         self.close()
         except Exception as e:
             self.is_busy_flag = False
-            logger.error("Exception in get_response_from_llm: %s", e)
-            traceback.print_exc()
+            logger.exception("Exception in get_response_from_llm: %s", e)
             raise
 
     def close(self):

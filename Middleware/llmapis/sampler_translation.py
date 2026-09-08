@@ -12,10 +12,11 @@ generation payload is assembled.
 Nothing here performs I/O. The functions are pure so they can be unit tested in
 isolation and reused from both the request path and tests.
 """
-import logging
 from typing import Any, Dict
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 # Reserved value that forces a literal JSON ``null`` onto the wire. A bare
 # ``null`` in config means "omit this field" (use the backend default); this
@@ -44,6 +45,7 @@ CANONICAL_SAMPLER_FIELDS = frozenset({
     "mirostat", "mirostat_tau", "mirostat_eta",
     "seed", "stop", "samplers", "logit_bias", "ignore_eos",
     "n_probs", "min_keep", "grammar", "json_schema",
+    "thinking_budget_tokens",
 })
 
 # Values of thinkingMode that mean "thinking off". Everything else is "on".

@@ -10,10 +10,13 @@ from urllib.parse import urlparse
 
 from PIL import Image
 
+from Middleware.exceptions.invalid_llm_response_error import InvalidLlmResponseError
 from Middleware.llmapis.handlers.base.base_chat_completions_handler import BaseChatCompletionsHandler
 from Middleware.llmapis.handlers.base.image_injection import inject_images_into_messages
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 
 class OpenAiApiHandler(BaseChatCompletionsHandler):
@@ -110,24 +113,34 @@ class OpenAiApiHandler(BaseChatCompletionsHandler):
             Union[str, Dict[str, Any]]: The extracted text content from
             `choices[0].message.content`, or a dictionary with 'content',
             'tool_calls', and 'finish_reason' keys when tool calls are present,
-            or an empty string if not found.
+            or an empty string for a valid message with missing, null, or empty content.
+
+        Raises:
+            InvalidLlmResponseError: If the response envelope, message, or content
+                fields have invalid structure. The error does not include the body.
         """
-        try:
-            message = response_json['choices'][0]['message']
-            content = message.get('content') or ""
-            tool_calls = message.get('tool_calls')
-            if tool_calls:
-                return {
-                    'content': content,
-                    'tool_calls': tool_calls,
-                    'finish_reason': response_json['choices'][0].get('finish_reason', 'tool_calls')
-                }
-            return content
-        except (KeyError, IndexError, TypeError, AttributeError):
-            # AttributeError covers a non-dict 'message' entry, which .get access
-            # would otherwise escape.
-            logger.error(f"Could not find content in OpenAI response: {response_json}")
-            return ""
+        if not isinstance(response_json, dict):
+            raise InvalidLlmResponseError("OpenAI response must be an object.")
+        choices = response_json.get('choices')
+        if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+            raise InvalidLlmResponseError("OpenAI response requires a nonempty choices array of objects.")
+        message = choices[0].get('message')
+        if not isinstance(message, dict):
+            raise InvalidLlmResponseError("OpenAI response requires a choices[0].message object.")
+        content = message.get('content')
+        if content is not None and not isinstance(content, str):
+            raise InvalidLlmResponseError("OpenAI response message content must be a string or null.")
+        tool_calls = message.get('tool_calls')
+        if tool_calls is not None and (not isinstance(tool_calls, list)
+                                       or any(not isinstance(call, dict) for call in tool_calls)):
+            raise InvalidLlmResponseError("OpenAI response tool_calls must be an array of objects or null.")
+        if tool_calls:
+            return {
+                'content': content or "",
+                'tool_calls': tool_calls,
+                'finish_reason': choices[0].get('finish_reason', 'tool_calls')
+            }
+        return content or ""
 
     def _build_messages_from_conversation(self, conversation: Optional[List[Dict[str, str]]],
                                           system_prompt: Optional[str], prompt: Optional[str]) -> List[Dict[str, Any]]:
@@ -248,4 +261,3 @@ class OpenAiApiHandler(BaseChatCompletionsHandler):
         if not isinstance(s, str) or len(s) < 100:
             return False
         return bool(re.match(r'^[A-Za-z0-9+/]+={0,2}$', s)) and len(s) % 4 == 0
-

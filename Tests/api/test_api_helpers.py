@@ -377,6 +377,35 @@ class TestRequireIdentifiedUser:
         assert 'mack' in error
 
 
+class TestRequireSharedWorkflowSelection:
+    """Tests for shared-mode model selection requirements."""
+
+    @pytest.fixture(autouse=True)
+    def reset_workflow_override(self):
+        instance_global_variables.clear_workflow_override()
+        yield
+        instance_global_variables.clear_workflow_override()
+
+    def test_shared_mode_requires_workflow_override(self, mocker):
+        mocker.patch('Middleware.api.api_helpers.get_allow_shared_workflows', return_value=True)
+
+        error = api_helpers.require_shared_workflow_selection()
+
+        assert error is not None
+        assert 'username:workflow' in error
+
+    def test_shared_mode_accepts_selected_workflow(self, mocker):
+        mocker.patch('Middleware.api.api_helpers.get_allow_shared_workflows', return_value=True)
+        instance_global_variables.set_workflow_override('general')
+
+        assert api_helpers.require_shared_workflow_selection() is None
+
+    def test_non_shared_mode_does_not_require_workflow_override(self, mocker):
+        mocker.patch('Middleware.api.api_helpers.get_allow_shared_workflows', return_value=False)
+
+        assert api_helpers.require_shared_workflow_selection() is None
+
+
 class TestBuildResponseJsonToolCalls:
     """Tests that build_response_json passes tool_calls through to the correct builder methods."""
 
@@ -607,7 +636,10 @@ class TestWorkflowExistsForUser:
         (tmp_path / 'Workflows' / 'custom_shared' / 'my_workflow').mkdir(parents=True)
         mocker.patch(
             'Middleware.api.api_helpers.get_user_config_for',
-            return_value={'sharedWorkflowsSubDirectoryOverride': 'custom_shared'}
+            return_value={
+                'allowSharedWorkflows': True,
+                'sharedWorkflowsSubDirectoryOverride': 'custom_shared',
+            }
         )
         mocker.patch(
             'Middleware.api.api_helpers.get_root_config_directory',
@@ -620,7 +652,10 @@ class TestWorkflowExistsForUser:
     def test_falls_back_to_shared_folder_without_override(self, mocker, tmp_path):
         """Without an override in the config, the '_shared' folder is checked."""
         (tmp_path / 'Workflows' / '_shared' / 'my_workflow').mkdir(parents=True)
-        mocker.patch('Middleware.api.api_helpers.get_user_config_for', return_value={})
+        mocker.patch(
+            'Middleware.api.api_helpers.get_user_config_for',
+            return_value={'allowSharedWorkflows': True}
+        )
         mocker.patch(
             'Middleware.api.api_helpers.get_root_config_directory',
             return_value=str(tmp_path)
@@ -629,8 +664,8 @@ class TestWorkflowExistsForUser:
         assert api_helpers._workflow_exists_for_user('my_workflow', 'alice') is True
         assert api_helpers._workflow_exists_for_user('missing_workflow', 'alice') is False
 
-    def test_config_error_falls_back_to_shared_folder(self, mocker, tmp_path):
-        """If the user config cannot be loaded, '_shared' is used as the folder."""
+    def test_config_error_disables_shared_workflow_selection(self, mocker, tmp_path):
+        """A missing user config cannot enable shared workflow execution."""
         (tmp_path / 'Workflows' / '_shared' / 'my_workflow').mkdir(parents=True)
         mocker.patch(
             'Middleware.api.api_helpers.get_user_config_for',
@@ -641,7 +676,21 @@ class TestWorkflowExistsForUser:
             return_value=str(tmp_path)
         )
 
-        assert api_helpers._workflow_exists_for_user('my_workflow', 'alice') is True
+        assert api_helpers._workflow_exists_for_user('my_workflow', 'alice') is False
+
+    def test_disabled_shared_mode_does_not_select_existing_folder(self, mocker, tmp_path):
+        """An existing shared folder is inactive unless the user enables it."""
+        (tmp_path / 'Workflows' / '_shared' / 'my_workflow').mkdir(parents=True)
+        mocker.patch(
+            'Middleware.api.api_helpers.get_user_config_for',
+            return_value={'allowSharedWorkflows': False}
+        )
+        mocker.patch(
+            'Middleware.api.api_helpers.get_root_config_directory',
+            side_effect=AssertionError("filesystem must not be probed when shared mode is disabled")
+        )
+
+        assert api_helpers._workflow_exists_for_user('my_workflow', 'alice') is False
 
     @pytest.mark.parametrize("unsafe_name", ['../evil', '/abs/path', 'sub/dir', '..'])
     def test_unsafe_workflow_name_rejected_before_any_lookup(self, mocker, unsafe_name):

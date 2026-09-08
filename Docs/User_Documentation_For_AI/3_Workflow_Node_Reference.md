@@ -13,7 +13,7 @@ The core LLM-calling node. Assembles a prompt, sends it to an endpoint, returns 
 | Property | Type | Default | Description |
 |---|---|---|---|
 | `endpointName` | String | required | LLM endpoint name. **[limited var]** |
-| `preset` | String | optional | Generation preset name. **[limited var]** |
+| `preset` | String | required | Generation preset name or endpoint with embedded preset samplers. **[limited var]** |
 | `systemPrompt` | String | required | System prompt. **[var]** |
 | `prompt` | String | required | User prompt. If empty, falls back to sending recent messages directly. **[var]** |
 | `lastMessagesToSendInsteadOfPrompt` | Int | 5 | When `prompt` is empty, how many recent turns to send. |
@@ -22,12 +22,12 @@ The core LLM-calling node. Assembles a prompt, sends it to an endpoint, returns 
 | `maxContextTokenSize` | Int | 4096 | Max context window size. |
 | `returnToUser` | Bool | false | Override: force this node to be the responder. |
 | `jinja2` | Bool | false | Enable Jinja2 templating in prompt/systemPrompt. |
-| `acceptImages` | Bool | false | Pass images to the LLM (endpoint must support vision). |
+| `acceptImages` | Bool | false | Pass images to the LLM. An endpoint with `backendSupportsImages: false` overrides this and receives text only. |
 | `maxImagesToSend` | Int | 0 | Limit images sent (0 = no limit). **[limited var]** |
 | `allowTools` | Bool | false | Forward frontend tool definitions to the LLM. Only useful on responder. |
-| `appendNativeToolExchange` | Bool | false | Authored-prompt nodes: deliver the trailing assistant `tool_calls` + `role:"tool"` exchange as native messages after the authored prompt (excluded from the text transcript). Needed for multi-round tool loops. Inert on collection-mode nodes, completions backends, and endpoints with `backendSupportsToolTurns: false`. |
+| `appendNativeToolExchange` | Bool | false | Authored-prompt nodes: deliver the trailing assistant `tool_calls` + `role:"tool"` exchange as native messages after the authored prompt (excluded from the text transcript). Responders pair it with `allowTools`; internal planners may use it with `allowTools: false` to inspect native history without receiving tool definitions. Inert on collection-mode nodes, completions backends, and endpoints with `backendSupportsToolTurns: false`. |
 | `lowercaseToolCallFunctionNames` | Bool | false | Lowercase tool call function names in LLM responses. Fixes local models that produce `Glob` instead of `glob`. |
-| `structuredOutputFile` | String | none | Grammar-constrain this node's output to a JSON Schema from `Configs/StructuredOutputs/` (backend must declare a `structuredOutput` mechanism in its ApiType). Output is guaranteed-parseable JSON. Describe the shape in the prompt too. |
+| `structuredOutputFile` | String | none | Grammar-constrain this node's output to a JSON Schema from `Configs/StructuredOutputs/` (backend must declare a `structuredOutput` mechanism in its ApiType). Enforcement depends on backend and schema support; validate the returned JSON and required fields before using it. Describe the shape in the prompt too. |
 | `addDiscussionIdTimestampsForLLM` | Bool | false | Inject timestamps into messages. |
 | `useRelativeTimestamps` | Bool | false | Use relative timestamps ("5 min ago") instead of absolute. |
 | `useGroupChatTimestampLogic` | Bool | false | Commit assistant timestamps immediately (for group chats). If false, commit on next user turn. |
@@ -161,7 +161,7 @@ Reads a text file from disk and returns its content.
 
 | Property | Type | Description |
 |---|---|---|
-| `filepath` | String | Path to file. **[var]** Supports `{Discussion_Id}`, `{YYYY_MM_DD}`. |
+| `filepath` | String | Path to file. **[var]** Use `{Discussion_Directory}` for discussion state; supports `{YYYY_MM_DD}` and other variables. |
 | `delimiter` | String | Optional: string to find in file content and replace. |
 | `customReturnDelimiter` | String | Optional: replacement for delimiter occurrences. |
 | `headCount` / `tailCount` | Int | Optional, opt-in: return only the first/last N chunks. Set at most one. |
@@ -179,7 +179,7 @@ Writes content to a text file. Creates parent directories if needed.
 
 | Property | Type | Description |
 |---|---|---|
-| `filepath` | String | Path to save to. **[var]** Supports `{Discussion_Id}`, `{YYYY_MM_DD}`. |
+| `filepath` | String | Path to save to. **[var]** Use `{Discussion_Directory}` for discussion state; supports `{YYYY_MM_DD}` and other variables. |
 | `content` | String | Content to write. **[var]** |
 | `mode` | String | Optional: `"overwrite"` (default) or `"append"` (adds to end of file, creating it if missing). |
 
@@ -299,21 +299,90 @@ see the user documentation for full behavior.
 
 ## WebFetch
 
-Issues an HTTP request via the `requests` library and returns the response. See `Nodes/WebFetch.md` for the full
-security/privacy notes (substituted URL variables must be trusted; redirects are followed).
+Issues an HTTP request via Python Requests (default) or the system curl executable and returns the response. See
+`Nodes/WebFetch.md` for the full transport, timeout, TLS, and security/privacy behavior.
 
 | Property | Type | Default | Description |
 |---|---|---|---|
 | `url` | String | required | Target URL. **[var]** |
 | `method` | String | `"GET"` | HTTP method (case-insensitive). |
+| `transport` | String | `"requests"` | `"requests"` or `"curl"` (case-insensitive). Curl must be on `PATH`. No User-Agent is set by Wilmer; the selected client uses its generic default unless `headers` overrides it. Curl config-file loading is disabled. |
 | `headers` | Object | `{}` | Request headers; values support **[var]**. Keys are sent as written. |
 | `body` | String | None | Raw request body. **[var]** |
-| `timeout` | Number | 30 | Request timeout in seconds (must be a positive number). |
+| `timeout` | Number | 30 | Positive timeout in seconds. Requests uses a per-phase timeout; curl uses connection and total-transfer timeouts. |
 | `outputFormat` | String | `"text"` | `"text"`, `"json"` (re-serialized), `"full"` (status/headers/body envelope), or `"html-stripped"`. |
 | `onError` | String | `"raise"` | `"raise"` aborts on failure; `"return"` emits an error payload to branch on. |
-| `proxy` | String | None | Proxy URL for both http/https (any scheme `requests` supports). **[var]** |
+| `proxy` | String | None | Proxy URL for both HTTP and HTTPS; supported schemes depend on the transport. **[var]** |
+| `caBundle` | String | None | Custom CA bundle path. **[var]** |
+| `verify` | Bool | true | Enables TLS verification. False disables verification and takes precedence over `caBundle`. |
 | `allowRedirects` | Bool | true | Whether HTTP 3xx redirects are followed. Set false to stop a remote redirect bouncing the request to another host. |
-| `maxResponseBytes` | Int | 10485760 | Body-size cap in bytes (streamed read aborts past it). `0` disables the cap. |
+| `maxResponseBytes` | Int | 10485760 | Body-size cap in bytes. Both transports enforce it while streaming. `0` disables the cap. |
+| `blockPrivateAddresses` | Bool | false | Reject non-public target addresses and re-check every redirect. |
+| `allowedHosts` | Array of strings | None | Restrict target hostnames and re-check every redirect. Entries support **[var]**. |
+
+---
+
+## WebPageFetch
+
+Retrieves one ordinary public webpage with publisher-cautious defaults. It is GET-only, bodyless, headerless,
+stateless, does not retry, and does not load page subresources. Use `WebFetch` for APIs, JSON handling, custom headers,
+authentication, bodies, methods other than GET, or curl. See `Nodes/WebPageFetch.md` for the complete robots, pacing,
+limits, identity, and security behavior.
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `url` | String | required | Absolute HTTP or HTTPS page URL. **[var]** |
+| `method` | String | `"GET"` | Only `GET` is accepted. |
+| `transport` | String | `"requests"` | Only `requests` is accepted. |
+| `timeout` | Number | 30 | Per-request timeout with an additional bounded body-read deadline. |
+| `outputFormat` | String | `"html-stripped"` | `"html-stripped"`, `"text"`, or `"full"`. |
+| `onError` | String | `"raise"` | `"raise"` aborts; `"return"` emits an error message or full envelope. |
+| `proxy` | String | None | Proxy used by robots and page requests. **[var]** |
+| `caBundle` | String | None | Custom CA bundle path. **[var]** |
+| `verify` | Bool | true | Enables TLS verification. False takes precedence over `caBundle`. |
+| `respectRobots` | Bool | true | Retrieves and evaluates robots.txt before the page. |
+| `failClosedOnRobotsError` | Bool | true | Refuses a page after a general robots retrieval or parsing failure. Robots 401/403 always denies. |
+| `blockPrivateAddresses` | Bool | true | Rejects non-public destinations and re-checks every redirect. |
+| `allowedHosts` | Array of strings | None | Exact hostname allowlist, re-checked on each hop. Entries support **[var]**. |
+| `restrictPorts` | Bool | true | Permits only scheme-default ports plus `allowedPorts`. |
+| `allowedPorts` | Array of integers | `[]` | Additional ports accepted while port restriction is enabled. |
+| `enableDomainPacing` | Bool | true | Enables the shared domain request lane. |
+| `minimumDelaySeconds` | Number | 5 | Minimum request interval. |
+| `maxPacingWaitSeconds` | Number | 300 | Refuses a pacing requirement above this duration. |
+| `honorCrawlDelay` | Bool | true | Includes matching integer Crawl-delay in the request interval. |
+| `honorRequestRate` | Bool | true | Includes the evenly spaced matching Request-rate interval. |
+| `honorRetryAfter` | Bool | true | Applies 429/503 Retry-After to future domain calls. |
+| `honorForbiddenCooldown` | Bool | true | Applies a future domain cooldown after HTTP 403. |
+| `robotsCacheSeconds` | Number | 86400 | In-memory successful or absent robots cache lifetime. |
+| `robotsFailureCacheSeconds` | Number | 300 | In-memory denied or failed robots cache lifetime. |
+| `forbiddenCooldownSeconds` | Number | 604800 | 403 cooldown duration. |
+| `retryAfterFallbackSeconds` | Number | 60 | 429/503 cooldown when Retry-After is absent or invalid. |
+| `allowRedirects` | Bool | true | Manually follows validated redirects. |
+| `maxRedirects` | Int | 5 | Redirect cap from 0 through 5. |
+| `enforceContentType` | Bool | true | Requires an allowed page Content-Type before body read. |
+| `allowedContentTypes` | Array of strings | HTML, XHTML, plain text | Base media types accepted by the final page. |
+| `maxHeaderBytes` | Int | 131072 | Approximate parsed-header cap for robots and page responses. |
+| `maxTransferBytes` | Int | 5242880 | Transferred body cap for robots and page responses. |
+| `maxDecodedBytes` | Int | 26214400 | Body cap after gzip or deflate decoding. |
+
+Both robots and page requests use the Requests default User-Agent, `python-requests/<installed version>`, with
+`python-requests` as the robots product token. No custom User-Agent, caller headers, destination credentials, cookies,
+Referer, or persisted browsing state are used. An explicitly configured proxy may use its own credentials.
+
+Malformed page URLs and redirect metadata follow `onError`. Robots URL/directive failures are cached and follow
+`failClosedOnRobotsError`. Retry-After integer seconds require ASCII digits; invalid numeric/date values use the
+configured fallback cooldown. Handler diagnostics and service warnings honor request log redaction.
+Page and robots URLs are prepared to a stable transport form before address and robots checks. Dot segments and
+unreserved escapes are normalized before authorization; the same URL is sent and returned in result metadata.
+Preparation failures use the corresponding page or robots error policy.
+
+Robots permission uses normalized rule-path specificity, not the length of URL text consumed by a wildcard. Unanchored
+trailing `*` adds no specificity; internal `*` and terminal `$` count as rule characters, and equal specificity prefers
+Allow. Thus `Allow: /*` cannot override `Disallow: /private` for `/private/page`. Matching user-agent groups are merged,
+and the same permission rule applies to initial pages and redirects.
+Reserved escapes remain distinct from literal separators in both rules and URLs. For example, an Allow for
+`/private/public` does not authorize `/private%2Fpublic`; encoded query delimiters also remain data. Unreserved
+escapes still compare equally to their literal characters. A misplaced end anchor follows `failClosedOnRobotsError`.
 
 ---
 
@@ -347,3 +416,11 @@ arguments are chosen by the workflow author.
 | `arguments` | Object | `{}` | Tool arguments; string values support **[var]**. |
 | `timeout` | Number | 30 | Overall timeout in seconds (bounds connect + initialize + call; must be positive). |
 | `onError` | String | `"raise"` | `"raise"` aborts on failure; `"return"` emits the error string. |
+
+## ConversationChunkProcessor
+
+Runs a child workflow once per complete chunk of new conversation messages. Required workflowName selects the child;
+chunkSize controls the group size, lookbackMessages withholds the freshest tail, and scoped_variables follow the
+chunk text as child inputs. Use Discussion_Directory for cursorDirectory and mutable returnFile paths.
+The cursor records one last-message hash per completed chunk. See the
+[complete node guide](../User_Documentation/Setup/Workflow_Details/Nodes/ConversationChunkProcessor.md).

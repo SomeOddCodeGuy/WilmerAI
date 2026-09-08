@@ -24,6 +24,7 @@ def mock_dependencies(mocker):
     mocker.patch("Middleware.workflows.managers.workflow_manager.StandardNodeHandler")
     mocker.patch("Middleware.workflows.managers.workflow_manager.ContextCompactorHandler")
     mocker.patch("Middleware.workflows.managers.workflow_manager.WebFetchHandler")
+    mocker.patch("Middleware.workflows.managers.workflow_manager.WebPageFetchHandler")
     mocker.patch("Middleware.workflows.managers.workflow_manager.CurlCommandHandler")
     mocker.patch("Middleware.workflows.managers.workflow_manager.MCPToolCallHandler")
 
@@ -103,7 +104,7 @@ class TestWorkflowManagerInitialization:
             "GetCustomFile", "SaveCustomFile", "ImageProcessor", "StaticResponse",
             "ArithmeticProcessor", "Conditional", "StringConcatenator",
             "JsonExtractor", "TagTextExtractor", "DelimitedChunker",
-            "ContextCompactor", "WebFetch", "CurlCommand", "MCPToolCall",
+            "ContextCompactor", "WebFetch", "WebPageFetch", "CurlCommand", "MCPToolCall",
         }
         assert set(manager.node_handlers.keys()) == expected_node_types
 

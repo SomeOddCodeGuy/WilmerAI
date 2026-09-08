@@ -4,6 +4,8 @@ import os
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+
 import Middleware.api.api_server as api_server_module
 from Middleware.api.api_server import ApiServer
 from Middleware.api.handlers.base.base_api_handler import BaseApiHandler
@@ -25,6 +27,15 @@ class MockApiHandler(BaseApiHandler):
 class AbstractMockHandler(BaseApiHandler):
     """An abstract handler subclass (register_routes deliberately not implemented)."""
     pass
+
+
+class WilmerProxyMockHandler(BaseApiHandler):
+    """A concrete handler available only in WilmerProxy runtime mode."""
+
+    SUPPORTED_MODES = frozenset({"wilmerproxy"})
+
+    def register_routes(self, app):
+        pass
 
 
 def test_discover_and_register_handlers(mocker):
@@ -74,6 +85,75 @@ def test_discover_skips_non_python_files(mocker):
     ApiServer(app_instance=MagicMock())
 
     mock_import.assert_not_called()
+
+
+def test_wilmer_proxy_mode_imports_and_registers_only_wilmer_proxy_handler_module(mocker):
+    mocker.patch.object(instance_global_variables, "RUNTIME_MODE", "wilmerproxy")
+    mocker.patch('os.walk', return_value=[
+        (
+            os.path.join(_handlers_root(), 'impl'),
+            [],
+            [
+                'openai_api_handler.py',
+                'ollama_api_handler.py',
+                'wilmer_proxy_openai_api_handler.py',
+            ],
+        )
+    ])
+    wilmer_proxy_module = SimpleNamespace(WilmerProxyMockHandler=WilmerProxyMockHandler)
+    mock_import = mocker.patch(
+        'importlib.import_module', return_value=wilmer_proxy_module)
+    mock_register = mocker.patch.object(WilmerProxyMockHandler, 'register_routes')
+    mock_app = MagicMock()
+
+    ApiServer(app_instance=mock_app)
+
+    mock_import.assert_called_once_with(
+        'Middleware.api.handlers.impl.wilmer_proxy_openai_api_handler')
+    mock_register.assert_called_once_with(mock_app)
+
+
+def test_workflow_mode_does_not_import_wilmer_proxy_handler_module(mocker):
+    mocker.patch.object(instance_global_variables, "RUNTIME_MODE", "workflow")
+    mocker.patch('os.walk', return_value=[
+        (
+            os.path.join(_handlers_root(), 'impl'),
+            [],
+            ['openai_api_handler.py', 'wilmer_proxy_openai_api_handler.py'],
+        )
+    ])
+    workflow_module = SimpleNamespace(MockApiHandler=MockApiHandler)
+    mock_import = mocker.patch('importlib.import_module', return_value=workflow_module)
+    mock_register = mocker.patch.object(MockApiHandler, 'register_routes')
+    mock_app = MagicMock()
+
+    ApiServer(app_instance=mock_app)
+
+    mock_import.assert_called_once_with('Middleware.api.handlers.impl.openai_api_handler')
+    mock_register.assert_called_once_with(mock_app)
+
+
+def test_wilmer_proxy_mode_registration_failure_aborts_startup(mocker):
+    mocker.patch.object(instance_global_variables, "RUNTIME_MODE", "wilmerproxy")
+    mocker.patch('os.walk', return_value=[
+        (
+            os.path.join(_handlers_root(), 'impl'),
+            [],
+            ['wilmer_proxy_openai_api_handler.py'],
+        )
+    ])
+
+    class RaisingWilmerProxyHandler(BaseApiHandler):
+        SUPPORTED_MODES = frozenset({"wilmerproxy"})
+
+        def register_routes(self, app):
+            raise RuntimeError("WilmerProxy registration failed")
+
+    module = SimpleNamespace(RaisingWilmerProxyHandler=RaisingWilmerProxyHandler)
+    mocker.patch('importlib.import_module', return_value=module)
+
+    with pytest.raises(RuntimeError, match="WilmerProxy registration failed"):
+        ApiServer(app_instance=MagicMock())
 
 
 def test_discover_tolerates_import_error_and_continues(mocker, caplog):

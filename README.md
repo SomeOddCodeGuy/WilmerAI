@@ -15,6 +15,14 @@
 
 ---
 
+## Maintainer's Notes
+
+> Minimum Python version is bumped up to 3.13.14/3.14.5. However, if you don't intend to use the web fetcher,
+> you should be fine on 3.11.10/3.12.13. Web fetch is the only item that really requires the higher versions.
+> So if you're already using Wilmer on a lower python, it should be fine.
+
+---
+
 ## What is WilmerAI?
 
 WilmerAI is an application designed for advanced semantic prompt routing and complex task orchestration. It
@@ -38,7 +46,7 @@ logic without requiring changes to your existing front-end tools.
 
 ## Working with Workflows
 
-### Semi-Autonomous Workflows Allow You Determine What Tools and When
+### Configure Tool Use in Workflows
 
 The below shows Open WebUI connected to 2 instances of Wilmer (recorded before multi-user support was added; a single
 instance can now serve multiple users). The first instance just hits Mistral Small 3 24b directly, and then the second
@@ -54,6 +62,8 @@ A zero-shot to an LLM may not give great results, but follow-up questions will o
 regularly perform
 [the same follow-up questions when doing tasks like software development](https://www.someoddcodeguy.dev/my-personal-guide-for-developing-software-with-ai-assistance/),
 creating a workflow to automate those steps can have great results.
+
+Results depend on the model, prompts, and task.
 
 ### Distributed LLMs
 
@@ -91,8 +101,7 @@ including proprietary APIs, depending on how you build your workflow.
     * **In-Workflow Routing**: During a workflow, it provides conditional "if/then" logic, allowing a process to
       dynamically choose its next step based on the output of a previous node.
 
-  Crucially, these routing decisions can be based on the **entire conversation history**, not just the user's last
-  messages, allowing for a much deeper understanding of intent.
+  Routing decisions can use the **entire conversation history**, subject to the workflow's configured context limits.
 
 ---
 
@@ -131,11 +140,11 @@ including proprietary APIs, depending on how you build your workflow.
 ---
 
 * **Tool Calling & Structured Output**
-  Full OpenAI-style tool calling passthrough, including reliable multi-round tool loops through authored-prompt
+  OpenAI-style tool calling passthrough, including multi-round tool loops through authored-prompt
   workflows (`appendNativeToolExchange`). On backends with constrained decoding (llama.cpp, Ollama, LM Studio, vLLM,
-  OpenAI), demanded tool calls (`tool_choice` forced or `required`) are grammar-enforced rather than hoped for, and
-  any workflow node can pin its output to a JSON Schema (`structuredOutputFile`), turning routing decisions,
-  extractions, and classifications into guaranteed-parseable JSON even on small local models. See
+  OpenAI), demanded tool calls (`tool_choice` forced or `required`) use the supported backend constraint mechanism.
+  LLM nodes can request a JSON Schema through `structuredOutputFile` for routing, extraction, or classification;
+  support and enforcement depend on the backend. See
   `Docs/User_Documentation/Core_Features/Tool_Calling_And_Structured_Output.md`.
 
 ---
@@ -164,141 +173,90 @@ including proprietary APIs, depending on how you build your workflow.
 
 ---
 
-#### Privacy Check (2026-07-19)
+#### Privacy Check (2026-09-07)
 
 For my own edification, to ensure I didn't accidentally add something that would negatively impact
-Wilmer's privacy posture, I'll sometimes ask Claude Code to do an end-to-end check to look for any
+Wilmer's privacy posture, I'll sometimes ask the coding agent I am working with to do an end-to-end check to look for any
 outbound calls or other data leakage. It's not as good as a formal code audit, but it gives me
 peace of mind. I've included the results of the check here.
 
 I've been doing this check whenever I make a really big set of changes, just to make sure
 that I didn't introduce something I didn't intend to via a library or sloppy coding.
 
-On 2026-07-19, Claude Code (Claude Opus 4.8) was asked to search the codebase and report any outbound
-network calls, telemetry, or other privacy-relevant behavior it could find. The results listed
+This informal check was performed using Codex (GPT-6 Astra), most recently on 2026-09-07.
+It looks for outbound network calls, telemetry, or other privacy-relevant behavior. The results listed
 below were generated for my own personal use and were shared for transparency; **they are not a
 guarantee**.
 
 If privacy matters to your deployment, please run your own analysis before using WilmerAI.
 
-```text
-What Was Checked
-----------------
-The Middleware/ and Public/ source trees, the top-level entry points (server.py, run_eventlet.py,
-run_waitress.py), the Scripts/ utilities (rekey_encrypted_files.py, backfill_embeddings.py), and
-all shell/batch launcher scripts (run_macos.sh, run_windows.bat, Scripts/rekey_encrypted_files.sh,
-Scripts/rekey_encrypted_files.bat) were searched for outbound HTTP calls (requests.get,
-requests.post, requests.Session, requests.request), raw socket usage, subprocess invocations,
-dynamic imports, hardcoded external URLs, telemetry-related keywords (analytics, telemetry,
-phone-home, tracking, metrics), and environment variable reads. The server entry points and
-launcher scripts contained no outbound network calls; run_eventlet.py sets TCP_NODELAY on the
-local listening socket but makes no external connections.
+This inventory comes from a static review of the release source, including application code, shipped Python helpers,
+server entry points and launchers. Offline tests provided additional evidence about request isolation, logging and
+storage boundaries. It does not certify external services, dependency internals or live network behavior.
 
-Outbound Network Calls
-----------------------
-The main outbound network call sites in Wilmer's own code, each targeting a destination the user
-configures (this reflects the current source and is representative rather than a guaranteed
-exhaustive registry; run your own analysis if it matters to you):
+| Outbound boundary | Trigger, destination and data |
+| --- | --- |
+| LLM and embedding transports | Configured workflow and memory operations send prompts, images, tools, schemas or memory text to configured endpoints. Explicitly configured backups may receive a failed primary request. |
+| Offline wiki tools | Enabled workflow features send queries to configured services with loopback defaults. Retrieval inside those services is outside this inventory. |
+| WebFetch | An explicit node sends its configured URL, method, body and headers through Requests or selected system curl. Proxies and optional destination guards are operator-controlled; TLS verification defaults on. |
+| WebPageFetch | An explicit page node retrieves its configured URL and, by default, robots.txt at that origin. Page and robots.txt requests can follow redirects when enabled. |
+| CurlCommand | A trusted workflow node launches system curl with configured arguments. Operator-selected options can intentionally access files or services. |
+| MCPToolCall | An explicit node selects its configured stdio process, SSE service or streamable HTTP service and sends tool arguments and configured headers/environment. |
+| Shipped MCPO helpers | Explicit PythonModule workflows retrieve schemas and execute selected tools at a configured or environment-supplied MCPO destination, with a loopback default. |
+| WilmerProxy | Explicit proxy mode relays allowed model requests to configured upstreams using the chosen authentication/header policy. |
+| Embedding backfill | An operator-run script sends selected memory text to its supplied embedding URL. The server does not run it automatically. |
+| Launcher setup | Operator-started shell/batch launchers can install requirements with pip and its configured registries. Installation traffic is separate from application requests. |
 
-1. Middleware/llmapis/handlers/base/base_llm_api_handler.py and handlers/base/base_api_transport.py
-   - session.post() to the user-configured LLM endpoint (self.base_url from the endpoint config);
-     the streaming path posts from base_llm_api_handler.py and the non-streaming path from
-     base_api_transport.py, both to the same user-configured destination
+No telemetry, analytics, automatic update service or unrelated runtime download was identified in the reviewed
+application code. No hardcoded public-internet request destinations were identified in the reviewed runtime code.
+Editable endpoint examples do include OpenAI and Anthropic provider URLs; using those configurations can send
+requests to those providers.
 
-2. Middleware/workflows/tools/offline_wikipedia_api_tool.py
-   - requests.get() to a user-configured host; defaults to 127.0.0.1:5728
-   - Disabled unless useOfflineWikiApi is set
+Runtime requests originate from configured services, user-selected URLs, or explicitly enabled workflow features.
+Redirects can derive subsequent request destinations. WebPageFetch starts robots.txt requests at the selected page's
+origin; both page and robots.txt responses may lead to other destinations when redirects are enabled.
 
-3. Public/workflow_python_scripts/_isevendays_mcp_scripts/mcp_service_discoverer.py
-   - requests.get() to a user-configured or env-var MCPO server; defaults to localhost:8889
+In the offline Middleware import checks performed for this review, no network access, subprocess creation, or
+runtime writes were observed. No live endpoint or packet-capture test was used for this inventory.
 
-4. Public/workflow_python_scripts/_isevendays_mcp_scripts/mcp_tool_executor.py
-   - requests.request() to the same MCPO server as above
+The reviewed built-in HTTP code did not add personal contact information or a project-specific User-Agent.
+Operator-configured headers, proxy credentials, tool environments and custom scripts can affect what is sent.
+Requests-based tools may also use environment-provided proxy or authentication settings; WebPageFetch and
+WilmerProxy disable those ambient settings. Application-level destination checks are not a substitute for
+network-level enforcement where required. WilmerProxy's model allowlist is not client authentication and does
+not hide model names inside upstream responses.
 
-5. Middleware/workflows/handlers/impl/web_fetch_handler.py
-   - requests.request() to the URL set on a WebFetch node (user-authored); optional HTTP/SOCKS
-     proxy. TLS verification is on by default.
+**Storage and diagnostics**
 
-6. Middleware/workflows/handlers/impl/curl_command_handler.py
-   - spawns the system `curl` binary via subprocess.Popen (shell=False) against the URL(s) in a
-     CurlCommand node's args (user-authored)
+- An API key selects a key-scoped discussion directory independently of encryption. Custom workflow file paths
+  must use that directory scope to share its isolation.
+- With `encryptUsingApiKey` enabled and a key supplied, supported discussion JSON and built-in state documents
+  use Fernet encryption on writes. Preserve the original API key and workflow selection to read encrypted files;
+  disabling encryption does not decrypt them. Existing plaintext is not encrypted merely by reading it, and
+  backups can retain earlier plaintext.
+- Custom text remains plaintext. SQLite vector memory contains readable text, metadata and embeddings; workflow
+  lock databases can contain discussion identifiers. These databases are not encrypted by this feature.
+- Configuration files can contain plaintext operator credentials and require separate protection.
+- When redaction is not enabled, diagnostic logging may contain prompts, model responses, tool payloads, or other
+  request content, depending on the request path and configured log level. Some content is logged at INFO as well
+  as DEBUG.
+- Built-in request redaction activates through `redactLogOutput`, or through `encryptUsingApiKey` when a key is
+  supplied. The reviewed paths apply that policy to request diagnostics, including errors and cleanup logging.
+  Offline tests covered redacted and unredacted requests; they do not establish that every possible path is covered.
+- Custom Python must use the logging helpers itself. Independent third-party loggers, startup print messages and
+  external services are outside this request-redaction policy.
 
-7. Middleware/workflows/tools/mcp_client_tool.py
-   - connects to an MCP server defined under Public/Configs/MCPServers/ (user-configured) over
-     stdio (local process), SSE, or streamable HTTP, for MCPToolCall nodes
+**Dependencies and extension boundaries**
 
-8. Middleware/llmapis/handlers/impl/embedding_api_handler.py (via handlers/base/base_api_transport.py)
-   - session.post() to the user-configured embeddings endpoint; only used when a discussion's
-     memory settings configure an embeddings endpoint, or a node requests semantic or hybrid
-     search against one
+Runtime/test dependencies are pinned in requirements.txt and requirements-test.txt. Exact installed pins and offline
+compatibility tests are evidence about the tested environment, not a security audit of every dependency.
 
-9. Scripts/backfill_embeddings.py
-   - requests.post() only to the user-supplied --url, and only when the script is run by hand;
-     never invoked by the server
+Handler discovery imports packaged code, and LLM handlers use a fixed factory. PythonModule nodes execute selected
+Python with process privileges and are not sandboxed. HTTP image URLs are forwarded to the configured provider rather
+than fetched by this application. Author-controlled file paths, SQL and subprocess options are trusted configuration.
 
-No telemetry, analytics, phone-home, auto-update, or hardcoded external URLs were found. Every
-outbound call Wilmer is known to make goes to a destination the user configures; there are no
-connections to hosts that Wilmer picks on its own. Any optional tool or node not individually
-listed above follows the same rule: it stays off unless the user enables it, and it targets only
-the host the user points it at (typically defaulting to a local address). The WebFetch and
-CurlCommand nodes additionally support an opt-in SSRF guard (blockPrivateAddresses / allowedHosts)
-that can restrict which hosts they are allowed to reach.
-
-Data Storage
-------------
-- JSON conversation/memory files: Optionally encrypted at rest using Fernet (AES-128-CBC with
-  HMAC, PBKDF2 with 100k iterations) when encryptUsingApiKey is enabled.
-- SQLite databases: Used for vector memory and workflow locks. These are NOT encrypted, even
-  when the encryption feature is enabled.
-- Log files: At DEBUG level, logs may contain full prompts and LLM responses unless
-  redactLogOutput or encryptUsingApiKey is enabled in the user configuration.
-- Configuration files: May contain API keys in plaintext. These files are not encrypted by Wilmer.
-
-Third-Party Dependencies
-------------------------
-All runtime dependencies from requirements.txt:
-
-  requests 2.34.2         - HTTP client for LLM API and tool calls
-  urllib3 2.7.0           - Transport layer for requests
-  Flask 3.1.3             - HTTP server framework
-  Jinja2 3.1.6            - Template rendering for workflow prompts
-  Pillow 12.3.0           - Image format detection and processing
-  eventlet 0.41.1         - Async WSGI server (optional)
-  waitress 3.0.2          - Production WSGI server (optional)
-  cryptography 49.0.0     - Fernet encryption for stored data
-  mcp 1.28.1              - Model Context Protocol client (MCPToolCall node)
-  PySocks 1.7.1           - SOCKS proxy support for requests (WebFetch proxy)
-
-No telemetry or analytics code was found in any of these packages' initialization paths as used
-by Wilmer.
-
-Dynamic Code Loading
---------------------
-- PythonModule workflow nodes execute user-provided Python scripts from the configured scripts
-  directory with the full privileges of the Wilmer process. These scripts are not sandboxed or
-  validated by Wilmer.
-- Front-end API handler discovery (Middleware/api/handlers/) uses importlib but loads only from
-  that directory within the application; the backend LLM API handlers are chosen by a static
-  factory rather than by scanning the filesystem.
-
-Image URL Handling
-------------------
-When a conversation message contains an image referenced by HTTP URL, that URL is forwarded as-is
-to the configured LLM provider. Wilmer does not fetch the image itself.
-
-Limitations
------------
-1. This is a static source-code search performed by an AI (Claude Opus 4.8), not a formal third-party
-   security audit.
-2. Third-party library source code was not checked at the bytecode level. The results confirm only
-   that Wilmer's own code does not appear to initiate unexpected connections.
-3. PythonModule scripts are user-provided and can execute arbitrary code. Their behavior is outside
-   the scope of this check.
-4. Runtime network monitoring (e.g., packet capture) was not performed.
-5. SQLite databases used for vector memory are not encrypted, even when encryption is otherwise
-   enabled.
-6. Log files may contain full conversation content unless redaction is explicitly enabled.
-```
+This is an AI-assisted source review, not a formal third-party audit or privacy guarantee. Operators should assess
+their configured services, scripts, credentials and storage independently.
 
 > While I do not have the tools to make a 100% guarantee claim there is not a third party
 > library doing something I'm not expecting, I wanted to make a point
@@ -314,19 +272,21 @@ User Documentation can be found by going to [/Docs/User_Documentation/](Docs/Use
 
 Helpful developer docs can be found in [/Docs/Developer_Docs/](Docs/Developer_Docs/README.md)
 
-## Quick-ish Setup
+## Setup
 
-WilmerAI requires Python 3.11.9 or newer (3.10.14+, 3.12.4+, or any 3.13+ also work). The
-3.11.9 floor is deliberate: it is the first 3.11 release with the CVE-2024-4032 fix that
-corrects `ipaddress`'s classification of several non-public address ranges, which the
-optional SSRF address guard (`blockPrivateAddresses` / `allowedHosts`) relies on.
+To use **all features, including `WebPageFetch`**, use **Python 3.13.14 or a later 3.13 patch**, or
+**3.14.5 or a later 3.14 patch**. Existing installations that do not use `WebPageFetch` are expected to continue
+working on **3.11.10 or a later 3.11 patch**, or **3.12.13 or a later 3.12 patch**.
+
+Development uses **Python 3.14.6**, pinned in [`.python-version`](.python-version). That exact patch is not required
+for end users. Complete dependency installations and the full suite have not yet been validated on Python 3.11
+or 3.12.
 
 ### Guides
 
 #### WilmerAI
 
-Hop into the [User Documents Setup Starting Guide](Docs/User_Documentation/Setup/_Getting-Start_Wilmer-Api.md) to get
-step by step rundown of how to quickly set up the API.
+Follow the [setup guide](Docs/User_Documentation/Setup/_Getting-Start_Wilmer-Api.md) to configure and start the API.
 
 #### Wilmer with Open WebUI
 

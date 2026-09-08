@@ -7,7 +7,9 @@ from Middleware.utilities.sensitive_logging_utils import sensitive_log_lazy, log
 from Middleware.utilities.text_utils import return_brackets
 from .base_llm_api_handler import LlmApiHandler
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 
 class BaseChatCompletionsHandler(LlmApiHandler):

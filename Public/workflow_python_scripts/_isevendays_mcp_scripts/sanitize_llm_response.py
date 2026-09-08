@@ -6,7 +6,9 @@ import re
 from Public.workflow_python_scripts._isevendays_mcp_scripts.workflow_utils import aggregate_generator_input
 from Middleware.utilities.text_utils import return_brackets_in_string
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 def sanitize_json_markers(text):
     """Remove problematic markers from LLM JSON output.
@@ -40,21 +42,19 @@ def Invoke(text, **kwargs):
     """Main entry point for the sanitization module.
 
     Args:
-        text (str): The LLM response text to sanitize (might be a generator).
+        text (str or generator): The LLM response text or streamed input.
+        **kwargs: Additional workflow arguments, unused by this module.
 
     Returns:
         str: Sanitized text.
     """
     logger.info("LLM response sanitizer invoked")
     
-    # --- Workaround Start --- 
-    # Aggregate input if it's a generator from a previous streaming step
     processed_text = aggregate_generator_input(text)
-    # --- Workaround End --- 
 
     if not processed_text or not isinstance(processed_text, str):
         logger.warning(f"Invalid input after aggregation: {type(processed_text)}")
         # Return original aggregated input or empty string if aggregation failed
         return processed_text if isinstance(processed_text, str) else ""
     
-    return sanitize_json_markers(processed_text) 
+    return sanitize_json_markers(processed_text)

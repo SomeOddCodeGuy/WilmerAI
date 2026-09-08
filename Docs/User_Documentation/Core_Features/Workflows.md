@@ -22,6 +22,8 @@ can be used throughout the workflow.
 
 **Example Workflow Structure (`MyWorkflow.json`):**
 
+Partial workflow example: supply any omitted `endpointName` and `preset` fields for LLM nodes before running it.
+
 ```json
 {
   "persona": "You are a helpful and creative AI assistant.",
@@ -109,7 +111,7 @@ available node categories and some key examples.
 * **`Standard`**: The most common type; makes a direct call to an LLM.
 * **`PythonModule`**: Executes a custom Python script and returns its string output.
 * **`GetCustomFile`**: Reads the content of a local text file. Supports variables in the filepath, including
-  `{Discussion_Id}` and `{YYYY_MM_DD}` for dynamic paths.
+  `{Discussion_Directory}` for canonical per-discussion paths and `{YYYY_MM_DD}` for dated paths.
 * **`SaveCustomFile`**: Saves a string to a local text file. Supports variables in both `filepath` and `content`.
 * **`ImageProcessor`**: Generates a text description for an image supplied by the user.
 * **`StaticResponse`**: Responds back with a hardcoded string that is defined on the node itself.
@@ -178,6 +180,8 @@ This category contains nodes for creating, retrieving, and managing conversation
 
 The following workflow demonstrates how these components work together. It defines a persona, uses one node to retrieve
 relevant facts from memory, and a second node to synthesize those facts into a response for the user.
+
+Partial workflow example: supply any omitted `endpointName` and `preset` fields for LLM nodes before running it.
 
 ```json
 {

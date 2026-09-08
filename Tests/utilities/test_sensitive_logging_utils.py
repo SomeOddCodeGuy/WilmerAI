@@ -120,14 +120,14 @@ class TestSensitiveLog:
         call_args = mock_logger.log.call_args
         assert call_args[0] == (logging.DEBUG, _REDACTION_MARKER)
 
-    def test_forwards_kwargs_when_redacted(self):
+    def test_drops_exception_details_when_redacted(self):
         set_encryption_context(True)
         mock_logger = MagicMock(spec=logging.Logger)
         sensitive_log(mock_logger, logging.ERROR, "secret error", exc_info=True)
         mock_logger.log.assert_called_once()
         call_args = mock_logger.log.call_args
         assert call_args[0] == (logging.ERROR, _REDACTION_MARKER)
-        assert call_args[1] == {"exc_info": True}
+        assert call_args[1] == {}
 
 
 # ---------------------------------------------------------------------------

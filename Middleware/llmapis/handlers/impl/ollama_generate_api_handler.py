@@ -6,7 +6,9 @@ from typing import Dict, Optional, Any, List
 from Middleware.llmapis.handlers.base.base_completions_handler import BaseCompletionsHandler
 from Middleware.utilities.sensitive_logging_utils import sensitive_log
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 
 class OllamaGenerateApiHandler(BaseCompletionsHandler):

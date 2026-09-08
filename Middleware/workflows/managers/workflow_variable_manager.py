@@ -3,9 +3,11 @@
 import logging
 import re
 from datetime import datetime
+from string import Formatter
 from typing import Dict, Any, List
 
 import jinja2
+from jinja2 import meta
 
 from Middleware.services.memory_service import MemoryService
 from Middleware.services.timestamp_service import TimestampService
@@ -13,7 +15,8 @@ from Middleware.utilities.config_utils import (
     get_chat_template_name, get_separate_conversation_in_variables,
     get_conversation_separation_delimiter, get_user_config,
     get_estimation_level_multiplier, is_context_clamp_enabled,
-    compute_endpoint_window_budget, CONTEXT_WINDOW_BUDGET_HEADROOM_TOKENS
+    compute_endpoint_window_budget, get_discussion_folder_path,
+    CONTEXT_WINDOW_BUDGET_HEADROOM_TOKENS
 )
 from Middleware.utilities.prompt_extraction_utils import (
     extract_last_n_turns, extract_last_n_turns_as_string,
@@ -30,7 +33,42 @@ from Middleware.utilities.prompt_template_utils import (
 from Middleware.utilities.text_utils import escape_brackets_in_string, return_brackets_in_string
 from Middleware.workflows.models.execution_context import ExecutionContext
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
+
+def _references_discussion_directory(prompt: str, jinja: bool = False) -> bool:
+    """Parse references using the same template language as the caller.
+
+    Args:
+        prompt (str): Template being resolved.
+        jinja (bool): Whether the node uses Jinja rather than standard formatting.
+
+    Returns:
+        bool: Whether the reserved directory is referenced.
+    """
+    if not prompt:
+        return False
+    if jinja:
+        try:
+            return "Discussion_Directory" in meta.find_undeclared_variables(
+                jinja2.Environment().parse(prompt))
+        except jinja2.TemplateSyntaxError:
+            # Malformed templates must not turn a reserved path into an empty root.
+            return bool(re.search(r"\bDiscussion_Directory\b", prompt))
+    pending = [prompt]
+    try:
+        while pending:
+            for _, field, specification, _ in Formatter().parse(pending.pop()):
+                if field is not None:
+                    if re.split(r"[.\[]", field, maxsplit=1)[0] == "Discussion_Directory":
+                        return True
+                    if specification:
+                        pending.append(specification)
+    except ValueError:
+        # Leave rendering errors to the formatter without weakening directory scoping.
+        return bool(re.search(r"\bDiscussion_Directory\b", prompt))
+    return False
 
 
 class WorkflowVariableManager:
@@ -216,17 +254,12 @@ class WorkflowVariableManager:
         """
         variables = {}
         now = datetime.now()
+        discussion_directory_requested = (
+            prompt is None or _references_discussion_directory(
+                prompt, bool(context.config and context.config.get('jinja2', False))))
 
-        # --- User-level shared workflow variables (single source of truth) ---
-        # A 'userWideWorkflowVariables' object in the user config exposes operator-defined values
-        # (e.g. a base directory for a workflow's on-disk state files) as {placeholders}
-        # available to EVERY workflow, so a path is set once in the user config instead of
-        # repeated in each workflow JSON. Added at the LOWEST precedence (the date/time,
-        # workflow-config, conversation, and agent-output variables below all override it),
-        # so a custom key can only fill a name nothing else defines and can never shadow a
-        # built-in. Left unescaped (like the workflow-config values below) so a value may
-        # itself reference another placeholder (e.g. "{Discussion_Id}") via the second
-        # resolution pass in apply_variables.
+        # User-wide values have the lowest precedence so they cannot shadow built-ins.
+        # Leave placeholders unescaped for the second resolution pass.
         try:
             user_config = get_user_config()
             shared_variables = user_config.get('userWideWorkflowVariables') if isinstance(user_config, dict) else None
@@ -255,6 +288,11 @@ class WorkflowVariableManager:
         # --- Context-specific variables ---
         if context.discussion_id:
             variables['Discussion_Id'] = context.discussion_id
+            if discussion_directory_requested:
+                variables['Discussion_Directory'] = get_discussion_folder_path(
+                    context.discussion_id, api_key_hash=context.api_key_hash)
+            else:
+                variables['Discussion_Directory'] = ''
             if not prompt or 'time_context_summary' in prompt:
                 variables['time_context_summary'] = self.timestamp_service.get_time_context_summary(
                     context.discussion_id, encryption_key=context.encryption_key,
@@ -263,7 +301,11 @@ class WorkflowVariableManager:
                 variables['time_context_summary'] = ''
         else:
             variables['Discussion_Id'] = ''
+            variables['Discussion_Directory'] = ''
             variables['time_context_summary'] = ''
+            if prompt is not None and discussion_directory_requested:
+                raise ValueError(
+                    "Discussion_Directory requires a discussion ID on the current request")
 
         # --- Conversation formatting settings ---
         add_role_tags = False
@@ -558,4 +600,3 @@ class WorkflowVariableManager:
                 messages, n, include_sysmes, remove_all_system_override,
                 add_role_tags=add_role_tags, separator=separator)
         return variables
-

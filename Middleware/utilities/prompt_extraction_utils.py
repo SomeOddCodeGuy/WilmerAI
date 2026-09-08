@@ -8,7 +8,9 @@ from typing import Dict, Tuple, List, Optional, Any
 from Middleware.utilities.sensitive_logging_utils import sensitive_log
 from Middleware.utilities.text_utils import escape_brackets_in_string, rough_estimate_token_length
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 template = {
     "Begin_Sys": "[Beg_Sys]",

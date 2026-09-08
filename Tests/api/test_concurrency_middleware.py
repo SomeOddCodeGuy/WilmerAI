@@ -334,6 +334,20 @@ def test_endpoint_level_short_circuits_middleware(mocker):
     sem.release()
 
 
+def test_proxy_endpoint_level_still_limits_request_lifetime(mocker):
+    mocker.patch("Middleware.common.instance_global_variables.CONCURRENCY_LEVEL", "endpoint")
+    mocker.patch("Middleware.common.instance_global_variables.RUNTIME_MODE", "wilmerproxy")
+    sem = threading.BoundedSemaphore(1)
+    middleware = ConcurrencyLimitMiddleware(_make_simple_app([b"stream"]), sem, acquire_timeout=0)
+    first_status, first = _call_middleware(middleware, method="POST")
+    busy_status, busy = _call_middleware(middleware, method="POST")
+    assert first_status["status"] == "200 OK"
+    assert busy_status["status"] == "503 Service Unavailable"
+    first.close()
+    assert sem.acquire(blocking=False)
+    sem.release()
+
+
 def test_wilmer_level_default_still_acquires_semaphore(mocker):
     """Explicit confirmation that the default CONCURRENCY_LEVEL ('wilmer')
     preserves the request-level gate semantics."""

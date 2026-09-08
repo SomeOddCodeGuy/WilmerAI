@@ -1,13 +1,14 @@
 # Middleware/services/embedding_service.py
 
-import logging
 from typing import List, Optional
 
 from Middleware.common.constants import EMBEDDING_API_TYPES
 from Middleware.llmapis.handlers.impl.embedding_api_handler import EmbeddingApiHandler
 from Middleware.utilities.config_utils import get_api_type_config, get_endpoint_config
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 
 class EmbeddingService:

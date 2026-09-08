@@ -329,8 +329,8 @@ class TestNonStreamingRetryLoop:
     @patch('requests.Session.post')
     def test_retries_three_times_and_reraises_on_final_attempt(self, mock_post, mock_handler,
                                                                setup_cancellation_service):
-        """Test that a persistent request error is retried 3 times, then re-raised."""
-        mock_post.side_effect = requests.exceptions.RequestException("Connection failed")
+        """Test that a persistent connection establishment timeout is retried 3 times, then re-raised."""
+        mock_post.side_effect = requests.exceptions.ConnectTimeout("Connection failed")
 
         with pytest.raises(requests.exceptions.RequestException, match="Connection failed"):
             mock_handler.handle_non_streaming(prompt="test")
@@ -396,7 +396,7 @@ class TestAbortCallbackLifecycle:
         # Invoking the captured callback must aggressively close the session
         abort_callback()
         mock_session.close.assert_called_once()
-        mock_session.adapters.clear.assert_called_once()
+        mock_session.adapters.clear.assert_not_called()
 
     def test_non_streaming_abort_callback_registered_and_unregistered(self, mock_handler,
                                                                       setup_cancellation_service, mocker):
@@ -427,7 +427,7 @@ class TestAbortCallbackLifecycle:
         # Invoking the captured callback must aggressively close the session
         abort_callback()
         mock_session.close.assert_called_once()
-        mock_session.adapters.clear.assert_called_once()
+        mock_session.adapters.clear.assert_not_called()
 
 
 class TestHandleStreamingLineProcessing:
@@ -459,11 +459,10 @@ class TestHandleStreamingLineProcessing:
 
     @patch('requests.Session.post')
     @patch('Middleware.llmapis.handlers.base.base_llm_api_handler.logger')
-    def test_streaming_http_error_captures_body_and_raises(self, mock_logger, mock_post,
+    def test_streaming_http_error_closes_response_and_raises(self, mock_logger, mock_post,
                                                            mock_handler, setup_cancellation_service):
         """
-        Test that an HTTP >= 400 response has its body captured and logged before
-        raise_for_status propagates the error.
+        HTTP errors are checked and closed by the shared POST policy.
         """
         mock_response = MagicMock()
         mock_response.status_code = 500
@@ -477,8 +476,8 @@ class TestHandleStreamingLineProcessing:
             list(mock_handler.handle_streaming(prompt="test"))
 
         mock_response.raise_for_status.assert_called_once()
-        error_logs = [str(call) for call in mock_logger.error.call_args_list]
-        assert any("upstream exploded" in log for log in error_logs)
+        mock_response.close.assert_called_once()
+        mock_post.assert_called_once()
 
 
 class MockLineDelimitedHandler(MockLlmApiHandler):

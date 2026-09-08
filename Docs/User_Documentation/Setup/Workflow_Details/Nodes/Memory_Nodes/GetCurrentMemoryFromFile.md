@@ -1,6 +1,6 @@
 ## The `GetCurrentMemoryFromFile` Node
 
-This guide provides a code-validated overview of the `GetCurrentMemoryFromFile` node. It details the
+This guide provides an overview of the `GetCurrentMemoryFromFile` node. It details the
 node's function as a direct reader of the long-term memory file.
 
 ### Core Purpose
@@ -53,7 +53,9 @@ If you only need the most recent memories, `RecentMemorySummarizerTool` is more 
 need the rolling conversation summary rather than the individual memory chunks, use
 `GetCurrentSummaryFromFile`.
 
-```json
+Annotated JSON example. Remove comments before saving it as a configuration file.
+
+```jsonc
 [
   {
     "title": "Step 1: Load all memory chunks",

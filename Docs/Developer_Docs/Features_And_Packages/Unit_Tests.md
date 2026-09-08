@@ -11,7 +11,17 @@ code coverage (`pytest-cov`).
 
 ## 1\. Environment Setup
 
-Before running or writing tests, you must install the necessary development dependencies.
+Use **Python 3.13.14 or a later 3.13 patch**, or **3.14.5 or a later 3.14 patch**, to run the full test suite.
+The `.python-version` file records **3.14.6** as the development default; it does not restrict tests to that version.
+
+With your chosen Python selected, create a virtual environment using `python -m venv .venv`
+(use `python3` if that is your installation's command).
+Activate it with `source .venv/bin/activate` on macOS/Linux or
+`.venv\Scripts\activate.bat` in Windows Command Prompt before installing dependencies or running tests.
+Verify the selected interpreter with `python -c "import sys; print(sys.executable); print(sys.version)"`.
+
+Before running or writing tests, install the application dependencies from `requirements.txt` and the testing
+dependencies below into that environment.
 
 ### **Dependencies**
 
@@ -34,7 +44,7 @@ pip install -r requirements-test.txt
 ### **Configuration**
 
 The `pytest.ini` file configures the test runner. It tells pytest that our source code is in the root directory (`.`)
-and that all test files are located within the `tests/` directory.
+and that all test files are located within the `Tests/` directory.
 
 **`pytest.ini`**
 
@@ -48,7 +58,7 @@ testpaths = Tests
 
 ## 2\. Directory Structure
 
-The `tests/` directory mirrors the structure of the `Middleware/` source directory. This convention makes it easy to
+The `Tests/` directory mirrors the structure of the `Middleware/` source directory. This convention makes it easy to
 locate tests corresponding to a specific module.
 
 ```plaintext
@@ -90,16 +100,6 @@ WilmerAI
 │   │   ├── test_llm_api_embedding_guard.py
 │   │   ├── test_llm_api_failover.py
 │   │   └── test_sampler_translation.py
-│   ├── manager/
-│   │   ├── conftest.py
-│   │   ├── test_configs_repo.py
-│   │   ├── test_connectivity.py
-│   │   ├── test_doctor.py
-│   │   ├── test_inspection.py
-│   │   ├── test_manager_app.py
-│   │   ├── test_registry.py
-│   │   ├── test_samplers.py
-│   │   └── test_stamping.py
 │   ├── models/
 │   │   └── test_llm_handler.py
 │   ├── services/
@@ -111,12 +111,15 @@ WilmerAI
 │   │   ├── test_memory_service.py
 │   │   ├── test_prompt_categorization_service.py
 │   │   ├── test_response_builder_service.py
-│   │   └── test_timestamp_service.py
+│   │   ├── test_timestamp_service.py
+│   │   └── test_web_page_fetch_service.py
 │   ├── scripts/
-│   │   └── test_rekey_encrypted_files.py
+│   │   ├── __init__.py
+│   │   ├── test_backfill_embeddings.py
+│   │   ├── test_install_requirements.py
+│   │   └── test_launch.py
 │   ├── utilities/
 │   │   ├── test_config_utils.py
-│   │   ├── test_config_utils_hardening.py
 │   │   ├── test_datetime_utils.py
 │   │   ├── test_encryption_utils.py
 │   │   ├── test_file_utils.py
@@ -140,6 +143,9 @@ WilmerAI
 │   │       ├── test_sanitize_llm_response.py
 │   │       └── test_workflow_utils.py
 │   ├── workflows/
+│   │   ├── test_game_discussion_paths.py
+│   │   ├── test_shipped_config_integrity.py
+│   │   ├── test_shipped_workflow_state_isolation.py
 │   │   ├── handlers/
 │   │   │   └── impl/
 │   │   │       ├── test_context_compactor_handler.py
@@ -150,7 +156,8 @@ WilmerAI
 │   │   │       ├── test_standard_node_handler.py
 │   │   │       ├── test_sub_workflow_node_handler.py
 │   │   │       ├── test_tool_node_handler.py
-│   │   │       └── test_web_fetch_handler.py
+│   │   │       ├── test_web_fetch_handler.py
+│   │   │       └── test_web_page_fetch_handler.py
 │   │   ├── managers/
 │   │   │   ├── test_workflow_manager.py
 │   │   │   └── test_workflow_variable_manager.py
@@ -178,7 +185,7 @@ Our suite relies on a few key pytest features to create isolated and maintainabl
 ### **Fixtures (`conftest.py`)**
 
 Fixtures are reusable functions that set up a specific state or object for your tests. Our primary fixtures are defined
-in `tests/conftest.py` and are available automatically to all tests.
+in `Tests/conftest.py` and are available automatically to all tests.
 
 * **`app()`**: Creates and configures a single instance of our Flask application for the entire test session. It ensures
   all API routes are registered before any tests run.
@@ -221,7 +228,7 @@ def test_chat_completions_non_streaming(client, mocker):
 
 Here is a summary of what each test file is responsible for.
 
-### **`tests/api/`**
+### **`Tests/api/`**
 
 * **`handlers/impl/test_openai_api_handler.py` & `test_ollama_api_handler.py`**
 
@@ -231,6 +238,12 @@ Here is a summary of what each test file is responsible for.
       `/v1/chat/completions`, `/api/generate`). They test both **streaming** and **non-streaming** behavior by mocking
       the return value of `handle_user_prompt` to be either a generator or a string. They also verify critical
       pre-processing logic.
+
+* **`handlers/test_waitress_streaming.py`**
+
+    * **Purpose**: To verify that streaming responses satisfy the WSGI server contract.
+    * **Strategy**: Passes shared SSE and NDJSON responses through Waitress's `WSGITask` with an in-memory output
+      channel. Checks framing, termination, and cleanup without opening sockets.
 
 * **`test_workflow_gateway.py`**
 
@@ -276,7 +289,7 @@ Here is a summary of what each test file is responsible for.
       delegating; and two concurrent requests against the same gate serialize at the LLM call rather than at
       the request boundary.
 
-### **`tests/llmapis/`**
+### **`Tests/llmapis/`**
 
 * **`test_llmapis_claude_api_handler.py`**
 
@@ -334,7 +347,7 @@ Here is a summary of what each test file is responsible for.
       error, the at-most-once-per-distinct-endpoint guarantee, and that streaming failover is only attempted before
       the first token is emitted.
 
-### **`tests/models/`**
+### **`Tests/models/`**
 
 * **`test_llm_handler.py`**
 
@@ -344,7 +357,7 @@ Here is a summary of what each test file is responsible for.
       references removed attributes). Also tests the `takes_message_collection` flag logic for different API types and
       documents intentionally removed attributes (like `takes_image_collection`) to prevent accidental re-introduction.
 
-### **`tests/services/`**
+### **`Tests/services/`**
 
 * **`test_llm_dispatch_service.py`**
 
@@ -367,6 +380,14 @@ Here is a summary of what each test file is responsible for.
     * **Strategy**: Straightforward tests that call the service's `build_*` methods with sample data and assert that the
       output dictionaries match the expected API format.
 
+* **`test_web_page_fetch_service.py`**
+
+    * **Purpose**: To verify the process-wide publisher-cautious page retrieval policy.
+    * **Strategy**: Uses fake Requests sessions, responses, raw streams, URL checker, monotonic and wall clocks, and
+      sleep function. No real DNS, HTTP, proxy, or wait occurs. Tests robots decisions and caching, pacing across
+      subdomains, redirect revalidation, library-default User-Agent and matching robots rules, cooldowns, content-type checks, independent header,
+      transferred, and decoded limits, gzip/deflate handling, and no-retry behavior.
+
 * **`test_mcp_client_tool.py`**
 
     * **Purpose**: To test `MCPClient.call_tool` and the async transport dispatch in `mcp_client_tool`.
@@ -378,7 +399,23 @@ Here is a summary of what each test file is responsible for.
       the pinned `mcp` package (`mcp==1.28.1`, a hard dependency in `requirements.txt`) to be installed; absent it they
       error rather than skip.
 
-### **`tests/utilities/`**
+### **`Tests/scripts/`**
+
+* **`test_launch.py`**
+
+    * **Purpose**: To verify environment validation, argument forwarding, and setup failure behavior.
+    * **Strategy**: Uses temporary installations and intercepted setup/server subprocesses. The shell wrapper runs
+      against a Python command stub. Windows file layouts and reparse tags are simulated; native platform checks
+      are required separately.
+
+* **`test_install_requirements.py`**
+
+    * **Purpose**: To verify pip policy preservation and rejection of conflicting installation destinations.
+    * **Strategy**: Exercises pip configuration parsing in temporary locations with installation intercepted.
+      A test-only bootstrap isolates configuration discovery and interpreter re-execution. Unit tests do not
+      install packages or contact services.
+
+### **`Tests/utilities/`**
 
 * **`test_encryption_utils.py`**
 
@@ -393,17 +430,14 @@ Here is a summary of what each test file is responsible for.
     * **Strategy**: Verifies that `sensitive_log` and `sensitive_log_lazy` correctly redact log messages when the
       encryption context is active, and pass them through unchanged when it is not.
 
-### **`tests/scripts/`**
+* **`test_encryption_data_preservation.py`**
 
-* **`test_rekey_encrypted_files.py`**
+    * **Purpose**: To verify encryption opt-in, historical ciphertext compatibility, and preservation of existing
+      runtime data when keys or file operations fail.
+    * **Strategy**: Uses synthetic temporary files and real Fernet keys to check incompatible-key rejection, plaintext
+      reads, atomic state backups, short writes, and metadata failures.
 
-    * **Purpose**: To test the re-key and decrypt script that migrates encrypted discussion files to a new API key or
-      removes encryption entirely.
-    * **Strategy**: Mocks filesystem operations and encryption utilities to verify re-key paths, decrypt-only paths,
-      directory rename on key change, environment variable key override, and plaintext pass-through when files are
-      already unencrypted.
-
-### **`tests/workflows/handlers/impl/`**
+### **`Tests/workflows/handlers/impl/`**
 
 * **`test_context_compactor_handler.py`**
 
@@ -416,9 +450,18 @@ Here is a summary of what each test file is responsible for.
 * **`test_web_fetch_handler.py`**
 
     * **Purpose**: To test the `WebFetch` node's HTTP request handling and output formatting.
-    * **Strategy**: Mocks `requests.request` (no real network) and asserts method/header/body/proxy handling, variable
-      substitution, the four output formats including the stdlib HTML stripper, `onError` raise/return branches,
-      timeout validation/coercion, pinned `verify=True`, the non-JSON-200 `json` branch, and streaming pass-through.
+    * **Strategy**: Mocks the single-hop Requests helper and `subprocess.Popen` (no real network or curl process) and asserts both
+      transport paths, method/header/body/proxy handling, generic User-Agent behavior, variable substitution, the four
+      output formats including the stdlib HTML stripper, redirects and address guards, `onError` raise/return branches,
+      timeout validation/coercion, TLS verification and CA bundles, response-size enforcement, process errors, and
+      streaming pass-through.
+
+* **`test_web_page_fetch_handler.py`**
+
+    * **Purpose**: To test `WebPageFetch` config validation, policy construction, and output formatting.
+    * **Strategy**: Injects a mocked page service and asserts default-on policy values, every explicit policy override,
+      URL/proxy/host/CA variable substitution, GET/body/header/transport invariants, output formats, `onError`, and
+      streaming. No network boundary is reached.
 
 * **`test_curl_command_handler.py`**
 
@@ -458,8 +501,8 @@ logic you add.
 
 Let's say you've added a new endpoint: `/v1/my_new_endpoint` in a new handler file. Here’s how you would test it.
 
-1. **Create the Test File**: Create a new file in the corresponding `tests/` directory (e.g.,
-   `tests/api/handlers/impl/test_my_new_handler.py`).
+1. **Create the Test File**: Create a new file in the corresponding `Tests/` directory (e.g.,
+   `Tests/api/handlers/impl/test_my_new_handler.py`).
 
 2. **Write the Test Function**: Define a test function that accepts the `client` and `mocker` fixtures.
 
@@ -470,13 +513,13 @@ Let's say you've added a new endpoint: `/v1/my_new_endpoint` in a new handler fi
    necessary JSON payload.
 
 5. **Assert the Results**: Check that the response status code is correct (e.g., `200`). Verify that the response data (
-   e.g., `response.json()`) is what you expect. Finally, assert that your mocked functions were called with the correct
+   e.g., `response.get_json()`) is what you expect. Finally, assert that your mocked functions were called with the correct
    arguments.
 
 **Example Template:**
 
 ```python
-# In tests/api/handlers/impl/test_my_new_handler.py
+# In Tests/api/handlers/impl/test_my_new_handler.py
 
 def test_my_new_endpoint_success(client, mocker):
     # 1. Mock the backend gateway to provide a predictable return value
@@ -491,8 +534,26 @@ def test_my_new_endpoint_success(client, mocker):
 
     # 4. Assert the outcome
     assert response.status_code == 200
-    assert response.json()["data"] == "Backend processed the request"
+    assert response.get_json()["data"] == "Backend processed the request"
 
     # 5. Verify the backend was called correctly
     mock_gateway.assert_called_once()
 ```
+
+### Shared-boundary regression coverage
+
+Additional tests cover failures that simple mock-only assertions can miss:
+
+- `Tests/api/handlers/test_stream_response_ownership.py`: pre-iteration and partial WSGI closure, real Eventlet scheduling, upstream closure, and post-response work.
+- `Tests/llmapis/handlers/base/test_abort_pool_cleanup.py`: pool disposal through a real Requests Session.
+- `Tests/services/test_fetch_transport_boundaries.py` and `Tests/workflows/handlers/impl/test_redirect_semantics.py`: real Requests with memory-only adapters, bounded redirect bodies, and method/body compatibility.
+- `Tests/services/test_web_page_fetch_service.py`: concurrent pacing and cooldown updates, plus acquisition cleanup.
+- `Tests/utilities/test_atomic_file_writes.py`: partial writes and failed replacement preservation.
+- `Tests/utilities/test_encryption_data_preservation.py`: encryption opt-in, historical ciphertext, incompatible keys, atomic backups, metadata failures, and encrypted short writes.
+- `Tests/workflows/handlers/impl/test_extension_log_redaction.py`: shipped helper logs and exception details, using synthetic content.
+- `Tests/workflows/managers/test_discussion_directory_templates.py`: nested format specifications retain request directory scope.
+- `Tests/api/handlers/test_reader_cleanup_redaction.py`: actual Eventlet completion/disconnect with a failing source close, private and ordinary diagnostics, and request release.
+- `Tests/services/test_page_fetch_error_boundaries.py`: real handler/service error envelopes, URL parsing, numeric publisher metadata, robots failure policy and log redaction.
+- `Tests/wilmer_proxy/test_proxy_redirect_boundaries.py`: real Requests and Flask with memory-only responses, delayed body consumption, invalid URL response headers, and status/body relay.
+
+These tests use temporary files and mocked network/process boundaries. They do not certify live socket interruption timing or frontend behavior.

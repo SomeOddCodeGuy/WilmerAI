@@ -1,12 +1,20 @@
 ### **Feature Guide: Per-User Encryption and Data Isolation**
 
-WilmerAI supports directory isolation and optional encryption for discussion files when a client sends an API key in
-the `Authorization` header. This ensures that each user's conversation data (memories, chat summaries, timestamps, and
-related state) is stored separately and, when encryption is enabled, encrypted at rest.
+> **Warning: losing the API key means losing access to encrypted data permanently.** WilmerAI does not store the key
+> and has no key reset, recovery key, backdoor, or other mechanism to recover that data. Encrypted backups also need
+> the original key. Before enabling encryption, save the exact API key securely, retain the original workflow-selection
+> name, and make a separate backup of your existing files.
 
-API keys serve as user identifiers. When an API key is present, it determines which directory discussion files are
-stored in, effectively treating each unique API key as a distinct user. Directory isolation activates automatically
-when an API key is present. Encryption requires an additional configuration setting.
+**Encryption is off by default.** Only the JSON boolean `"encryptUsingApiKey": true`, together with an API key in
+the request, enables it.
+
+WilmerAI supports directory isolation and optional encryption for discussion files when a client sends an API key in
+the `Authorization` header. Built-in conversation data is stored in the key's directory scope. Workflow-authored state
+uses the same scope when its file path starts with `{Discussion_Directory}`.
+
+API keys serve as client storage namespace secrets. They do not select a WilmerAI workflow and WilmerAI does not
+validate them as login credentials. When a key is present, it determines which directory discussion files are stored
+in. Directory isolation activates automatically; encryption requires an additional configuration setting.
 
 -----
 
@@ -14,16 +22,16 @@ when an API key is present. Encryption requires an additional configuration sett
 
 ### Enabling Data Isolation
 
-To enable per-user data isolation, configure your front-end application to send an `Authorization: Bearer <key>` header
-with every request to WilmerAI. The key can be any non-empty string; it does not need to match any specific format or
-be registered anywhere in WilmerAI's configuration. This causes all discussion files to be stored in a subdirectory
-derived from a hash of the API key.
+To enable client data isolation, configure each front-end application to send its own
+`Authorization: Bearer <key>` header with every request to WilmerAI. Use a different high-entropy value for each
+independent client. The key does not need to be registered in WilmerAI. It causes built-in discussion files, and custom
+workflow files rooted at `{Discussion_Directory}`, to use a subdirectory derived from a hash of the key.
 
 ### Enabling Encryption
 
 Data isolation alone does not encrypt files; they remain plaintext JSON, just stored in separate directories. To also
 encrypt files at rest, add the following setting to your user configuration file (under
-`Public/Configs/Users/<username>.json`):
+`Public/Configs/Users/<workflow-selection>.json`):
 
 ```json
 {
@@ -33,6 +41,11 @@ encrypt files at rest, add the following setting to your user configuration file
 
 When this is set to `true` and an API key is present, all discussion JSON files are encrypted using a key derived from
 the API key. When `false` (the default), files are stored as plaintext regardless of whether an API key is sent.
+
+Use a JSON boolean, not a quoted string such as `"false"`; invalid types are rejected. Existing plaintext in the same
+storage scope remains readable and is encrypted when next written. Merely reading it does not modify it. Files
+already encrypted require the original API key and workflow selection; disabling the setting does not decrypt them.
+Follow [Changing or Removing Encryption](#changing-or-removing-encryption) before turning it off.
 
 **Example request with an API key:**
 
@@ -62,9 +75,10 @@ original directory structure and remain plaintext.
 
 ### What Happens When an API Key Is Present
 
-**Directory isolation** always applies when an API key is present. Discussion files are stored in a subdirectory derived
-from a hash of the API key. This prevents different API keys from reading or overwriting each other's files, even if
-they share the same `discussionId`.
+**Directory isolation** always applies to built-in state when an API key is present. Discussion files are stored in a
+subdirectory derived from a hash of the key. Workflow-authored state receives this behavior only when its path uses
+`{Discussion_Directory}`. Files configured with an unrelated absolute path or a path built from only `{Discussion_Id}`
+bypass this boundary.
 
 ```
 Without API key:
@@ -77,10 +91,23 @@ With API key:
 The hash (`a1b2c3d4e5f6g7h8` in the example above) is a 16-character hex string derived from the API key. The raw API
 key never appears in file paths or on disk.
 
+For workflow file nodes, use the canonical variable rather than reconstructing this layout:
+
+```json
+{
+  "type": "SaveCustomFile",
+  "filepath": "{Discussion_Directory}/workflow_state.md",
+  "content": "{agent1Output}"
+}
+```
+
+`{Discussion_Directory}` fails closed when the request has no discussion ID. The raw API key and key hash are not
+exposed to workflows.
+
 **File encryption** applies only when `encryptUsingApiKey` is `true` in the user config. When enabled, all discussion
 JSON files are encrypted using the API key before being written to disk. The encryption uses industry-standard Fernet
 symmetric encryption (AES-128-CBC with HMAC-SHA256 authentication). Only a request carrying the same API key can
-decrypt and read those files.
+decrypt and read those files when it also selects the same workflow configuration.
 
 ### Files That Are Encrypted
 
@@ -93,30 +120,43 @@ All discussion-specific JSON files are encrypted when `encryptUsingApiKey` is `t
 - Condensation tracker files
 - Context compactor state files
 
+The built-in `state_document.md` is also encrypted under these settings. Its `.bak` file preserves the previous version's
+bytes, so it is encrypted when that previous version was encrypted; the first backup after opt-in can still be plaintext.
+Custom text files and SQLite databases do not inherit this encryption.
+
 ### Log Redaction
 
-When encryption is enabled, WilmerAI automatically redacts sensitive content from all logging output (both terminal
+When encryption is enabled, WilmerAI automatically redacts sensitive content from built-in request logging (both terminal
 and log files). Prompts, LLM responses, payload data, and other user-generated text are replaced with a short
 `[Redacted]` marker. Operational logs (request IDs, timing data, node execution summaries) remain visible for
 debugging purposes.
 
-This ensures that even if someone has access to the terminal or log files, they cannot see the content of an
-encrypted user's conversations.
+Built-in provider parsers, native MCP calls, memory chunking and summary writes, image fallback, shipped MCP helpers and retrieval tools use the same request redaction policy. Redacted diagnostics omit exception and stack details. CurlCommand never logs its command arguments. Operator-provided PythonModule scripts must use WilmerAI's sensitive logging helpers to apply this policy to their own logs. Independent third-party logging and startup messages are outside this request logging boundary.
+
+OpenAI chat/completions and Ollama chat/generate requests redact diagnostics while user selection is pending.
+After selection, payload logging follows that user's privacy setting. Private payloads are not serialized for logging,
+and early errors or rejected user selections remain redacted. Subsequent ordinary requests retain normal diagnostics.
 
 Log redaction can also be enabled independently of encryption by setting `"redactLogOutput": true` in your user
 configuration file. This is useful if you want to suppress sensitive content from logs without enabling file
 encryption. When this setting is active, all requests have their log output redacted, regardless of whether an
 API key is present. See the [Log Redaction Without Encryption](#log-redaction-without-encryption) section below.
 
+Cancellation cleanup keeps the original generation request's redaction setting, including when a separate cancellation
+request triggers it. Cleanup errors and the cancellation service's own error logs follow that setting. An already
+private cancelling request also stays private; ordinary requests retain normal diagnostic output.
+
 ### Files That Are NOT Encrypted
 
 - **SQLite databases**: The vector memory database and the workflow locking database remain unencrypted. Encrypting
   SQLite at rest is non-trivial: it typically requires compiling against SQLCipher (a third-party encrypted SQLite
   fork), which introduces native build dependencies and complicates cross-platform distribution. This is a known
-  limitation. In practice, vector embeddings do not directly expose conversation text, but the workflow locking
-  database may contain discussion IDs.
+  limitation. The vector database contains readable memory text and metadata as well as embeddings. The workflow
+  locking database may contain discussion IDs. Protect these files separately when encryption at rest is required.
 - **Configuration files**: All files under `Public/Configs/` (users, workflows, endpoints, presets, etc.) are not
   encrypted. These are system configuration, not per-user conversation data.
+- **Custom text files**: `GetCustomFile`, `SaveCustomFile`, and `ConversationChunkProcessor` files are plaintext even
+  when their paths use `{Discussion_Directory}`. The variable gives them directory isolation, not encryption at rest.
 
 -----
 
@@ -124,17 +164,23 @@ API key is present. See the [Log Redaction Without Encryption](#log-redaction-wi
 
 This feature is designed for transparent adoption:
 
-- **No migration required**: Existing unencrypted discussion files are readable even after you start sending an API
-  key. The system automatically detects whether a file is encrypted or plaintext and handles both. The first time an
-  existing file is updated, it is transparently encrypted.
+- **Adding a key creates a new storage scope**: Keyed requests intentionally do not fall back to old unkeyed files.
+  Copy data into the new key-hash directory only after deciding which client should own it. This prevents a keyed
+  request from silently reading legacy shared state.
 
 - **Mixed-mode operation**: Some clients can send an API key while others do not. Each operates independently.
   Clients without an API key continue to use the original directory structure with plaintext files.
 
-- **Key consistency**: The encryption is tied to the specific API key string and the WilmerAI username. If a client
-  changes its API key, it will not be able to read files encrypted with the previous key. Each API key effectively
-  creates a separate, isolated data partition. If you change your WilmerAI username, you will need to re-key your
-  encrypted files using the re-key script (see below).
+- **Key and workflow-selection consistency**: The encryption key is tied to both the API key string and the selected
+  file under `Public/Configs/Users`. If a client changes either value, it cannot read files encrypted with the previous
+  combination. Directory isolation itself uses only the API-key hash, so changing the workflow
+  selection can otherwise point at the same files with an incompatible encryption key.
+
+- **Read errors**: If a built-in discussion file or state-document backup cannot be read, its update stops. Check
+  file permissions and the original encryption settings, or recover from an independent backup.
+
+- **Backups**: Keep independent backups as well as the state document's previous-version backup. The first backup
+  after enabling encryption can still contain the previous plaintext; protect pre-encryption copies separately.
 
 ### Discussion File Directory Layout Migration
 
@@ -155,10 +201,10 @@ New layout with API key isolation:
   {discussionDirectory}/{api_key_hash}/{discussion_id}/memories.json
 ```
 
-This migration is fully backwards compatible. When WilmerAI looks for a discussion file, it first checks for the
-new nested path. If that file does not exist, it checks for a legacy flat file at the old path. If a legacy file is
-found, it is read from the old location. New files and updated files are always written to the new nested location.
-No manual migration is required; old files will continue to be read until they are naturally superseded.
+For unkeyed legacy data, WilmerAI checks the nested path first, then an existing flat file. An existing flat file
+continues to be read and written at that location. New files use nested storage; normal writes do not move old files.
+Move legacy files explicitly while the server is stopped if you want to consolidate their layout. Keyed requests
+remain isolated from unkeyed data.
 
 -----
 
@@ -172,8 +218,8 @@ OpenAI-compatible endpoint), set the API key field to any value. Open WebUI will
 
 ### SillyTavern
 
-In SillyTavern, the API key field in the connection settings is sent as the `Authorization: Bearer` header. Enter
-any value to enable encryption.
+In SillyTavern, the API key field in the connection settings is sent as the `Authorization: Bearer` header. Enter a
+unique high-entropy value to enable directory isolation. Encryption also requires `encryptUsingApiKey: true`.
 
 ### Custom Scripts
 
@@ -200,7 +246,8 @@ response = requests.post(
 ## Log Redaction Without Encryption
 
 If you want to redact sensitive content from logs but do not need file encryption or per-user directory isolation,
-add the following to your user configuration file (`Public/Configs/Users/<username>.json`):
+add the following to your selected workflow configuration file
+(`Public/Configs/Users/<workflow-selection>.json`):
 
 ```json
 {
@@ -229,10 +276,9 @@ or when the terminal is visible to others).
 - **Performance**: The encryption overhead is negligible for the JSON files used by WilmerAI's discussion system.
   The `cryptography` library is lazily loaded, so there is zero overhead when no API key is present.
 
-- **Multiple users, same instance**: This feature is designed for shared WilmerAI instances. Each user (or front-end
-  application) can use a different API key, and their discussion data will be fully isolated and independently
-  encrypted. Two users can even use the same `discussionId` without conflict, as their files are in separate
-  directories.
+- **Multiple clients, same instance**: Each independent client or trust domain should use a different API key. Built-in
+  data and workflow files based on `{Discussion_Directory}` then occupy separate directories even when the clients use
+  the same `discussionId`. This does not authenticate the caller; anyone who knows a key can select that storage scope.
 
 - **Supported endpoints**: Both the OpenAI-compatible endpoints (`/v1/chat/completions`, `/v1/completions`) and the
   Ollama-compatible endpoints (`/api/chat`, `/api/generate`) support API key extraction.
@@ -241,78 +287,19 @@ or when the terminal is visible to others).
 
 ## Changing or Removing Encryption
 
-WilmerAI includes scripts in the `Scripts/` directory to re-key or decrypt existing files. These scripts use the
-project's virtual environment, so no additional installs are needed.
+> **Caution:** Earlier versions included optional rekey/decryption scripts, now **deprecated and removed**. These
+> manually run scripts targeted the **API-key-hash subdirectory beneath the configured discussion directory** and
+> never ran automatically at startup. Rekeying processed JSON files, `state_document.md`, and `state_document.md.bak`
+> throughout that subtree.
+> If unrelated files matching those names or extensions had been stored there, they could also have been encrypted.
+> Directory links could redirect the target, and renaming the hash directory changed paths for files inside it.
+>
+> Older copies of these scripts should no longer be used. A more guided replacement with clearer safeguards is
+> planned for a future release to reduce the possibility of user error.
 
-### Before You Start
+Keep the original API key and exact workflow-selection name while using existing encrypted discussions. Changing
+either can make those files inaccessible. Setting `encryptUsingApiKey` to `false` does not decrypt existing files;
+removing the Bearer key selects a different storage namespace and does not move the data.
 
-**Stop the WilmerAI server before running the rekey or decrypt scripts.** Running these scripts while the server is
-active may cause data corruption if WilmerAI reads or writes discussion files during the re-key process.
-
-**Back up your discussion files before running the rekey or decrypt scripts.** These scripts modify files in-place.
-If the process is interrupted or something goes wrong, your original encrypted files may not be recoverable without
-a backup. The script will prompt you to confirm you have backed up (or offer to create a backup automatically), but
-it is safest to do this yourself beforehand.
-
-### Passing API Keys Securely
-
-The rekey script accepts API keys via command-line arguments (`--api-key`, `--new-api-key`), but command-line
-arguments are visible to other users on the same machine via `ps` or Task Manager. For better security, pass your
-keys via environment variables instead:
-
-**macOS / Linux:**
-
-```bash
-export WILMER_API_KEY="old-key-here"
-export WILMER_NEW_API_KEY="new-key-here"
-./Scripts/rekey_encrypted_files.sh --user myuser
-```
-
-**Windows (PowerShell):**
-
-```powershell
-$env:WILMER_API_KEY = "old-key-here"
-$env:WILMER_NEW_API_KEY = "new-key-here"
-Scripts\rekey_encrypted_files.bat --user myuser
-```
-
-When both an environment variable and a command-line argument are provided, the command-line argument takes
-precedence.
-
-### Re-keying (changing your API key)
-
-If you need to change your API key, run the re-key script to decrypt all files with the old key and re-encrypt them
-with the new key. The directory is automatically renamed to match the new key's hash.
-
-**macOS / Linux:**
-
-```bash
-./Scripts/rekey_encrypted_files.sh --user myuser --api-key "old-key-here" --new-api-key "new-key-here"
-```
-
-**Windows:**
-
-```bat
-Scripts\rekey_encrypted_files.bat --user myuser --api-key "old-key-here" --new-api-key "new-key-here"
-```
-
-### Decrypting (removing encryption)
-
-To decrypt all files and leave them as plaintext (for example, before disabling `encryptUsingApiKey`), run the
-script without `--new-api-key`:
-
-**macOS / Linux:**
-
-```bash
-./Scripts/rekey_encrypted_files.sh --user myuser --api-key "your-key-here"
-```
-
-**Windows:**
-
-```bat
-Scripts\rekey_encrypted_files.bat --user myuser --api-key "your-key-here"
-```
-
-This decrypts all files in place. Files that are already plaintext are left unchanged. After decrypting, you can set
-`encryptUsingApiKey` to `false` in your user config (or remove the setting entirely) and your data will remain
-accessible.
+Preserve a complete independent backup before changing encryption settings. Normal reads can still decrypt existing
+files with their original key and workflow selection. An encrypted backup also requires its original key.

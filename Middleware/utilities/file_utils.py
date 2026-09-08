@@ -1,14 +1,14 @@
 # /Middleware/utilities/file_utils.py
 
 import json
-import logging
 import os
-import shutil
 import tempfile
 from pathlib import Path
 from typing import Dict, List, Tuple, Union, Optional
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 
 def resolve_file_path(path_str: str) -> str:
@@ -53,6 +53,25 @@ def _to_path(path_str: str) -> Path:
     return Path(resolve_file_path(path_str))
 
 
+def _path_exists(file_path: Path) -> bool:
+    """Check existence without mistaking metadata failures for missing data.
+
+    Args:
+        file_path (Path): Path to check.
+
+    Returns:
+        bool: False only when the path does not exist.
+
+    Raises:
+        OSError: If metadata cannot be read for any other reason.
+    """
+    try:
+        file_path.stat()
+    except FileNotFoundError:
+        return False
+    return True
+
+
 def _resolve_case_insensitive_path(path_str: str) -> Optional[Path]:
     """
     Resolves the correct casing of a file path in a case-insensitive manner.
@@ -68,11 +87,11 @@ def _resolve_case_insensitive_path(path_str: str) -> Optional[Path]:
         Optional[Path]: The resolved file path if found, otherwise None.
     """
     file_path = _to_path(path_str)
-    if file_path.exists():
+    if _path_exists(file_path):
         return file_path
     parent_dir = file_path.parent
     target_filename = file_path.name
-    if not parent_dir.exists():
+    if not _path_exists(parent_dir):
         return None
     entries = {p.name.lower(): p for p in parent_dir.iterdir()}
     return entries.get(target_filename.lower())
@@ -126,7 +145,12 @@ def _atomic_write_bytes(file_path: Path, data: bytes) -> None:
     tmp_path = None
     try:
         tmp_fd, tmp_path = tempfile.mkstemp(dir=str(file_path.parent), suffix='.tmp')
-        os.write(tmp_fd, data)
+        remaining = memoryview(data)
+        while remaining:
+            written = os.write(tmp_fd, remaining)
+            if written <= 0:
+                raise OSError("Atomic file write made no progress")
+            remaining = remaining[written:]
         os.fsync(tmp_fd)
         os.close(tmp_fd)
         tmp_fd = None
@@ -154,6 +178,9 @@ def _write_json_file(file_path: Path, data, encryption_key: Optional[bytes] = No
         data: The data to serialize to JSON.
         encryption_key (Optional[bytes]): Fernet key for encryption.
     """
+    if _path_exists(file_path):
+        # A direct writer must not replace data owned by another encryption key.
+        _read_json_file(file_path, encryption_key)
     json_bytes = json.dumps(data, indent=4).encode('utf-8')
     if encryption_key:
         from Middleware.utilities.encryption_utils import encrypt_bytes
@@ -186,7 +213,7 @@ def ensure_json_file_exists(
     """
     resolved_path = _resolve_case_insensitive_path(filepath)
 
-    if resolved_path and resolved_path.exists():
+    if resolved_path and _path_exists(resolved_path):
         data = _read_json_file(resolved_path, encryption_key)
         if not isinstance(data, list):
             raise TypeError(
@@ -300,7 +327,7 @@ def load_timestamp_file(filepath: str, encryption_key: Optional[bytes] = None) -
             Returns an empty dictionary if the file is not found.
     """
     file_path = _resolve_case_insensitive_path(filepath)
-    if file_path and file_path.exists():
+    if file_path and _path_exists(file_path):
         logger.debug(f"File exists: {file_path}")
         logger.info(f"Opening file: {file_path}")
         return _read_json_file(file_path, encryption_key)
@@ -410,7 +437,7 @@ def read_condensation_tracker(filepath: str, encryption_key: Optional[bytes] = N
             or an empty dictionary if the file is not found.
     """
     file_path = _resolve_case_insensitive_path(filepath)
-    if file_path and file_path.exists():
+    if file_path and _path_exists(file_path):
         return _read_json_file(file_path, encryption_key)
     else:
         return {}
@@ -449,7 +476,7 @@ def read_vision_responses(filepath: str, encryption_key: Optional[bytes] = None)
             or an empty dictionary if the file is not found.
     """
     file_path = _resolve_case_insensitive_path(filepath)
-    if file_path and file_path.exists():
+    if file_path and _path_exists(file_path):
         return _read_json_file(file_path, encryption_key)
     else:
         return {}
@@ -545,7 +572,7 @@ def save_custom_file(filepath: str, content: str, mode: str = "overwrite",
         return change_count
 
     file_path.parent.mkdir(parents=True, exist_ok=True)
-    if mode == "append" and file_path.exists():
+    if mode == "append" and _path_exists(file_path):
         # Read-modify-write so the atomic replace below is preserved. Let a read
         # failure propagate rather than swallowing it: silently writing only the new
         # content would overwrite (not append to) the existing file and lose its prior
@@ -562,11 +589,8 @@ def read_plain_text_file(filepath: str, encryption_key: Optional[bytes] = None) 
     """
     Reads a plain-text (e.g. markdown) file, transparently decrypting if needed.
 
-    Mirrors the encrypted-then-plaintext fallback behavior of ``_read_json_file``:
-    when an encryption_key is provided the file is first treated as encrypted
-    binary data; if decryption fails the content is returned as plaintext
-    (migration scenario, or a user hand-edited the file while encryption was
-    enabled).
+    Existing plaintext remains readable when encryption is enabled. Recognizable
+    encrypted tokens require a working key and never fall back to plaintext.
 
     Args:
         filepath (str): The path of the file to read.
@@ -576,19 +600,23 @@ def read_plain_text_file(filepath: str, encryption_key: Optional[bytes] = None) 
         str: The file's text content, or an empty string if the file does not exist.
     """
     file_path = _to_path(filepath)
-    if not file_path.exists():
+    if not _path_exists(file_path):
         return ''
 
+    raw = file_path.read_bytes()
     if encryption_key:
         try:
             from cryptography.fernet import InvalidToken
             from Middleware.utilities.encryption_utils import decrypt_bytes
-            raw = file_path.read_bytes()
             return decrypt_bytes(raw, encryption_key).decode('utf-8')
         except (InvalidToken, ValueError, UnicodeDecodeError):
-            logger.warning("Encrypted read failed for %s, falling back to plaintext.", file_path)
+            pass
 
-    return file_path.read_text(encoding='utf-8')
+    from Middleware.utilities.encryption_utils import looks_like_fernet_token
+    if looks_like_fernet_token(raw):
+        raise ValueError("Encrypted text requires the original API key and workflow selection; "
+                         "restore those settings or decrypt with the original key before disabling encryption")
+    return raw.decode('utf-8')
 
 
 def write_plain_text_file(filepath: str, content: str, encryption_key: Optional[bytes] = None,
@@ -597,10 +625,8 @@ def write_plain_text_file(filepath: str, content: str, encryption_key: Optional[
     Writes a plain-text file atomically, with an optional pre-write backup.
 
     When ``backup_suffix`` is provided and the target file already exists, the
-    existing file is first copied to ``{filepath}{backup_suffix}`` so the
-    previous version survives one overwrite. If the backup copy fails, the
-    exception propagates and the write is never attempted, guaranteeing the
-    current content cannot be lost.
+    existing bytes are atomically copied to ``{filepath}{backup_suffix}`` before
+    replacing the target. A backup failure propagates before the target write.
 
     Args:
         filepath (str): The target file path.
@@ -612,11 +638,16 @@ def write_plain_text_file(filepath: str, content: str, encryption_key: Optional[
     file_path = _to_path(filepath)
     file_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if backup_suffix and file_path.exists():
-        shutil.copy2(str(file_path), str(file_path) + backup_suffix)
+    if _path_exists(file_path):
+        read_plain_text_file(filepath, encryption_key)
 
     data = content.encode('utf-8')
     if encryption_key:
         from Middleware.utilities.encryption_utils import encrypt_bytes
         data = encrypt_bytes(data, encryption_key)
+    if backup_suffix and _path_exists(file_path):
+        backup_path = Path(str(file_path) + backup_suffix)
+        if _path_exists(backup_path):
+            read_plain_text_file(str(backup_path), encryption_key)
+        _atomic_write_bytes(backup_path, file_path.read_bytes())
     _atomic_write_bytes(file_path, data)

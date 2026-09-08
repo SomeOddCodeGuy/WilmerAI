@@ -7,13 +7,11 @@ import logging
 import os
 from logging.handlers import RotatingFileHandler
 
-# The main import is now the ApiServer, not WilmerApi
 from Middleware.api.api_server import ApiServer
 from Middleware.common import instance_global_variables
 from Middleware.common.launch_arguments import parse_and_apply_launch_arguments
 from Middleware.common.server_startup import UserInjectionFilter, UserRoutingFileHandler, resolve_file_logging, \
     resolve_port
-from Middleware.services.locking_service import LockingService
 from Middleware.utilities import config_utils
 
 logger = logging.getLogger(__name__)
@@ -27,14 +25,23 @@ def initialize_app():
     Note: When run via WSGI server (Eventlet/Waitress), the launcher script sets
     instance_global_variables before importing this module. When run directly,
     the shared launch-argument parser sets them.
+
+    Returns:
+        ApiServer: Initialized server with registered routes and concurrency controls.
     """
     # Parse arguments if running directly
     if __name__ == '__main__':
         parse_and_apply_launch_arguments("Process configuration directory and user arguments.")
 
-    # Validate that all configured users have config files
+    is_wilmer_proxy_mode = instance_global_variables.RUNTIME_MODE == "wilmerproxy"
+    if is_wilmer_proxy_mode:
+        from Middleware.wilmer_proxy.config import load_wilmer_proxy_config
+        wilmer_proxy_config = load_wilmer_proxy_config()
+    else:
+        wilmer_proxy_config = None
+
     users = instance_global_variables.USERS or []
-    if users:
+    if users and not is_wilmer_proxy_mode:
         config_dir = config_utils.get_root_config_directory()
         for user in users:
             user_config_path = os.path.join(str(config_dir), 'Users', f'{user.lower()}.json')
@@ -55,7 +62,7 @@ def initialize_app():
     for h in handlers:
         h.addFilter(user_filter)
 
-    is_multi_user = users and len(users) > 1
+    is_multi_user = not is_wilmer_proxy_mode and users and len(users) > 1
 
     if use_file_logging:
         log_directory = os.path.expanduser(instance_global_variables.LOGGING_DIRECTORY)
@@ -81,6 +88,10 @@ def initialize_app():
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
+    if wilmer_proxy_config:
+        logger.info(f"Runtime mode: WilmerProxy ({wilmer_proxy_config.name})")
+    else:
+        logger.info("Runtime mode: workflow")
     logger.info(f"Config Directory: {instance_global_variables.CONFIG_DIRECTORY}")
     if is_multi_user:
         logger.info(f"Users: {', '.join(users)}")
@@ -88,18 +99,20 @@ def initialize_app():
         logger.info(f"User: {users[0]}")
     logger.info(f"Logging Directory: {instance_global_variables.LOGGING_DIRECTORY}")
 
-    logger.info(
-        f"Deleting old locks that do not belong to Wilmer Instance_Id: '{instance_global_variables.INSTANCE_ID}'"
-    )
-    lock_users = users if users else [None]
-    for lock_user in lock_users:
-        if lock_user:
-            instance_global_variables.set_request_user(lock_user)
-        try:
-            locking_service = LockingService()
-            locking_service.delete_old_locks(instance_global_variables.INSTANCE_ID)
-        finally:
-            instance_global_variables.clear_request_user()
+    if not is_wilmer_proxy_mode:
+        from Middleware.services.locking_service import LockingService
+        logger.info(
+            f"Deleting old locks that do not belong to Wilmer Instance_Id: '{instance_global_variables.INSTANCE_ID}'"
+        )
+        lock_users = users if users else [None]
+        for lock_user in lock_users:
+            if lock_user:
+                instance_global_variables.set_request_user(lock_user)
+            try:
+                locking_service = LockingService()
+                locking_service.delete_old_locks(instance_global_variables.INSTANCE_ID)
+            finally:
+                instance_global_variables.clear_request_user()
 
     instance_global_variables.initialize_request_semaphore(instance_global_variables.CONCURRENCY_LIMIT)
     if instance_global_variables.CONCURRENCY_LIMIT > 0:
@@ -112,7 +125,6 @@ def initialize_app():
 
     logger.info("Initializing API Server")
 
-    # Instantiate the new ApiServer
     server = ApiServer()
     return server
 

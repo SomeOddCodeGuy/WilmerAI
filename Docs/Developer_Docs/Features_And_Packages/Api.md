@@ -301,19 +301,26 @@ on whether multi-user mode is active:
 
 | Format | Example | Result |
 |--------|---------|--------|
-| `username:workflow` | `chat-ui:general` | `(None, "general")` |
-| `workflow` | `general` | `(None, "general")` if in `_shared/` |
+| `username:workflow` | `chat-ui:general` | `(None, "general")` when shared mode is enabled and the workflow exists |
+| `workflow` | `general` | `(None, "general")` when shared mode is enabled and the workflow exists |
 | `username:workflow:latest` | `chat-ui:general:latest` | Strips `:latest`, same as above |
-| Non-matching | `gpt-4` | `(None, None)`, uses normal routing |
+| Non-matching | `gpt-4` | `(None, None)` |
+
+In shared mode, `(None, None)` is rejected with HTTP 400 because a workflow model is required. Outside shared mode,
+`(None, None)` continues through custom workflow or routing mode.
 
 **Multi-user mode** (USERS has 2+ entries):
 
 | Format | Example | Result |
 |--------|---------|--------|
-| `username` | `user-two` | `("user-two", None)` (routes to user-two's default workflow) |
-| `username:workflow` | `user-two:general` | `("user-two", "general")` (routes to user-two's shared workflow) |
+| `username` | `user-two` | `("user-two", None)` (valid outside shared mode; rejected for a shared-mode user) |
+| `username:workflow` | `user-two:general` | `("user-two", "general")` when that user enables shared mode and the workflow exists |
 | `workflow` (bare) | `general` | `(None, None)` (rejected, user must be specified) |
 | Non-matching | `gpt-4` | `(None, None)` (rejected by `require_identified_user()`) |
+
+The selection checks enforce three mutually exclusive modes. `allowSharedWorkflows: true` takes precedence and
+requires a valid shared workflow model. Otherwise, `customWorkflowOverride: true` selects the fixed custom workflow.
+When both settings are false, the request uses `routingConfig` and `categorizationWorkflow`.
 
 ### Folder Structure
 
@@ -348,7 +355,8 @@ Public/Configs/Workflows/
 ### Key Files
 
 * `api_helpers.py`: Contains `parse_model_field()`, `set_request_context_from_model()`, `clear_request_context()`
-  (plus backward-compatible aliases `set_workflow_override()` and `clear_workflow_override()`)
+  (plus backward-compatible aliases `set_workflow_override()` and `clear_workflow_override()`),
+  `require_identified_user()`, and `require_shared_workflow_selection()`
 * `instance_global_variables.py`: Contains `USERS` list, `get_request_user()` / `set_request_user()` /
   `clear_request_user()` for per-request user, and workflow override functions. Note: the legacy `USER`
   global has been removed; all user resolution flows through `USERS` and request-scoped context.
@@ -364,10 +372,10 @@ Public/Configs/Workflows/
 
 ## 5\. Streaming Connection Lifecycle
 
-All streaming responses in WilmerAI (both Ollama and OpenAI handlers) explicitly set the `Connection: close` HTTP
-header. This forces the TCP connection to be torn down after each streaming response completes, rather than being
-kept alive for reuse. The machinery described in this section is implemented once, in
-`Middleware/api/handlers/base/base_streaming.py`, and parameterized per handler via `StreamingApiConfig`.
+OpenAI and Ollama streaming responses leave connection and transfer-encoding headers to the WSGI server.
+The application supplies `Cache-Control: no-cache` and `X-Accel-Buffering: no`, without setting `Connection` or
+`Content-Length`. Shared response construction and stream handling live in
+`Middleware/api/handlers/base/base_streaming.py`, parameterized per handler via `StreamingApiConfig`.
 
 ### Why Connection: close
 
@@ -384,16 +392,17 @@ characteristics:
    unable to send new requests or reconnect to WilmerAI after a streaming response completes. The condition
    persists until the front-end is restarted, which tears down all connections.
 
-3. **Heartbeat interaction**: WilmerAI sends heartbeat messages every 1 second during streaming (empty NDJSON
-   lines for Ollama, SSE comments for OpenAI). These keep the connection active during long prefill phases
+3. **Heartbeat interaction**: WilmerAI sends heartbeat messages every 1 second during Eventlet streaming (JSON
+   heartbeat objects for Ollama, SSE comments for OpenAI). These keep the connection active during long prefill phases
    for disconnect detection purposes.
 
-Setting `Connection: close` ensures that each streaming response gets a clean TCP lifecycle. The overhead of
-re-establishing connections is negligible for LLM streaming responses, which typically last seconds to minutes.
+The supported launchers retain server-owned connection closure: Eventlet disables keep-alive, and Waitress 3.0.2
+marks streamed HTTP/1.1 responses without a known content length for closure and supplies chunked framing itself.
+This avoids asking clients to reuse a completed stream's connection without violating the WSGI header boundary.
 
 ### Stream-Complete Detection
 
-In addition to `Connection: close`, the streaming generators detect when the stream is logically complete and
+The streaming generators also detect when the stream is logically complete and
 return immediately, rather than waiting for the entire `handle_user_prompt()` generator chain to finish.
 
 This is necessary because of how workflow processing works. When a workflow has multiple nodes, the responding
@@ -403,7 +412,7 @@ nodes (memory summarization, categorization, etc.) within the same generator. Du
 the Eventlet heartbeat mechanism would send heartbeat messages to the client, but from the client's perspective,
 the stream is already complete.
 
-The fix: each streaming generator checks whether the chunk it just yielded is the stream-complete marker:
+Each streaming generator checks whether the chunk it just yielded is the stream-complete marker:
 
 - **Ollama**: checks for `"done": true` or `"done":true` in the encoded bytes. A substring check is safe here
   because generated text inside the chunk's JSON has its quotes escaped (`\"done\": true`), so content can never
@@ -478,18 +487,14 @@ the reader terminates only when `handle_user_prompt()` exhausts. A post-returnTo
 therefore keeps its reader greenlet (and the request-scoped state it captured) alive for the life of the process, since
 the client has already disconnected at the terminator and nothing else will reclaim it. This is an inherent trade-off
 of letting post-return work outlive the client; bound such nodes with their own timeouts rather than relying on the
-request lifecycle to free them. The known concrete instance of this, the per-discussion memory condensation lock in
-`slow_but_quality_rag_tool.py`, is now bounded by default: the acquire waits `condensationLockTimeoutSeconds` (default
-600s) and, on timeout, skips memory generation for that round (self-healing: it retries on the next qualifying turn)
-rather than blocking forever. Set that key to 0 to restore the original unbounded wait.
+request lifecycle to free them. The per-discussion memory condensation lock in `slow_but_quality_rag_tool.py`
+waits up to `condensationLockTimeoutSeconds` (default 600s). On timeout, it skips memory generation for that
+round and retries on the next qualifying turn. A value of 0 permits an unbounded wait.
 
 Correspondingly, the streaming generator's `finally` block sends `stop_signal` to the reader **only** on this
 kill path. On *natural* completion (the generator returned at the terminator), it leaves `stop_signal`
-unsent and lets the reader send it from its own `finally` when `execute()` finishes. This matters because the
-reader only checks `stop_signal` before queueing a chunk: if a future post-returnToUser node ever yielded
-output, signaling from the generator's natural-completion path would cause the reader to `break` and cut that
-output off. Post-return nodes are non-responding today (they don't yield), so this is defensive, not a current
-bug.
+unsent and lets the reader send it from its own `finally` when `execute()` finishes. This preserves the reader's
+ownership of post-response workflow execution until completion.
 
 The asynchronous `eventlet.spawn(reader_greenlet.kill)` pattern (rather than a direct blocking `kill()`) is
 used to avoid blocking the generator's `finally` block, which would delay the WSGI server's HTTP response
@@ -497,26 +502,25 @@ finalization.
 
 ### Implementation Details
 
-Both `Connection: close` and stream-complete detection are implemented in the shared streaming functions
+Stream-complete detection is implemented in the shared streaming functions
 `stream_with_eventlet_optimized()` and `stream_response_fallback()` in
 `Middleware/api/handlers/base/base_streaming.py`. Each handler supplies its own stream-terminator predicate,
 heartbeat bytes, mimetype, and log label through its module-level `StreamingApiConfig`.
 
-Note that `Connection` is technically a hop-by-hop header under WSGI/PEP 3333 and should not normally be set by
-WSGI applications. However, setting it to `close` is the safer pragmatic choice for streaming responses, as it
-prevents the class of client-side connection pool issues described above. Eventlet's WSGI server respects this
-header and will close the socket after the response is fully sent.
+`Connection` is a hop-by-hop header and must not be supplied by the WSGI application. `_build_streaming_response`
+leaves connection policy to the server. It retains the request-context iterator and response-owned cleanup callbacks.
 
-### Server-Level Keep-Alive Disable
+### Server-Level Connection Handling
 
-In addition to the per-response `Connection: close` header set by Flask, the Eventlet WSGI server itself is
-configured with `keepalive=False` in `run_eventlet.py`. This forces the server to set `close_connection = 1`
-on every request handler instance at the WSGI protocol level, which is more authoritative than a Flask response
-header. This prevents any scenario where the response-level header might be stripped or ignored by intermediary
-layers.
+Eventlet is configured with `keepalive=False` in `run_eventlet.py`. It sets connection closure at the server
+protocol layer, independently of application response headers.
 
 A `socket_timeout=60` is also set as a safety net. This times out idle client sockets after 60 seconds,
 preventing zombie connections from accumulating if a client fails to close its end of the connection.
+
+Waitress 3.0.2 supplies `Connection: close` for these streamed responses when building the HTTP response, alongside
+its chunked transfer framing. No additional Waitress launcher setting is needed. Other WSGI deployments control
+their own connection policy and should be validated at that server's boundary.
 
 -----
 
@@ -646,10 +650,9 @@ Key design points:
   exhaustion, `close()` called by the WSGI server, an exception during iteration), and all of them funnel through
   `_release()`, which checks the flag before calling `semaphore.release()`.
 
-* **`__next__` catches `BaseException`, not `Exception`**: This is intentional. `StopIteration` (signaling
-  iterator exhaustion) is a subclass of `BaseException` but not `Exception`. Similarly, `GeneratorExit` and
-  `KeyboardInterrupt` bypass `Exception`. Catching `BaseException` ensures the semaphore is released under all
-  termination conditions, not just well-behaved ones.
+* **`__next__` catches `BaseException`**: `StopIteration` signals exhaustion and is an `Exception` subclass.
+  `GeneratorExit`, `KeyboardInterrupt` and other control-flow exceptions bypass `Exception`. Catching
+  `BaseException` ensures release for those paths too.
 
 * **`close()` delegates to the underlying iterable**: Per PEP 3333, WSGI servers must call `close()` on the
   response iterable if it exists. The releasing iterator calls `_release()` and then forwards the `close()` call
@@ -881,3 +884,31 @@ interrupted at its next node boundary even though there is no non-streaming disc
   wiring in `ChatCompletionsAPI` / `CompletionsAPI`.
 * `Middleware/api/handlers/base/base_streaming.py`: guarded release in the streaming teardowns and the
   pre-response disconnect instrumentation.
+
+### Response ownership and cancellation cleanup
+
+Both streaming implementations wrap their body in a response-owned `_RequestContextIterator`. WSGI response closure
+therefore releases ownership even when the body generator has never started. The Eventlet path tracks whether its
+reader started, finished, or was abandoned; a scheduled reader checks abandonment before invoking the backend.
+Started readers explicitly close their backend iterator and release cancellation/idempotency state on teardown.
+Exceptions from the reader's source close are handled inside that greenlet with the sensitive logger, so Eventlet's
+hub does not print private cleanup errors to stderr. Stop signaling and registration release still run, and the
+reader restores its previous request context. Ordinary requests retain the cleanup diagnostic.
+The wrapper restores the captured request state around each advance and close, then restores the caller's previous
+state before returning. Its close method releases bookkeeping even when upstream close raises and is idempotent.
+When redaction is active, exceptions escaping iteration or close become a generic error with the original exception
+chain suppressed; this prevents a WSGI server from printing private exception text outside the application logger.
+Fallback streaming closes its upstream iterator and releases bookkeeping on completion, error or partial closure.
+
+The Eventlet response is marked complete before yielding its terminal chunk. Closing it after that chunk preserves
+post-response workflow work; the reader releases its registration when that work finishes. Normal fallback iteration
+continues post-response nodes synchronously without emitting additional chunks. Closing an unfinished fallback stream
+cancels it; synchronous prefill still cannot detect disconnection until execution yields control.
+
+Cancellation callback registration captures the generation's log-redaction policy. The shared invocation helper uses
+that policy for callback and service error logs even when a separate DELETE request invokes cancellation. It preserves
+an already-private caller and restores caller state after success, callback failure or control-flow interruption.
+
+Abort callbacks close attached responses and owned HTTP adapter pools while the adapters remain registered. Closing a
+Requests Session alone does not guarantee interruption of a request blocked before response headers; transport timeouts
+remain relevant.

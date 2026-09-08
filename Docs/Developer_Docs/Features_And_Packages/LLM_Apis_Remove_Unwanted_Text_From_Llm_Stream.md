@@ -56,14 +56,9 @@ response. The rule, applied identically by both the streaming and non-streaming 
 if it starts at 0-based character index `openingTagGracePeriod` or earlier**. The tag does not need to *end* inside the
 window; a tag whose first character lands inside the window but whose last character falls beyond it still qualifies.
 
-This is a deliberate reconciliation decision. Historically the two paths disagreed: the non-streaming path required the
-entire opening tag to end inside the window, and the streaming result could change depending on where chunk boundaries
-happened to fall. The start-based rule was chosen because the window's purpose is to locate where the block *begins*.
 To guarantee the streaming outcome is independent of chunk sizes, `StreamingThinkRemover` holds its buffer until
 `openingTagGracePeriod + len(startThinkTag)` characters have accumulated before concluding that no qualifying tag will
-appear. Parity between the two paths is enforced by a parametrized test
-(`TestStreamingNonStreamingParity` in `Tests/utilities/test_streaming_utils.py`) that runs a battery of inputs through
-both implementations at multiple chunk sizes, including one character at a time.
+appear. Streaming/non-streaming parity coverage is in `Tests/utilities/test_streaming_utils.py`.
 
 -----
 

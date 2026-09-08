@@ -17,7 +17,9 @@ from Public.workflow_python_scripts._isevendays_mcp_scripts.mcp_prompt_utils imp
 from Public.workflow_python_scripts._isevendays_mcp_scripts.mcp_workflow_integration import MCPConfigurationError
 from Middleware.utilities.text_utils import return_brackets_in_string
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 def Invoke(messages: List[Dict[str, str]], mcpo_url: str = DEFAULT_MCPO_URL, tool_execution_map: Dict = None) -> Dict:
     """Main entry point for the MCP Tool Executor module.
@@ -572,4 +574,4 @@ def validate_tool_call_format(tool_call: Dict) -> bool:
     # as operationId is now used directly.
 
     logger.debug(f"Tool call format validation passed for '{tool_call['name']}'.")
-    return True 
+    return True

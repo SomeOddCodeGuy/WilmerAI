@@ -3,15 +3,16 @@
 WilmerAI ships with several example users, and those come with pre-defined endpoints and presets that are meant to be
 updated with connection info from the user, so that they can be used in workflows.
 
-While it is impossible to know what endpoints a user has available without them detailing it, it is a safe bet when
-writing any workflow that the user will likely have endpoints matching these names. It is on the user to express
-otherwise.
+These names describe the shipped examples. Confirm the user's selected endpoint collection before generating a workflow.
 
-Endpoints live in `Public/Configs/Endpoints/<collection>/` and presets live in
-`Public/Configs/Presets/<ApiPresetType>/<collection>/` (one preset folder per backend type). **Every preset is named to
-match the endpoint it pairs with:** `General-Endpoint` -> `General-Preset`, `Worker-Endpoint` -> `Worker-Preset`,
-`Vision-Endpoint` -> `Vision-Preset`, and so on. If a node uses an endpoint named `X-Endpoint`, expect a preset named
-`X-Preset` in the active preset collection.
+Endpoints live in `Public/Configs/Endpoints/<collection>/`. The shared workflows use endpoint names as preset
+donors: for example, both `endpointName` and `preset` can be `General-Endpoint`. Its embedded `presetSamplers`
+are translated to the target endpoint's ApiType. A different endpoint name can also donate sampler values.
+
+Legacy preset files live in `Public/Configs/Presets/<ApiPresetType>/<collection>/`, with fallback to the ApiType
+root. Names such as `General-Preset` are valid only when that file exists in the selected collection. A node must
+supply `preset`; there is no implicit endpoint default. An endpoint's optional `appendPresetName` file supplies
+native sampler overrides after donor translation or legacy file loading.
 
 -----
 
@@ -30,14 +31,16 @@ images are handled.
 
 #### Roles
 
-* `General-Endpoint` / `General-Preset`: Your best generalist model. Non-reasoning; thinking disabled.
-* `General-Reasoning-Endpoint` / `General-Reasoning-Preset`: Your best generalist reasoning model. Thinking enabled.
+Use each role's endpoint name for its embedded preset donor:
+
+* `General-Endpoint`: General response model. Non-reasoning; thinking disabled.
+* `General-Reasoning-Endpoint`: General reasoning model. Thinking enabled.
   Present only in the non-CoT collections (`_shared`, `_shared_discussionid`).
-* `Fast-Endpoint` / `Fast-Preset`: A small, fast generalist. Non-reasoning; thinking disabled.
-* `Fast-Reasoning-Endpoint` / `Fast-Reasoning-Preset`: A small, fast reasoning model. Thinking enabled. Present only in
+* `Fast-Endpoint`: A small, fast generalist. Non-reasoning; thinking disabled.
+* `Fast-Reasoning-Endpoint`: A small, fast reasoning model. Thinking enabled. Present only in
   the non-CoT collections.
-* `Worker-Endpoint` / `Worker-Preset`: The workhorse for grunt-work task nodes. Thinking disabled.
-* `Vision-Endpoint` / `Vision-Preset`: The vision model. Present only in the `*_discussionid` collections. The vision
+* `Worker-Endpoint`: Task-processing model. Thinking disabled.
+* `Vision-Endpoint`: The vision model. Present only in the `*_discussionid` collections. The vision
   node writes its description of an image to the discussion's files, so the image is not reprocessed on later turns.
 
 #### Native reasoning vs. manual chain-of-thought
@@ -52,7 +55,15 @@ whose native reasoning is unreliable: the workflow supplies the reasoning step e
 model.
 
 Whether "thinking disabled" can be enforced from the preset depends on the backend. See
-[Disabling Model Reasoning via Presets](../../Setup/Configuration_Files/Preset.md) for the per-backend matrix.
+[Disabling Model Reasoning via Presets](../Setup/Configuration_Files/Preset.md) for the per-backend matrix.
+
+#### Manual CoT V2 configuration
+
+The `fast-reasoning` and `general-reasoning` routes in `_shared_manual_cot_v2*` use a Reasoner followed by a
+Responder. Configure their models and output limits through the `ThinkingModel`, `RespondingModel`,
+`ThinkingResponseTokenSize`, and `RespondingResponseTokenSize` variables in each route's `_DefaultWorkflow.json`.
+The discussion-ID collection uses a dedicated vision model to supply image descriptions to text-only Reasoner
+and Responder models.
 
 -----
 

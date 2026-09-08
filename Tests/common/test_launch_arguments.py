@@ -10,7 +10,7 @@ _STAMPED_ATTRIBUTES = [
     "CONFIG_DIRECTORY", "PUBLIC_DIRECTORY", "USERS", "LOGGING_DIRECTORY",
     "USER_LEVEL_SQLITE_DIRECTORY", "DISCUSSION_DIRECTORY", "FILE_LOGGING",
     "PORT", "LISTEN_ADDRESS", "CONCURRENCY_LIMIT", "CONCURRENCY_TIMEOUT",
-    "CONCURRENCY_LEVEL",
+    "CONCURRENCY_LEVEL", "RUNTIME_MODE", "WILMER_PROXY_CONFIG",
 ]
 
 
@@ -95,6 +95,59 @@ class TestParseAndApplyLaunchArguments:
     def test_listen_accepts_explicit_address(self, mocker):
         self._parse(mocker, "--listen", "192.168.1.5")
         assert instance_global_variables.LISTEN_ADDRESS == "192.168.1.5"
+
+    def test_wilmer_proxy_mode_and_named_config_are_stamped(self, mocker):
+        self._parse(
+            mocker,
+            "--Mode",
+            "WilmerProxy",
+            "--WilmerProxyConfig",
+            "frontend-filter",
+        )
+
+        assert instance_global_variables.RUNTIME_MODE == "wilmerproxy"
+        assert instance_global_variables.WILMER_PROXY_CONFIG == "frontend-filter"
+
+    def test_wilmer_proxy_mode_requires_named_config(self, mocker):
+        instance_global_variables.RUNTIME_MODE = "workflow"
+        instance_global_variables.WILMER_PROXY_CONFIG = None
+        mocker.patch("sys.argv", ["prog", "--Mode", "WilmerProxy"])
+
+        with pytest.raises(SystemExit):
+            parse_and_apply_launch_arguments("test launcher")
+
+    def test_wilmer_proxy_config_is_rejected_outside_wilmer_proxy_mode(self, mocker):
+        instance_global_variables.RUNTIME_MODE = "workflow"
+        instance_global_variables.WILMER_PROXY_CONFIG = None
+        mocker.patch(
+            "sys.argv", ["prog", "--WilmerProxyConfig", "frontend-filter"])
+
+        with pytest.raises(SystemExit):
+            parse_and_apply_launch_arguments("test launcher")
+
+    @pytest.mark.parametrize(
+        "legacy_args",
+        [
+            ("--Mode", "Proxy", "--WilmerProxyConfig", "frontend-filter"),
+            ("--Mode", "WilmerProxy", "--ProxyConfig", "frontend-filter"),
+        ],
+    )
+    def test_legacy_generic_proxy_cli_names_are_not_supported(self, mocker, legacy_args):
+        instance_global_variables.RUNTIME_MODE = "workflow"
+        instance_global_variables.WILMER_PROXY_CONFIG = None
+        mocker.patch("sys.argv", ["prog", *legacy_args])
+
+        with pytest.raises(SystemExit):
+            parse_and_apply_launch_arguments("test launcher")
+
+    def test_workflow_mode_clears_stale_wilmer_proxy_config(self, mocker):
+        instance_global_variables.RUNTIME_MODE = "wilmerproxy"
+        instance_global_variables.WILMER_PROXY_CONFIG = "old-filter"
+
+        self._parse(mocker, "--Mode", "Workflow")
+
+        assert instance_global_variables.RUNTIME_MODE == "workflow"
+        assert instance_global_variables.WILMER_PROXY_CONFIG is None
 
     def test_absent_flags_leave_prior_globals_untouched(self, mocker):
         """Absent optional flags must NOT overwrite what a launcher (or module

@@ -155,6 +155,7 @@ LLAMACPP_CFG = {
     "samplerFieldMap": {
         "temperature": "temperature", "top_p": "top_p", "min_p": "min_p", "top_k": "top_k",
         "repeat_penalty": "repeat_penalty", "stop": "stop",
+        "thinking_budget_tokens": "thinking_budget_tokens",
     },
 }
 
@@ -191,6 +192,11 @@ class TestTranslate:
     def test_no_padding_only_present_keys(self):
         # Nothing beyond what the user wrote should appear.
         assert translate({"temperature": 0.5}, LLAMACPP_CFG) == {"temperature": 0.5}
+
+    def test_llamacpp_thinking_budget_tokens_stays_top_level(self):
+        assert translate({"thinking_budget_tokens": 8192}, LLAMACPP_CFG) == {
+            "thinking_budget_tokens": 8192
+        }
 
     def test_stop_renamed_for_claude(self):
         assert translate({"stop": ["<|im_end|>"]}, CLAUDE_CFG) == {"stop_sequences": ["<|im_end|>"]}

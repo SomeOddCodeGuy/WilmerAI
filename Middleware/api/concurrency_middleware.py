@@ -1,9 +1,10 @@
 import json
-import logging
 
 from Middleware.common import instance_global_variables
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 _503_BODY = json.dumps({
     "error": {
@@ -74,14 +75,22 @@ class ConcurrencyLimitMiddleware:
         return environ.get("REQUEST_METHOD", "POST") == "POST"
 
     def __call__(self, environ, start_response):
+        """Apply the configured ingress concurrency limit to a WSGI request.
+
+        Args:
+            environ (dict): WSGI request environment.
+            start_response (Callable): WSGI status and header callback.
+
+        Returns:
+            Iterable[bytes]: Application response or a 503 body when the semaphore wait expires.
+        """
         if not self._requires_concurrency_limit(environ):
             return self._app(environ, start_response)
 
-        # In 'endpoint' mode the gate is enforced inside LlmApiService around the
-        # outbound LLM call instead of at request ingress. The request-level gate
-        # is read at call time (not __init__) so the level can be toggled in tests
-        # and so a single middleware instance can serve either mode consistently.
-        if instance_global_variables.CONCURRENCY_LEVEL == "endpoint":
+        # Workflow endpoint mode acquires its gate at the LLM call; the proxy has
+        # no workflow dispatch layer and must keep its gate at ingress.
+        if (instance_global_variables.CONCURRENCY_LEVEL == "endpoint"
+                and instance_global_variables.RUNTIME_MODE != "wilmerproxy"):
             return self._app(environ, start_response)
 
         acquired = self._semaphore.acquire(timeout=self._acquire_timeout)

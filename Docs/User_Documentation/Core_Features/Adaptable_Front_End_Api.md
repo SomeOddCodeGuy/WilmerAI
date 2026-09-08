@@ -34,6 +34,8 @@ The client application is not aware of the backend processing, which allows it t
 
 WilmerAI provides compatibility with commonly used API specifications.
 
+Both the Eventlet and Waitress launchers support streaming OpenAI and Ollama responses.
+
 ### OpenAI API Compatibility (Recommended)
 
 This is a widely adopted standard and provides significant flexibility. By pointing your OpenAI-compatible client at

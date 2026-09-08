@@ -63,7 +63,7 @@ its own one-job leaf (see the strategy table below).
   {
     "title": "Load the document",
     "type": "GetCustomFile",
-    "filepath": "{someBaseDir}/document_{Discussion_Id}.md",
+    "filepath": "{Discussion_Directory}/document.md",
     "delimiter": "",
     "customReturnDelimiter": "\n"
   },
@@ -108,7 +108,7 @@ document) and `{agent2Input}` (the recent messages):
   {
     "title": "Save the document",
     "type": "SaveCustomFile",
-    "filepath": "{someBaseDir}/document_{Discussion_Id}.md",
+    "filepath": "{Discussion_Directory}/document.md",
     "content": "{agent1Output}",
     "mode": "overwrite"
   },
@@ -146,11 +146,12 @@ a log or ledger is kept small by a strict decider, or is edited surgically inste
 
 ## Things to get right
 
-- **Per-conversation isolation.** Put `{Discussion_Id}` in the filepath (both the load and every save) so each
-  conversation keeps its own file. `GetCustomFile` and `SaveCustomFile` both resolve it.
+- **Per-discussion isolation.** Use `{Discussion_Directory}` as the base for both the load and every save. It keeps the
+  file with built-in discussion state and includes the optional API-key storage scope.
 - **Sub-workflows are isolated.** A child cannot see the parent's `{agent#Output}` values. It *can* see the conversation
-  (`{chat_user_prompt_*}`, `{chat_system_prompt}`), user-wide variables from the user config, and `{Discussion_Id}`.
-  Anything else must be passed via `scoped_variables`, arriving as `{agent1Input}`, `{agent2Input}`, and so on.
+  (`{chat_user_prompt_*}`, `{chat_system_prompt}`), user-wide variables from the user config, `{Discussion_Id}`, and
+  `{Discussion_Directory}`. Anything else must be passed via `scoped_variables`, arriving as `{agent1Input}`,
+  `{agent2Input}`, and so on.
 - **Keep bookkeeping off the final response.** The tree returns the file so a later node can use it, but if that file
   can grow, distill it with a worker step before handing it to the user-facing responder rather than injecting the
   whole thing.

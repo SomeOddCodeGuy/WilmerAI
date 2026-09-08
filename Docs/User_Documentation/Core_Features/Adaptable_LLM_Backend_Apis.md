@@ -87,7 +87,9 @@ To connect a model in your workflow:
 
 <!-- end list -->
 
-```json
+Annotated JSON example. Remove comments before saving it as a configuration file.
+
+```jsonc
 {
   "nodes": [
     {
@@ -96,7 +98,7 @@ To connect a model in your workflow:
       "prompt": "Hello! How can I help you today?",
       "endpointName": "MyLocalModel",
       // This tells the node to use your specific endpoint
-      "presetName": "Creative",
+      "preset": "Creative",
       "returnToUser": true
     }
   ]
@@ -110,7 +112,7 @@ The node is now configured to send its request to the LLM defined in `MyLocalMod
 
 ### Advanced Usage: Dynamic Endpoints and Presets
 
-For more dynamic workflows, the `endpointName` and `presetName` fields can also accept variables defined at the top of
+For more dynamic workflows, the `endpointName` and `preset` fields can also accept variables defined at the top of
 your workflow or passed in from a parent workflow.
 
 This allows you to create flexible workflows that can switch models based on initial parameters. For example, you could
@@ -118,16 +120,14 @@ define a `{default_model}` variable and reference it in multiple nodes.
 
  ```json
  {
-  "variables": {
-    "default_model": "MyLocalModel",
-    "default_preset": "My_Preset"
-  },
+  "default_model": "MyLocalModel",
+  "default_preset": "My_Preset",
   "nodes": [
     {
       "title": "Respond to User",
       "type": "Standard",
       "endpointName": "{default_model}",
-      "presetName": "{default_preset}",
+      "preset": "{default_preset}",
       "returnToUser": true
     }
   ]

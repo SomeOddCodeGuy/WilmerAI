@@ -4,7 +4,9 @@ import requests
 
 from Middleware.utilities.config_utils import get_user_config
 
-logger = logging.getLogger(__name__)
+from Middleware.utilities.sensitive_logging_utils import get_sensitive_logger
+
+logger = get_sensitive_logger(__name__)
 
 NO_INFORMATION_FOUND_MESSAGE = "No pertinent information was found in the search"
 

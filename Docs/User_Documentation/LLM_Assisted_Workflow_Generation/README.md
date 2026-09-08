@@ -146,12 +146,6 @@ This project has the following nodes available:
 # User_Documentation/Setup/Workflow_Details/Workflow_Nodes.md
 </workflow_nodes>
 
-And finally, here are some recommended prompting methodologies that the project maintainer, Socg,
-tends to use:
-<wilmer_prompting_methodologies>
-# User_Documentation/LLM_Assisted_Workflow_Generation/Workflow_Prompting_Methodologies_Socg.md
-</wilmer_prompting_methodologies>
-
 Along with this, here are the default endpoints and presets that are generally available to use:
 <endpoints_and_presets>
 # User_Documentation/LLM_Assisted_Workflow_Generation/Default_Endpoints_And_Presets
